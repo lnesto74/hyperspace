@@ -1,0 +1,13 @@
+{
+  "name": "hyperspace-edge-simulator",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "LiDAR edge simulator for Hyperspace - simulates people trajectories via MQTT",
+  "scripts": {
+    "start": "node simulator.js",
+    "dev": "node --watch simulator.js"
+  },
+  "dependencies": {
+    "mqtt": "^5.3.4"
+  }
+}
