@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { FileUp, Box, ArrowLeft, AlertCircle, CheckCircle2, Loader2, Eye, Box as Box3D } from 'lucide-react'
+import { FileUp, Box, ArrowLeft, AlertCircle, CheckCircle2, Loader2, Eye, Box as Box3D, Radio } from 'lucide-react'
 import { useVenue } from '../../context/VenueContext'
 import UploadCard from './UploadCard'
 import GroupListPanel from './GroupListPanel'
@@ -9,6 +9,45 @@ import Layout3DPreview from './Layout3DPreview'
 import DwgImportsList from './DwgImportsList'
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3001'
+
+// LiDAR types
+export interface LidarModel {
+  id: string
+  name: string
+  hfov_deg: number
+  vfov_deg: number
+  range_m: number
+  dome_mode: boolean
+}
+
+export interface LidarInstance {
+  id: string
+  layout_version_id: string
+  model_id: string
+  x_m: number
+  z_m: number
+  y_m?: number
+  mount_y_m?: number
+  yaw_deg: number
+  source: 'manual' | 'auto'
+  range_m?: number
+}
+
+export interface SimulationResult {
+  coverage_percent: number
+  heatmap: { x: number; z: number; count: number; overlap?: boolean }[]
+  uncovered_cells: number
+  total_cells: number
+}
+
+export interface AutoplaceSettings {
+  overlap_mode: 'everywhere' | 'critical_only' | 'percent_target'
+  k_required: number
+  overlap_target_pct: number
+  los_enabled: boolean
+  sample_spacing_m: number
+  mount_y_m?: number
+}
 
 export interface DwgFixture {
   id: string
@@ -96,6 +135,63 @@ export default function DwgImporterPage({ onClose, onLayoutGenerated }: DwgImpor
   const [show3DPreview, setShow3DPreview] = useState(false)
   const [showUploadView, setShowUploadView] = useState(false)
   const [deletedFixtureIds, setDeletedFixtureIds] = useState<Set<string>>(new Set())
+  const [customNames, setCustomNames] = useState<Record<string, string>>({})
+  
+  // Scale correction for DXF units (read from autoplace settings where PreviewPanel stores it)
+  const autoplaceStorageKey = `dwg-autoplace-settings-${importData?.filename || 'default'}`
+  const [scaleCorrection, setScaleCorrection] = useState<number>(() => {
+    const saved = localStorage.getItem(autoplaceStorageKey)
+    if (saved) {
+      try { 
+        return JSON.parse(saved).scaleCorrection || 1.0 
+      } catch { 
+        return 1.0 
+      }
+    }
+    return 1.0
+  })
+  
+  // Re-read scaleCorrection when switching to 3D view (since PreviewPanel may have updated it)
+  useEffect(() => {
+    if (show3DPreview) {
+      const saved = localStorage.getItem(autoplaceStorageKey)
+      if (saved) {
+        try {
+          const parsed = JSON.parse(saved)
+          if (parsed.scaleCorrection && parsed.scaleCorrection !== scaleCorrection) {
+            console.log('Syncing scaleCorrection from PreviewPanel:', parsed.scaleCorrection)
+            setScaleCorrection(parsed.scaleCorrection)
+          }
+        } catch { }
+      }
+    }
+  }, [show3DPreview, autoplaceStorageKey, scaleCorrection])
+  
+  // LiDAR mode state - selectedLidarModelId persisted to localStorage
+  const lidarModelStorageKey = `dwg-selected-lidar-model-${importData?.filename || 'default'}`
+  const [lidarMode, setLidarMode] = useState(false)
+  const [lidarModels, setLidarModels] = useState<LidarModel[]>([])
+  const [lidarInstances, setLidarInstances] = useState<LidarInstance[]>([])
+  const [selectedLidarModelId, setSelectedLidarModelId] = useState<string | null>(() => {
+    const saved = localStorage.getItem(lidarModelStorageKey)
+    return saved || null
+  })
+  const [selectedLidarInstanceId, setSelectedLidarInstanceId] = useState<string | null>(null)
+  const [simulationResult, setSimulationResult] = useState<SimulationResult | null>(null)
+  const [isSimulating, setIsSimulating] = useState(false)
+  
+  // Persist selected LiDAR model whenever it changes
+  useEffect(() => {
+    if (selectedLidarModelId) {
+      localStorage.setItem(lidarModelStorageKey, selectedLidarModelId)
+    } else {
+      localStorage.removeItem(lidarModelStorageKey)
+    }
+  }, [lidarModelStorageKey, selectedLidarModelId])
+  
+  const handleUpdateGroupName = useCallback((groupId: string, name: string) => {
+    setCustomNames(prev => ({ ...prev, [groupId]: name }))
+  }, [])
 
   // Check feature flag and DWG support
   useEffect(() => {
@@ -133,6 +229,216 @@ export default function DwgImporterPage({ onClose, onLayoutGenerated }: DwgImpor
       fetchCatalog()
     }
   }, [featureEnabled])
+
+  // Fetch LiDAR models when entering LiDAR mode or 3D preview
+  useEffect(() => {
+    if ((lidarMode || show3DPreview) && generatedLayoutId) {
+      const fetchLidarData = async () => {
+        try {
+          // Fetch models
+          const modelsRes = await fetch(`${API_BASE}/api/lidar/models`)
+          if (modelsRes.ok) {
+            const models = await modelsRes.json()
+            setLidarModels(models)
+            if (models.length > 0 && !selectedLidarModelId) {
+              setSelectedLidarModelId(models[0].id)
+            }
+          }
+          // Fetch instances for this layout
+          const instancesRes = await fetch(`${API_BASE}/api/lidar/instances?layout_version_id=${generatedLayoutId}`)
+          if (instancesRes.ok) {
+            const instances = await instancesRes.json()
+            console.log('Fetched LiDAR instances:', instances.length)
+            setLidarInstances(instances)
+          }
+        } catch (err) {
+          console.error('Failed to fetch LiDAR data:', err)
+        }
+      }
+      fetchLidarData()
+    }
+  }, [lidarMode, show3DPreview, generatedLayoutId, selectedLidarModelId])
+
+  // LiDAR handlers
+  const handleAddLidarInstance = useCallback(async (x: number, z: number) => {
+    if (!generatedLayoutId || !selectedLidarModelId) return
+    const model = lidarModels.find(m => m.id === selectedLidarModelId)
+    if (!model) return
+    
+    try {
+      const res = await fetch(`${API_BASE}/api/lidar/instances`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          layout_version_id: generatedLayoutId,
+          model_id: selectedLidarModelId,
+          x_m: x,
+          z_m: z,
+          mount_y_m: 3,
+          yaw_deg: 0,
+          source: 'manual'
+        })
+      })
+      if (res.ok) {
+        const newInstance = await res.json()
+        newInstance.range_m = model.range_m
+        setLidarInstances(prev => [...prev, newInstance])
+      }
+    } catch (err) {
+      console.error('Failed to add LiDAR instance:', err)
+    }
+  }, [generatedLayoutId, selectedLidarModelId, lidarModels])
+
+  const handleDeleteLidarInstance = useCallback(async (instanceId: string) => {
+    try {
+      const res = await fetch(`${API_BASE}/api/lidar/instances/${instanceId}`, { method: 'DELETE' })
+      if (res.ok) {
+        setLidarInstances(prev => prev.filter(i => i.id !== instanceId))
+        if (selectedLidarInstanceId === instanceId) {
+          setSelectedLidarInstanceId(null)
+        }
+      }
+    } catch (err) {
+      console.error('Failed to delete LiDAR instance:', err)
+    }
+  }, [selectedLidarInstanceId])
+
+  const handleUpdateLidarInstance = useCallback(async (instanceId: string, updates: Partial<LidarInstance>) => {
+    try {
+      const res = await fetch(`${API_BASE}/api/lidar/instances/${instanceId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updates)
+      })
+      if (res.ok) {
+        const updated = await res.json()
+        setLidarInstances(prev => prev.map(i => i.id === instanceId ? { ...i, ...updated } : i))
+        console.log('Updated LiDAR instance:', instanceId, updates)
+      }
+    } catch (err) {
+      console.error('Failed to update LiDAR instance:', err)
+    }
+  }, [])
+
+  const handleDeleteAllLidarInstances = useCallback(async () => {
+    if (!generatedLayoutId) return
+    try {
+      // Delete all instances for this layout
+      const deletePromises = lidarInstances.map(inst =>
+        fetch(`${API_BASE}/api/lidar/instances/${inst.id}`, { method: 'DELETE' })
+      )
+      await Promise.all(deletePromises)
+      setLidarInstances([])
+      setSelectedLidarInstanceId(null)
+      setSimulationResult(null)
+      console.log('Deleted all LiDAR instances')
+    } catch (err) {
+      console.error('Failed to delete all LiDAR instances:', err)
+    }
+  }, [generatedLayoutId, lidarInstances])
+
+  const handleRunSimulation = useCallback(async () => {
+    if (!generatedLayoutId || lidarInstances.length === 0) return
+    setIsSimulating(true)
+    try {
+      const res = await fetch(`${API_BASE}/api/lidar/simulate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          layout_version_id: generatedLayoutId,
+          floor_cell_size_m: 0.5,
+          floor_y_m: 0
+        })
+      })
+      if (res.ok) {
+        const result = await res.json()
+        setSimulationResult(result)
+      }
+    } catch (err) {
+      console.error('Failed to run simulation:', err)
+    } finally {
+      setIsSimulating(false)
+    }
+  }, [generatedLayoutId, lidarInstances.length])
+
+  const handleAutoPlace = useCallback(async (
+    roi: { x: number; z: number }[],
+    settings?: AutoplaceSettings
+  ) => {
+    if (!generatedLayoutId || !selectedLidarModelId || roi.length < 3) {
+      console.log('Auto-place preconditions not met:', { generatedLayoutId, selectedLidarModelId, roiLength: roi.length })
+      return
+    }
+    console.log('Starting auto-place with ROI:', roi, 'settings:', settings)
+    setIsSimulating(true)
+    try {
+      const res = await fetch(`${API_BASE}/api/lidar/autoplace`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          layout_version_id: generatedLayoutId,
+          model_id: selectedLidarModelId,
+          floor_cell_size_m: 0.5,
+          coverage_target_pct: 0.95,
+          roi_vertices: roi,
+          // New solver parameters
+          overlap_mode: settings?.overlap_mode || 'everywhere',
+          k_required: settings?.k_required || 2,
+          overlap_target_pct: settings?.overlap_target_pct || 0.8,
+          los_enabled: settings?.los_enabled || false,
+          sample_spacing_m: settings?.sample_spacing_m || 0.75,
+          mount_y_m: settings?.mount_y_m || 3.0
+        })
+      })
+      const result = await res.json()
+      console.log('Auto-place response:', res.status, result)
+      
+      if (res.ok) {
+        // Set instances directly from result if available
+        if (result.instances && result.instances.length > 0) {
+          console.log('Setting instances from result:', result.instances.length)
+          // Map the instances to include model_id and source
+          const mappedInstances = result.instances.map((inst: { id: string; x_m: number; z_m: number; mount_y_m?: number; yaw_deg?: number }) => ({
+            ...inst,
+            model_id: selectedLidarModelId,
+            source: 'auto',
+            layout_version_id: generatedLayoutId
+          }))
+          setLidarInstances(prev => [...prev.filter(i => i.source !== 'auto'), ...mappedInstances])
+        }
+        
+        // Also try to refresh from API
+        const instancesRes = await fetch(`${API_BASE}/api/lidar/instances?layout_version_id=${generatedLayoutId}`)
+        if (instancesRes.ok) {
+          const instances = await instancesRes.json()
+          console.log('Refreshed instances from API:', instances.length)
+          if (instances.length > 0) {
+            setLidarInstances(instances)
+          }
+        }
+        
+        if (result.simulation) {
+          setSimulationResult(result.simulation)
+        }
+        
+        // Log solver results
+        if (result.solver_status) {
+          console.log('Solver status:', result.solver_status, 
+            'Coverage:', (result.coverage_pct * 100).toFixed(1) + '%',
+            'K-Coverage:', (result.k_coverage_pct * 100).toFixed(1) + '%')
+        }
+        if (result.warnings?.length > 0) {
+          console.warn('Solver warnings:', result.warnings)
+        }
+      } else {
+        console.error('Auto-place failed:', result.error || result)
+      }
+    } catch (err) {
+      console.error('Failed to auto-place:', err)
+    } finally {
+      setIsSimulating(false)
+    }
+  }, [generatedLayoutId, selectedLidarModelId])
 
   // Handle file upload
   const handleUpload = useCallback(async (file: File) => {
@@ -524,6 +830,8 @@ export default function DwgImporterPage({ onClose, onLayoutGenerated }: DwgImpor
                   .map(f => f.id)
                 handleDeleteFixtures(fixtureIds)
               }}
+              customNames={customNames}
+              onUpdateName={handleUpdateGroupName}
             />
           </div>
 
@@ -561,7 +869,12 @@ export default function DwgImporterPage({ onClose, onLayoutGenerated }: DwgImpor
             {/* Preview Content */}
             <div className="flex-1">
               {show3DPreview && generatedLayoutId ? (
-                <Layout3DPreview layoutVersionId={generatedLayoutId} />
+                <Layout3DPreview 
+                  layoutVersionId={generatedLayoutId}
+                  lidarInstances={lidarInstances}
+                  lidarModels={lidarModels}
+                  scaleCorrection={scaleCorrection}
+                />
               ) : (
                 <PreviewPanel
                   importData={importData}
@@ -581,6 +894,24 @@ export default function DwgImporterPage({ onClose, onLayoutGenerated }: DwgImpor
                   onDeleteFixtures={handleDeleteFixtures}
                   onHoverFixture={setHoveredFixtureId}
                   hoveredFixtureId={hoveredFixtureId}
+                  // LiDAR mode props
+                  lidarMode={lidarMode}
+                  onToggleLidarMode={() => setLidarMode(!lidarMode)}
+                  lidarEnabled={!!generatedLayoutId}
+                  lidarModels={lidarModels}
+                  lidarInstances={lidarInstances}
+                  selectedLidarModelId={selectedLidarModelId}
+                  selectedLidarInstanceId={selectedLidarInstanceId}
+                  onSelectLidarModel={setSelectedLidarModelId}
+                  onSelectLidarInstance={setSelectedLidarInstanceId}
+                  onAddLidarInstance={handleAddLidarInstance}
+                  onDeleteLidarInstance={handleDeleteLidarInstance}
+                  onUpdateLidarInstance={handleUpdateLidarInstance}
+                  onDeleteAllLidarInstances={handleDeleteAllLidarInstances}
+                  simulationResult={simulationResult}
+                  isSimulating={isSimulating}
+                  onRunSimulation={handleRunSimulation}
+                  onAutoPlace={handleAutoPlace}
                 />
               )}
             </div>
