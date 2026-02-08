@@ -1,7 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { 
-  X, Bell, AlertTriangle, AlertCircle, Info, CheckCircle, 
-  Filter, RefreshCw, ChevronDown, Clock, MapPin
+  X, Bell, AlertTriangle, AlertCircle, Info, CheckCircle, RefreshCw
 } from 'lucide-react'
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3001'
@@ -271,7 +270,7 @@ export default function ActivityLedger({ venueId, isOpen, onClose }: ActivityLed
                         <CheckCircle className="w-4 h-4" />
                       </button>
                     ) : (
-                      <CheckCircle className="w-4 h-4 text-green-500/50" title="Acknowledged" />
+                      <CheckCircle className="w-4 h-4 text-green-500/50" />
                     )}
                   </div>
                 </div>

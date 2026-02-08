@@ -11,9 +11,13 @@ interface RoiContextType {
   drawingVertices: Vector2[]
   kpiPopupRoiId: string | null
   showKPIOverlays: boolean
+  hiddenRoiIds: Set<string>
+  currentDwgLayoutId: string | null
   
-  loadRegions: (venueId: string) => Promise<void>
-  createRegion: (venueId: string, name: string, vertices: Vector2[], color?: string) => Promise<RegionOfInterest | null>
+  loadRegions: (venueId: string, dwgLayoutId?: string | null) => Promise<void>
+  toggleRoiVisibility: (roiId: string) => void
+  isRoiVisible: (roiId: string) => boolean
+  createRegion: (venueId: string, name: string, vertices: Vector2[], color?: string, dwgLayoutId?: string | null) => Promise<RegionOfInterest | null>
   updateRegion: (id: string, updates: Partial<RegionOfInterest>) => Promise<void>
   deleteRegion: (id: string) => Promise<void>
   selectRegion: (id: string | null) => void
@@ -21,7 +25,7 @@ interface RoiContextType {
   startDrawing: () => void
   addDrawingVertex: (vertex: Vector2) => void
   removeLastVertex: () => void
-  finishDrawing: (venueId: string, name: string, color?: string) => Promise<RegionOfInterest | null>
+  finishDrawing: (venueId: string, name: string, color?: string, dwgLayoutId?: string | null) => Promise<RegionOfInterest | null>
   cancelDrawing: () => void
   
   updateVertexPosition: (roiId: string, vertexIndex: number, position: Vector2) => void
@@ -53,6 +57,24 @@ export function RoiProvider({ children }: { children: ReactNode }) {
   const [drawingVertices, setDrawingVertices] = useState<Vector2[]>([])
   const [kpiPopupRoiId, setKpiPopupRoiId] = useState<string | null>(null)
   const [showKPIOverlays, setShowKPIOverlays] = useState(false)
+  const [hiddenRoiIds, setHiddenRoiIds] = useState<Set<string>>(new Set())
+  const [currentDwgLayoutId, setCurrentDwgLayoutId] = useState<string | null>(null)
+
+  const toggleRoiVisibility = useCallback((roiId: string) => {
+    setHiddenRoiIds(prev => {
+      const next = new Set(prev)
+      if (next.has(roiId)) {
+        next.delete(roiId)
+      } else {
+        next.add(roiId)
+      }
+      return next
+    })
+  }, [])
+
+  const isRoiVisible = useCallback((roiId: string) => {
+    return !hiddenRoiIds.has(roiId)
+  }, [hiddenRoiIds])
 
   const toggleKPIOverlays = useCallback(() => {
     setShowKPIOverlays(prev => !prev)
@@ -62,12 +84,26 @@ export function RoiProvider({ children }: { children: ReactNode }) {
     setShowKPIOverlays(false)
   }, [])
 
-  const loadRegions = useCallback(async (venueId: string) => {
+  const loadRegions = useCallback(async (venueId: string, dwgLayoutId?: string | null) => {
     try {
-      const res = await fetch(`${API_BASE}/api/venues/${venueId}/roi`)
+      // Use different endpoint for DWG vs manual mode
+      const url = dwgLayoutId
+        ? `${API_BASE}/api/venues/${venueId}/dwg/${dwgLayoutId}/roi`
+        : `${API_BASE}/api/venues/${venueId}/roi`
+      
+      console.log(`[RoiContext] Loading regions from: ${url}`)
+      
+      const res = await fetch(url)
       if (!res.ok) throw new Error('Failed to load regions')
       const data = await res.json()
+      
+      console.log(`[RoiContext] Loaded ${data.length} ROIs for ${dwgLayoutId ? 'DWG mode' : 'manual mode'}`)
+      if (data.length > 0) {
+        console.log(`[RoiContext] First ROI: "${data[0].name}" at (${data[0].vertices[0]?.x?.toFixed(2)}, ${data[0].vertices[0]?.z?.toFixed(2)})`)
+      }
+      
       setRegions(data)
+      setCurrentDwgLayoutId(dwgLayoutId || null)
     } catch (err) {
       console.error('Failed to load ROIs:', err)
     }
@@ -77,10 +113,16 @@ export function RoiProvider({ children }: { children: ReactNode }) {
     venueId: string, 
     name: string, 
     vertices: Vector2[], 
-    color?: string
+    color?: string,
+    dwgLayoutId?: string | null
   ): Promise<RegionOfInterest | null> => {
     try {
-      const res = await fetch(`${API_BASE}/api/venues/${venueId}/roi`, {
+      // Use different endpoint for DWG vs manual mode
+      const url = dwgLayoutId
+        ? `${API_BASE}/api/venues/${venueId}/dwg/${dwgLayoutId}/roi`
+        : `${API_BASE}/api/venues/${venueId}/roi`
+      
+      const res = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -149,14 +191,15 @@ export function RoiProvider({ children }: { children: ReactNode }) {
   const finishDrawing = useCallback(async (
     venueId: string, 
     name: string, 
-    color?: string
+    color?: string,
+    dwgLayoutId?: string | null
   ): Promise<RegionOfInterest | null> => {
     if (drawingVertices.length < 3) {
       addToast('error', 'Need at least 3 vertices to create a region')
       return null
     }
     
-    const roi = await createRegion(venueId, name, drawingVertices, color)
+    const roi = await createRegion(venueId, name, drawingVertices, color, dwgLayoutId)
     setIsDrawing(false)
     setDrawingVertices([])
     return roi
@@ -208,7 +251,11 @@ export function RoiProvider({ children }: { children: ReactNode }) {
       drawingVertices,
       kpiPopupRoiId,
       showKPIOverlays,
+      hiddenRoiIds,
+      currentDwgLayoutId,
       loadRegions,
+      toggleRoiVisibility,
+      isRoiVisible,
       createRegion,
       updateRegion,
       deleteRegion,

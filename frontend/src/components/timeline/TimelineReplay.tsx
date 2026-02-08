@@ -176,14 +176,14 @@ export default function TimelineReplay({ venueId, isOpen, onTimeChange }: Timeli
             const trail = posArray.map(p => ({ x: p.x, y: 0, z: p.z }))
             
             trackMap.set(trackKey, {
+              id: trackKey,
               trackKey,
               deviceId: 'replay',
-              classification: 'person',
+              timestamp: lastPos.timestamp,
+              position: { x: lastPos.x, y: 0, z: lastPos.z },
               venuePosition: { x: lastPos.x, y: 0, z: lastPos.z },
               velocity: { x: lastPos.vx || 0, y: 0, z: lastPos.vz || 0 },
-              confidence: 1,
-              timestamp: lastPos.timestamp,
-              roiIds: lastPos.roiIds || [],
+              objectType: 'person' as const,
               trail,
             })
           }
@@ -193,11 +193,6 @@ export default function TimelineReplay({ venueId, isOpen, onTimeChange }: Timeli
       })
       .catch(err => console.error('Failed to fetch replay trajectories:', err))
   }, [isOpen, venueId, currentIndex, timelineData, setReplayTracks])
-
-  const handleBarClick = (index: number) => {
-    setCurrentIndex(index)
-    setIsPlaying(false)
-  }
 
   const handleSkipBack = () => {
     setCurrentIndex(Math.max(0, currentIndex - 10))
@@ -462,7 +457,7 @@ export default function TimelineReplay({ venueId, isOpen, onTimeChange }: Timeli
           <>
             {/* Bar Chart */}
             <div className="absolute inset-0 flex items-end gap-px">
-              {timelineData.map((slot, index) => {
+              {timelineData.map((slot, _index) => {
                 const kpi1Val = getKpiValue(slot, kpi1)
                 const kpi2Val = getKpiValue(slot, kpi2)
                 const heightPercent = (kpi1Val / maxKpi1) * 100

@@ -22,6 +22,8 @@ export class TrajectoryStorageService extends EventEmitter {
     this.db = db;
     this.buffer = new Map(); // venueId -> Map<trackKey, positions[]>
     this.visitSessions = new Map(); // trackKey -> { startTime, lastSeen, roiId, positions[] }
+    this.queueSessions = new Map(); // trackKey -> { queueZoneId, queueEntryTime, ... }
+    this.zoneLinks = new Map(); // queueZoneId -> serviceZoneId (loaded from DB)
     this.dataDir = path.join(__dirname, '../data/trajectories');
     this.flushInterval = null;
     this.syncInterval = null;
@@ -30,12 +32,15 @@ export class TrajectoryStorageService extends EventEmitter {
     // Configuration
     this.BUFFER_FLUSH_MS = 5000;      // Flush buffer to JSON every 5 seconds
     this.DB_SYNC_MS = 60000;          // Sync JSON to DB every minute
+    this.CLEANUP_MS = 15 * 60 * 1000; // Cleanup old data every 15 minutes
     this.POSITION_SAMPLE_MS = 1000;   // Sample position every 1 second (not every frame)
     this.VISIT_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes visit timeout
     this.DWELL_THRESHOLD_MS = 10 * 1000;    // 10 seconds for dwell (was 60s)
     this.ENGAGEMENT_THRESHOLD_MS = 30 * 1000; // 30 seconds for engagement (was 120s)
-    this.VISIT_END_GRACE_MS = 3000;       // 3 seconds grace period before ending visit
+    this.VISIT_END_GRACE_MS = 1000;       // 1 second grace period before ending visit
     this.MIN_VISIT_DURATION_MS = 1000;    // Minimum 1 second to count as a visit
+    this.DATA_RETENTION_MS = 24 * 60 * 60 * 1000; // Keep only 24 hours of detailed data
+    this.MAX_POSITIONS_PER_SESSION = 100; // Limit positions stored per visit session
     
     // Track last sample time per track to avoid over-sampling
     this.lastSampleTime = new Map();
@@ -100,7 +105,7 @@ export class TrajectoryStorageService extends EventEmitter {
         FOREIGN KEY (venue_id) REFERENCES venues(id) ON DELETE CASCADE
       );
 
-      -- Daily KPI aggregates (for fast querying)
+      -- Daily KPI aggregates (for fast querying - NEVER DELETE)
       CREATE TABLE IF NOT EXISTS zone_kpi_daily (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         venue_id TEXT NOT NULL,
@@ -126,6 +131,27 @@ export class TrajectoryStorageService extends EventEmitter {
         FOREIGN KEY (roi_id) REFERENCES regions_of_interest(id) ON DELETE CASCADE
       );
 
+      -- Hourly KPI aggregates (for granular historical views - NEVER DELETE)
+      CREATE TABLE IF NOT EXISTS zone_kpi_hourly (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        venue_id TEXT NOT NULL,
+        roi_id TEXT NOT NULL,
+        date TEXT NOT NULL,
+        hour INTEGER NOT NULL,
+        visits INTEGER DEFAULT 0,
+        time_spent_ms INTEGER DEFAULT 0,
+        dwells INTEGER DEFAULT 0,
+        engagements INTEGER DEFAULT 0,
+        peak_occupancy INTEGER DEFAULT 0,
+        avg_occupancy REAL DEFAULT 0,
+        avg_waiting_time_ms INTEGER DEFAULT 0,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+        UNIQUE(venue_id, roi_id, date, hour),
+        FOREIGN KEY (venue_id) REFERENCES venues(id) ON DELETE CASCADE,
+        FOREIGN KEY (roi_id) REFERENCES regions_of_interest(id) ON DELETE CASCADE
+      );
+
       -- Zone settings (per-zone KPI thresholds and configuration)
       CREATE TABLE IF NOT EXISTS zone_settings (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -137,10 +163,18 @@ export class TrajectoryStorageService extends EventEmitter {
         alerts_enabled INTEGER DEFAULT 0,
         visit_end_grace_sec INTEGER DEFAULT 3,
         min_visit_duration_sec INTEGER DEFAULT 1,
+        zone_type TEXT DEFAULT 'general',
+        linked_service_zone_id TEXT,
+        queue_warning_threshold_sec INTEGER DEFAULT 60,
+        queue_critical_threshold_sec INTEGER DEFAULT 120,
+        queue_ok_color TEXT DEFAULT '#22c55e',
+        queue_warning_color TEXT DEFAULT '#f59e0b',
+        queue_critical_color TEXT DEFAULT '#ef4444',
         created_at TEXT NOT NULL DEFAULT (datetime('now')),
         updated_at TEXT NOT NULL DEFAULT (datetime('now')),
         FOREIGN KEY (venue_id) REFERENCES venues(id) ON DELETE CASCADE,
-        FOREIGN KEY (roi_id) REFERENCES regions_of_interest(id) ON DELETE CASCADE
+        FOREIGN KEY (roi_id) REFERENCES regions_of_interest(id) ON DELETE CASCADE,
+        FOREIGN KEY (linked_service_zone_id) REFERENCES regions_of_interest(id) ON DELETE SET NULL
       );
 
       -- Zone alert rules (customizable per zone)
@@ -200,7 +234,31 @@ export class TrajectoryStorageService extends EventEmitter {
         FOREIGN KEY (venue_id) REFERENCES venues(id) ON DELETE CASCADE
       );
 
+      -- Queue sessions table (tracks queue→service transitions per queue theory)
+      CREATE TABLE IF NOT EXISTS queue_sessions (
+        id TEXT PRIMARY KEY,
+        venue_id TEXT NOT NULL,
+        track_key TEXT NOT NULL,
+        queue_zone_id TEXT NOT NULL,
+        service_zone_id TEXT,
+        queue_entry_time INTEGER NOT NULL,
+        queue_exit_time INTEGER,
+        service_entry_time INTEGER,
+        service_exit_time INTEGER,
+        waiting_time_ms INTEGER,
+        service_time_ms INTEGER,
+        time_in_system_ms INTEGER,
+        is_complete INTEGER DEFAULT 0,
+        is_abandoned INTEGER DEFAULT 0,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        FOREIGN KEY (venue_id) REFERENCES venues(id) ON DELETE CASCADE,
+        FOREIGN KEY (queue_zone_id) REFERENCES regions_of_interest(id) ON DELETE CASCADE,
+        FOREIGN KEY (service_zone_id) REFERENCES regions_of_interest(id) ON DELETE CASCADE
+      );
+
       -- Create indexes for fast queries
+      CREATE INDEX IF NOT EXISTS idx_queue_sessions_venue_time ON queue_sessions(venue_id, queue_entry_time);
+      CREATE INDEX IF NOT EXISTS idx_queue_sessions_queue_zone ON queue_sessions(queue_zone_id, queue_entry_time);
       CREATE INDEX IF NOT EXISTS idx_zone_visits_roi_time ON zone_visits(roi_id, start_time);
       CREATE INDEX IF NOT EXISTS idx_zone_visits_venue_time ON zone_visits(venue_id, start_time);
       CREATE INDEX IF NOT EXISTS idx_zone_occupancy_roi_time ON zone_occupancy(roi_id, timestamp);
@@ -211,9 +269,395 @@ export class TrajectoryStorageService extends EventEmitter {
       CREATE INDEX IF NOT EXISTS idx_zone_alert_rules_roi ON zone_alert_rules(roi_id);
       CREATE INDEX IF NOT EXISTS idx_activity_ledger_venue_time ON activity_ledger(venue_id, timestamp);
       CREATE INDEX IF NOT EXISTS idx_activity_ledger_roi_time ON activity_ledger(roi_id, timestamp);
+      CREATE INDEX IF NOT EXISTS idx_zone_kpi_hourly_roi_date ON zone_kpi_hourly(roi_id, date, hour);
     `);
     
+    // Migration: Add queue-specific columns to zone_settings if they don't exist
+    try {
+      const cols = this.db.prepare("PRAGMA table_info(zone_settings)").all();
+      const colNames = cols.map(c => c.name);
+      if (!colNames.includes('queue_warning_threshold_sec')) {
+        this.db.exec(`ALTER TABLE zone_settings ADD COLUMN queue_warning_threshold_sec INTEGER DEFAULT 60`);
+      }
+      if (!colNames.includes('queue_critical_threshold_sec')) {
+        this.db.exec(`ALTER TABLE zone_settings ADD COLUMN queue_critical_threshold_sec INTEGER DEFAULT 120`);
+      }
+      if (!colNames.includes('queue_ok_color')) {
+        this.db.exec(`ALTER TABLE zone_settings ADD COLUMN queue_ok_color TEXT DEFAULT '#22c55e'`);
+      }
+      if (!colNames.includes('queue_warning_color')) {
+        this.db.exec(`ALTER TABLE zone_settings ADD COLUMN queue_warning_color TEXT DEFAULT '#f59e0b'`);
+      }
+      if (!colNames.includes('queue_critical_color')) {
+        this.db.exec(`ALTER TABLE zone_settings ADD COLUMN queue_critical_color TEXT DEFAULT '#ef4444'`);
+      }
+    } catch (err) {
+      console.log('Queue threshold columns migration:', err.message);
+    }
+    
     console.log('📊 Trajectory storage tables initialized');
+  }
+
+  /**
+   * Load queue→service zone links from zone_settings
+   * Queue zones (red) are linked to service zones (green) for waiting time calculation
+   */
+  loadZoneLinks(venueId) {
+    try {
+      // First try to load manually configured links
+      const links = this.db.prepare(`
+        SELECT zs.roi_id as queue_zone_id, zs.linked_service_zone_id as service_zone_id
+        FROM zone_settings zs
+        WHERE zs.venue_id = ? AND zs.linked_service_zone_id IS NOT NULL
+      `).all(venueId);
+      
+      for (const link of links) {
+        this.zoneLinks.set(link.queue_zone_id, link.service_zone_id);
+      }
+      
+      // Auto-detect queue→service links based on zone names and colors
+      if (links.length === 0) {
+        this.autoDetectZoneLinks(venueId);
+      }
+      
+      console.log(`📊 Loaded ${this.zoneLinks.size} queue→service zone links for venue ${venueId}`);
+    } catch (err) {
+      // Table might not have the column yet, try auto-detect
+      console.log('📊 Zone links table not ready, trying auto-detect');
+      this.autoDetectZoneLinks(venueId);
+    }
+  }
+
+  /**
+   * Auto-detect queue→service zone pairs based on naming convention
+   * Pattern: "Checkout X - Queue" paired with "Checkout X - Service"
+   */
+  autoDetectZoneLinks(venueId) {
+    try {
+      const zones = this.db.prepare(`
+        SELECT id, name, color, vertices FROM regions_of_interest WHERE venue_id = ?
+      `).all(venueId);
+      
+      const queueZones = new Map(); // key: checkout number, value: zone
+      const serviceZones = new Map(); // key: checkout number, value: zone
+      
+      for (const zone of zones) {
+        const name = zone.name || '';
+        const nameLower = name.toLowerCase();
+        
+        // Pattern: "Checkout X - Queue" or "Checkout X - Service"
+        const checkoutMatch = name.match(/checkout\s*(\d+)/i);
+        if (checkoutMatch) {
+          const checkoutNum = checkoutMatch[1];
+          if (nameLower.includes('queue')) {
+            queueZones.set(checkoutNum, { ...zone, vertices: JSON.parse(zone.vertices || '[]') });
+          } else if (nameLower.includes('service')) {
+            serviceZones.set(checkoutNum, { ...zone, vertices: JSON.parse(zone.vertices || '[]') });
+          }
+        }
+      }
+      
+      // Link queue zones to their matching service zones by checkout number
+      for (const [checkoutNum, queueZone] of queueZones) {
+        const serviceZone = serviceZones.get(checkoutNum);
+        if (serviceZone) {
+          this.zoneLinks.set(queueZone.id, serviceZone.id);
+          console.log(`📊 Linked: "${queueZone.name}" → "${serviceZone.name}"`);
+        }
+      }
+      
+      console.log(`📊 Auto-linked ${this.zoneLinks.size} queue→service zone pairs`);
+    } catch (err) {
+      console.error('Failed to auto-detect zone links:', err);
+    }
+  }
+
+  /**
+   * Get center point of a zone polygon
+   */
+  getZoneCenter(vertices) {
+    if (!vertices || vertices.length === 0) return { x: 0, z: 0 };
+    const sumX = vertices.reduce((sum, v) => sum + (v.x || 0), 0);
+    const sumZ = vertices.reduce((sum, v) => sum + (v.z || 0), 0);
+    return { x: sumX / vertices.length, z: sumZ / vertices.length };
+  }
+
+  /**
+   * Track queue session for a person (queue theory)
+   * Called when a person enters or is in a queue zone
+   */
+  updateQueueSession(venueId, trackKey, queueZoneId, currentRoiIds, timestamp) {
+    const serviceZoneId = this.zoneLinks.get(queueZoneId);
+    if (!serviceZoneId) return; // No linked service zone
+    
+    const sessionKey = `${trackKey}:${queueZoneId}`;
+    const inServiceZone = currentRoiIds.includes(serviceZoneId);
+    
+    if (!this.queueSessions.has(sessionKey)) {
+      // Person just entered queue zone - start new queue session
+      this.queueSessions.set(sessionKey, {
+        id: `qs-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+        venueId,
+        trackKey,
+        queueZoneId,
+        serviceZoneId,
+        queueEntryTime: timestamp,
+        queueExitTime: null,
+        serviceEntryTime: null,
+        serviceExitTime: null,
+        lastSeenInQueue: timestamp,
+        lastSeenInService: null,
+      });
+      console.log(`📊 Queue session started: ${trackKey} entered queue ${queueZoneId}`);
+    }
+    
+    const session = this.queueSessions.get(sessionKey);
+    
+    // Check if person transitioned to service zone
+    if (inServiceZone && !session.serviceEntryTime) {
+      session.queueExitTime = timestamp;
+      session.serviceEntryTime = timestamp;
+      session.lastSeenInService = timestamp;
+      console.log(`📊 Queue→Service transition: ${trackKey} (waited ${Math.round((timestamp - session.queueEntryTime) / 1000)}s)`);
+    } else if (inServiceZone && session.serviceEntryTime) {
+      // Still in service zone
+      session.lastSeenInService = timestamp;
+    } else if (!inServiceZone && !session.serviceEntryTime) {
+      // Still in queue zone (not yet in service)
+      session.lastSeenInQueue = timestamp;
+    }
+  }
+
+  /**
+   * Check if a track has any active queue sessions
+   */
+  hasActiveQueueSessions(trackKey) {
+    for (const sessionKey of this.queueSessions.keys()) {
+      if (sessionKey.startsWith(trackKey + ':')) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Check if any queue sessions should be finalized
+   */
+  checkQueueSessionEnds(trackKey, currentRoiIds, timestamp) {
+    const GRACE_MS = 1000; // 1 second grace period
+    
+    for (const [sessionKey, session] of this.queueSessions.entries()) {
+      if (!sessionKey.startsWith(trackKey + ':')) continue;
+      
+      const inQueueZone = currentRoiIds.includes(session.queueZoneId);
+      const inServiceZone = currentRoiIds.includes(session.serviceZoneId);
+      
+      // Person left service zone after being served - complete session
+      if (session.serviceEntryTime && !inServiceZone) {
+        const timeSinceService = timestamp - session.lastSeenInService;
+        if (timeSinceService > GRACE_MS) {
+          session.serviceExitTime = session.lastSeenInService;
+          this.finalizeQueueSession(session);
+          this.queueSessions.delete(sessionKey);
+        }
+      }
+      // Person left queue without entering service - abandoned
+      else if (!session.serviceEntryTime && !inQueueZone && !inServiceZone) {
+        const timeSinceQueue = timestamp - session.lastSeenInQueue;
+        if (timeSinceQueue > GRACE_MS) {
+          session.queueExitTime = session.lastSeenInQueue;
+          session.isAbandoned = true;
+          this.finalizeQueueSession(session);
+          this.queueSessions.delete(sessionKey);
+        }
+      }
+    }
+  }
+
+  /**
+   * Finalize a queue session and save to database
+   */
+  finalizeQueueSession(session) {
+    const waitingTimeMs = session.serviceEntryTime 
+      ? session.serviceEntryTime - session.queueEntryTime 
+      : (session.queueExitTime || Date.now()) - session.queueEntryTime;
+    
+    const serviceTimeMs = session.serviceEntryTime && session.serviceExitTime
+      ? session.serviceExitTime - session.serviceEntryTime
+      : null;
+    
+    const timeInSystemMs = session.serviceExitTime
+      ? session.serviceExitTime - session.queueEntryTime
+      : null;
+    
+    const isComplete = session.serviceEntryTime && session.serviceExitTime ? 1 : 0;
+    const isAbandoned = session.isAbandoned ? 1 : 0;
+    
+    try {
+      this.db.prepare(`
+        INSERT INTO queue_sessions (id, venue_id, track_key, queue_zone_id, service_zone_id, 
+          queue_entry_time, queue_exit_time, service_entry_time, service_exit_time,
+          waiting_time_ms, service_time_ms, time_in_system_ms, is_complete, is_abandoned)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        session.id,
+        session.venueId,
+        session.trackKey,
+        session.queueZoneId,
+        session.serviceZoneId,
+        session.queueEntryTime,
+        session.queueExitTime,
+        session.serviceEntryTime,
+        session.serviceExitTime,
+        waitingTimeMs,
+        serviceTimeMs,
+        timeInSystemMs,
+        isComplete,
+        isAbandoned
+      );
+      
+      const status = isAbandoned ? 'ABANDONED' : (isComplete ? 'COMPLETE' : 'PARTIAL');
+      console.log(`📊 Queue session ${status}: wait=${Math.round(waitingTimeMs/1000)}s, service=${serviceTimeMs ? Math.round(serviceTimeMs/1000) + 's' : 'N/A'}`);
+      
+      this.emit('queue_session_ended', {
+        ...session,
+        waitingTimeMs,
+        serviceTimeMs,
+        timeInSystemMs,
+        isComplete,
+        isAbandoned,
+      });
+    } catch (err) {
+      console.error('Failed to save queue session:', err);
+    }
+  }
+
+  /**
+   * Get current real-time waiting time for people currently in ANY zone
+   * Uses in-memory visit sessions (not database) for instant updates
+   */
+  getCurrentWaitingTimeMs(roiId) {
+    const now = Date.now();
+    let totalWaitMs = 0;
+    let count = 0;
+    
+    // First check queue sessions for queue zones
+    for (const [sessionKey, session] of this.queueSessions.entries()) {
+      if (session.queueZoneId === roiId && !session.serviceEntryTime) {
+        const waitSoFar = now - session.queueEntryTime;
+        totalWaitMs += waitSoFar;
+        count++;
+      }
+    }
+    
+    // If no queue sessions, check regular visit sessions
+    if (count === 0) {
+      for (const [sessionKey, session] of this.visitSessions.entries()) {
+        if (session.roiId === roiId) {
+          const waitSoFar = now - session.startTime;
+          totalWaitMs += waitSoFar;
+          count++;
+        }
+      }
+    }
+    
+    return count > 0 ? totalWaitMs / count : 0;
+  }
+
+  /**
+   * Get live stats for a zone from in-memory sessions
+   */
+  getLiveZoneStats(roiId) {
+    const now = Date.now();
+    let totalTimeMs = 0;
+    let count = 0;
+    let maxTimeMs = 0;
+    
+    for (const [sessionKey, session] of this.visitSessions.entries()) {
+      if (session.roiId === roiId) {
+        const timeInZone = now - session.startTime;
+        totalTimeMs += timeInZone;
+        maxTimeMs = Math.max(maxTimeMs, timeInZone);
+        count++;
+      }
+    }
+    
+    return {
+      currentOccupancy: count,
+      avgTimeInZoneMs: count > 0 ? totalTimeMs / count : 0,
+      maxTimeInZoneMs: maxTimeMs,
+      avgTimeInZoneSec: count > 0 ? Math.round(totalTimeMs / count / 1000) : 0,
+      avgTimeInZoneMin: count > 0 ? Math.round(totalTimeMs / count / 60000 * 10) / 10 : 0,
+    };
+  }
+
+  /**
+   * Get queue KPIs for a specific queue zone
+   */
+  getQueueKPIs(queueZoneId, startTime, endTime) {
+    const result = this.db.prepare(`
+      SELECT 
+        COUNT(*) as total_sessions,
+        COUNT(CASE WHEN is_complete = 1 THEN 1 END) as completed_sessions,
+        COUNT(CASE WHEN is_abandoned = 1 THEN 1 END) as abandoned_sessions,
+        AVG(waiting_time_ms) as avg_waiting_time_ms,
+        AVG(CASE WHEN is_complete = 1 THEN waiting_time_ms END) as avg_waiting_time_complete_ms,
+        MAX(waiting_time_ms) as max_waiting_time_ms,
+        AVG(service_time_ms) as avg_service_time_ms,
+        AVG(time_in_system_ms) as avg_time_in_system_ms,
+        COUNT(*) * 1.0 / NULLIF((? - ?) / 3600000.0, 0) as arrival_rate_per_hour
+      FROM queue_sessions
+      WHERE queue_zone_id = ? AND queue_entry_time >= ? AND queue_entry_time < ?
+    `).get(endTime, startTime, queueZoneId, startTime, endTime);
+    
+    // Calculate percentiles
+    const waitTimes = this.db.prepare(`
+      SELECT waiting_time_ms FROM queue_sessions
+      WHERE queue_zone_id = ? AND queue_entry_time >= ? AND queue_entry_time < ?
+      ORDER BY waiting_time_ms
+    `).all(queueZoneId, startTime, endTime);
+    
+    const p50 = this.percentile(waitTimes.map(r => r.waiting_time_ms), 50);
+    const p90 = this.percentile(waitTimes.map(r => r.waiting_time_ms), 90);
+    const p95 = this.percentile(waitTimes.map(r => r.waiting_time_ms), 95);
+    
+    // Get current real-time waiting time for people in queue NOW
+    const currentWaitMs = this.getCurrentWaitingTimeMs(queueZoneId);
+    
+    // Use current wait time if we have active sessions, otherwise use historical average
+    const effectiveWaitMs = currentWaitMs > 0 ? currentWaitMs : (result?.avg_waiting_time_ms || 0);
+    
+    return {
+      totalSessions: result?.total_sessions || 0,
+      completedSessions: result?.completed_sessions || 0,
+      abandonedSessions: result?.abandoned_sessions || 0,
+      abandonRate: result?.total_sessions > 0 
+        ? ((result.abandoned_sessions || 0) / result.total_sessions) * 100 
+        : 0,
+      avgWaitingTimeMs: effectiveWaitMs,
+      historicalAvgWaitMs: result?.avg_waiting_time_ms || 0,
+      currentWaitMs: currentWaitMs,
+      avgWaitingTimeCompleteMs: result?.avg_waiting_time_complete_ms || 0,
+      maxWaitingTimeMs: result?.max_waiting_time_ms || 0,
+      medianWaitingTimeMs: p50 || 0,
+      p90WaitingTimeMs: p90 || 0,
+      p95WaitingTimeMs: p95 || 0,
+      avgServiceTimeMs: result?.avg_service_time_ms || 0,
+      avgTimeInSystemMs: result?.avg_time_in_system_ms || 0,
+      arrivalRatePerHour: result?.arrival_rate_per_hour || 0,
+      // Formatted for display
+      avgWaitingTimeSec: Math.round(effectiveWaitMs / 1000),
+      avgWaitingTimeMin: Math.round(effectiveWaitMs / 60000 * 10) / 10,
+    };
+  }
+
+  /**
+   * Calculate percentile from sorted array
+   */
+  percentile(arr, p) {
+    if (arr.length === 0) return 0;
+    const idx = Math.ceil((p / 100) * arr.length) - 1;
+    return arr[Math.max(0, idx)];
   }
 
   start() {
@@ -225,6 +669,12 @@ export class TrajectoryStorageService extends EventEmitter {
     
     // Start DB sync interval
     this.syncInterval = setInterval(() => this.syncToDatabase(), this.DB_SYNC_MS);
+    
+    // Start cleanup interval to prevent database bloat
+    this.cleanupInterval = setInterval(() => this.cleanupOldData(), this.CLEANUP_MS);
+    
+    // Run initial cleanup
+    setTimeout(() => this.cleanupOldData(), 10000);
     
     console.log('📊 Trajectory storage service started');
   }
@@ -242,11 +692,89 @@ export class TrajectoryStorageService extends EventEmitter {
       this.syncInterval = null;
     }
     
+    if (this.cleanupInterval) {
+      clearInterval(this.cleanupInterval);
+      this.cleanupInterval = null;
+    }
+    
     // Final flush before stopping
     this.flushBuffer();
     this.syncToDatabase();
     
     console.log('📊 Trajectory storage service stopped');
+  }
+
+  /**
+   * Clean up old data to prevent database bloat
+   * IMPORTANT: Aggregates data BEFORE deleting to preserve historical KPIs
+   */
+  cleanupOldData() {
+    const cutoffTime = Date.now() - this.DATA_RETENTION_MS;
+    
+    try {
+      // STEP 1: Aggregate hourly data BEFORE deleting raw data
+      this.aggregateHourlyData(cutoffTime);
+      
+      // STEP 2: Update daily aggregates
+      this.updateDailyAggregates();
+      
+      // STEP 3: Now safe to delete old raw data (aggregated data preserved)
+      const posResult = this.db.prepare(`
+        DELETE FROM track_positions WHERE timestamp < ?
+      `).run(cutoffTime);
+      
+      // Delete old zone occupancy snapshots
+      const occResult = this.db.prepare(`
+        DELETE FROM zone_occupancy WHERE timestamp < ?
+      `).run(cutoffTime);
+      
+      // Delete old activity ledger entries (keep 7 days)
+      const ledgerCutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;
+      const ledgerResult = this.db.prepare(`
+        DELETE FROM activity_ledger WHERE timestamp < ? AND acknowledged = 1
+      `).run(ledgerCutoff);
+      
+      // Clean up stale visit sessions in memory (older than 1 hour)
+      const sessionCutoff = Date.now() - 60 * 60 * 1000;
+      let staleSessions = 0;
+      for (const [key, session] of this.visitSessions.entries()) {
+        if (session.lastSeen < sessionCutoff) {
+          this.visitSessions.delete(key);
+          staleSessions++;
+        }
+      }
+      
+      // Clean up stale queue sessions
+      let staleQueues = 0;
+      for (const [key, session] of this.queueSessions.entries()) {
+        const lastActivity = session.lastSeenInService || session.lastSeenInQueue || session.queueEntryTime;
+        if (lastActivity < sessionCutoff) {
+          this.queueSessions.delete(key);
+          staleQueues++;
+        }
+      }
+      
+      // Clean up lastSampleTime map
+      for (const [trackKey, time] of this.lastSampleTime.entries()) {
+        if (time < sessionCutoff) {
+          this.lastSampleTime.delete(trackKey);
+        }
+      }
+      
+      const totalDeleted = posResult.changes + occResult.changes + ledgerResult.changes;
+      if (totalDeleted > 0 || staleSessions > 0 || staleQueues > 0) {
+        console.log(`🧹 Cleanup: ${posResult.changes} positions, ${occResult.changes} occupancy, ${ledgerResult.changes} ledger, ${staleSessions} stale sessions, ${staleQueues} stale queues`);
+      }
+      
+      // Run VACUUM periodically to reclaim space (every ~4 hours based on 15min interval)
+      if (Math.random() < 0.0625) { // ~1/16 chance = every ~4 hours
+        console.log('🧹 Running database VACUUM...');
+        this.db.exec('VACUUM');
+        console.log('🧹 VACUUM complete');
+      }
+    } catch (err) {
+      console.error('Failed to cleanup old data:', err);
+    }
   }
 
   /**
@@ -284,13 +812,27 @@ export class TrajectoryStorageService extends EventEmitter {
     
     this.buffer.get(venueId).push(positionData);
     
+    // Cache the ROI IDs to avoid repeated map() calls
+    const currentRoiIds = currentRois.map(r => r.id);
+    
     // Update visit sessions for each ROI
     for (const roi of currentRois) {
       this.updateVisitSession(venueId, track.trackKey, roi.id, positionData);
+      
+      // Track queue sessions for queue zones (per queue theory)
+      // Only call if this ROI is a linked queue zone
+      if (this.zoneLinks.has(roi.id)) {
+        this.updateQueueSession(venueId, track.trackKey, roi.id, currentRoiIds, now);
+      }
     }
     
     // Check for visit end in ROIs the track left
     this.checkVisitEnds(venueId, track.trackKey, currentRois);
+    
+    // Check for queue session ends (only if we have any active sessions for this track)
+    if (this.hasActiveQueueSessions(track.trackKey)) {
+      this.checkQueueSessionEnds(track.trackKey, currentRoiIds, now);
+    }
   }
 
   /**
@@ -339,10 +881,12 @@ export class TrajectoryStorageService extends EventEmitter {
         positions: [positionData],
       });
     } else {
-      // Update existing session
+      // Update existing session (limit positions to prevent memory leak)
       const session = this.visitSessions.get(sessionKey);
       session.lastSeen = now;
-      session.positions.push(positionData);
+      if (session.positions.length < this.MAX_POSITIONS_PER_SESSION) {
+        session.positions.push(positionData);
+      }
     }
   }
 
@@ -448,20 +992,16 @@ export class TrajectoryStorageService extends EventEmitter {
   }
 
   /**
-   * Write a finalized visit to a pending file
+   * Write a finalized visit to a pending file (append mode - NDJSON format)
+   * Uses newline-delimited JSON for efficient append without reading whole file
    */
   writeVisitToFile(visit) {
-    const filename = `visits_pending.json`;
+    const filename = `visits_pending.ndjson`;
     const filepath = path.join(this.dataDir, filename);
     
     try {
-      let visits = [];
-      if (fs.existsSync(filepath)) {
-        const content = fs.readFileSync(filepath, 'utf-8');
-        visits = JSON.parse(content);
-      }
-      visits.push(visit);
-      fs.writeFileSync(filepath, JSON.stringify(visits, null, 2));
+      // Append single line (NDJSON format - one JSON object per line)
+      fs.appendFileSync(filepath, JSON.stringify(visit) + '\n');
     } catch (err) {
       console.error('Failed to write visit to file:', err);
     }
@@ -529,24 +1069,64 @@ export class TrajectoryStorageService extends EventEmitter {
   }
 
   /**
-   * Sync visit JSON files to database
+   * Sync visit files to database (supports both old JSON and new NDJSON formats)
    */
   syncVisitFiles() {
-    const filepath = path.join(this.dataDir, 'visits_pending.json');
-    if (!fs.existsSync(filepath)) return;
+    // Try new NDJSON format first, then fall back to old JSON format
+    const ndjsonPath = path.join(this.dataDir, 'visits_pending.ndjson');
+    const jsonPath = path.join(this.dataDir, 'visits_pending.json');
+    
+    let filepath = null;
+    let isNdjson = false;
+    
+    if (fs.existsSync(ndjsonPath)) {
+      filepath = ndjsonPath;
+      isNdjson = true;
+    } else if (fs.existsSync(jsonPath)) {
+      filepath = jsonPath;
+      isNdjson = false;
+    } else {
+      return; // No files to sync
+    }
     
     try {
+      const stats = fs.statSync(filepath);
+      console.log(`📊 Syncing ${isNdjson ? 'NDJSON' : 'JSON'} visits (${(stats.size / 1024 / 1024).toFixed(2)} MB)...`);
+      
       const content = fs.readFileSync(filepath, 'utf-8');
-      const visits = JSON.parse(content);
+      let visits;
+      
+      if (isNdjson) {
+        // Parse NDJSON (one JSON object per line)
+        visits = content.trim().split('\n').filter(line => line.trim()).map(line => {
+          try {
+            return JSON.parse(line);
+          } catch (e) {
+            console.error('Failed to parse NDJSON line:', line.substring(0, 100));
+            return null;
+          }
+        }).filter(v => v !== null);
+      } else {
+        // Parse old JSON array format
+        visits = JSON.parse(content);
+      }
+      
+      console.log(`📊 Parsed ${visits.length} visits to sync`);
+      
+      if (visits.length === 0) {
+        fs.unlinkSync(filepath);
+        return;
+      }
       
       const insertStmt = this.db.prepare(`
         INSERT OR IGNORE INTO zone_visits (id, venue_id, roi_id, track_key, start_time, end_time, duration_ms, is_complete_track, is_dwell, is_engagement, entry_position_x, entry_position_z, exit_position_x, exit_position_z)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
       
+      let insertedCount = 0;
       const insertMany = this.db.transaction((visits) => {
         for (const v of visits) {
-          insertStmt.run(
+          const result = insertStmt.run(
             v.id,
             v.venueId,
             v.roiId,
@@ -562,15 +1142,110 @@ export class TrajectoryStorageService extends EventEmitter {
             v.exitPosition?.x,
             v.exitPosition?.z
           );
+          if (result.changes > 0) insertedCount++;
         }
       });
       
       insertMany(visits);
       
+      console.log(`📊 Inserted ${insertedCount} new visits (${visits.length - insertedCount} duplicates ignored)`);
+      
       // Clear the file
       fs.unlinkSync(filepath);
+      console.log('📊 visits_pending.json deleted after sync');
     } catch (err) {
-      console.error('Failed to sync visits to database:', err);
+      console.error('❌ Failed to sync visits to database:', err);
+    }
+  }
+
+  /**
+   * Aggregate hourly KPI data from raw tables before cleanup
+   * This preserves historical granular data for day/week/month views
+   */
+  aggregateHourlyData(beforeTimestamp) {
+    try {
+      // Get distinct hours that have data to aggregate
+      const hoursWithData = this.db.prepare(`
+        SELECT DISTINCT 
+          venue_id,
+          roi_id,
+          date(timestamp/1000, 'unixepoch', 'localtime') as date,
+          strftime('%H', timestamp/1000, 'unixepoch', 'localtime') as hour
+        FROM zone_occupancy
+        WHERE timestamp < ?
+        GROUP BY venue_id, roi_id, date, hour
+      `).all(beforeTimestamp);
+      
+      if (hoursWithData.length === 0) return;
+      
+      const upsertHourly = this.db.prepare(`
+        INSERT INTO zone_kpi_hourly (venue_id, roi_id, date, hour, visits, time_spent_ms, dwells, engagements, peak_occupancy, avg_occupancy, avg_waiting_time_ms)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(venue_id, roi_id, date, hour) DO UPDATE SET
+          visits = visits + excluded.visits,
+          time_spent_ms = time_spent_ms + excluded.time_spent_ms,
+          dwells = dwells + excluded.dwells,
+          engagements = engagements + excluded.engagements,
+          peak_occupancy = MAX(peak_occupancy, excluded.peak_occupancy),
+          avg_occupancy = (avg_occupancy + excluded.avg_occupancy) / 2,
+          avg_waiting_time_ms = (avg_waiting_time_ms + excluded.avg_waiting_time_ms) / 2,
+          updated_at = datetime('now')
+      `);
+      
+      let aggregatedCount = 0;
+      for (const { venue_id, roi_id, date, hour } of hoursWithData) {
+        const hourInt = parseInt(hour);
+        const hourStart = new Date(`${date}T${hour.padStart(2, '0')}:00:00`).getTime();
+        const hourEnd = hourStart + 60 * 60 * 1000;
+        
+        // Get visit stats for this hour
+        const visitStats = this.db.prepare(`
+          SELECT 
+            COUNT(DISTINCT track_key) as visits,
+            SUM(duration_ms) as time_spent_ms,
+            SUM(CASE WHEN is_dwell = 1 THEN 1 ELSE 0 END) as dwells,
+            SUM(CASE WHEN is_engagement = 1 THEN 1 ELSE 0 END) as engagements
+          FROM zone_visits
+          WHERE roi_id = ? AND start_time >= ? AND start_time < ?
+        `).get(roi_id, hourStart, hourEnd);
+        
+        // Get occupancy stats for this hour
+        const occStats = this.db.prepare(`
+          SELECT 
+            MAX(occupancy_count) as peak,
+            AVG(occupancy_count) as avg
+          FROM zone_occupancy
+          WHERE roi_id = ? AND timestamp >= ? AND timestamp < ?
+        `).get(roi_id, hourStart, hourEnd);
+        
+        // Get queue waiting time stats
+        const queueStats = this.db.prepare(`
+          SELECT AVG(waiting_time_ms) as avg_wait
+          FROM queue_sessions
+          WHERE queue_zone_id = ? AND queue_entry_time >= ? AND queue_entry_time < ?
+        `).get(roi_id, hourStart, hourEnd);
+        
+        upsertHourly.run(
+          venue_id,
+          roi_id,
+          date,
+          hourInt,
+          visitStats?.visits || 0,
+          visitStats?.time_spent_ms || 0,
+          visitStats?.dwells || 0,
+          visitStats?.engagements || 0,
+          occStats?.peak || 0,
+          occStats?.avg || 0,
+          queueStats?.avg_wait || 0
+        );
+        aggregatedCount++;
+      }
+      
+      if (aggregatedCount > 0) {
+        console.log(`📊 Aggregated ${aggregatedCount} hourly KPI records`);
+      }
+    } catch (err) {
+      console.error('Failed to aggregate hourly data:', err);
     }
   }
 

@@ -37,6 +37,8 @@ interface PreviewPanelProps {
   onAutoPlace?: (roi: RoiVertex[], settings?: AutoplaceSettings) => void
   lidarRoi?: RoiVertex[] | null
   onSetLidarRoi?: (roi: RoiVertex[] | null) => void
+  onRefreshModels?: () => Promise<void>
+  layoutVersionId?: string | null  // For saving ROI by layout version ID
 }
 
 type Tool = 'pan' | 'select' | 'rectangle' | 'place_lidar' | 'draw_roi'
@@ -69,7 +71,9 @@ export default function PreviewPanel({
   onRunSimulation,
   onAutoPlace,
   lidarRoi: lidarRoiProp,
-  onSetLidarRoi
+  onSetLidarRoi,
+  onRefreshModels,
+  layoutVersionId
 }: PreviewPanelProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const [dimensions, setDimensions] = useState({ width: 800, height: 600 })
@@ -102,23 +106,55 @@ export default function PreviewPanel({
   const lidarRoi = lidarRoiProp !== undefined ? lidarRoiProp : localLidarRoi
   const setLidarRoi = onSetLidarRoi || ((roi: RoiVertex[] | null) => {
     setLocalLidarRoi(roi)
-    // Persist to localStorage
+    // Persist to localStorage with both filename and layoutVersionId keys
     const roiKey = `dwg-lidar-roi-${importData.filename || 'default'}`
     if (roi) {
       localStorage.setItem(roiKey, JSON.stringify(roi))
+      // Also save by layoutVersionId for MainViewport DWG mode access
+      if (layoutVersionId) {
+        localStorage.setItem(`dwg-lidar-roi-by-layout-${layoutVersionId}`, JSON.stringify(roi))
+      }
     } else {
       localStorage.removeItem(roiKey)
+      if (layoutVersionId) {
+        localStorage.removeItem(`dwg-lidar-roi-by-layout-${layoutVersionId}`)
+      }
     }
   })
   
   // LiDAR model settings panel state
   const [showModelSettings, setShowModelSettings] = useState(false)
+  const [editingModelId, setEditingModelId] = useState<string | null>(null) // null = create new, string = edit existing
   const [newModelName, setNewModelName] = useState('New LiDAR')
   const [newModelHfov, setNewModelHfov] = useState(360)
   const [newModelVfov, setNewModelVfov] = useState(30)
   const [newModelRange, setNewModelRange] = useState(15)
   const [newModelOverlap, setNewModelOverlap] = useState(2) // Min overlap in meters for tracking continuity
   const [isCreatingModel, setIsCreatingModel] = useState(false)
+  
+  // Helper to open model settings modal for editing an existing model
+  const openEditModel = (model: LidarModel) => {
+    console.log('[Model Settings] Opening edit for model:', model)
+    setEditingModelId(model.id)
+    setNewModelName(model.name)
+    setNewModelHfov(model.hfov_deg || 360)
+    setNewModelVfov(model.vfov_deg || 30)
+    setNewModelRange(model.range_m || 15)
+    setNewModelOverlap((model.notes as { min_overlap_m?: number })?.min_overlap_m || 2)
+    setShowModelSettings(true)
+  }
+  
+  // Helper to reset form for creating new model
+  const openCreateModel = () => {
+    console.log('[Model Settings] Opening create new model dialog')
+    setEditingModelId(null)
+    setNewModelName('New LiDAR')
+    setNewModelHfov(360)
+    setNewModelVfov(30)
+    setNewModelRange(15)
+    setNewModelOverlap(2)
+    setShowModelSettings(true)
+  }
   
   // Autoplace solver settings state - persisted to localStorage
   const autoplaceStorageKey = `dwg-autoplace-settings-${importData.filename || 'default'}`
@@ -874,12 +910,27 @@ export default function PreviewPanel({
             <span className="text-xs text-gray-500 italic">No models</span>
           )}
           <button
-            onClick={() => setShowModelSettings(true)}
+            onClick={openCreateModel}
             className="p-1 text-gray-400 hover:text-white rounded hover:bg-gray-700"
-            title="Add/Configure LiDAR Model"
+            title="Add New LiDAR Model"
           >
             <Plus className="w-4 h-4" />
           </button>
+          {selectedLidarModelId && lidarModels.find(m => m.id === selectedLidarModelId) && (
+            <button
+              onClick={() => {
+                console.log('[Model Settings] Pencil clicked, selectedLidarModelId:', selectedLidarModelId)
+                console.log('[Model Settings] Available models:', lidarModels)
+                const model = lidarModels.find(m => m.id === selectedLidarModelId)
+                console.log('[Model Settings] Found model:', model)
+                if (model) openEditModel(model)
+              }}
+              className="p-1 text-gray-400 hover:text-white rounded hover:bg-gray-700"
+              title="Edit Selected Model Settings"
+            >
+              <Pencil className="w-4 h-4" />
+            </button>
+          )}
           
           <button
             onClick={() => setActiveTool('place_lidar')}
@@ -1187,11 +1238,11 @@ export default function PreviewPanel({
       {/* LiDAR Model Settings Modal */}
       {showModelSettings && (
         <div className="absolute inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-gray-800 rounded-lg p-4 w-80 shadow-xl border border-gray-700">
+          <div className="bg-gray-800 rounded-lg p-4 w-96 shadow-xl border border-gray-700">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-white font-medium flex items-center gap-2">
                 <Settings className="w-4 h-4" />
-                Add LiDAR Model
+                {editingModelId ? 'Edit LiDAR Model' : 'Add LiDAR Model'}
               </h3>
               <button
                 onClick={() => setShowModelSettings(false)}
@@ -1200,6 +1251,27 @@ export default function PreviewPanel({
                 <X className="w-4 h-4" />
               </button>
             </div>
+            
+            {/* Existing Models List (only in create mode) */}
+            {!editingModelId && lidarModels.length > 0 && (
+              <div className="mb-4 pb-3 border-b border-gray-700">
+                <label className="text-xs text-gray-400 block mb-2">Existing Models (click to edit)</label>
+                <div className="space-y-1 max-h-32 overflow-y-auto">
+                  {lidarModels.map(m => (
+                    <button
+                      key={m.id}
+                      onClick={() => openEditModel(m)}
+                      className="w-full text-left px-2 py-1.5 rounded bg-gray-700 hover:bg-gray-600 text-sm flex justify-between items-center"
+                    >
+                      <span className="text-white">{m.name}</span>
+                      <span className="text-gray-400 text-xs">
+                        {m.range_m}m | {m.hfov_deg}°×{m.vfov_deg}°
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
             
             <div className="space-y-3">
               <div>
@@ -1268,10 +1340,22 @@ export default function PreviewPanel({
               
               <div className="flex gap-2 mt-4">
                 <button
-                  onClick={() => setShowModelSettings(false)}
+                  onClick={() => {
+                    if (editingModelId) {
+                      // Go back to create mode
+                      setEditingModelId(null)
+                      setNewModelName('New LiDAR')
+                      setNewModelHfov(360)
+                      setNewModelVfov(30)
+                      setNewModelRange(15)
+                      setNewModelOverlap(2)
+                    } else {
+                      setShowModelSettings(false)
+                    }
+                  }}
                   className="flex-1 px-3 py-2 bg-gray-700 hover:bg-gray-600 text-gray-300 text-sm rounded"
                 >
-                  Cancel
+                  {editingModelId ? 'Back' : 'Cancel'}
                 </button>
                 <button
                   onClick={async () => {
@@ -1279,32 +1363,54 @@ export default function PreviewPanel({
                     setIsCreatingModel(true)
                     try {
                       const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3001'
-                      const res = await fetch(`${API_BASE}/api/lidar/models`, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                          name: newModelName,
-                          hfov_deg: newModelHfov,
-                          vfov_deg: newModelVfov,
-                          range_m: newModelRange,
-                          dome_mode: true,
-                          notes: { min_overlap_m: newModelOverlap }
+                      
+                      if (editingModelId) {
+                        // UPDATE existing model
+                        const res = await fetch(`${API_BASE}/api/lidar/models/${editingModelId}`, {
+                          method: 'PUT',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({
+                            name: newModelName,
+                            hfov_deg: newModelHfov,
+                            vfov_deg: newModelVfov,
+                            range_m: newModelRange,
+                            dome_mode: true,
+                            notes: { min_overlap_m: newModelOverlap }
+                          })
                         })
-                      })
-                      if (res.ok) {
-                        const model = await res.json()
-                        onSelectLidarModel?.(model.id)
-                        setShowModelSettings(false)
-                        // Reset form
-                        setNewModelName('New LiDAR')
-                        setNewModelHfov(360)
-                        setNewModelVfov(30)
-                        setNewModelRange(15)
-                        // Note: parent needs to refresh models list
-                        window.location.reload() // Simple refresh for now
+                        if (res.ok) {
+                          console.log('[Model Settings] Model updated successfully')
+                          setShowModelSettings(false)
+                          // Refresh models list without full page reload
+                          await onRefreshModels?.()
+                        } else {
+                          console.error('Failed to update model:', await res.text())
+                        }
+                      } else {
+                        // CREATE new model
+                        const res = await fetch(`${API_BASE}/api/lidar/models`, {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({
+                            name: newModelName,
+                            hfov_deg: newModelHfov,
+                            vfov_deg: newModelVfov,
+                            range_m: newModelRange,
+                            dome_mode: true,
+                            notes: { min_overlap_m: newModelOverlap }
+                          })
+                        })
+                        if (res.ok) {
+                          const model = await res.json()
+                          console.log('[Model Settings] Model created successfully:', model.id)
+                          onSelectLidarModel?.(model.id)
+                          setShowModelSettings(false)
+                          // Refresh models list without full page reload
+                          await onRefreshModels?.()
+                        }
                       }
                     } catch (err) {
-                      console.error('Failed to create model:', err)
+                      console.error('Failed to save model:', err)
                     } finally {
                       setIsCreatingModel(false)
                     }
@@ -1312,7 +1418,7 @@ export default function PreviewPanel({
                   disabled={isCreatingModel || !newModelName.trim()}
                   className="flex-1 px-3 py-2 bg-blue-600 hover:bg-blue-500 disabled:bg-gray-600 text-white text-sm rounded"
                 >
-                  {isCreatingModel ? 'Creating...' : 'Create Model'}
+                  {isCreatingModel ? 'Saving...' : editingModelId ? 'Update Model' : 'Create Model'}
                 </button>
               </div>
             </div>
@@ -1651,6 +1757,10 @@ export default function PreviewPanel({
             mount_y_m: autoplaceMountHeight
           }}
           onClose={() => setShowDebugPanel(false)}
+          lidarInstances={lidarInstances}
+          lidarModels={lidarModels}
+          projectName={importData.filename || 'Untitled Project'}
+          layoutVersionId={importData.filename || ''}
         />
       )}
     </div>

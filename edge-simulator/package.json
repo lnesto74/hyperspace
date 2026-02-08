@@ -5,7 +5,11 @@
   "description": "LiDAR edge simulator for Hyperspace - simulates people trajectories via MQTT",
   "scripts": {
     "start": "node simulator.js",
-    "dev": "node --watch simulator.js"
+    "start:enhanced": "node simulator-enhanced.js",
+    "start:queue": "SIMULATION_MODE=queue node simulator-enhanced.js",
+    "start:mixed": "SIMULATION_MODE=mixed node simulator-enhanced.js",
+    "dev": "node --watch simulator.js",
+    "dev:enhanced": "node --watch simulator-enhanced.js"
   },
   "dependencies": {
     "mqtt": "^5.3.4"

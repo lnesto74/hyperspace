@@ -1,14 +1,19 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { Play, Square, Settings, Wifi, WifiOff, Radio, Clock, Users, Move, Save, Check } from 'lucide-react'
+import { Play, Square, Settings, Wifi, WifiOff, Radio, Clock, Users, Move, Save, Check, ShoppingCart, Shuffle, Layers } from 'lucide-react'
 
 interface Config {
   mqttBroker: string
+  backendUrl: string
   deviceId: string
   venueId: string
   frequencyHz: number
   personCount: number
+  targetPeopleCount: number
+  avgStayTime: number
   venueWidth: number
   venueDepth: number
+  simulationMode: 'random' | 'queue' | 'mixed'
+  queueSpawnInterval: number
 }
 
 interface Status {
@@ -17,17 +22,23 @@ interface Status {
   tracksSent: number
   uptime: number
   lastError: string | null
+  activePeopleCount: number
   config: Config
 }
 
 const defaultConfig: Config = {
   mqttBroker: 'mqtt://localhost:1883',
+  backendUrl: 'http://localhost:3001',
   deviceId: 'lidar-edge-001',
   venueId: 'default-venue',
   frequencyHz: 10,
   personCount: 5,
+  targetPeopleCount: 20,
+  avgStayTime: 5,
   venueWidth: 20,
   venueDepth: 15,
+  simulationMode: 'random',
+  queueSpawnInterval: 5,
 }
 
 export default function App() {
@@ -36,18 +47,31 @@ export default function App() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved'>('idle')
-  const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+  const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const isUserEditing = useRef(false)
+  const initialLoadDone = useRef(false)
 
   const fetchStatus = async () => {
+    // Skip config updates while user is editing
+    if (isUserEditing.current) {
+      // Still fetch status for display updates, but don't update config
+      try {
+        const res = await fetch('/api/status')
+        const data = await res.json()
+        // Only update status fields, not config
+        setStatus(prev => prev ? { ...prev, isRunning: data.isRunning, mqttConnected: data.mqttConnected, tracksSent: data.tracksSent, uptime: data.uptime, lastError: data.lastError } : data)
+      } catch (err) {
+        console.error('Failed to fetch status:', err)
+      }
+      return
+    }
+    
     try {
       const res = await fetch('/api/status')
       const data = await res.json()
       setStatus(data)
-      // Only update config from server if user is not actively editing
-      if (!isUserEditing.current) {
-        setConfig(data.config)
-      }
+      setConfig(data.config)
+      initialLoadDone.current = true
     } catch (err) {
       console.error('Failed to fetch status:', err)
     }
@@ -55,7 +79,7 @@ export default function App() {
 
   useEffect(() => {
     fetchStatus()
-    const interval = setInterval(fetchStatus, 1000)
+    const interval = setInterval(fetchStatus, 2000) // Slower interval
     return () => clearInterval(interval)
   }, [])
 
@@ -75,12 +99,20 @@ export default function App() {
     }
   }, [])
 
+  const handleFocus = () => {
+    isUserEditing.current = true
+  }
+
+  const handleBlur = () => {
+    // Delay clearing editing flag to allow final save to complete
+    setTimeout(() => {
+      isUserEditing.current = false
+    }, 2000)
+  }
+
   const updateConfig = (updates: Partial<Config>) => {
     const newConfig = { ...config, ...updates }
     setConfig(newConfig)
-    
-    // Mark as editing to prevent fetch from overwriting
-    isUserEditing.current = true
     
     // Debounced autosave - wait 500ms after last change
     if (saveTimeoutRef.current) {
@@ -88,8 +120,6 @@ export default function App() {
     }
     saveTimeoutRef.current = setTimeout(() => {
       saveConfig(newConfig)
-      // Allow fetch to update config again after save completes
-      setTimeout(() => { isUserEditing.current = false }, 1000)
     }, 500)
   }
 
@@ -159,7 +189,11 @@ export default function App() {
             </div>
           </div>
 
-          <div className="grid grid-cols-3 gap-4 mb-6">
+          <div className="grid grid-cols-4 gap-4 mb-6">
+            <div className="bg-[#0f0f14] rounded-lg p-4 text-center">
+              <div className="text-2xl font-bold text-green-400">{status?.activePeopleCount || 0}</div>
+              <div className="text-xs text-gray-500">People in Scene</div>
+            </div>
             <div className="bg-[#0f0f14] rounded-lg p-4 text-center">
               <div className="text-2xl font-bold text-white">{status?.tracksSent.toLocaleString() || 0}</div>
               <div className="text-xs text-gray-500">Tracks Sent</div>
@@ -239,6 +273,8 @@ export default function App() {
                 type="text"
                 value={config.mqttBroker}
                 onChange={(e) => updateConfig({ mqttBroker: e.target.value })}
+                onFocus={handleFocus}
+                onBlur={handleBlur}
                 disabled={status?.isRunning}
                 className="w-full bg-[#0f0f14] border border-gray-700 rounded-lg px-4 py-2 text-white focus:border-blue-500 focus:outline-none disabled:opacity-50"
                 placeholder="mqtt://100.x.x.x:1883"
@@ -252,9 +288,27 @@ export default function App() {
                 type="text"
                 value={config.deviceId}
                 onChange={(e) => updateConfig({ deviceId: e.target.value })}
+                onFocus={handleFocus}
+                onBlur={handleBlur}
                 disabled={status?.isRunning}
                 className="w-full bg-[#0f0f14] border border-gray-700 rounded-lg px-4 py-2 text-white focus:border-blue-500 focus:outline-none disabled:opacity-50"
               />
+            </div>
+
+            {/* Backend URL */}
+            <div>
+              <label className="block text-sm text-gray-400 mb-1">Hyperspace Backend URL</label>
+              <input
+                type="text"
+                value={config.backendUrl}
+                onChange={(e) => updateConfig({ backendUrl: e.target.value })}
+                onFocus={handleFocus}
+                onBlur={handleBlur}
+                disabled={status?.isRunning}
+                className="w-full bg-[#0f0f14] border border-gray-700 rounded-lg px-4 py-2 text-white focus:border-blue-500 focus:outline-none disabled:opacity-50"
+                placeholder="http://100.x.x.x:3001"
+              />
+              <p className="text-xs text-gray-500 mt-1">Required for queue mode to fetch geometry</p>
             </div>
 
             {/* Venue ID */}
@@ -264,10 +318,86 @@ export default function App() {
                 type="text"
                 value={config.venueId}
                 onChange={(e) => updateConfig({ venueId: e.target.value })}
+                onFocus={handleFocus}
+                onBlur={handleBlur}
                 disabled={status?.isRunning}
                 className="w-full bg-[#0f0f14] border border-gray-700 rounded-lg px-4 py-2 text-white focus:border-blue-500 focus:outline-none disabled:opacity-50"
               />
             </div>
+
+            {/* Simulation Mode */}
+            <div>
+              <label className="block text-sm text-gray-400 mb-2 flex items-center gap-2">
+                <Layers className="w-4 h-4" />
+                Simulation Mode
+              </label>
+              <div className="grid grid-cols-3 gap-2">
+                <button
+                  onClick={() => updateConfig({ simulationMode: 'random' })}
+                  disabled={status?.isRunning}
+                  className={`p-3 rounded-lg border flex flex-col items-center gap-1 transition-colors disabled:opacity-50 ${
+                    config.simulationMode === 'random'
+                      ? 'bg-blue-600/20 border-blue-500 text-blue-400'
+                      : 'bg-[#0f0f14] border-gray-700 text-gray-400 hover:border-gray-600'
+                  }`}
+                >
+                  <Shuffle className="w-5 h-5" />
+                  <span className="text-xs">Random</span>
+                </button>
+                <button
+                  onClick={() => updateConfig({ simulationMode: 'queue' })}
+                  disabled={status?.isRunning}
+                  className={`p-3 rounded-lg border flex flex-col items-center gap-1 transition-colors disabled:opacity-50 ${
+                    config.simulationMode === 'queue'
+                      ? 'bg-orange-600/20 border-orange-500 text-orange-400'
+                      : 'bg-[#0f0f14] border-gray-700 text-gray-400 hover:border-gray-600'
+                  }`}
+                >
+                  <ShoppingCart className="w-5 h-5" />
+                  <span className="text-xs">Queue</span>
+                </button>
+                <button
+                  onClick={() => updateConfig({ simulationMode: 'mixed' })}
+                  disabled={status?.isRunning}
+                  className={`p-3 rounded-lg border flex flex-col items-center gap-1 transition-colors disabled:opacity-50 ${
+                    config.simulationMode === 'mixed'
+                      ? 'bg-purple-600/20 border-purple-500 text-purple-400'
+                      : 'bg-[#0f0f14] border-gray-700 text-gray-400 hover:border-gray-600'
+                  }`}
+                >
+                  <Layers className="w-5 h-5" />
+                  <span className="text-xs">Mixed</span>
+                </button>
+              </div>
+              <p className="text-xs text-gray-500 mt-2">
+                {config.simulationMode === 'random' && 'People walk randomly around the venue'}
+                {config.simulationMode === 'queue' && 'Customers approach cashiers, wait in queue, get served'}
+                {config.simulationMode === 'mixed' && 'Both random walkers and queue customers'}
+              </p>
+            </div>
+
+            {/* Queue Spawn Interval - only show for queue/mixed modes */}
+            {(config.simulationMode === 'queue' || config.simulationMode === 'mixed') && (
+              <div>
+                <label className="block text-sm text-gray-400 mb-1 flex items-center gap-2">
+                  <ShoppingCart className="w-4 h-4" />
+                  New Customer Every: {config.queueSpawnInterval}s
+                </label>
+                <input
+                  type="range"
+                  min="2"
+                  max="30"
+                  value={config.queueSpawnInterval}
+                  onChange={(e) => updateConfig({ queueSpawnInterval: parseInt(e.target.value) })}
+                  disabled={status?.isRunning}
+                  className="w-full accent-orange-500 disabled:opacity-50"
+                />
+                <div className="flex justify-between text-xs text-gray-500 mt-1">
+                  <span>2s (busy)</span>
+                  <span>30s (slow)</span>
+                </div>
+              </div>
+            )}
 
             {/* Frequency */}
             <div>
@@ -290,25 +420,50 @@ export default function App() {
               </div>
             </div>
 
-            {/* Person Count */}
+            {/* Target People in Scene */}
             <div>
               <label className="block text-sm text-gray-400 mb-1 flex items-center gap-2">
                 <Users className="w-4 h-4" />
-                Person Count: {config.personCount}
+                People in Scene: {config.targetPeopleCount}
               </label>
               <input
                 type="range"
                 min="1"
-                max="20"
-                value={config.personCount}
-                onChange={(e) => updateConfig({ personCount: parseInt(e.target.value) })}
-                disabled={status?.isRunning}
-                className="w-full accent-blue-500 disabled:opacity-50"
+                max="200"
+                value={config.targetPeopleCount}
+                onChange={(e) => updateConfig({ targetPeopleCount: parseInt(e.target.value) })}
+                className="w-full accent-green-500"
               />
               <div className="flex justify-between text-xs text-gray-500 mt-1">
                 <span>1</span>
-                <span>20</span>
+                <span>50</span>
+                <span>100</span>
+                <span>150</span>
+                <span>200</span>
               </div>
+              <p className="text-xs text-gray-500 mt-1">Target number of people active in the scene at any time</p>
+            </div>
+
+            {/* Average Stay Time */}
+            <div>
+              <label className="block text-sm text-gray-400 mb-1 flex items-center gap-2">
+                <Clock className="w-4 h-4" />
+                Avg Stay Time: {config.avgStayTime} min
+              </label>
+              <input
+                type="range"
+                min="1"
+                max="30"
+                value={config.avgStayTime}
+                onChange={(e) => updateConfig({ avgStayTime: parseInt(e.target.value) })}
+                className="w-full accent-amber-500"
+              />
+              <div className="flex justify-between text-xs text-gray-500 mt-1">
+                <span>1 min</span>
+                <span>15 min</span>
+                <span>30 min</span>
+              </div>
+              <p className="text-xs text-gray-500 mt-1">How long people stay before exiting</p>
             </div>
 
             {/* Venue Size */}

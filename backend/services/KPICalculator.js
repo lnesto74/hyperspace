@@ -371,7 +371,7 @@ export class KPICalculator {
   getVisitsByHour(roiId, startTime, endTime) {
     const results = this.db.prepare(`
       SELECT 
-        strftime('%H', datetime(start_time/1000, 'unixepoch')) as hour,
+        strftime('%H', datetime(start_time/1000, 'unixepoch', 'localtime')) as hour,
         COUNT(DISTINCT track_key) as visits
       FROM zone_visits
       WHERE roi_id = ? AND start_time >= ? AND start_time < ?

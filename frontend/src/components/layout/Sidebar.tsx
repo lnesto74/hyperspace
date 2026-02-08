@@ -1,7 +1,8 @@
 import { useState } from 'react'
-import { Box, Package, Radar, Settings, Hexagon } from 'lucide-react'
+import { Box, Package, Radar, Settings, Hexagon, FileUp, Target, Map } from 'lucide-react'
 import { SidebarTab } from './AppShell'
 import VenuePanel from '../venue/VenuePanel'
+import VenueDwgPanel from '../venue/VenueDwgPanel'
 import ObjectLibrary from '../objects/ObjectLibrary'
 import LidarNetworkPanel from '../lidar/LidarNetworkPanel'
 import RoiPanel from '../roi/RoiPanel'
@@ -11,16 +12,19 @@ import { useVenue } from '../../context/VenueContext'
 interface SidebarProps {
   activeTab: SidebarTab
   onTabChange: (tab: SidebarTab) => void
+  onOpenDwgImporter?: () => void
+  onOpenLidarPlanner?: () => void
 }
 
 const tabs: { id: SidebarTab; icon: typeof Box; label: string }[] = [
+  { id: 'venueDwg', icon: Map, label: 'DWG' },
   { id: 'venue', icon: Box, label: 'Venue' },
   { id: 'objects', icon: Package, label: 'Objects' },
   { id: 'lidars', icon: Radar, label: 'LiDARs' },
   { id: 'regions', icon: Hexagon, label: 'Regions' },
 ]
 
-export default function Sidebar({ activeTab, onTabChange }: SidebarProps) {
+export default function Sidebar({ activeTab, onTabChange, onOpenDwgImporter, onOpenLidarPlanner }: SidebarProps) {
   const { venue } = useVenue()
   const [showWhiteLabel, setShowWhiteLabel] = useState(false)
 
@@ -59,6 +63,7 @@ export default function Sidebar({ activeTab, onTabChange }: SidebarProps) {
 
       {/* Tab Content */}
       <div className="flex-1 overflow-y-auto">
+        {activeTab === 'venueDwg' && <VenueDwgPanel />}
         {activeTab === 'venue' && <VenuePanel />}
         {activeTab === 'objects' && <ObjectLibrary />}
         {activeTab === 'lidars' && <LidarNetworkPanel />}
@@ -75,6 +80,24 @@ export default function Sidebar({ activeTab, onTabChange }: SidebarProps) {
           >
             <Settings className="w-4 h-4" />
           </button>
+          {onOpenDwgImporter && (
+            <button 
+              onClick={onOpenDwgImporter}
+              className="text-gray-400 hover:text-highlight transition-colors"
+              title="Import DWG/DXF Floorplan"
+            >
+              <FileUp className="w-4 h-4" />
+            </button>
+          )}
+          {onOpenLidarPlanner && (
+            <button 
+              onClick={onOpenLidarPlanner}
+              className="text-gray-400 hover:text-green-400 transition-colors"
+              title="LiDAR Coverage Planner"
+            >
+              <Target className="w-4 h-4" />
+            </button>
+          )}
           <img 
             src="/assets/ulisse-logo.png" 
             alt="Ulisse" 

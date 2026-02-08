@@ -351,8 +351,14 @@ export default function ZoneKPIPopup({ roiId, roiName, roiColor, onClose }: Zone
     
     // Auto-refresh KPIs every 30 seconds
     const kpiInterval = setInterval(fetchKPIs, 30000)
-    // Live occupancy every 2 seconds
-    const liveInterval = setInterval(fetchLiveOccupancy, 2000)
+    // Live occupancy every 4 seconds (reduced from 2s to avoid blocking 3D)
+    const liveInterval = setInterval(() => {
+      if ('requestIdleCallback' in window) {
+        (window as any).requestIdleCallback(fetchLiveOccupancy, { timeout: 1500 })
+      } else {
+        setTimeout(fetchLiveOccupancy, 0)
+      }
+    }, 4000)
     
     return () => {
       clearInterval(kpiInterval)

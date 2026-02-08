@@ -5,6 +5,7 @@ import { useVenue } from './VenueContext'
 
 const MAX_TRAIL_LENGTH = 100 // ~10 seconds at 10Hz
 const TRACK_TTL_MS = 5000 // 5 seconds before track is removed
+const CLEANUP_INTERVAL_MS = 1000 // Cleanup stale tracks every 1 second
 
 interface TrackingContextType {
   tracks: Map<string, TrackWithTrail>
@@ -26,7 +27,7 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
   const [isReplayMode, setIsReplayMode] = useState(false)
   const socketRef = useRef<Socket | null>(null)
   const subscribedVenueRef = useRef<string | null>(null)
-  const trackTimeoutsRef = useRef<Map<string, NodeJS.Timeout>>(new Map())
+  const trackLastSeenRef = useRef<Map<string, number>>(new Map())
   
   // Return replay tracks when in replay mode, otherwise live tracks
   const tracks = isReplayMode ? replayTracks : liveTracks
@@ -48,16 +49,22 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
       setIsConnected(false)
     })
 
-    socket.on('tracks', (data: { venueId: string, tracks: Track[] }) => {
-      if (data.venueId !== subscribedVenueRef.current) return
+    // Throttle track updates to avoid overwhelming React
+    let pendingTracks: Track[] = []
+    let updateScheduled = false
+    
+    const flushTrackUpdates = () => {
+      if (pendingTracks.length === 0) return
       
-      // Skip live updates when in replay mode
-      if (isReplayMode) return
+      const tracksToProcess = pendingTracks
+      pendingTracks = []
+      updateScheduled = false
       
+      const now = Date.now()
       setLiveTracks(prev => {
         const next = new Map(prev)
         
-        for (const track of data.tracks) {
+        for (const track of tracksToProcess) {
           const existing = next.get(track.trackKey)
           const trail = existing?.trail || []
           
@@ -68,23 +75,27 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
           
           next.set(track.trackKey, { ...track, trail })
           
-          const existingTimeout = trackTimeoutsRef.current.get(track.trackKey)
-          if (existingTimeout) clearTimeout(existingTimeout)
-          
-          const timeout = setTimeout(() => {
-            setLiveTracks(p => {
-              const n = new Map(p)
-              n.delete(track.trackKey)
-              return n
-            })
-            trackTimeoutsRef.current.delete(track.trackKey)
-          }, TRACK_TTL_MS)
-          
-          trackTimeoutsRef.current.set(track.trackKey, timeout)
+          // Update last seen timestamp (no timeout creation)
+          trackLastSeenRef.current.set(track.trackKey, now)
         }
         
         return next
       })
+    }
+    
+    socket.on('tracks', (data: { venueId: string, tracks: Track[] }) => {
+      if (data.venueId !== subscribedVenueRef.current) return
+      
+      // Skip live updates when in replay mode
+      if (isReplayMode) return
+      
+      // Buffer tracks and throttle updates to ~30fps max
+      pendingTracks.push(...data.tracks)
+      
+      if (!updateScheduled) {
+        updateScheduled = true
+        requestAnimationFrame(flushTrackUpdates)
+      }
     })
 
     socket.on('track_removed', (data: { trackKey: string }) => {
@@ -94,12 +105,7 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
         next.delete(data.trackKey)
         return next
       })
-      
-      const timeout = trackTimeoutsRef.current.get(data.trackKey)
-      if (timeout) {
-        clearTimeout(timeout)
-        trackTimeoutsRef.current.delete(data.trackKey)
-      }
+      trackLastSeenRef.current.delete(data.trackKey)
     })
 
     socket.on('lidar_status', (data: { deviceId: string, status: LidarStatus, message?: string }) => {
@@ -108,10 +114,33 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
 
     socketRef.current = socket
 
+    // Single interval to cleanup stale tracks (instead of per-track timeouts)
+    const cleanupInterval = setInterval(() => {
+      const now = Date.now()
+      const staleKeys: string[] = []
+      
+      trackLastSeenRef.current.forEach((lastSeen, key) => {
+        if (now - lastSeen > TRACK_TTL_MS) {
+          staleKeys.push(key)
+        }
+      })
+      
+      if (staleKeys.length > 0) {
+        setLiveTracks(prev => {
+          const next = new Map(prev)
+          staleKeys.forEach(key => {
+            next.delete(key)
+            trackLastSeenRef.current.delete(key)
+          })
+          return next
+        })
+      }
+    }, CLEANUP_INTERVAL_MS)
+
     return () => {
       socket.disconnect()
-      trackTimeoutsRef.current.forEach(t => clearTimeout(t))
-      trackTimeoutsRef.current.clear()
+      clearInterval(cleanupInterval)
+      trackLastSeenRef.current.clear()
     }
   }, [isReplayMode])
 

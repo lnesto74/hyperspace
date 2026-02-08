@@ -58,10 +58,69 @@ npm start
 
 ## Interactive Commands
 
-While running, you can type commands:
+### Basic Simulator
 - `+` or `add` - Add a new person
 - `-` or `remove` - Remove a person
 - `status` - Show current count
+
+### Enhanced Simulator
+- `q` or `queue` - Spawn a queue customer
+- `r` or `random` - Spawn a random walker
+- `reload` - Reload geometry from backend
+- `status` - Show current status
+- `help` - Show all commands
+
+## Enhanced Simulator (Geometry-Aware)
+
+The enhanced simulator fetches venue geometry from the backend and creates realistic queue simulations.
+
+### Running Enhanced Simulator
+
+```bash
+# Mixed mode (random walkers + queue simulation)
+npm run start:mixed
+
+# Queue-only mode
+npm run start:queue
+
+# With custom venue
+VENUE_ID=your-venue-id npm run start:mixed
+```
+
+### Configuration (Enhanced)
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `BACKEND_URL` | `http://localhost:3001` | Hyperspace backend URL |
+| `SIMULATION_MODE` | `mixed` | Mode: `random`, `queue`, or `mixed` |
+| `NUM_RANDOM_WALKERS` | `3` | Number of random walking agents |
+| `QUEUE_SPAWN_INTERVAL` | `5000` | Ms between new queue customers |
+
+### How Queue Simulation Works
+
+1. **Fetches geometry** from backend API (`/api/venues/{id}` and `/api/venues/{id}/roi`)
+2. **Parses cashier zones** by finding ROIs ending with "- Queue" and "- Service"
+3. **Spawns queue agents** that follow realistic behavior:
+   - Approach the queue zone
+   - Wait in queue (move forward gradually)
+   - Enter service zone
+   - Leave after being served
+
+```
+Agent State Machine:
+  approaching → queuing → serving → leaving → done
+       ↓           ↓         ↓         ↓
+    (walk to   (wait &    (at the   (exit to
+     queue)    shuffle)   counter)   side)
+```
+
+### Prerequisites
+
+Before running queue simulation:
+1. Start the Hyperspace backend
+2. Create a venue with checkout objects
+3. Run **Smart KPI Mode** (⚡ button) to generate queue/service zones
+4. Start the enhanced simulator
 
 ## MQTT Message Format
 

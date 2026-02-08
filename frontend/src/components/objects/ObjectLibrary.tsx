@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { Package, Square, ShoppingCart, DoorOpen, Circle, Shapes, Upload, FolderUp, X, ChevronDown, Plus } from 'lucide-react'
+import { Package, Square, ShoppingCart, DoorOpen, Circle, Shapes, Upload, FolderUp, X, ChevronDown, Plus, Monitor, Radio } from 'lucide-react'
 import { useVenue } from '../../context/VenueContext'
 import { ObjectType, Vector3 } from '../../types'
 
@@ -31,6 +31,8 @@ const OBJECT_PRESETS: ObjectPreset[] = [
   { type: 'checkout', name: 'Checkout', icon: ShoppingCart, description: 'Checkout counter' },
   { type: 'entrance', name: 'Entrance', icon: DoorOpen, description: 'Door or entrance' },
   { type: 'pillar', name: 'Pillar', icon: Circle, description: 'Structural column' },
+  { type: 'digital_display', name: 'Digital Display', icon: Monitor, description: 'Digital signage or screen' },
+  { type: 'radio', name: 'Radio', icon: Radio, description: 'Radio or audio device' },
   { type: 'custom', name: 'Custom', icon: Shapes, description: 'Custom object' },
 ]
 
@@ -40,6 +42,8 @@ const DEFAULT_DIMENSIONS: Record<ObjectType, ObjectDimensions> = {
   checkout: { width: 1.5, height: 1, depth: 0.8 },
   entrance: { width: 2, height: 2.5, depth: 0.1 },
   pillar: { width: 0.4, height: 3, depth: 0.4 },
+  digital_display: { width: 1.5, height: 2, depth: 0.1 },
+  radio: { width: 0.3, height: 0.3, depth: 0.2 },
   custom: { width: 1, height: 1, depth: 1 },
 }
 

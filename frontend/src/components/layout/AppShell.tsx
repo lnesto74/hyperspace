@@ -6,9 +6,10 @@ import MainViewport from '../venue/MainViewport'
 import TimelineReplay from '../timeline/TimelineReplay'
 import { useVenue } from '../../context/VenueContext'
 import { useLidar } from '../../context/LidarContext'
+import { useDwg } from '../../context/DwgContext'
 import { useAutoSave } from '../../hooks/useAutoSave'
 
-export type SidebarTab = 'venue' | 'objects' | 'lidars' | 'regions'
+export type SidebarTab = 'venueDwg' | 'venue' | 'objects' | 'lidars' | 'regions'
 export type CameraView = 'perspective' | 'top' | 'isometric' | 'front'
 
 export interface LightingSettings {
@@ -48,6 +49,10 @@ export default function AppShell() {
   const [tracking, setTracking] = useState<TrackingSettings>(defaultTracking)
   const { venue, selectedObjectId, objects } = useVenue()
   const { selectedPlacementId, placements } = useLidar()
+  const { dwgLayoutId: selectedDwgLayoutId } = useDwg()
+  
+  // Determine if we're in DWG venue mode
+  const isDwgMode = activeTab === 'venueDwg' && selectedDwgLayoutId !== null
   
   // Get selected placement for coordinates display
   const selectedPlacement = placements.find(p => p.id === selectedPlacementId)

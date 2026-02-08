@@ -460,25 +460,49 @@ export class AgentV2 {
       const dist = Math.sqrt(dx * dx + dz * dz);
       
       if (dist > 0.1) {
-        // Move toward target using normal movement (respects obstacles)
-        const moveSpeed = 1.0;
-        const step = Math.min(moveSpeed * dt, dist);
-        const nx = this.x + (dx / dist) * step;
-        const nz = this.z + (dz / dist) * step;
+        // Check for agents blocking our path (agent-to-agent collision)
+        const minAgentDist = SIM_CONFIG.personalSpaceRadius || 0.5;
+        let blockedByAgent = false;
         
-        // Check walkability with agent radius buffer (same as followPath)
-        const r = SIM_CONFIG.agentRadius;
-        const isNewPosWalkable = (
-          this.navGrid.isWalkableWorld(nx, nz) &&
-          this.navGrid.isWalkableWorld(nx + r, nz) &&
-          this.navGrid.isWalkableWorld(nx - r, nz) &&
-          this.navGrid.isWalkableWorld(nx, nz + r) &&
-          this.navGrid.isWalkableWorld(nx, nz - r)
-        );
+        for (const other of agents) {
+          if (other.id === this.id || other.state === STATE.DONE || !other.spawned) continue;
+          
+          const odx = other.x - this.x;
+          const odz = other.z - this.z;
+          const oDist = Math.sqrt(odx * odx + odz * odz);
+          
+          // Check if other agent is in front of us (toward our target) and too close
+          if (oDist < minAgentDist) {
+            // Dot product to check if agent is in direction of movement
+            const dotProduct = (dx * odx + dz * odz) / (dist * oDist);
+            if (dotProduct > 0.3) { // Agent is roughly in front of us
+              blockedByAgent = true;
+              break;
+            }
+          }
+        }
         
-        if (isNewPosWalkable) {
-          this.x = nx;
-          this.z = nz;
+        if (!blockedByAgent) {
+          // Move toward target using normal movement (respects obstacles)
+          const moveSpeed = 1.0;
+          const step = Math.min(moveSpeed * dt, dist);
+          const nx = this.x + (dx / dist) * step;
+          const nz = this.z + (dz / dist) * step;
+          
+          // Check walkability with agent radius buffer (same as followPath)
+          const r = SIM_CONFIG.agentRadius;
+          const isNewPosWalkable = (
+            this.navGrid.isWalkableWorld(nx, nz) &&
+            this.navGrid.isWalkableWorld(nx + r, nz) &&
+            this.navGrid.isWalkableWorld(nx - r, nz) &&
+            this.navGrid.isWalkableWorld(nx, nz + r) &&
+            this.navGrid.isWalkableWorld(nx, nz - r)
+          );
+          
+          if (isNewPosWalkable) {
+            this.x = nx;
+            this.z = nz;
+          }
         }
         
         this.heading = Math.atan2(dx, dz);
@@ -574,24 +598,47 @@ export class AgentV2 {
       if (dist < 0.3) {
         this.queuePathIndex++;
       } else {
-        // Move toward target with obstacle check
-        const moveSpeed = 0.8;
-        const nx = this.x + (dx / dist) * moveSpeed * dt;
-        const nz = this.z + (dz / dist) * moveSpeed * dt;
+        // Check for agents blocking our path (agent-to-agent collision)
+        const minAgentDist = SIM_CONFIG.personalSpaceRadius || 0.5;
+        let blockedByAgent = false;
         
-        // Check walkability with agent radius buffer
-        const r = SIM_CONFIG.agentRadius;
-        const isNewPosWalkable = (
-          this.navGrid.isWalkableWorld(nx, nz) &&
-          this.navGrid.isWalkableWorld(nx + r, nz) &&
-          this.navGrid.isWalkableWorld(nx - r, nz) &&
-          this.navGrid.isWalkableWorld(nx, nz + r) &&
-          this.navGrid.isWalkableWorld(nx, nz - r)
-        );
+        for (const other of agents) {
+          if (other.id === this.id || other.state === STATE.DONE || !other.spawned) continue;
+          
+          const odx = other.x - this.x;
+          const odz = other.z - this.z;
+          const oDist = Math.sqrt(odx * odx + odz * odz);
+          
+          // Check if other agent is in front of us and too close
+          if (oDist < minAgentDist) {
+            const dotProduct = (dx * odx + dz * odz) / (dist * oDist);
+            if (dotProduct > 0.3) {
+              blockedByAgent = true;
+              break;
+            }
+          }
+        }
         
-        if (isNewPosWalkable) {
-          this.x = nx;
-          this.z = nz;
+        if (!blockedByAgent) {
+          // Move toward target with obstacle check
+          const moveSpeed = 0.8;
+          const nx = this.x + (dx / dist) * moveSpeed * dt;
+          const nz = this.z + (dz / dist) * moveSpeed * dt;
+          
+          // Check walkability with agent radius buffer
+          const r = SIM_CONFIG.agentRadius;
+          const isNewPosWalkable = (
+            this.navGrid.isWalkableWorld(nx, nz) &&
+            this.navGrid.isWalkableWorld(nx + r, nz) &&
+            this.navGrid.isWalkableWorld(nx - r, nz) &&
+            this.navGrid.isWalkableWorld(nx, nz + r) &&
+            this.navGrid.isWalkableWorld(nx, nz - r)
+          );
+          
+          if (isNewPosWalkable) {
+            this.x = nx;
+            this.z = nz;
+          }
         }
         this.heading = Math.atan2(dx, dz);
       }
@@ -823,10 +870,12 @@ export class AgentV2 {
       
       if (d < minD && d > 0.01) {
         nearbyCount++;
-        // Very gentle avoidance (0.1) to prevent oscillation
+        // Stronger avoidance with exponential falloff for close agents
         const s = (minD - d) / minD;
-        ax += (dx / d) * s * 0.1;
-        az += (dz / d) * s * 0.1;
+        // Stronger push when very close (0.5 base, up to 1.5 when overlapping)
+        const strength = 0.5 + s * 1.0;
+        ax += (dx / d) * s * strength;
+        az += (dz / d) * s * strength;
       }
     }
     
@@ -834,13 +883,14 @@ export class AgentV2 {
     this.nearbyAgentCount = nearbyCount;
     
     // Smooth avoidance to prevent zig-zag (blend with previous)
-    const smoothing = 0.7;
+    const smoothing = 0.5;
     this.smoothAvoidX = (this.smoothAvoidX || 0) * smoothing + ax * (1 - smoothing);
     this.smoothAvoidZ = (this.smoothAvoidZ || 0) * smoothing + az * (1 - smoothing);
     
-    // If surrounded, just wait instead of oscillating
-    if (nearbyCount >= 2) {
-      return { x: 0, z: 0 };
+    // Even when surrounded, apply reduced avoidance to prevent overlapping
+    if (nearbyCount >= 3) {
+      // Reduce but don't eliminate avoidance when crowded
+      return { x: this.smoothAvoidX * 0.3, z: this.smoothAvoidZ * 0.3 };
     }
     
     return { x: this.smoothAvoidX, z: this.smoothAvoidZ };

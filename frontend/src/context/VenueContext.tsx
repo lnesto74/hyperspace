@@ -16,6 +16,8 @@ interface VenueContextType {
   objects: VenueObject[]
   venueList: VenueListItem[]
   selectedObjectId: string | null
+  selectedObjectIds: Set<string>
+  copiedObjects: VenueObject[]
   isLoading: boolean
   
   fetchVenueList: () => Promise<void>
@@ -29,25 +31,21 @@ interface VenueContextType {
   setObjects: (objects: VenueObject[]) => void
   
   addObject: (type: VenueObject['type'], position: Vector3, scale?: Vector3) => VenueObject
+  addObjects: (newObjects: VenueObject[]) => void
   updateObject: (id: string, updates: Partial<VenueObject>) => void
   removeObject: (id: string) => void
+  removeObjects: (ids: string[]) => void
   selectObject: (id: string | null) => void
+  toggleObjectSelection: (id: string) => void
+  addToSelection: (id: string) => void
+  clearSelection: () => void
+  copySelectedObjects: () => void
+  pasteObjects: () => void
   
   snapToGrid: (position: Vector3) => Vector3
 }
 
 const VenueContext = createContext<VenueContextType | null>(null)
-
-const DEFAULT_VENUE: Venue = {
-  id: '',
-  name: 'New Venue',
-  width: 20,
-  depth: 15,
-  height: 4,
-  tileSize: 1,
-  createdAt: new Date().toISOString(),
-  updatedAt: new Date().toISOString(),
-}
 
 const DEFAULT_OBJECT_SCALES: Record<VenueObject['type'], Vector3> = {
   shelf: { x: 2, y: 2, z: 0.6 },
@@ -55,6 +53,8 @@ const DEFAULT_OBJECT_SCALES: Record<VenueObject['type'], Vector3> = {
   checkout: { x: 1.5, y: 1, z: 0.8 },
   entrance: { x: 2, y: 2.5, z: 0.1 },
   pillar: { x: 0.4, y: 3, z: 0.4 },
+  digital_display: { x: 1.5, y: 2, z: 0.1 },
+  radio: { x: 0.3, y: 0.3, z: 0.2 },
   custom: { x: 1, y: 1, z: 1 },
 }
 
@@ -64,6 +64,8 @@ const DEFAULT_OBJECT_COLORS: Record<VenueObject['type'], string> = {
   checkout: '#22c55e',
   entrance: '#f59e0b',
   pillar: '#78716c',
+  digital_display: '#3b82f6',
+  radio: '#ef4444',
   custom: '#8b5cf6',
 }
 
@@ -73,6 +75,8 @@ export function VenueProvider({ children }: { children: ReactNode }) {
   const [objects, setObjects] = useState<VenueObject[]>([])
   const [venueList, setVenueList] = useState<VenueListItem[]>([])
   const [selectedObjectId, setSelectedObjectId] = useState<string | null>(null)
+  const [selectedObjectIds, setSelectedObjectIds] = useState<Set<string>>(new Set())
+  const [copiedObjects, setCopiedObjects] = useState<VenueObject[]>([])
   const [isLoading, setIsLoading] = useState(false)
 
   const fetchVenueList = useCallback(async () => {
@@ -215,14 +219,93 @@ export function VenueProvider({ children }: { children: ReactNode }) {
     setObjects(prev => prev.map(o => o.id === id ? { ...o, ...updates } : o))
   }, [])
 
+  const addObjects = useCallback((newObjects: VenueObject[]) => {
+    setObjects(prev => [...prev, ...newObjects])
+    // Select all newly added objects
+    const newIds = new Set(newObjects.map(o => o.id))
+    setSelectedObjectIds(newIds)
+    setSelectedObjectId(newObjects.length > 0 ? newObjects[0].id : null)
+  }, [])
+
   const removeObject = useCallback((id: string) => {
     setObjects(prev => prev.filter(o => o.id !== id))
+    setSelectedObjectIds(prev => {
+      const next = new Set(prev)
+      next.delete(id)
+      return next
+    })
     if (selectedObjectId === id) setSelectedObjectId(null)
   }, [selectedObjectId])
 
+  const removeObjects = useCallback((ids: string[]) => {
+    const idsSet = new Set(ids)
+    setObjects(prev => prev.filter(o => !idsSet.has(o.id)))
+    setSelectedObjectIds(new Set())
+    setSelectedObjectId(null)
+  }, [])
+
   const selectObject = useCallback((id: string | null) => {
     setSelectedObjectId(id)
+    setSelectedObjectIds(id ? new Set([id]) : new Set())
   }, [])
+
+  const toggleObjectSelection = useCallback((id: string) => {
+    setSelectedObjectIds(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) {
+        next.delete(id)
+      } else {
+        next.add(id)
+      }
+      // Update single selectedObjectId to match
+      if (next.size === 1) {
+        setSelectedObjectId(Array.from(next)[0])
+      } else if (next.size === 0) {
+        setSelectedObjectId(null)
+      } else {
+        setSelectedObjectId(id) // Most recent selection
+      }
+      return next
+    })
+  }, [])
+
+  const addToSelection = useCallback((id: string) => {
+    setSelectedObjectIds(prev => {
+      const next = new Set(prev)
+      next.add(id)
+      return next
+    })
+    setSelectedObjectId(id)
+  }, [])
+
+  const clearSelection = useCallback(() => {
+    setSelectedObjectIds(new Set())
+    setSelectedObjectId(null)
+  }, [])
+
+  const copySelectedObjects = useCallback(() => {
+    const toCopy = objects.filter(o => selectedObjectIds.has(o.id))
+    setCopiedObjects(toCopy)
+  }, [objects, selectedObjectIds])
+
+  const pasteObjects = useCallback(() => {
+    if (copiedObjects.length === 0) return
+    
+    // Create new objects with new IDs and offset position
+    const offset = 1 // 1 meter offset
+    const newObjects: VenueObject[] = copiedObjects.map(obj => ({
+      ...obj,
+      id: uuidv4(),
+      name: `${obj.name} (copy)`,
+      position: {
+        x: obj.position.x + offset,
+        y: obj.position.y,
+        z: obj.position.z + offset,
+      },
+    }))
+    
+    addObjects(newObjects)
+  }, [copiedObjects, addObjects])
 
   return (
     <VenueContext.Provider value={{
@@ -230,6 +313,8 @@ export function VenueProvider({ children }: { children: ReactNode }) {
       objects,
       venueList,
       selectedObjectId,
+      selectedObjectIds,
+      copiedObjects,
       isLoading,
       fetchVenueList,
       deleteVenue,
@@ -241,9 +326,16 @@ export function VenueProvider({ children }: { children: ReactNode }) {
       importVenue,
       setObjects,
       addObject,
+      addObjects,
       updateObject,
       removeObject,
+      removeObjects,
       selectObject,
+      toggleObjectSelection,
+      addToSelection,
+      clearSelection,
+      copySelectedObjects,
+      pasteObjects,
       snapToGrid,
     }}>
       {children}

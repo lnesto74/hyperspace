@@ -5,7 +5,7 @@ import { roiQueries } from '../database/schema.js';
 export default function createRoiRoutes(db) {
   const router = Router();
 
-  // Get all ROIs for a venue
+  // Get all ROIs for a venue (manual mode - dwg_layout_id IS NULL)
   router.get('/venues/:venueId/roi', (req, res) => {
     try {
       const rois = roiQueries.getByVenueId(db, req.params.venueId);
@@ -13,6 +13,17 @@ export default function createRoiRoutes(db) {
     } catch (err) {
       console.error('Failed to get ROIs:', err);
       res.status(500).json({ error: 'Failed to get ROIs' });
+    }
+  });
+
+  // Get all ROIs for a DWG layout
+  router.get('/venues/:venueId/dwg/:dwgLayoutId/roi', (req, res) => {
+    try {
+      const rois = roiQueries.getByDwgLayoutId(db, req.params.venueId, req.params.dwgLayoutId);
+      res.json(rois);
+    } catch (err) {
+      console.error('Failed to get DWG ROIs:', err);
+      res.status(500).json({ error: 'Failed to get DWG ROIs' });
     }
   });
 
@@ -30,7 +41,7 @@ export default function createRoiRoutes(db) {
     }
   });
 
-  // Create a new ROI
+  // Create a new ROI (manual mode - no dwgLayoutId)
   router.post('/venues/:venueId/roi', (req, res) => {
     try {
       const { name, vertices, color, opacity } = req.body;
@@ -43,6 +54,7 @@ export default function createRoiRoutes(db) {
       const roi = {
         id: uuidv4(),
         venueId: req.params.venueId,
+        dwgLayoutId: null,  // Manual mode
         name,
         vertices,
         color: color || '#f59e0b',
@@ -56,6 +68,36 @@ export default function createRoiRoutes(db) {
     } catch (err) {
       console.error('Failed to create ROI:', err);
       res.status(500).json({ error: 'Failed to create ROI' });
+    }
+  });
+
+  // Create a new ROI for DWG layout
+  router.post('/venues/:venueId/dwg/:dwgLayoutId/roi', (req, res) => {
+    try {
+      const { name, vertices, color, opacity } = req.body;
+      
+      if (!name || !vertices || vertices.length < 3) {
+        return res.status(400).json({ error: 'Name and at least 3 vertices required' });
+      }
+
+      const now = new Date().toISOString();
+      const roi = {
+        id: uuidv4(),
+        venueId: req.params.venueId,
+        dwgLayoutId: req.params.dwgLayoutId,  // DWG mode
+        name,
+        vertices,
+        color: color || '#f59e0b',
+        opacity: opacity ?? 0.5,
+        createdAt: now,
+        updatedAt: now,
+      };
+
+      roiQueries.create(db, roi);
+      res.status(201).json(roi);
+    } catch (err) {
+      console.error('Failed to create DWG ROI:', err);
+      res.status(500).json({ error: 'Failed to create DWG ROI' });
     }
   });
 

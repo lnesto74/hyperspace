@@ -21,7 +21,7 @@ export interface VenueObject {
   color?: string;
 }
 
-export type ObjectType = 'shelf' | 'wall' | 'checkout' | 'entrance' | 'pillar' | 'custom';
+export type ObjectType = 'shelf' | 'wall' | 'checkout' | 'entrance' | 'pillar' | 'custom' | 'digital_display' | 'radio';
 
 // LiDAR types
 export interface LidarDevice {

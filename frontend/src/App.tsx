@@ -3,13 +3,26 @@ import { LidarProvider } from './context/LidarContext'
 import { TrackingProvider } from './context/TrackingContext'
 import { ToastProvider } from './context/ToastContext'
 import { RoiProvider, useRoi } from './context/RoiContext'
+import { HeatmapProvider } from './context/HeatmapContext'
+import { PlanogramProvider } from './context/PlanogramContext'
+import { DwgProvider, useDwg } from './context/DwgContext'
 import AppShell from './components/layout/AppShell'
 import ZoneKPIPopup from './components/kpi/ZoneKPIPopup'
 import ZoneKPIOverlayPanel from './components/kpi/ZoneKPIOverlayPanel'
 import ActivityLedger from './components/kpi/ActivityLedger'
-import { BarChart3, Bell } from 'lucide-react'
-import { useState, useEffect } from 'react'
+import HeatmapViewerModal from './components/heatmap/HeatmapViewerModal'
+import SmartKpiModal from './components/kpi/SmartKpiModal'
+import PlanogramBuilder from './components/planogram/PlanogramBuilder'
+import { DwgImporterPage } from './components/dwgImporter'
+import LidarPlannerPage from './components/lidarPlanner/LidarPlannerPage'
+import { BarChart3, Bell, Thermometer, Zap, LayoutGrid } from 'lucide-react'
+import { useState, useEffect, createContext, useContext } from 'react'
 import { useVenue } from './context/VenueContext'
+
+// App view mode context
+type ViewMode = 'main' | 'planogram' | 'dwgImporter' | 'lidarPlanner'
+const ViewModeContext = createContext<{ mode: ViewMode; setMode: (m: ViewMode) => void }>({ mode: 'main', setMode: () => {} })
+export const useViewMode = () => useContext(ViewModeContext)
 
 function KPIPopupWrapper() {
   const { regions, kpiPopupRoiId, closeKPIPopup } = useRoi()
@@ -30,10 +43,19 @@ function KPIPopupWrapper() {
 }
 
 function KPIOverlayToggle() {
-  const { showKPIOverlays, toggleKPIOverlays, regions } = useRoi()
+  const { showKPIOverlays, toggleKPIOverlays } = useRoi()
   const { venue } = useVenue()
+  const { setMode } = useViewMode()
+  const { dwgLayoutId } = useDwg()
   const [showLedger, setShowLedger] = useState(false)
+  const [showHeatmapModal, setShowHeatmapModal] = useState(false)
+  const [showSmartKpiModal, setShowSmartKpiModal] = useState(false)
   const [unreadCount, setUnreadCount] = useState(0)
+  
+  // Debug: log dwgLayoutId
+  useEffect(() => {
+    console.log(`[KPIOverlayToggle] dwgLayoutId from context: ${dwgLayoutId}`)
+  }, [dwgLayoutId])
   
   // Fetch unread count for badge
   useEffect(() => {
@@ -57,12 +79,58 @@ function KPIOverlayToggle() {
     return () => clearInterval(interval)
   }, [venue?.id])
   
-  if (regions.length === 0) return null
-  
   return (
     <>
+      {/* Heatmap Viewer Modal */}
+      <HeatmapViewerModal 
+        isOpen={showHeatmapModal} 
+        onClose={() => setShowHeatmapModal(false)} 
+      />
+      
+      {/* Smart KPI Modal */}
+      <SmartKpiModal
+        isOpen={showSmartKpiModal}
+        onClose={() => setShowSmartKpiModal(false)}
+        dwgLayoutId={dwgLayoutId}
+      />
+      
       {/* Button Group above Footer */}
       <div className="fixed bottom-16 right-4 z-30 flex items-center gap-2">
+        {/* Planogram Builder Button */}
+        <button
+          onClick={() => setMode('planogram')}
+          className="flex items-center justify-center w-10 h-10 rounded-lg shadow-lg transition-all bg-gray-800 hover:bg-gray-700 text-gray-300 border border-gray-600"
+          title="Planogram Builder"
+        >
+          <LayoutGrid className="w-4 h-4" />
+        </button>
+        
+        {/* Smart KPI Button */}
+        <button
+          onClick={() => setShowSmartKpiModal(true)}
+          className={`flex items-center justify-center w-10 h-10 rounded-lg shadow-lg transition-all ${
+            showSmartKpiModal 
+              ? 'bg-purple-600 hover:bg-purple-700 text-white' 
+              : 'bg-gray-800 hover:bg-gray-700 text-gray-300 border border-gray-600'
+          }`}
+          title="Smart KPI Mode - Auto-generate zones"
+        >
+          <Zap className="w-4 h-4" />
+        </button>
+        
+        {/* Heatmap Viewer Button */}
+        <button
+          onClick={() => setShowHeatmapModal(true)}
+          className={`flex items-center justify-center w-10 h-10 rounded-lg shadow-lg transition-all ${
+            showHeatmapModal 
+              ? 'bg-orange-600 hover:bg-orange-700 text-white' 
+              : 'bg-gray-800 hover:bg-gray-700 text-gray-300 border border-gray-600'
+          }`}
+          title="Open Heatmap Viewer"
+        >
+          <Thermometer className="w-4 h-4" />
+        </button>
+        
         {/* Activity Ledger Button */}
         <button
           onClick={() => setShowLedger(!showLedger)}
@@ -114,6 +182,53 @@ function KPIOverlayToggle() {
   )
 }
 
+function MainApp() {
+  const [viewMode, setViewMode] = useState<ViewMode>('main')
+  
+  return (
+    <ViewModeContext.Provider value={{ mode: viewMode, setMode: setViewMode }}>
+      <PlanogramProvider>
+        {/* DWG Importer View */}
+        {viewMode === 'dwgImporter' && (
+          <DwgImporterPage 
+            onClose={() => setViewMode('main')}
+          />
+        )}
+        {/* LiDAR Planner View */}
+        {viewMode === 'lidarPlanner' && (
+          <div className="fixed inset-0 z-50 bg-gray-900">
+            <div className="h-10 border-b border-gray-700 flex items-center px-4 bg-gray-800">
+              <button
+                onClick={() => setViewMode('main')}
+                className="text-gray-400 hover:text-white text-sm"
+              >
+                ← Back to Main
+              </button>
+              <span className="ml-4 text-white font-medium">LiDAR Coverage Planner</span>
+            </div>
+            <div className="h-[calc(100vh-40px)]">
+              <LidarPlannerPage />
+            </div>
+          </div>
+        )}
+        {/* Planogram View */}
+        <div style={{ display: viewMode === 'planogram' ? 'block' : 'none' }}>
+          <PlanogramBuilder />
+        </div>
+        {/* Main View */}
+        <div style={{ display: viewMode === 'main' ? 'block' : 'none' }}>
+          <AppShell 
+            onOpenDwgImporter={() => setViewMode('dwgImporter')}
+            onOpenLidarPlanner={() => setViewMode('lidarPlanner')}
+          />
+          <KPIPopupWrapper />
+          <KPIOverlayToggle />
+        </div>
+      </PlanogramProvider>
+    </ViewModeContext.Provider>
+  )
+}
+
 function App() {
   return (
     <ToastProvider>
@@ -121,9 +236,11 @@ function App() {
         <LidarProvider>
           <TrackingProvider>
             <RoiProvider>
-              <AppShell />
-              <KPIPopupWrapper />
-              <KPIOverlayToggle />
+              <HeatmapProvider>
+                <DwgProvider>
+                  <MainApp />
+                </DwgProvider>
+              </HeatmapProvider>
             </RoiProvider>
           </TrackingProvider>
         </LidarProvider>

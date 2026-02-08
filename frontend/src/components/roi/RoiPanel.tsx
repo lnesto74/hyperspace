@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Plus, Trash2, Edit2, X, Check, MousePointer2 } from 'lucide-react'
+import { Plus, Trash2, Edit2, X, Check, MousePointer2, Eye, EyeOff } from 'lucide-react'
 import { useRoi } from '../../context/RoiContext'
 import { useVenue } from '../../context/VenueContext'
 
@@ -17,6 +17,8 @@ export default function RoiPanel() {
     cancelDrawing,
     finishDrawing,
     removeLastVertex,
+    toggleRoiVisibility,
+    isRoiVisible,
   } = useRoi()
   
   const [editingId, setEditingId] = useState<string | null>(null)
@@ -180,6 +182,16 @@ export default function RoiPanel() {
                     </>
                   ) : (
                     <>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          toggleRoiVisibility(roi.id)
+                        }}
+                        className={`p-1 transition-all ${isRoiVisible(roi.id) ? 'text-gray-500 hover:text-yellow-400' : 'text-yellow-500'}`}
+                        title={isRoiVisible(roi.id) ? 'Hide zone' : 'Show zone'}
+                      >
+                        {isRoiVisible(roi.id) ? <Eye className="w-3 h-3" /> : <EyeOff className="w-3 h-3" />}
+                      </button>
                       <button
                         onClick={(e) => {
                           e.stopPropagation()

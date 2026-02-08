@@ -1,0 +1,131 @@
+{
+  "planogram": {
+    "id": "demo-planogram-001",
+    "venueId": "demo-venue",
+    "name": "Demo Store Planogram",
+    "version": 1,
+    "status": "draft",
+    "createdAt": "2024-01-15T10:00:00.000Z",
+    "updatedAt": "2024-01-15T10:00:00.000Z"
+  },
+  "shelves": [
+    {
+      "id": "shelf-plan-001",
+      "planogramId": "demo-planogram-001",
+      "shelfId": "shelf-dairy-01",
+      "numLevels": 4,
+      "slotWidthM": 0.12,
+      "levelHeightM": 0.35,
+      "slots": {
+        "levels": [
+          {
+            "levelIndex": 0,
+            "slots": [
+              { "slotIndex": 0, "skuItemId": "sku-milk-whole", "facingSpan": 2 },
+              { "slotIndex": 2, "skuItemId": "sku-milk-2pct", "facingSpan": 2 },
+              { "slotIndex": 4, "skuItemId": "sku-milk-skim", "facingSpan": 1 },
+              { "slotIndex": 5, "skuItemId": null, "facingSpan": 1 }
+            ]
+          },
+          {
+            "levelIndex": 1,
+            "slots": [
+              { "slotIndex": 0, "skuItemId": "sku-yogurt-plain", "facingSpan": 1 },
+              { "slotIndex": 1, "skuItemId": "sku-yogurt-vanilla", "facingSpan": 1 },
+              { "slotIndex": 2, "skuItemId": "sku-yogurt-plain", "facingSpan": 1 },
+              { "slotIndex": 3, "skuItemId": "sku-yogurt-vanilla", "facingSpan": 1 },
+              { "slotIndex": 4, "skuItemId": null, "facingSpan": 1 },
+              { "slotIndex": 5, "skuItemId": null, "facingSpan": 1 }
+            ]
+          },
+          {
+            "levelIndex": 2,
+            "slots": [
+              { "slotIndex": 0, "skuItemId": "sku-cheese-cheddar", "facingSpan": 2 },
+              { "slotIndex": 2, "skuItemId": "sku-cheese-mozz", "facingSpan": 2 },
+              { "slotIndex": 4, "skuItemId": null, "facingSpan": 1 },
+              { "slotIndex": 5, "skuItemId": null, "facingSpan": 1 }
+            ]
+          },
+          {
+            "levelIndex": 3,
+            "slots": [
+              { "slotIndex": 0, "skuItemId": null, "facingSpan": 1 },
+              { "slotIndex": 1, "skuItemId": null, "facingSpan": 1 },
+              { "slotIndex": 2, "skuItemId": null, "facingSpan": 1 },
+              { "slotIndex": 3, "skuItemId": null, "facingSpan": 1 },
+              { "slotIndex": 4, "skuItemId": null, "facingSpan": 1 },
+              { "slotIndex": 5, "skuItemId": null, "facingSpan": 1 }
+            ]
+          }
+        ]
+      }
+    }
+  ],
+  "skuDetails": {
+    "sku-milk-whole": {
+      "id": "sku-milk-whole",
+      "skuCode": "SKU001",
+      "name": "Organic Whole Milk",
+      "brand": "Happy Farms",
+      "category": "Dairy",
+      "subcategory": "Milk",
+      "price": 4.99
+    },
+    "sku-milk-2pct": {
+      "id": "sku-milk-2pct",
+      "skuCode": "SKU002",
+      "name": "2% Reduced Fat Milk",
+      "brand": "Happy Farms",
+      "category": "Dairy",
+      "subcategory": "Milk",
+      "price": 4.49
+    },
+    "sku-milk-skim": {
+      "id": "sku-milk-skim",
+      "skuCode": "SKU003",
+      "name": "Skim Milk",
+      "brand": "Happy Farms",
+      "category": "Dairy",
+      "subcategory": "Milk",
+      "price": 4.29
+    },
+    "sku-yogurt-plain": {
+      "id": "sku-yogurt-plain",
+      "skuCode": "SKU004",
+      "name": "Greek Yogurt Plain",
+      "brand": "Olympus",
+      "category": "Dairy",
+      "subcategory": "Yogurt",
+      "price": 6.99
+    },
+    "sku-yogurt-vanilla": {
+      "id": "sku-yogurt-vanilla",
+      "skuCode": "SKU005",
+      "name": "Greek Yogurt Vanilla",
+      "brand": "Olympus",
+      "category": "Dairy",
+      "subcategory": "Yogurt",
+      "price": 7.49
+    },
+    "sku-cheese-cheddar": {
+      "id": "sku-cheese-cheddar",
+      "skuCode": "SKU006",
+      "name": "Cheddar Cheese Block",
+      "brand": "Valley Gold",
+      "category": "Dairy",
+      "subcategory": "Cheese",
+      "price": 5.99
+    },
+    "sku-cheese-mozz": {
+      "id": "sku-cheese-mozz",
+      "skuCode": "SKU007",
+      "name": "Mozzarella Shredded",
+      "brand": "Valley Gold",
+      "category": "Dairy",
+      "subcategory": "Cheese",
+      "price": 3.99
+    }
+  },
+  "exportedAt": "2024-01-15T12:00:00.000Z"
+}

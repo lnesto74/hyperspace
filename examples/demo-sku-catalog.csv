@@ -1,0 +1,31 @@
+sku_code,name,brand,category,subcategory,size,price,margin,width_m,height_m,depth_m
+SKU001,Organic Whole Milk,Happy Farms,Dairy,Milk,1 Gallon,4.99,0.35,0.12,0.28,0.12
+SKU002,2% Reduced Fat Milk,Happy Farms,Dairy,Milk,1 Gallon,4.49,0.32,0.12,0.28,0.12
+SKU003,Skim Milk,Happy Farms,Dairy,Milk,1 Gallon,4.29,0.30,0.12,0.28,0.12
+SKU004,Greek Yogurt Plain,Olympus,Dairy,Yogurt,32oz,6.99,0.40,0.10,0.12,0.10
+SKU005,Greek Yogurt Vanilla,Olympus,Dairy,Yogurt,32oz,7.49,0.42,0.10,0.12,0.10
+SKU006,Cheddar Cheese Block,Valley Gold,Dairy,Cheese,16oz,5.99,0.38,0.08,0.15,0.06
+SKU007,Mozzarella Shredded,Valley Gold,Dairy,Cheese,8oz,3.99,0.35,0.08,0.12,0.04
+SKU008,Sourdough Bread,Artisan Bake,Bakery,Bread,24oz,4.49,0.45,0.15,0.12,0.12
+SKU009,Whole Wheat Bread,Nature's Own,Bakery,Bread,20oz,3.99,0.40,0.14,0.12,0.10
+SKU010,Croissants 4-Pack,French Touch,Bakery,Pastry,8oz,5.99,0.50,0.18,0.08,0.12
+SKU011,Blueberry Muffins 6-Pack,Morning Glory,Bakery,Pastry,18oz,6.49,0.48,0.20,0.10,0.15
+SKU012,Cola Classic,Fizz Co,Beverages,Soda,2 Liter,2.49,0.25,0.10,0.32,0.10
+SKU013,Orange Juice,Sunshine,Beverages,Juice,64oz,4.99,0.30,0.10,0.25,0.10
+SKU014,Apple Juice,Sunshine,Beverages,Juice,64oz,4.49,0.28,0.10,0.25,0.10
+SKU015,Sparkling Water Lime,Bubble Fresh,Beverages,Water,12-Pack,5.99,0.35,0.30,0.12,0.20
+SKU016,Spring Water,Pure Flow,Beverages,Water,24-Pack,4.99,0.20,0.35,0.20,0.25
+SKU017,Potato Chips Original,Crunch Time,Snacks,Chips,10oz,3.99,0.45,0.25,0.35,0.08
+SKU018,Tortilla Chips,Fiesta,Snacks,Chips,13oz,4.29,0.42,0.28,0.38,0.10
+SKU019,Trail Mix,Nature's Best,Snacks,Nuts,16oz,7.99,0.40,0.12,0.20,0.08
+SKU020,Granola Bars 6-Pack,Energy Boost,Snacks,Bars,8oz,4.49,0.38,0.18,0.12,0.04
+SKU021,Pasta Spaghetti,Bella Italia,Pantry,Pasta,16oz,1.99,0.35,0.08,0.28,0.04
+SKU022,Pasta Penne,Bella Italia,Pantry,Pasta,16oz,1.99,0.35,0.08,0.28,0.04
+SKU023,Marinara Sauce,Nonna's,Pantry,Sauce,24oz,3.99,0.40,0.08,0.18,0.08
+SKU024,Olive Oil Extra Virgin,Mediterranean Gold,Pantry,Oil,17oz,8.99,0.45,0.06,0.25,0.06
+SKU025,Chicken Breast Frozen,Farm Fresh,Frozen,Meat,2lb,9.99,0.25,0.20,0.05,0.25
+SKU026,Pizza Pepperoni,Tony's,Frozen,Pizza,22oz,6.99,0.35,0.30,0.03,0.30
+SKU027,Ice Cream Vanilla,Creamy Dreams,Frozen,Dessert,1.5qt,5.99,0.40,0.15,0.12,0.15
+SKU028,Frozen Vegetables Mix,Garden Select,Frozen,Vegetables,16oz,2.99,0.30,0.15,0.20,0.05
+SKU029,Laundry Detergent,Clean Pro,Household,Cleaning,100oz,12.99,0.30,0.15,0.30,0.10
+SKU030,Paper Towels 6-Roll,Soft Touch,Household,Paper,6 Rolls,8.99,0.25,0.25,0.30,0.25

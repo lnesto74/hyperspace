@@ -13,6 +13,12 @@ interface ZoneSettings {
   alertsEnabled: boolean
   visitEndGraceSec: number
   minVisitDurationSec: number
+  // Queue-specific settings
+  queueWarningThresholdSec: number
+  queueCriticalThresholdSec: number
+  queueOkColor: string
+  queueWarningColor: string
+  queueCriticalColor: string
 }
 
 interface AlertRule {
@@ -93,6 +99,8 @@ function SettingSlider({
 }
 
 export default function ZoneSettingsPanel({ roiId, roiName, roiColor, isOpen, onClose }: ZoneSettingsPanelProps) {
+  const isQueueZone = roiName?.toLowerCase().includes('queue')
+  
   const [settings, setSettings] = useState<ZoneSettings>({
     dwellThresholdSec: 60,
     engagementThresholdSec: 120,
@@ -100,6 +108,12 @@ export default function ZoneSettingsPanel({ roiId, roiName, roiColor, isOpen, on
     alertsEnabled: false,
     visitEndGraceSec: 3,
     minVisitDurationSec: 1,
+    // Queue defaults
+    queueWarningThresholdSec: 60,
+    queueCriticalThresholdSec: 120,
+    queueOkColor: '#22c55e',      // green
+    queueWarningColor: '#f59e0b', // amber
+    queueCriticalColor: '#ef4444', // red
   })
   const [rules, setRules] = useState<AlertRule[]>([])
   const [saving, setSaving] = useState(false)
@@ -337,6 +351,83 @@ export default function ZoneSettingsPanel({ roiId, roiName, roiColor, isOpen, on
                 unit="s"
                 onChange={(v) => setSettings(s => ({ ...s, minVisitDurationSec: v }))}
               />
+
+              {/* Queue-specific settings */}
+              {isQueueZone && (
+                <>
+                  <div className="border-t border-gray-700 pt-4 mt-4">
+                    <h3 className="text-sm font-medium text-amber-400 mb-3 flex items-center gap-2">
+                      <Clock className="w-4 h-4" />
+                      Queue Waiting Time Thresholds
+                    </h3>
+                    
+                    {/* Warning Threshold */}
+                    <SettingSlider
+                      label="Warning Threshold"
+                      value={settings.queueWarningThresholdSec}
+                      min={10}
+                      max={180}
+                      step={5}
+                      unit="s"
+                      onChange={(v) => setSettings(s => ({ ...s, queueWarningThresholdSec: v }))}
+                    />
+
+                    {/* Critical Threshold */}
+                    <SettingSlider
+                      label="Critical Threshold"
+                      value={settings.queueCriticalThresholdSec}
+                      min={30}
+                      max={300}
+                      step={10}
+                      unit="s"
+                      onChange={(v) => setSettings(s => ({ ...s, queueCriticalThresholdSec: v }))}
+                    />
+                  </div>
+
+                  {/* Threshold Colors */}
+                  <div className="border-t border-gray-700 pt-4 mt-4">
+                    <h3 className="text-sm font-medium text-amber-400 mb-3">Threshold Colors</h3>
+                    <div className="grid grid-cols-3 gap-3">
+                      <div className="space-y-1">
+                        <label className="text-xs text-gray-400">OK</label>
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="color"
+                            value={settings.queueOkColor}
+                            onChange={(e) => setSettings(s => ({ ...s, queueOkColor: e.target.value }))}
+                            className="w-8 h-8 rounded cursor-pointer bg-transparent border border-gray-600"
+                          />
+                          <span className="text-xs text-gray-500">&lt;{settings.queueWarningThresholdSec}s</span>
+                        </div>
+                      </div>
+                      <div className="space-y-1">
+                        <label className="text-xs text-gray-400">Warning</label>
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="color"
+                            value={settings.queueWarningColor}
+                            onChange={(e) => setSettings(s => ({ ...s, queueWarningColor: e.target.value }))}
+                            className="w-8 h-8 rounded cursor-pointer bg-transparent border border-gray-600"
+                          />
+                          <span className="text-xs text-gray-500">{settings.queueWarningThresholdSec}-{settings.queueCriticalThresholdSec}s</span>
+                        </div>
+                      </div>
+                      <div className="space-y-1">
+                        <label className="text-xs text-gray-400">Critical</label>
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="color"
+                            value={settings.queueCriticalColor}
+                            onChange={(e) => setSettings(s => ({ ...s, queueCriticalColor: e.target.value }))}
+                            className="w-8 h-8 rounded cursor-pointer bg-transparent border border-gray-600"
+                          />
+                          <span className="text-xs text-gray-500">&gt;{settings.queueCriticalThresholdSec}s</span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </>
+              )}
             </div>
           )}
 

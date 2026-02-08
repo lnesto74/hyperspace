@@ -21,6 +21,10 @@ import createRoiRoutes from './routes/roi.js';
 import createKpiRoutes from './routes/kpi.js';
 import createZoneSettingsRoutes from './routes/zoneSettings.js';
 import createWhiteLabelRoutes from './routes/whiteLabel.js';
+import createSmartKpiRoutes from './routes/smartKpi.js';
+import createPlanogramRoutes from './routes/planogram.js';
+import createDwgImportRoutes from './routes/dwgImport.js';
+import lidarPlannerRoutes from './routes/lidarPlanner.js';
 
 const PORT = process.env.PORT || 3001;
 const MOCK_LIDAR = process.env.MOCK_LIDAR === 'true';
@@ -126,6 +130,9 @@ trackingNamespace.on('connection', (socket) => {
     socket.join(`venue:${venueId}`);
     console.log(`📺 Client ${socket.id} subscribed to venue ${venueId}`);
     
+    // Load queue→service zone links for queue theory tracking
+    trajectoryStorage.loadZoneLinks(venueId);
+    
     // Start track aggregator
     trackAggregator.start(venueId);
     
@@ -181,6 +188,13 @@ app.use('/api', createRoiRoutes(db));
 app.use('/api', createKpiRoutes(db, kpiCalculator, trajectoryStorage));
 app.use('/api', createZoneSettingsRoutes(db, trajectoryStorage));
 app.use('/api', createWhiteLabelRoutes(db));
+app.use('/api/smart-kpi', createSmartKpiRoutes(db));
+app.use('/api/planogram', createPlanogramRoutes(db));
+app.use('/api/dwg', createDwgImportRoutes(db));
+
+// LiDAR Planner routes (feature-flagged)
+app.set('db', db); // Make db available to lidarPlanner routes
+app.use('/api/lidar', lidarPlannerRoutes);
 
 // Serve uploaded logos
 app.use('/api/uploads/logos', express.static(path.join(__dirname, 'uploads', 'logos')));
@@ -192,6 +206,89 @@ app.get('/api/health', (req, res) => {
     mockMode: MOCK_LIDAR,
     timestamp: new Date().toISOString(),
   });
+});
+
+// Edge Simulator Control (via Tailscale)
+const EDGE_SERVER_URL = process.env.EDGE_SERVER_URL || 'http://100.78.174.103:8080';
+
+app.get('/api/edge-simulator/status', async (req, res) => {
+  try {
+    const response = await fetch(`${EDGE_SERVER_URL}/api/status`, { timeout: 5000 });
+    const data = await response.json();
+    res.json({ connected: true, ...data });
+  } catch (err) {
+    res.json({ connected: false, isRunning: false, error: err.message });
+  }
+});
+
+app.post('/api/edge-simulator/start', async (req, res) => {
+  try {
+    const response = await fetch(`${EDGE_SERVER_URL}/api/start`, { method: 'POST' });
+    const data = await response.json();
+    console.log('🎯 Edge simulator started:', data);
+    res.json({ success: true, ...data });
+  } catch (err) {
+    console.error('❌ Failed to start edge simulator:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.post('/api/edge-simulator/stop', async (req, res) => {
+  try {
+    const response = await fetch(`${EDGE_SERVER_URL}/api/stop`, { method: 'POST' });
+    const data = await response.json();
+    console.log('🛑 Edge simulator stopped:', data);
+    res.json({ success: true, ...data });
+  } catch (err) {
+    console.error('❌ Failed to stop edge simulator:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.get('/api/edge-simulator/config', async (req, res) => {
+  try {
+    const response = await fetch(`${EDGE_SERVER_URL}/api/config`);
+    const data = await response.json();
+    res.json({ connected: true, ...data });
+  } catch (err) {
+    res.json({ connected: false, error: err.message });
+  }
+});
+
+app.post('/api/edge-simulator/config', async (req, res) => {
+  try {
+    const response = await fetch(`${EDGE_SERVER_URL}/api/config`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(req.body),
+    });
+    const data = await response.json();
+    console.log('⚙️ Edge simulator config updated:', req.body);
+    res.json({ success: true, ...data });
+  } catch (err) {
+    console.error('❌ Failed to update edge config:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.get('/api/edge-simulator/diagnostics', async (req, res) => {
+  try {
+    const response = await fetch(`${EDGE_SERVER_URL}/api/diagnostics`);
+    const data = await response.json();
+    res.json({ connected: true, ...data });
+  } catch (err) {
+    res.json({ connected: false, error: err.message });
+  }
+});
+
+app.get('/api/edge-simulator/debug/agents', async (req, res) => {
+  try {
+    const response = await fetch(`${EDGE_SERVER_URL}/api/debug/agents`);
+    const data = await response.json();
+    res.json({ connected: true, ...data });
+  } catch (err) {
+    res.json({ connected: false, error: err.message });
+  }
 });
 
 // Start server

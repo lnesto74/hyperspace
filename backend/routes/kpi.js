@@ -341,7 +341,7 @@ export default function createKpiRoutes(db, kpiCalculator, trajectoryStorage) {
           occupancy = db.prepare(`
             SELECT AVG(occupancy_count) as avg_occupancy, MAX(occupancy_count) as peak
             FROM zone_occupancy
-            WHERE venue_id = ? AND zone_id = ? AND timestamp >= ? AND timestamp < ?
+            WHERE venue_id = ? AND roi_id = ? AND timestamp >= ? AND timestamp < ?
           `).get(venueId, roiId, ts, slotEnd);
         } else {
           occupancy = db.prepare(`
@@ -357,7 +357,7 @@ export default function createKpiRoutes(db, kpiCalculator, trajectoryStorage) {
           visits = db.prepare(`
             SELECT COUNT(*) as count
             FROM zone_visits
-            WHERE venue_id = ? AND zone_id = ? AND start_time >= ? AND start_time < ?
+            WHERE venue_id = ? AND roi_id = ? AND start_time >= ? AND start_time < ?
           `).get(venueId, roiId, ts, slotEnd);
         } else {
           visits = db.prepare(`
@@ -373,7 +373,7 @@ export default function createKpiRoutes(db, kpiCalculator, trajectoryStorage) {
           dwells = db.prepare(`
             SELECT COUNT(*) as count
             FROM zone_visits
-            WHERE venue_id = ? AND zone_id = ? AND start_time >= ? AND start_time < ? AND is_dwell = 1
+            WHERE venue_id = ? AND roi_id = ? AND start_time >= ? AND start_time < ? AND is_dwell = 1
           `).get(venueId, roiId, ts, slotEnd);
         } else {
           dwells = db.prepare(`
@@ -389,7 +389,7 @@ export default function createKpiRoutes(db, kpiCalculator, trajectoryStorage) {
           engagements = db.prepare(`
             SELECT COUNT(*) as count
             FROM zone_visits
-            WHERE venue_id = ? AND zone_id = ? AND start_time >= ? AND start_time < ? AND is_engagement = 1
+            WHERE venue_id = ? AND roi_id = ? AND start_time >= ? AND start_time < ? AND is_engagement = 1
           `).get(venueId, roiId, ts, slotEnd);
         } else {
           engagements = db.prepare(`
@@ -422,6 +422,121 @@ export default function createKpiRoutes(db, kpiCalculator, trajectoryStorage) {
   });
 
   /**
+   * Get heatmap data aggregated by tile for a venue
+   * Query params:
+   * - timeframe: 'day' | 'week' | 'month' (default: 'day')
+   * - tileSize: size of each tile in meters (default: venue's tile_size)
+   */
+  router.get('/venues/:venueId/heatmap', (req, res) => {
+    try {
+      const { venueId } = req.params;
+      const { timeframe = 'day', tileSize: tileSizeParam } = req.query;
+      
+      // Get venue info for dimensions and tile size
+      const venue = db.prepare('SELECT * FROM venues WHERE id = ?').get(venueId);
+      if (!venue) {
+        return res.status(404).json({ error: 'Venue not found' });
+      }
+      
+      const tileSize = parseFloat(tileSizeParam) || venue.tile_size || 1;
+      
+      // Calculate time range based on timeframe
+      const now = Date.now();
+      let startTime;
+      switch (timeframe) {
+        case 'week':
+          startTime = now - 7 * 24 * 60 * 60 * 1000;
+          break;
+        case 'month':
+          startTime = now - 30 * 24 * 60 * 60 * 1000;
+          break;
+        case 'day':
+        default:
+          startTime = now - 24 * 60 * 60 * 1000;
+          break;
+      }
+      
+      // Get all track positions within the timeframe
+      const positions = db.prepare(`
+        SELECT track_key, timestamp, position_x, position_z
+        FROM track_positions
+        WHERE venue_id = ? AND timestamp >= ? AND timestamp <= ?
+        ORDER BY track_key, timestamp ASC
+      `).all(venueId, startTime, now);
+      
+      // Aggregate by tile
+      // Tile coordinates are calculated as floor(position / tileSize)
+      const tileData = new Map(); // key: "tileX,tileZ" -> { visits: Set<trackKey>, dwellMs: number }
+      
+      // Track last position per track for dwell calculation
+      const trackLastPos = new Map(); // trackKey -> { tileKey, timestamp }
+      
+      for (const pos of positions) {
+        const tileX = Math.floor(pos.position_x / tileSize);
+        const tileZ = Math.floor(pos.position_z / tileSize);
+        const tileKey = `${tileX},${tileZ}`;
+        
+        if (!tileData.has(tileKey)) {
+          tileData.set(tileKey, { visits: new Set(), dwellMs: 0 });
+        }
+        
+        const tile = tileData.get(tileKey);
+        tile.visits.add(pos.track_key);
+        
+        // Calculate dwell time
+        const lastPos = trackLastPos.get(pos.track_key);
+        if (lastPos && lastPos.tileKey === tileKey) {
+          // Same tile - add time difference to dwell
+          const timeDiff = pos.timestamp - lastPos.timestamp;
+          if (timeDiff > 0 && timeDiff < 60000) { // Cap at 1 minute to avoid gaps
+            tile.dwellMs += timeDiff;
+          }
+        }
+        
+        trackLastPos.set(pos.track_key, { tileKey, timestamp: pos.timestamp });
+      }
+      
+      // Convert to array format
+      const tiles = [];
+      let maxVisits = 0;
+      let maxDwell = 0;
+      
+      tileData.forEach((data, key) => {
+        const [tileX, tileZ] = key.split(',').map(Number);
+        const visits = data.visits.size;
+        const dwellSec = Math.round(data.dwellMs / 1000);
+        
+        maxVisits = Math.max(maxVisits, visits);
+        maxDwell = Math.max(maxDwell, dwellSec);
+        
+        tiles.push({
+          tileX,
+          tileZ,
+          x: tileX * tileSize + tileSize / 2, // Center of tile
+          z: tileZ * tileSize + tileSize / 2,
+          visits,
+          dwellSec,
+        });
+      });
+      
+      res.json({
+        tiles,
+        tileSize,
+        timeframe,
+        startTime,
+        endTime: now,
+        maxVisits,
+        maxDwell,
+        venueWidth: venue.width,
+        venueDepth: venue.depth,
+      });
+    } catch (err) {
+      console.error('Failed to get heatmap data:', err);
+      res.status(500).json({ error: 'Failed to get heatmap data' });
+    }
+  });
+
+  /**
    * Get trajectory positions for a specific time range (for replay)
    */
   router.get('/venues/:venueId/trajectories', (req, res) => {
@@ -438,7 +553,7 @@ export default function createKpiRoutes(db, kpiCalculator, trajectoryStorage) {
       
       // Get track positions for the time range
       const positions = db.prepare(`
-        SELECT track_key, timestamp, x, z, vx, vz, roi_ids
+        SELECT track_key, timestamp, position_x, position_z, velocity_x, velocity_z, roi_id
         FROM track_positions
         WHERE venue_id = ? AND timestamp >= ? AND timestamp <= ?
         ORDER BY timestamp ASC
@@ -452,11 +567,11 @@ export default function createKpiRoutes(db, kpiCalculator, trajectoryStorage) {
         }
         tracks[pos.track_key].push({
           timestamp: pos.timestamp,
-          x: pos.x,
-          z: pos.z,
-          vx: pos.vx,
-          vz: pos.vz,
-          roiIds: pos.roi_ids ? JSON.parse(pos.roi_ids) : [],
+          x: pos.position_x,
+          z: pos.position_z,
+          vx: pos.velocity_x,
+          vz: pos.velocity_z,
+          roiIds: pos.roi_id ? [pos.roi_id] : [],
         });
       }
       
@@ -466,6 +581,205 @@ export default function createKpiRoutes(db, kpiCalculator, trajectoryStorage) {
       res.status(500).json({ error: 'Failed to get trajectory data' });
     }
   });
+
+  /**
+   * Get LIVE waiting time for a zone from in-memory sessions (instant, no DB)
+   */
+  router.get('/roi/:roiId/live-stats', (req, res) => {
+    try {
+      const { roiId } = req.params;
+      const liveStats = trajectoryStorage.getLiveZoneStats(roiId);
+      
+      res.json({
+        roiId,
+        timestamp: Date.now(),
+        ...liveStats,
+      });
+    } catch (err) {
+      console.error('Failed to get live zone stats:', err);
+      res.status(500).json({ error: 'Failed to get live zone stats' });
+    }
+  });
+
+  /**
+   * Get queue KPIs for a specific queue zone (queue theory metrics)
+   * Returns: waiting time, service time, throughput, abandon rate, etc.
+   */
+  router.get('/roi/:roiId/queue-kpis', (req, res) => {
+    try {
+      const { roiId } = req.params;
+      const { startTime, endTime, period } = req.query;
+      
+      const now = Date.now();
+      let start = startTime ? parseInt(startTime) : now - 60 * 60 * 1000; // Default last hour
+      let end = endTime ? parseInt(endTime) : now;
+      
+      if (period) {
+        switch (period) {
+          case 'hour':
+            start = now - 60 * 60 * 1000;
+            break;
+          case 'day':
+            start = now - 24 * 60 * 60 * 1000;
+            break;
+          case 'week':
+            start = now - 7 * 24 * 60 * 60 * 1000;
+            break;
+        }
+        end = now;
+      }
+      
+      const queueKpis = trajectoryStorage.getQueueKPIs(roiId, start, end);
+      
+      // Get current queue length (live occupancy)
+      const liveOccupancy = db.prepare(`
+        SELECT occupancy_count FROM zone_occupancy
+        WHERE roi_id = ? AND timestamp > ?
+        ORDER BY timestamp DESC LIMIT 1
+      `).get(roiId, now - 10000);
+      
+      res.json({
+        roiId,
+        startTime: start,
+        endTime: end,
+        queueKpis: {
+          ...queueKpis,
+          currentQueueLength: liveOccupancy?.occupancy_count || 0,
+        },
+      });
+    } catch (err) {
+      console.error('Failed to get queue KPIs:', err);
+      res.status(500).json({ error: 'Failed to get queue KPIs' });
+    }
+  });
+
+  /**
+   * Get queue KPIs for all checkout lanes in a venue
+   */
+  router.get('/venues/:venueId/queue-kpis', (req, res) => {
+    try {
+      const { venueId } = req.params;
+      const { period } = req.query;
+      
+      const now = Date.now();
+      let start = now - 60 * 60 * 1000; // Default last hour
+      
+      if (period === 'day') start = now - 24 * 60 * 60 * 1000;
+      if (period === 'week') start = now - 7 * 24 * 60 * 60 * 1000;
+      
+      // Find all queue zones (zones with linked service zones)
+      const queueZones = db.prepare(`
+        SELECT zs.roi_id, zs.linked_service_zone_id, r.name, r.color
+        FROM zone_settings zs
+        JOIN regions_of_interest r ON zs.roi_id = r.id
+        WHERE zs.venue_id = ? AND zs.linked_service_zone_id IS NOT NULL
+      `).all(venueId);
+      
+      const results = queueZones.map(zone => {
+        const queueKpis = trajectoryStorage.getQueueKPIs(zone.roi_id, start, now);
+        
+        // Get current queue length
+        const liveOccupancy = db.prepare(`
+          SELECT occupancy_count FROM zone_occupancy
+          WHERE roi_id = ? AND timestamp > ?
+          ORDER BY timestamp DESC LIMIT 1
+        `).get(zone.roi_id, now - 10000);
+        
+        return {
+          queueZoneId: zone.roi_id,
+          serviceZoneId: zone.linked_service_zone_id,
+          name: zone.name,
+          color: zone.color,
+          currentQueueLength: liveOccupancy?.occupancy_count || 0,
+          ...queueKpis,
+        };
+      });
+      
+      // Calculate venue-wide averages
+      const totalSessions = results.reduce((sum, r) => sum + r.totalSessions, 0);
+      const avgWaitingTime = totalSessions > 0
+        ? results.reduce((sum, r) => sum + (r.avgWaitingTimeMs * r.totalSessions), 0) / totalSessions
+        : 0;
+      
+      res.json({
+        venueId,
+        startTime: start,
+        endTime: now,
+        period: period || 'hour',
+        summary: {
+          totalQueueZones: queueZones.length,
+          totalSessions,
+          avgWaitingTimeMs: avgWaitingTime,
+          avgWaitingTimeSec: Math.round(avgWaitingTime / 1000),
+          avgWaitingTimeMin: Math.round(avgWaitingTime / 60000 * 10) / 10,
+        },
+        queueZones: results,
+      });
+    } catch (err) {
+      console.error('Failed to get venue queue KPIs:', err);
+      res.status(500).json({ error: 'Failed to get venue queue KPIs' });
+    }
+  });
+
+  /**
+   * Link a queue zone to a service zone (for queue theory tracking)
+   */
+  router.post('/roi/:roiId/link-service-zone', (req, res) => {
+    try {
+      const { roiId } = req.params;
+      const { serviceZoneId, venueId } = req.body;
+      
+      if (!serviceZoneId || !venueId) {
+        return res.status(400).json({ error: 'serviceZoneId and venueId required' });
+      }
+      
+      // Upsert zone settings with linked service zone
+      db.prepare(`
+        INSERT INTO zone_settings (roi_id, venue_id, linked_service_zone_id, zone_type)
+        VALUES (?, ?, ?, 'queue')
+        ON CONFLICT(roi_id) DO UPDATE SET
+          linked_service_zone_id = excluded.linked_service_zone_id,
+          zone_type = 'queue',
+          updated_at = datetime('now')
+      `).run(roiId, venueId, serviceZoneId);
+      
+      // Reload zone links in trajectory storage
+      trajectoryStorage.loadZoneLinks(venueId);
+      
+      res.json({ 
+        success: true, 
+        queueZoneId: roiId, 
+        serviceZoneId,
+        message: 'Queue zone linked to service zone for waiting time tracking'
+      });
+    } catch (err) {
+      console.error('Failed to link service zone:', err);
+      res.status(500).json({ error: 'Failed to link service zone' });
+    }
+  });
+
+  /**
+   * Manually trigger database sync (syncs pending visits to DB)
+   */
+  router.post('/sync', (req, res) => {
+    try {
+      console.log('📊 Manual sync triggered...');
+      trajectoryStorage.syncToDatabase();
+      res.json({ success: true, message: 'Database sync completed' });
+    } catch (err) {
+      console.error('Failed to sync database:', err);
+      res.status(500).json({ error: 'Failed to sync database' });
+    }
+  });
+
+  // Set up automatic sync interval (every 15 minutes)
+  setInterval(() => {
+    try {
+      trajectoryStorage.syncToDatabase();
+    } catch (err) {
+      console.error('Auto-sync failed:', err);
+    }
+  }, 15 * 60 * 1000);
 
   return router;
 }

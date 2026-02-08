@@ -24,6 +24,11 @@ export default function createZoneSettingsRoutes(db, trajectoryStorage) {
           alerts_enabled: 0,
           visit_end_grace_sec: 3,
           min_visit_duration_sec: 1,
+          queue_warning_threshold_sec: 60,
+          queue_critical_threshold_sec: 120,
+          queue_ok_color: '#22c55e',
+          queue_warning_color: '#f59e0b',
+          queue_critical_color: '#ef4444',
         };
       }
       
@@ -35,6 +40,12 @@ export default function createZoneSettingsRoutes(db, trajectoryStorage) {
         alertsEnabled: settings.alerts_enabled === 1,
         visitEndGraceSec: settings.visit_end_grace_sec,
         minVisitDurationSec: settings.min_visit_duration_sec,
+        // Queue-specific settings
+        queueWarningThresholdSec: settings.queue_warning_threshold_sec || 60,
+        queueCriticalThresholdSec: settings.queue_critical_threshold_sec || 120,
+        queueOkColor: settings.queue_ok_color || '#22c55e',
+        queueWarningColor: settings.queue_warning_color || '#f59e0b',
+        queueCriticalColor: settings.queue_critical_color || '#ef4444',
       });
     } catch (err) {
       console.error('Failed to get zone settings:', err);
@@ -55,6 +66,12 @@ export default function createZoneSettingsRoutes(db, trajectoryStorage) {
         alertsEnabled,
         visitEndGraceSec,
         minVisitDurationSec,
+        // Queue-specific settings
+        queueWarningThresholdSec,
+        queueCriticalThresholdSec,
+        queueOkColor,
+        queueWarningColor,
+        queueCriticalColor,
       } = req.body;
       
       // Get venue_id from ROI
@@ -63,10 +80,10 @@ export default function createZoneSettingsRoutes(db, trajectoryStorage) {
         return res.status(404).json({ error: 'ROI not found' });
       }
       
-      // Upsert settings
+      // Upsert settings (including queue-specific fields)
       db.prepare(`
-        INSERT INTO zone_settings (roi_id, venue_id, dwell_threshold_sec, engagement_threshold_sec, max_occupancy, alerts_enabled, visit_end_grace_sec, min_visit_duration_sec, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+        INSERT INTO zone_settings (roi_id, venue_id, dwell_threshold_sec, engagement_threshold_sec, max_occupancy, alerts_enabled, visit_end_grace_sec, min_visit_duration_sec, queue_warning_threshold_sec, queue_critical_threshold_sec, queue_ok_color, queue_warning_color, queue_critical_color, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
         ON CONFLICT(roi_id) DO UPDATE SET
           dwell_threshold_sec = excluded.dwell_threshold_sec,
           engagement_threshold_sec = excluded.engagement_threshold_sec,
@@ -74,6 +91,11 @@ export default function createZoneSettingsRoutes(db, trajectoryStorage) {
           alerts_enabled = excluded.alerts_enabled,
           visit_end_grace_sec = excluded.visit_end_grace_sec,
           min_visit_duration_sec = excluded.min_visit_duration_sec,
+          queue_warning_threshold_sec = excluded.queue_warning_threshold_sec,
+          queue_critical_threshold_sec = excluded.queue_critical_threshold_sec,
+          queue_ok_color = excluded.queue_ok_color,
+          queue_warning_color = excluded.queue_warning_color,
+          queue_critical_color = excluded.queue_critical_color,
           updated_at = datetime('now')
       `).run(
         roiId,
@@ -83,7 +105,12 @@ export default function createZoneSettingsRoutes(db, trajectoryStorage) {
         maxOccupancy ?? 50,
         alertsEnabled ? 1 : 0,
         visitEndGraceSec ?? 3,
-        minVisitDurationSec ?? 1
+        minVisitDurationSec ?? 1,
+        queueWarningThresholdSec ?? 60,
+        queueCriticalThresholdSec ?? 120,
+        queueOkColor ?? '#22c55e',
+        queueWarningColor ?? '#f59e0b',
+        queueCriticalColor ?? '#ef4444'
       );
       
       console.log(`📊 Zone settings updated for ROI ${roiId}`);

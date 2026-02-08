@@ -212,9 +212,13 @@ export class NavGrid {
     
     // MINIMUM OBSTACLE SIZE: Prevent agents from stepping through thin obstacles
     // Shelves are often only 0.6m deep - agents can tunnel through in one frame
-    const MIN_OBSTACLE_SIZE = 1.5; // At least 1.5m in each dimension
-    effectiveW = Math.max(effectiveW, MIN_OBSTACLE_SIZE);
-    effectiveD = Math.max(effectiveD, MIN_OBSTACLE_SIZE);
+    // BUT: Don't expand checkouts - agents need to stand near them for service
+    const isCheckout = type.includes('checkout') || type.includes('cashier') || type.includes('counter');
+    if (!isCheckout) {
+      const MIN_OBSTACLE_SIZE = 1.5; // At least 1.5m in each dimension
+      effectiveW = Math.max(effectiveW, MIN_OBSTACLE_SIZE);
+      effectiveD = Math.max(effectiveD, MIN_OBSTACLE_SIZE);
+    }
     
     const halfW = effectiveW / 2;
     const halfD = effectiveD / 2;
