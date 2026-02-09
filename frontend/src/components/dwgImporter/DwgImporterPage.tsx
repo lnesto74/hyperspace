@@ -18,6 +18,7 @@ export interface LidarModel {
   vfov_deg: number
   range_m: number
   dome_mode: boolean
+  notes?: { min_overlap_m?: number }
 }
 
 export interface LidarInstance {

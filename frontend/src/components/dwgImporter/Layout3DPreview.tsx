@@ -52,12 +52,20 @@ interface LidarModel {
   dome_mode?: boolean
 }
 
+interface SimulationResult {
+  coverage_percent: number
+  heatmap: { x: number; z: number; count: number; overlap?: boolean }[]
+  uncovered_cells: number
+  total_cells: number
+}
+
 interface Layout3DPreviewProps {
   layoutVersionId: string
   onClose?: () => void
   lidarInstances?: LidarInstance[]
   lidarModels?: LidarModel[]
   scaleCorrection?: number
+  simulationResult?: SimulationResult | null
 }
 
 interface CustomModel {
@@ -75,7 +83,7 @@ const TYPE_COLORS: Record<string, number> = {
   default: 0x4b5563
 }
 
-export default function Layout3DPreview({ layoutVersionId, lidarInstances = [], lidarModels = [], scaleCorrection = 1.0 }: Layout3DPreviewProps) {
+export default function Layout3DPreview({ layoutVersionId, lidarInstances = [], lidarModels = [], scaleCorrection = 1.0, simulationResult = null }: Layout3DPreviewProps) {
   console.log('Layout3DPreview render - lidarInstances:', lidarInstances.length, 'lidarModels:', lidarModels.length)
   
   const containerRef = useRef<HTMLDivElement>(null)
@@ -304,20 +312,8 @@ export default function Layout3DPreview({ layoutVersionId, lidarInstances = [], 
     fillLight.position.set(-500, 800, -500)
     scene.add(fillLight)
 
-    // Grid - larger to support scaled scenes
-    const gridHelper = new THREE.GridHelper(2000, 200, 0x444466, 0x333344)
-    scene.add(gridHelper)
-
-    // Floor - larger to support scaled scenes
-    const floorGeometry = new THREE.PlaneGeometry(4000, 4000)
-    const floorMaterial = new THREE.MeshStandardMaterial({ 
-      color: 0x1a1a24, 
-      roughness: 0.9 
-    })
-    const floor = new THREE.Mesh(floorGeometry, floorMaterial)
-    floor.rotation.x = -Math.PI / 2
-    floor.receiveShadow = true
-    scene.add(floor)
+    // Grid and floor will be created dynamically when layout data is loaded
+    // (see the layoutData useEffect below)
 
     // Fixtures group
     const fixturesGroup = new THREE.Group()
@@ -497,13 +493,99 @@ export default function Layout3DPreview({ layoutVersionId, lidarInstances = [], 
     }
 
     const { fixtures, unit_scale_to_m, bounds } = layoutData
+    const scene = sceneRef.current
     
     // Center offset - use scaleCorrection to match LiDAR coordinate system
     const effectiveScale = unit_scale_to_m * scaleCorrection
     const centerX = (bounds.minX + bounds.maxX) / 2 * effectiveScale
     const centerZ = (bounds.minY + bounds.maxY) / 2 * effectiveScale
+    
+    // Calculate ACTUAL content bounds from fixtures (not raw DWG bounds which can be huge)
+    let contentMinX = Infinity, contentMaxX = -Infinity
+    let contentMinZ = Infinity, contentMaxZ = -Infinity
+    
+    fixtures.forEach(fixture => {
+      if (fixture.footprint.points && fixture.footprint.points.length > 0) {
+        fixture.footprint.points.forEach(pt => {
+          const x = pt.x * effectiveScale - centerX
+          const z = pt.y * effectiveScale - centerZ
+          contentMinX = Math.min(contentMinX, x)
+          contentMaxX = Math.max(contentMaxX, x)
+          contentMinZ = Math.min(contentMinZ, z)
+          contentMaxZ = Math.max(contentMaxZ, z)
+        })
+      } else {
+        const x = fixture.pose2d.x * effectiveScale - centerX
+        const z = fixture.pose2d.y * effectiveScale - centerZ
+        const halfW = (fixture.footprint.w * effectiveScale) / 2
+        const halfD = (fixture.footprint.d * effectiveScale) / 2
+        contentMinX = Math.min(contentMinX, x - halfW)
+        contentMaxX = Math.max(contentMaxX, x + halfW)
+        contentMinZ = Math.min(contentMinZ, z - halfD)
+        contentMaxZ = Math.max(contentMaxZ, z + halfD)
+      }
+    })
+    
+    // Also include LiDAR positions in content bounds
+    lidarInstances.forEach(inst => {
+      const x = inst.x_m - centerX
+      const z = inst.z_m - centerZ
+      contentMinX = Math.min(contentMinX, x - 10)
+      contentMaxX = Math.max(contentMaxX, x + 10)
+      contentMinZ = Math.min(contentMinZ, z - 10)
+      contentMaxZ = Math.max(contentMaxZ, z + 10)
+    })
+    
+    // Calculate content size (actual fixtures + LiDARs, not raw DWG bounds)
+    const contentWidth = contentMaxX - contentMinX
+    const contentDepth = contentMaxZ - contentMinZ
+    const maxContentSize = Math.max(contentWidth, contentDepth)
+    
+    // Fallback to DWG bounds only if no content found
+    const rawBoundsWidth = (bounds.maxX - bounds.minX) * effectiveScale
+    const rawBoundsDepth = (bounds.maxY - bounds.minY) * effectiveScale
+    
+    // Use content bounds if valid, otherwise cap at reasonable size
+    const useContentBounds = isFinite(maxContentSize) && maxContentSize > 0
+    const sceneSize = useContentBounds 
+      ? Math.max(maxContentSize * 1.5, 50) // 1.5x content, min 50m
+      : Math.min(Math.max(rawBoundsWidth, rawBoundsDepth) * 1.5, 500) // Cap at 500m for raw bounds
+    
+    const gridDivisions = Math.min(Math.ceil(sceneSize), 200) // 1m per division, max 200
 
+    // Calculate center of actual content (to position grid there)
+    const contentCenterX = useContentBounds ? (contentMinX + contentMaxX) / 2 : 0
+    const contentCenterZ = useContentBounds ? (contentMinZ + contentMaxZ) / 2 : 0
+    
+    console.log(`Raw DWG bounds: ${rawBoundsWidth.toFixed(1)}m x ${rawBoundsDepth.toFixed(1)}m`)
+    console.log(`Content bounds: ${contentWidth.toFixed(1)}m x ${contentDepth.toFixed(1)}m, using: ${useContentBounds ? 'content' : 'raw'}, grid size: ${sceneSize.toFixed(1)}m`)
+    console.log(`Content center: (${contentCenterX.toFixed(1)}, ${contentCenterZ.toFixed(1)})`)
     console.log(`Rendering ${fixtures.length} fixtures, scaleCorrection: ${scaleCorrection}, effectiveScale: ${effectiveScale}, center: (${centerX.toFixed(2)}, ${centerZ.toFixed(2)})`)
+    
+    // Remove old grid and floor if they exist
+    const oldGrid = scene.getObjectByName('DynamicGrid')
+    const oldFloor = scene.getObjectByName('DynamicFloor')
+    if (oldGrid) scene.remove(oldGrid)
+    if (oldFloor) scene.remove(oldFloor)
+    
+    // Create grid sized to actual scene bounds, positioned at content center
+    const gridHelper = new THREE.GridHelper(sceneSize, gridDivisions, 0x444466, 0x333344)
+    gridHelper.name = 'DynamicGrid'
+    gridHelper.position.set(contentCenterX, 0, contentCenterZ)
+    scene.add(gridHelper)
+    
+    // Create floor sized to actual scene bounds, positioned at content center
+    const floorGeometry = new THREE.PlaneGeometry(sceneSize * 1.2, sceneSize * 1.2)
+    const floorMaterial = new THREE.MeshStandardMaterial({ 
+      color: 0x1a1a24, 
+      roughness: 0.9 
+    })
+    const floor = new THREE.Mesh(floorGeometry, floorMaterial)
+    floor.name = 'DynamicFloor'
+    floor.position.set(contentCenterX, 0, contentCenterZ)
+    floor.rotation.x = -Math.PI / 2
+    floor.receiveShadow = true
+    scene.add(floor)
 
     // Add fixtures
     fixtures.forEach((fixture, idx) => {
@@ -810,12 +892,78 @@ export default function Layout3DPreview({ layoutVersionId, lidarInstances = [], 
         circle.position.set(x, 0.05, z)
         circle.rotation.x = -Math.PI / 2
         group.add(circle)
+      } else {
+        // Non-dome: FOV cone visualization
+        const hfov = model?.hfov_deg || 90
+        const vfov = model?.vfov_deg || 30
+        const yaw = (inst.yaw_deg || 0) * Math.PI / 180
+        
+        // Create cone geometry for FOV
+        const coneAngle = (hfov / 2) * Math.PI / 180
+        const coneHeight = Math.min(range, mountHeight) // Don't go below floor
+        const coneRadius = Math.tan(coneAngle) * coneHeight
+        const coneGeometry = new THREE.ConeGeometry(coneRadius, coneHeight, 32, 1, true)
+        const coneMaterial = new THREE.MeshBasicMaterial({
+          color: inst.source === 'auto' ? 0x22c55e : 0x3b82f6,
+          transparent: true,
+          opacity: 0.12,
+          side: THREE.DoubleSide,
+          depthWrite: false
+        })
+        const cone = new THREE.Mesh(coneGeometry, coneMaterial)
+        cone.position.set(x, mountHeight - coneHeight / 2, z)
+        cone.rotation.x = Math.PI // Point downward
+        cone.rotation.y = yaw
+        group.add(cone)
+        
+        // FOV arc on floor
+        const arcGeometry = new THREE.RingGeometry(range * 0.9, range, 32, 1, -coneAngle + yaw + Math.PI / 2, hfov * Math.PI / 180)
+        const arcMaterial = new THREE.MeshBasicMaterial({
+          color: inst.source === 'auto' ? 0x22c55e : 0x3b82f6,
+          transparent: true,
+          opacity: 0.25,
+          side: THREE.DoubleSide
+        })
+        const arc = new THREE.Mesh(arcGeometry, arcMaterial)
+        arc.position.set(x, 0.05, z)
+        arc.rotation.x = -Math.PI / 2
+        group.add(arc)
       }
     })
     
+    // Add simulation heatmap on floor (coverage visualization)
+    if (simulationResult && simulationResult.heatmap && simulationResult.heatmap.length > 0) {
+      const cellSize = 0.5 // meters
+      const heatmapGroup = new THREE.Group()
+      heatmapGroup.name = 'heatmap'
+      
+      simulationResult.heatmap.forEach((cell) => {
+        const cellX = cell.x - centerX
+        const cellZ = cell.z - centerZ
+        const intensity = Math.min(cell.count / 3, 1)
+        
+        // Coverage cell
+        const cellGeometry = new THREE.PlaneGeometry(cellSize * 0.9, cellSize * 0.9)
+        const cellMaterial = new THREE.MeshBasicMaterial({
+          color: cell.overlap ? 0x00ff64 : 0x0096ff,
+          transparent: true,
+          opacity: intensity * 0.4,
+          side: THREE.DoubleSide,
+          depthWrite: false
+        })
+        const cellMesh = new THREE.Mesh(cellGeometry, cellMaterial)
+        cellMesh.position.set(cellX, 0.02, cellZ)
+        cellMesh.rotation.x = -Math.PI / 2
+        heatmapGroup.add(cellMesh)
+      })
+      
+      group.add(heatmapGroup)
+      console.log('Added heatmap with', simulationResult.heatmap.length, 'cells, coverage:', simulationResult.coverage_percent.toFixed(1) + '%')
+    }
+    
     console.log('Added', group.children.length, 'objects to LiDAR group')
     
-  }, [lidarInstances, lidarModels, layoutData, scaleCorrection])
+  }, [lidarInstances, lidarModels, layoutData, scaleCorrection, simulationResult])
 
   // Toggle LiDAR layer visibility
   useEffect(() => {
