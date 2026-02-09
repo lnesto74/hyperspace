@@ -40,6 +40,12 @@ const defaultConfig = {
   simulationMode: 'random', // 'random', 'queue', 'mixed'
   queueSpawnInterval: 5, // seconds between new queue customers
   useSimV2: true, // Feature flag: use new V2 simulation with navgrid, pathfinding, anti-glitch
+  // Cashier agent settings
+  enableCashiers: true,
+  cashierShiftMin: 60, // Average shift duration in minutes
+  cashierBreakProb: 15, // Break probability per hour (%)
+  laneOpenConfirmSec: 120, // Seconds cashier must be present before lane marked open
+  enableIdConfusion: false, // Simulate LiDAR ID tracking errors
 };
 
 // SimulatorV2 instance
@@ -864,11 +870,43 @@ const startSimulation = async () => {
       // Initialize SimulatorV2 if enabled
       if (config.useSimV2) {
         console.log('[SimV2] Initializing V2 simulation...');
-        simulatorV2 = new SimulatorV2(config.venueWidth, config.venueDepth, {
+        // Build SimV2 config from frontend config
+        const simV2Config = {
           maxOccupancy: config.targetPeopleCount,
           seed: null, // Random seed
-        });
+          // Cashier feature flags
+          ENABLE_CASHIER_AGENTS: config.enableCashiers,
+          ENABLE_ID_CONFUSION: config.enableIdConfusion,
+        };
+        
+        // Override cashier behavior settings if provided
+        if (config.enableCashiers) {
+          simV2Config.cashierBehavior = {
+            cashiersPerLane: 1,
+            spawnAtStart: true,
+            shiftDurationMin: [config.cashierShiftMin * 0.5, config.cashierShiftMin * 1.5],
+            breakProbabilityPerHour: config.cashierBreakProb / 100,
+          };
+          simV2Config.laneOpenClose = {
+            openConfirmWindowSec: config.laneOpenConfirmSec,
+            closeGraceWindowSec: 180,
+          };
+        }
+        
+        simulatorV2 = new SimulatorV2(config.venueWidth, config.venueDepth, simV2Config);
         simulatorV2.initFromScene(venueGeometry.objects || [], venueGeometry.rois || []);
+        
+        // Log cashier status
+        const cashierCount = simulatorV2.cashierAgents?.length || 0;
+        const laneCount = simulatorV2.laneStates?.length || 0;
+        console.log(`[SimV2] Cashiers: ${cashierCount} agents spawned for ${laneCount} lanes`);
+        console.log(`[SimV2] Cashier config: enabled=${config.enableCashiers}, shift=${config.cashierShiftMin}min, break=${config.cashierBreakProb}%`);
+        
+        if (cashierCount > 0) {
+          for (const c of simulatorV2.cashierAgents) {
+            console.log(`[SimV2] Cashier ${c.id}: lane=${c.laneId}, anchor=(${c.anchorPoint.x.toFixed(1)}, ${c.anchorPoint.z.toFixed(1)}), state=${c.state}`);
+          }
+        }
         
         // Bulk spawn initial agents to reach target quickly
         const initialSpawn = Math.min(config.targetPeopleCount, 50);
@@ -900,6 +938,16 @@ const startSimulation = async () => {
 
     const intervalMs = 1000 / config.frequencyHz;
     const dt = 1 / config.frequencyHz;
+    
+    // IMMEDIATE DEBUG LOG
+    console.log('====== SIMULATION STARTING ======');
+    console.log(`ENABLE_CASHIER_AGENTS: ${config.enableCashiers}`);
+    if (simulatorV2) {
+      console.log(`NavGrid cashiers detected: ${simulatorV2.navGrid?.cashiers?.length || 0}`);
+      console.log(`CashierAgents array: ${simulatorV2.cashierAgents?.length || 0}`);
+      console.log(`LaneStates array: ${simulatorV2.laneStates?.length || 0}`);
+    }
+    console.log('=================================');
 
     simulationInterval = setInterval(() => {
       if (!mqttClient || !stats.mqttConnected) return;
@@ -920,7 +968,7 @@ const startSimulation = async () => {
         // Update simulation
         simulatorV2.update(dt);
         
-        // Publish active agents
+        // Publish active customer agents
         const agents = simulatorV2.getActiveAgents();
         for (const agent of agents) {
           const message = agent.toMessage(config.deviceId, config.venueId);
@@ -929,6 +977,27 @@ const startSimulation = async () => {
             JSON.stringify(message)
           );
           stats.tracksSent++;
+        }
+        
+        // Publish active cashier agents
+        const cashiers = simulatorV2.getActiveCashiers();
+        for (const cashier of cashiers) {
+          const message = cashier.toMessage(config.deviceId, config.venueId);
+          mqttClient.publish(
+            `hyperspace/trajectories/${config.deviceId}`,
+            JSON.stringify(message)
+          );
+          stats.tracksSent++;
+        }
+        
+        // Debug log all cashiers every 5 seconds
+        if (!global.lastCashierLog || Date.now() - global.lastCashierLog > 5000) {
+          global.lastCashierLog = Date.now();
+          const allCashiers = simulatorV2.cashierAgents || [];
+          console.log(`[Cashier Debug] Total: ${allCashiers.length}, Active: ${cashiers.length}`);
+          for (const c of allCashiers) {
+            console.log(`  Cashier ${c.id}: state=${c.state}, spawned=${c.spawned}, pos=(${c.x.toFixed(1)}, ${c.z.toFixed(1)}), lane=${c.laneId}`);
+          }
         }
         
         // Prune exited agents periodically

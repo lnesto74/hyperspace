@@ -1,6 +1,6 @@
 /**
  * Simulation V2 Module Index
- * Feature flags: SIM_NAV_V2, SIM_BEHAVIOR_V2, SIM_RECOVERY_V2
+ * Feature flags: SIM_NAV_V2, SIM_BEHAVIOR_V2, SIM_RECOVERY_V2, ENABLE_CASHIER_AGENTS
  */
 
 import { SIM_CONFIG, SeededRandom, selectPersona } from './simconfig.js';
@@ -10,6 +10,8 @@ import { DirectionalGate, GateManager } from './gates.js';
 import AntiGlitch from './antiglitch.js';
 import { CheckoutQueueSubsystem, QUEUE_STATE } from './checkoutqueue.js';
 import { AgentV2, STATE } from './agent.js';
+import { CashierAgent, CASHIER_STATE } from './cashieragent.js';
+import { IDConfusionManager } from './idconfusion.js';
 import SimulatorV2 from './simulator.js';
 
 export {
@@ -34,6 +36,9 @@ export {
   QUEUE_STATE,
   AgentV2,
   STATE,
+  CashierAgent,
+  CASHIER_STATE,
+  IDConfusionManager,
   SimulatorV2,
 };
 

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { Play, Square, Settings, Wifi, WifiOff, Radio, Clock, Users, Move, Save, Check, ShoppingCart, Shuffle, Layers } from 'lucide-react'
+import { Play, Square, Settings, Wifi, WifiOff, Radio, Clock, Users, Move, Save, Check, ShoppingCart, Shuffle, Layers, UserCheck, Coffee, AlertTriangle } from 'lucide-react'
 
 interface Config {
   mqttBroker: string
@@ -14,6 +14,12 @@ interface Config {
   venueDepth: number
   simulationMode: 'random' | 'queue' | 'mixed'
   queueSpawnInterval: number
+  // Cashier settings
+  enableCashiers: boolean
+  cashierShiftMin: number
+  cashierBreakProb: number
+  laneOpenConfirmSec: number
+  enableIdConfusion: boolean
 }
 
 interface Status {
@@ -39,6 +45,12 @@ const defaultConfig: Config = {
   venueDepth: 15,
   simulationMode: 'random',
   queueSpawnInterval: 5,
+  // Cashier settings
+  enableCashiers: true,
+  cashierShiftMin: 60,
+  cashierBreakProb: 15,
+  laneOpenConfirmSec: 120,
+  enableIdConfusion: false,
 }
 
 export default function App() {
@@ -498,6 +510,118 @@ export default function App() {
                   className="w-full accent-blue-500 disabled:opacity-50"
                 />
               </div>
+            </div>
+
+            {/* Cashier Agents Section */}
+            <div className="border-t border-gray-700 pt-5 mt-5">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-md font-semibold text-white flex items-center gap-2">
+                  <UserCheck className="w-5 h-5 text-red-400" />
+                  Cashier Agents
+                </h3>
+                <button
+                  onClick={() => updateConfig({ enableCashiers: !config.enableCashiers })}
+                  disabled={status?.isRunning}
+                  className={`px-3 py-1 rounded-full text-xs font-medium transition-colors disabled:opacity-50 ${
+                    config.enableCashiers
+                      ? 'bg-red-600/20 text-red-400 border border-red-500'
+                      : 'bg-gray-700 text-gray-400 border border-gray-600'
+                  }`}
+                >
+                  {config.enableCashiers ? 'Enabled' : 'Disabled'}
+                </button>
+              </div>
+
+              {config.enableCashiers && (
+                <div className="space-y-4 pl-2 border-l-2 border-red-500/30">
+                  {/* Shift Duration */}
+                  <div>
+                    <label className="block text-sm text-gray-400 mb-1 flex items-center gap-2">
+                      <Clock className="w-4 h-4" />
+                      Avg Shift Duration: {config.cashierShiftMin} min
+                    </label>
+                    <input
+                      type="range"
+                      min="10"
+                      max="180"
+                      step="10"
+                      value={config.cashierShiftMin}
+                      onChange={(e) => updateConfig({ cashierShiftMin: parseInt(e.target.value) })}
+                      disabled={status?.isRunning}
+                      className="w-full accent-red-500 disabled:opacity-50"
+                    />
+                    <div className="flex justify-between text-xs text-gray-500 mt-1">
+                      <span>10 min</span>
+                      <span>1 hr</span>
+                      <span>3 hrs</span>
+                    </div>
+                  </div>
+
+                  {/* Break Probability */}
+                  <div>
+                    <label className="block text-sm text-gray-400 mb-1 flex items-center gap-2">
+                      <Coffee className="w-4 h-4" />
+                      Break Probability: {config.cashierBreakProb}% / hour
+                    </label>
+                    <input
+                      type="range"
+                      min="0"
+                      max="50"
+                      step="5"
+                      value={config.cashierBreakProb}
+                      onChange={(e) => updateConfig({ cashierBreakProb: parseInt(e.target.value) })}
+                      disabled={status?.isRunning}
+                      className="w-full accent-red-500 disabled:opacity-50"
+                    />
+                    <div className="flex justify-between text-xs text-gray-500 mt-1">
+                      <span>0%</span>
+                      <span>25%</span>
+                      <span>50%</span>
+                    </div>
+                  </div>
+
+                  {/* Lane Open Confirmation */}
+                  <div>
+                    <label className="block text-sm text-gray-400 mb-1 flex items-center gap-2">
+                      <Clock className="w-4 h-4" />
+                      Lane Open Confirm: {config.laneOpenConfirmSec}s
+                    </label>
+                    <input
+                      type="range"
+                      min="5"
+                      max="300"
+                      step="5"
+                      value={config.laneOpenConfirmSec}
+                      onChange={(e) => updateConfig({ laneOpenConfirmSec: parseInt(e.target.value) })}
+                      disabled={status?.isRunning}
+                      className="w-full accent-red-500 disabled:opacity-50"
+                    />
+                    <p className="text-xs text-gray-500 mt-1">Time cashier must be present before lane is marked open</p>
+                  </div>
+
+                  {/* ID Confusion Toggle */}
+                  <div className="flex items-center justify-between p-3 bg-[#0f0f14] rounded-lg">
+                    <div className="flex items-center gap-2">
+                      <AlertTriangle className="w-4 h-4 text-yellow-500" />
+                      <div>
+                        <div className="text-sm text-gray-300">ID Confusion Simulation</div>
+                        <div className="text-xs text-gray-500">Simulate LiDAR tracking errors</div>
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => updateConfig({ enableIdConfusion: !config.enableIdConfusion })}
+                      disabled={status?.isRunning}
+                      className={`w-12 h-6 rounded-full transition-colors disabled:opacity-50 ${
+                        config.enableIdConfusion ? 'bg-yellow-600' : 'bg-gray-700'
+                      }`}
+                    >
+                      <div className={`w-5 h-5 rounded-full bg-white transition-transform ${
+                        config.enableIdConfusion ? 'translate-x-6' : 'translate-x-0.5'
+                      }`} />
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         </div>

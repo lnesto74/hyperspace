@@ -36,6 +36,33 @@ export class CheckoutQueueSubsystem {
     
     // Agent data: { queueIdx, state, serviceTimer, targetPos }
     this.agents = new Map();
+    
+    // Reference to lane states (set by simulator)
+    this.laneStates = null;
+  }
+  
+  // Set lane states reference (called by simulator)
+  setLaneStates(laneStates) {
+    this.laneStates = laneStates;
+  }
+  
+  // Check if a lane is open (cashier present and confirmed)
+  isLaneOpen(queueIdx) {
+    if (!this.laneStates || queueIdx >= this.laneStates.length) {
+      return true; // Default to open if no lane state info
+    }
+    return this.laneStates[queueIdx].isOpen;
+  }
+  
+  // Get list of open lanes
+  getOpenLanes() {
+    if (!this.laneStates) {
+      // No lane state info - all lanes are open
+      return this.queues.map((_, i) => i);
+    }
+    return this.laneStates
+      .filter(ls => ls.isOpen)
+      .map(ls => ls.laneId);
   }
 
   init() {
@@ -70,13 +97,23 @@ export class CheckoutQueueSubsystem {
   }
 
   /**
-   * Agent wants to join a queue - pick random one
+   * Agent wants to join a queue - pick from open lanes (or random if all closed)
    */
   startQueueDecision(agentId, agent) {
     if (this.queues.length === 0) return null;
     
-    // Pick random queue
-    const queueIdx = Math.floor(this.rng.next() * this.queues.length);
+    // Get open lanes
+    const openLanes = this.getOpenLanes();
+    
+    let queueIdx;
+    if (openLanes.length > 0) {
+      // Pick random open lane
+      queueIdx = openLanes[Math.floor(this.rng.next() * openLanes.length)];
+    } else {
+      // No open lanes - pick random queue anyway (customers might queue hoping lane opens)
+      queueIdx = Math.floor(this.rng.next() * this.queues.length);
+      console.log(`[Queue] No open lanes, agent ${agentId} picking closed lane ${queueIdx}`);
+    }
     const queue = this.queues[queueIdx];
     
     // Determine where agent should go

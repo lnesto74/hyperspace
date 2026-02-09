@@ -136,6 +136,64 @@ export const SIM_CONFIG = {
   
   // Seeded RNG for reproducibility
   seed: null,                   // null = random, number = fixed seed
+  
+  // ========== CASHIER AGENTS (Feature Flag) ==========
+  ENABLE_CASHIER_AGENTS: true,  // Master toggle for cashier simulation
+  
+  cashierBehavior: {
+    // Spawn settings
+    cashiersPerLane: 1,           // 0 or 1 (MVP = max 1 per lane)
+    spawnAtStart: true,           // Auto-spawn cashiers at simulation start
+    staggeredStartSec: [0, 60],   // Stagger shift starts by 0-60 seconds
+    
+    // Shift schedule
+    shiftDurationMin: [30, 180],  // minutes (30 min to 3 hours)
+    
+    // Break behavior
+    breakProbabilityPerHour: 0.15,  // 15% chance per hour to take break
+    breakDurationMin: [2, 10],      // minutes
+    breakCheckIntervalSec: 60,      // How often to roll for break
+    
+    // Transition timing
+    arrivalTransitionSec: [5, 20],  // Time to walk to position
+    leaveTransitionSec: [5, 15],    // Time to walk away
+    
+    // Service area (synthetic rectangle around cashier position)
+    serviceAreaWidth: 1.5,        // meters
+    serviceAreaDepth: 1.5,        // meters
+    serviceAreaOffsetZ: 0.5,      // offset from cashier position toward queue
+    
+    // Staff exit point (auto-computed behind checkouts)
+    staffExitOffsetZ: -3.0,       // meters behind cashier (negative = toward entrance)
+    
+    // WORKING state motion model
+    jitterSigma: 0.04,            // meters - gaussian step per tick
+    microShiftRadius: 0.2,        // meters - occasional shift target radius
+    microShiftIntervalSec: [30, 180],  // seconds between micro-shifts
+    microShiftDurationSec: [2, 6],     // seconds to complete micro-shift
+    microShiftSpeed: 0.1,         // m/s during micro-shift
+    
+    // Walking speed (ARRIVE/LEAVE/BREAK states)
+    walkSpeed: [0.7, 1.3],        // m/s
+    
+    // LiDAR noise (same as customers but can be tuned separately)
+    measurementNoiseSigma: 0.03,  // meters
+  },
+  
+  // Lane open/close detection (ground truth)
+  laneOpenClose: {
+    openConfirmWindowSec: 120,    // Must be in service area for 2 min to confirm open
+    closeGraceWindowSec: 180,     // Lane stays "open" for 3 min after cashier leaves
+  },
+  
+  // Optional: ID confusion simulation (LiDAR tracking errors)
+  ENABLE_ID_CONFUSION: false,
+  idConfusion: {
+    confusionDistance: 0.6,       // meters - trigger distance
+    confusionProbPerSec: 0.03,    // probability per second when close
+    swapDurationSec: [1, 3],      // how long ID swap lasts
+    occlusionDurationSec: [0.5, 2], // how long track drops
+  },
 };
 
 // Seeded random number generator (Mulberry32)

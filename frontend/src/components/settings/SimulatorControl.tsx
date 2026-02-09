@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { Play, Square, RefreshCw, Users, Clock, Gauge, AlertCircle, CheckCircle2, Wifi, WifiOff, MapPin } from 'lucide-react'
+import { Play, Square, RefreshCw, Users, Clock, Gauge, AlertCircle, CheckCircle2, Wifi, WifiOff, MapPin, UserCheck, Coffee, AlertTriangle } from 'lucide-react'
 
 interface SimulatorConfig {
   targetPeopleCount: number
@@ -8,6 +8,12 @@ interface SimulatorConfig {
   simulationMode: string
   queueSpawnInterval: number
   venueId?: string
+  // Cashier settings
+  enableCashiers: boolean
+  cashierShiftMin: number
+  cashierBreakProb: number
+  laneOpenConfirmSec: number
+  enableIdConfusion: boolean
 }
 
 interface Venue {
@@ -37,6 +43,12 @@ export function SimulatorControl() {
     frequencyHz: 14,
     simulationMode: 'mixed',
     queueSpawnInterval: 6,
+    // Cashier defaults
+    enableCashiers: true,
+    cashierShiftMin: 60,
+    cashierBreakProb: 15,
+    laneOpenConfirmSec: 120,
+    enableIdConfusion: false,
   })
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -67,6 +79,12 @@ export function SimulatorControl() {
           frequencyHz: data.config.frequencyHz || 14,
           simulationMode: data.config.simulationMode || 'mixed',
           queueSpawnInterval: data.config.queueSpawnInterval || 6,
+          // Cashier settings
+          enableCashiers: data.config.enableCashiers ?? true,
+          cashierShiftMin: data.config.cashierShiftMin || 60,
+          cashierBreakProb: data.config.cashierBreakProb || 15,
+          laneOpenConfirmSec: data.config.laneOpenConfirmSec || 120,
+          enableIdConfusion: data.config.enableIdConfusion ?? false,
         })
         // Set selected venue from edge server config
         if (data.config.venueId && !selectedVenueId) {
@@ -90,6 +108,24 @@ export function SimulatorControl() {
   const handleStart = async () => {
     setLoading(true)
     try {
+      // Always send config before starting to ensure correct venue and cashier settings
+      const selectedVenue = venues.find(v => v.id === selectedVenueId)
+      const configToSend = {
+        ...config,
+        venueId: selectedVenueId,
+        ...(selectedVenue && {
+          venueWidth: selectedVenue.width,
+          venueDepth: selectedVenue.depth,
+        }),
+      }
+      await fetch(`${API_BASE}/api/edge-simulator/config`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(configToSend),
+      })
+      setConfigDirty(false)
+      
+      // Now start the simulation
       await fetch(`${API_BASE}/api/edge-simulator/start`, { method: 'POST' })
       await fetchStatus()
     } catch (err) {
@@ -109,7 +145,7 @@ export function SimulatorControl() {
     setLoading(false)
   }
 
-  const handleConfigChange = (key: keyof SimulatorConfig, value: number | string) => {
+  const handleConfigChange = (key: keyof SimulatorConfig, value: number | string | boolean) => {
     setConfig(prev => ({ ...prev, [key]: value }))
     setConfigDirty(true)
   }
@@ -122,9 +158,16 @@ export function SimulatorControl() {
   const handleApplyConfig = async () => {
     setLoading(true)
     try {
+      // Find selected venue to get dimensions
+      const selectedVenue = venues.find(v => v.id === selectedVenueId)
       const configToSend = {
         ...config,
         venueId: selectedVenueId,
+        // Include venue dimensions so edge server can properly initialize
+        ...(selectedVenue && {
+          venueWidth: selectedVenue.width,
+          venueDepth: selectedVenue.depth,
+        }),
       }
       await fetch(`${API_BASE}/api/edge-simulator/config`, {
         method: 'POST',
@@ -302,6 +345,84 @@ export function SimulatorControl() {
             <option value="queue">Queue Only</option>
             <option value="browsing">Browsing Only</option>
           </select>
+        </div>
+
+        {/* Cashier Agents Section */}
+        <div className="border-t border-gray-600 pt-3 mt-3">
+          <div className="flex items-center justify-between mb-2">
+            <label className="text-xs text-gray-400 flex items-center gap-1">
+              <UserCheck className="w-3 h-3 text-red-400" /> Cashier Agents
+            </label>
+            <button
+              onClick={() => handleConfigChange('enableCashiers', !config.enableCashiers)}
+              className={`px-2 py-0.5 rounded text-xs font-medium transition-colors ${
+                config.enableCashiers
+                  ? 'bg-red-600/30 text-red-400 border border-red-500/50'
+                  : 'bg-gray-700 text-gray-400 border border-gray-600'
+              }`}
+            >
+              {config.enableCashiers ? 'ON' : 'OFF'}
+            </button>
+          </div>
+
+          {config.enableCashiers && (
+            <div className="space-y-2 pl-2 border-l border-red-500/30">
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="text-xs text-gray-500 flex items-center gap-1">
+                    <Clock className="w-3 h-3" /> Shift (min)
+                  </label>
+                  <input
+                    type="number"
+                    min={10}
+                    max={180}
+                    value={config.cashierShiftMin}
+                    onChange={(e) => handleConfigChange('cashierShiftMin', parseInt(e.target.value) || 60)}
+                    className="w-full mt-1 px-2 py-1 bg-gray-700 border border-gray-600 rounded text-white text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs text-gray-500 flex items-center gap-1">
+                    <Coffee className="w-3 h-3" /> Break %/hr
+                  </label>
+                  <input
+                    type="number"
+                    min={0}
+                    max={50}
+                    value={config.cashierBreakProb}
+                    onChange={(e) => handleConfigChange('cashierBreakProb', parseInt(e.target.value) || 0)}
+                    className="w-full mt-1 px-2 py-1 bg-gray-700 border border-gray-600 rounded text-white text-sm"
+                  />
+                </div>
+              </div>
+              <div>
+                <label className="text-xs text-gray-500">Lane Open Confirm (sec)</label>
+                <input
+                  type="number"
+                  min={5}
+                  max={300}
+                  value={config.laneOpenConfirmSec}
+                  onChange={(e) => handleConfigChange('laneOpenConfirmSec', parseInt(e.target.value) || 120)}
+                  className="w-full mt-1 px-2 py-1 bg-gray-700 border border-gray-600 rounded text-white text-sm"
+                />
+              </div>
+              <div className="flex items-center justify-between py-1">
+                <label className="text-xs text-gray-500 flex items-center gap-1">
+                  <AlertTriangle className="w-3 h-3 text-yellow-500" /> ID Confusion
+                </label>
+                <button
+                  onClick={() => handleConfigChange('enableIdConfusion', !config.enableIdConfusion)}
+                  className={`w-8 h-4 rounded-full transition-colors ${
+                    config.enableIdConfusion ? 'bg-yellow-600' : 'bg-gray-600'
+                  }`}
+                >
+                  <div className={`w-3 h-3 rounded-full bg-white transition-transform ${
+                    config.enableIdConfusion ? 'translate-x-4' : 'translate-x-0.5'
+                  }`} />
+                </button>
+              </div>
+            </div>
+          )}
         </div>
 
         <button

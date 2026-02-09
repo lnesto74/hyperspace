@@ -10,6 +10,8 @@ import GateManager from './gates.js';
 import AntiGlitch from './antiglitch.js';
 import { CheckoutQueueSubsystem } from './checkoutqueue.js';
 import { AgentV2, STATE } from './agent.js';
+import { CashierAgent, CASHIER_STATE } from './cashieragent.js';
+import { IDConfusionManager } from './idconfusion.js';
 
 export class SimulatorV2 {
   constructor(venueWidth, venueDepth, config = {}) {
@@ -26,9 +28,19 @@ export class SimulatorV2 {
     this.antiGlitch = new AntiGlitch(this.navGrid);
     this.queueManager = new CheckoutQueueSubsystem(this.navGrid, this.rng);
     
-    // Agents
+    // Agents (customers)
     this.agents = [];
     this.nextAgentId = 1;
+    
+    // Cashier agents
+    this.cashierAgents = [];
+    this.nextCashierId = 1;
+    
+    // Lane open/close state (ground truth)
+    this.laneStates = [];
+    
+    // ID confusion manager (optional LiDAR tracking errors)
+    this.idConfusion = new IDConfusionManager(this.rng);
     
     // Stats
     this.stats = {
@@ -63,9 +75,52 @@ export class SimulatorV2 {
     // Initialize queue manager
     this.queueManager.init();
     
+    // Spawn cashiers if enabled
+    if (this.config.ENABLE_CASHIER_AGENTS) {
+      this.spawnCashiers();
+      // Pass lane states to queue manager so it knows which lanes are open
+      this.queueManager.setLaneStates(this.laneStates);
+    }
+    
     this.initialized = true;
     console.log('[SimV2] Initialization complete');
     console.log('[SimV2] NavGrid zones:', this.navGrid.zoneBounds);
+  }
+  
+  // Spawn cashier agents for each lane
+  spawnCashiers() {
+    const cfg = this.config.cashierBehavior;
+    if (!cfg || cfg.cashiersPerLane === 0) return;
+    
+    const cashiers = this.navGrid.cashiers || [];
+    console.log(`[SimV2] Spawning cashiers for ${cashiers.length} lanes`);
+    
+    // Initialize lane states
+    this.laneStates = cashiers.map((_, i) => ({
+      laneId: i,
+      isOpen: false,
+      openSince: null,
+      closedSince: null,
+      cashierAgentId: null,
+    }));
+    
+    for (let i = 0; i < cashiers.length; i++) {
+      if (cfg.cashiersPerLane > 0) {
+        const cashierAgent = new CashierAgent(
+          this.nextCashierId++,
+          i,  // laneId
+          cashiers[i],  // cashier position {x, z}
+          this.navGrid,
+          this.pathPlanner,
+          this.rng
+        );
+        
+        this.cashierAgents.push(cashierAgent);
+        this.laneStates[i].cashierAgentId = cashierAgent.id;
+      }
+    }
+    
+    console.log(`[SimV2] Spawned ${this.cashierAgents.length} cashier agents`);
   }
   
   // Spawn a new agent
@@ -101,7 +156,7 @@ export class SimulatorV2 {
     // Update queue subsystem
     this.queueManager.update(dt);
     
-    // Update all agents
+    // Update all customer agents
     for (const agent of this.agents) {
       const wasActive = agent.state !== STATE.DONE;
       agent.update(dt, this.agents);
@@ -120,6 +175,47 @@ export class SimulatorV2 {
       }
     }
     
+    // Update cashier agents
+    if (this.config.ENABLE_CASHIER_AGENTS) {
+      for (const cashier of this.cashierAgents) {
+        cashier.update(dt, this.cashierAgents);
+        
+        // Update lane open/close state
+        if (cashier.laneId < this.laneStates.length) {
+          const laneState = this.laneStates[cashier.laneId];
+          const wasOpen = laneState.isOpen;
+          laneState.isOpen = cashier.isLaneOpen();
+          
+          if (!wasOpen && laneState.isOpen) {
+            laneState.openSince = Date.now();
+            laneState.closedSince = null;
+            console.log(`[SimV2] Lane ${cashier.laneId} OPENED`);
+          } else if (wasOpen && !laneState.isOpen) {
+            laneState.closedSince = Date.now();
+            console.log(`[SimV2] Lane ${cashier.laneId} CLOSED`);
+          }
+        }
+        
+        // Update heatmap for cashiers too
+        if (this.heatmap && cashier.spawned && cashier.state !== CASHIER_STATE.DONE) {
+          const hx = Math.floor(cashier.x / this.config.heatmapResolution);
+          const hz = Math.floor(cashier.z / this.config.heatmapResolution);
+          if (hx >= 0 && hx < this.heatmapWidth && hz >= 0 && hz < this.heatmapDepth) {
+            this.heatmap[hz * this.heatmapWidth + hx] += dt;
+          }
+        }
+      }
+    }
+    
+    // Update ID confusion simulation
+    if (this.config.ENABLE_ID_CONFUSION) {
+      this.idConfusion.update(
+        this.getActiveAgents(),
+        this.getActiveCashiers(),
+        dt
+      );
+    }
+    
     // Clean up old data periodically
     if (Math.random() < 0.01) {
       this.antiGlitch.clearOldData();
@@ -127,14 +223,37 @@ export class SimulatorV2 {
     }
   }
   
-  // Get active (spawned, not done) agents
+  // Get active (spawned, not done) customer agents
   getActiveAgents() {
     return this.agents.filter(a => a.spawned && a.state !== STATE.DONE);
   }
   
-  // Get count of active agents
+  // Get active cashier agents
+  getActiveCashiers() {
+    return this.cashierAgents.filter(c => c.spawned && c.state !== CASHIER_STATE.DONE);
+  }
+  
+  // Get all active agents (customers + cashiers)
+  getAllActiveAgents() {
+    const customers = this.getActiveAgents();
+    const cashiers = this.getActiveCashiers();
+    return [...customers, ...cashiers];
+  }
+  
+  // Get count of active customer agents
   getActiveCount() {
     return this.agents.filter(a => a.spawned && a.state !== STATE.DONE).length;
+  }
+  
+  // Get lane states (for external systems to know which lanes are open)
+  getLaneStates() {
+    return this.laneStates;
+  }
+  
+  // Check if a specific lane is open
+  isLaneOpen(laneId) {
+    if (laneId < 0 || laneId >= this.laneStates.length) return false;
+    return this.laneStates[laneId].isOpen;
   }
   
   // Remove exited agents (to free memory)
@@ -151,10 +270,15 @@ export class SimulatorV2 {
     
     return {
       activeAgents: this.getActiveCount(),
+      activeCashiers: this.getActiveCashiers().length,
       totalSpawned: this.stats.totalSpawned,
       totalExited: this.stats.totalExited,
       antiGlitch: antiGlitchDiag,
       gateViolations: gateViolations.length,
+      laneStates: this.laneStates.map(ls => ({
+        laneId: ls.laneId,
+        isOpen: ls.isOpen,
+      })),
       navGrid: {
         width: this.navGrid.gridWidth,
         depth: this.navGrid.gridDepth,
@@ -197,9 +321,49 @@ export class SimulatorV2 {
   reset() {
     this.agents = [];
     this.nextAgentId = 1;
+    this.cashierAgents = [];
+    this.nextCashierId = 1;
+    this.laneStates = [];
     this.stats = { totalSpawned: 0, totalExited: 0, stuckEvents: 0, gateViolations: 0 };
     if (this.heatmap) this.heatmap.fill(0);
     this.rng = new SeededRandom(this.config.seed);
+    this.idConfusion.reset();
+    
+    // Re-spawn cashiers if enabled
+    if (this.config.ENABLE_CASHIER_AGENTS && this.initialized) {
+      this.spawnCashiers();
+    }
+  }
+  
+  // Get all track messages (with optional ID confusion applied)
+  getTrackMessages(deviceId, venueId) {
+    const messages = [];
+    
+    // Customer tracks
+    for (const agent of this.getActiveAgents()) {
+      let msg = agent.toMessage(deviceId, venueId);
+      
+      // Apply ID confusion if enabled
+      if (this.config.ENABLE_ID_CONFUSION) {
+        msg = this.idConfusion.applyToMessage(msg);
+      }
+      
+      if (msg) messages.push(msg);
+    }
+    
+    // Cashier tracks
+    for (const cashier of this.getActiveCashiers()) {
+      let msg = cashier.toMessage(deviceId, venueId);
+      
+      // Apply ID confusion if enabled
+      if (this.config.ENABLE_ID_CONFUSION) {
+        msg = this.idConfusion.applyToMessage(msg);
+      }
+      
+      if (msg) messages.push(msg);
+    }
+    
+    return messages;
   }
   
   // Debug: print navgrid
