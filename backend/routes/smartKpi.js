@@ -67,8 +67,77 @@ export default function createSmartKpiRoutes(db) {
         return res.status(400).json({ error: result.error });
       }
       
+      // Combine generated ROIs with custom zones if provided
+      // Custom zones need to be PROPAGATED to all fixtures of the same type
+      let allRois = [...result.generatedRois];
+      if (options.customZones && Array.isArray(options.customZones) && options.customZones.length > 0) {
+        // Group generated ROIs by fixture (e.g., "Cashier 1", "Cashier 2")
+        const fixtureGroups = {};
+        result.generatedRois.forEach(roi => {
+          const nameParts = roi.name.split(' - ');
+          if (nameParts.length > 1) {
+            const fixtureName = nameParts.slice(0, -1).join(' - ');
+            if (!fixtureGroups[fixtureName]) {
+              fixtureGroups[fixtureName] = [];
+            }
+            fixtureGroups[fixtureName].push(roi);
+          }
+        });
+        
+        const fixtureNames = Object.keys(fixtureGroups);
+        if (fixtureNames.length > 0) {
+          const refFixtureName = fixtureNames[0];
+          const refRois = fixtureGroups[refFixtureName];
+          
+          let refCenterX = 0, refCenterZ = 0;
+          refRois.forEach(roi => {
+            const centerX = roi.vertices.reduce((sum, v) => sum + v.x, 0) / roi.vertices.length;
+            const centerZ = roi.vertices.reduce((sum, v) => sum + v.z, 0) / roi.vertices.length;
+            refCenterX += centerX;
+            refCenterZ += centerZ;
+          });
+          refCenterX /= refRois.length;
+          refCenterZ /= refRois.length;
+          
+          options.customZones.forEach((cz, czIdx) => {
+            fixtureNames.forEach((fixtureName, fIdx) => {
+              const fixtureRois = fixtureGroups[fixtureName];
+              
+              let fixCenterX = 0, fixCenterZ = 0;
+              fixtureRois.forEach(roi => {
+                const centerX = roi.vertices.reduce((sum, v) => sum + v.x, 0) / roi.vertices.length;
+                const centerZ = roi.vertices.reduce((sum, v) => sum + v.z, 0) / roi.vertices.length;
+                fixCenterX += centerX;
+                fixCenterZ += centerZ;
+              });
+              fixCenterX /= fixtureRois.length;
+              fixCenterZ /= fixtureRois.length;
+              
+              const offsetX = fixCenterX - refCenterX;
+              const offsetZ = fixCenterZ - refCenterZ;
+              
+              const propagatedVertices = cz.vertices.map(v => ({
+                x: v.x + offsetX,
+                z: v.z + offsetZ,
+              }));
+              
+              allRois.push({
+                id: `custom-${Date.now()}-${czIdx}-${fIdx}`,
+                name: `${fixtureName} - ${cz.name || `Custom ${czIdx + 1}`}`,
+                vertices: propagatedVertices,
+                color: '#10b981',
+                opacity: 0.4,
+                roiType: 'custom',
+              });
+            });
+          });
+          
+          console.log(`[SmartKPI] Propagated ${options.customZones.length} custom zones to ${fixtureNames.length} fixtures`);
+        }
+      }
+      
       // Save to database (this will delete existing zones for this template first)
-      const savedRois = smartKpiService.saveRois(venueId, result.generatedRois, templateId);
+      const savedRois = smartKpiService.saveRois(venueId, allRois, templateId);
       
       res.status(201).json({
         success: true,
@@ -137,8 +206,86 @@ export default function createSmartKpiRoutes(db) {
         return res.status(400).json({ error: result.error });
       }
       
+      // Combine generated ROIs with custom zones if provided
+      // Custom zones need to be PROPAGATED to all fixtures of the same type
+      let allRois = [...result.generatedRois];
+      if (options.customZones && Array.isArray(options.customZones) && options.customZones.length > 0) {
+        // Group generated ROIs by fixture (e.g., "Cashier 1", "Cashier 2")
+        // ROI names follow pattern: "Cashier 1 - Service", "Cashier 1 - Queue"
+        const fixtureGroups = {};
+        result.generatedRois.forEach(roi => {
+          const nameParts = roi.name.split(' - ');
+          if (nameParts.length > 1) {
+            const fixtureName = nameParts.slice(0, -1).join(' - '); // e.g., "Cashier 1"
+            if (!fixtureGroups[fixtureName]) {
+              fixtureGroups[fixtureName] = [];
+            }
+            fixtureGroups[fixtureName].push(roi);
+          }
+        });
+        
+        const fixtureNames = Object.keys(fixtureGroups);
+        if (fixtureNames.length > 0) {
+          // Get reference fixture (first one) to calculate offsets
+          const refFixtureName = fixtureNames[0];
+          const refRois = fixtureGroups[refFixtureName];
+          
+          // Calculate reference center (average of first fixture's ROI centers)
+          let refCenterX = 0, refCenterZ = 0;
+          refRois.forEach(roi => {
+            const centerX = roi.vertices.reduce((sum, v) => sum + v.x, 0) / roi.vertices.length;
+            const centerZ = roi.vertices.reduce((sum, v) => sum + v.z, 0) / roi.vertices.length;
+            refCenterX += centerX;
+            refCenterZ += centerZ;
+          });
+          refCenterX /= refRois.length;
+          refCenterZ /= refRois.length;
+          
+          console.log(`[SmartKPI DWG] Reference fixture: ${refFixtureName} at (${refCenterX.toFixed(2)}, ${refCenterZ.toFixed(2)})`);
+          
+          // Propagate each custom zone to all fixtures
+          options.customZones.forEach((cz, czIdx) => {
+            fixtureNames.forEach((fixtureName, fIdx) => {
+              const fixtureRois = fixtureGroups[fixtureName];
+              
+              // Calculate this fixture's center
+              let fixCenterX = 0, fixCenterZ = 0;
+              fixtureRois.forEach(roi => {
+                const centerX = roi.vertices.reduce((sum, v) => sum + v.x, 0) / roi.vertices.length;
+                const centerZ = roi.vertices.reduce((sum, v) => sum + v.z, 0) / roi.vertices.length;
+                fixCenterX += centerX;
+                fixCenterZ += centerZ;
+              });
+              fixCenterX /= fixtureRois.length;
+              fixCenterZ /= fixtureRois.length;
+              
+              // Calculate offset from reference to this fixture
+              const offsetX = fixCenterX - refCenterX;
+              const offsetZ = fixCenterZ - refCenterZ;
+              
+              // Create propagated custom zone with offset applied
+              const propagatedVertices = cz.vertices.map(v => ({
+                x: v.x + offsetX,
+                z: v.z + offsetZ,
+              }));
+              
+              allRois.push({
+                id: `custom-${Date.now()}-${czIdx}-${fIdx}`,
+                name: `${fixtureName} - ${cz.name || `Custom ${czIdx + 1}`}`,
+                vertices: propagatedVertices,
+                color: '#10b981',
+                opacity: 0.4,
+                roiType: 'custom',
+              });
+            });
+          });
+          
+          console.log(`[SmartKPI DWG] Propagated ${options.customZones.length} custom zones to ${fixtureNames.length} fixtures`);
+        }
+      }
+      
       // Save to database with DWG layout ID for mode separation
-      const savedRois = smartKpiService.saveRois(venueId, result.generatedRois, templateId, layoutId);
+      const savedRois = smartKpiService.saveRois(venueId, allRois, templateId, layoutId);
       
       res.status(201).json({
         success: true,

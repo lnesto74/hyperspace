@@ -117,7 +117,7 @@ export default function MainViewport({
   const dragOffsetRef = useRef(new THREE.Vector3())
   
   // Magnetic snap threshold (meters)
-  const SNAP_THRESHOLD = 0.5
+  const SNAP_THRESHOLD = 0.2
   
   // Hovered ROI for tooltip
   const hoveredRoiIdRef = useRef<string | null>(null)
@@ -132,6 +132,7 @@ export default function MainViewport({
     addDrawingVertex, 
     selectRegion,
     updateRegion,
+    deleteRegion,
     updateVertexPosition,
     openKPIPopup,
   } = useRoi()
@@ -259,6 +260,7 @@ export default function MainViewport({
   const selectRegionRef = useRef(selectRegion)
   const addDrawingVertexRef = useRef(addDrawingVertex)
   const updateRegionRef = useRef(updateRegion)
+  const deleteRegionRef = useRef(deleteRegion)
   const updateVertexPositionRef = useRef(updateVertexPosition)
   const openKPIPopupRef = useRef(openKPIPopup)
   const selectedObjectIdRef = useRef(selectedObjectId)
@@ -282,12 +284,13 @@ export default function MainViewport({
     selectRegionRef.current = selectRegion
     addDrawingVertexRef.current = addDrawingVertex
     updateRegionRef.current = updateRegion
+    deleteRegionRef.current = deleteRegion
     updateVertexPositionRef.current = updateVertexPosition
     openKPIPopupRef.current = openKPIPopup
     selectedObjectIdRef.current = selectedObjectId
     selectedPlacementIdRef.current = selectedPlacementId
     selectedRoiIdRef.current = selectedRoiId
-  }, [venue, objects, placements, regions, isDrawing, drawingVertices, updateObject, updatePlacement, removeObject, removePlacement, snapToGrid, selectObject, selectPlacement, selectRegion, addDrawingVertex, updateRegion, updateVertexPosition, openKPIPopup, selectedObjectId, selectedPlacementId, selectedRoiId])
+  }, [venue, objects, placements, regions, isDrawing, drawingVertices, updateObject, updatePlacement, removeObject, removePlacement, snapToGrid, selectObject, selectPlacement, selectRegion, addDrawingVertex, updateRegion, deleteRegion, updateVertexPosition, openKPIPopup, selectedObjectId, selectedPlacementId, selectedRoiId])
   
   // Load ROIs when venue changes
   useEffect(() => {
@@ -316,11 +319,20 @@ export default function MainViewport({
     cameraRef.current = camera
 
     // Renderer
-    const renderer = new THREE.WebGLRenderer({ antialias: true })
+    const renderer = new THREE.WebGLRenderer({ 
+      antialias: true,
+      logarithmicDepthBuffer: true, // Better depth precision for large scenes
+      alpha: true,
+    })
     renderer.setSize(width, height)
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
     renderer.shadowMap.enabled = true
     renderer.shadowMap.type = THREE.PCFSoftShadowMap
+    renderer.sortObjects = true // Ensure proper transparent object sorting
+    // Ensure canvas is positioned at origin of container for accurate mouse tracking
+    renderer.domElement.style.position = 'absolute'
+    renderer.domElement.style.top = '0'
+    renderer.domElement.style.left = '0'
     container.appendChild(renderer.domElement)
     rendererRef.current = renderer
 
@@ -391,7 +403,9 @@ export default function MainViewport({
 
     // Get mouse position in normalized device coordinates
     const getMouseNDC = (event: MouseEvent) => {
-      const rect = container.getBoundingClientRect()
+      // Use renderer's canvas rect for accurate coordinates
+      const canvas = renderer.domElement
+      const rect = canvas.getBoundingClientRect()
       return new THREE.Vector2(
         ((event.clientX - rect.left) / rect.width) * 2 - 1,
         -((event.clientY - rect.top) / rect.height) * 2 + 1
@@ -1020,6 +1034,9 @@ export default function MainViewport({
         } else if (selectedPlacementIdRef.current) {
           removePlacementRef.current(selectedPlacementIdRef.current)
           selectPlacementRef.current(null)
+        } else if (selectedRoiIdRef.current) {
+          deleteRegionRef.current(selectedRoiIdRef.current)
+          selectRegionRef.current(null)
         }
       }
     }
@@ -1308,25 +1325,48 @@ export default function MainViewport({
           const cacheBuster = `?t=${Date.now()}`
           const loaded = await loadModel(obj.type, `${API_BASE}${customModel.file_path}${cacheBuster}`)
           if (loaded) {
-            // Only apply solid color material for OBJ files (they don't have textures)
-            // GLTF/GLB files have their own materials with textures - preserve them
+            // Check if this object type should be translucent (walls, shelves)
+            const isTranslucentType = obj.type === 'wall' || obj.type === 'shelf'
             const isObjFile = customModel.original_name?.toLowerCase().endsWith('.obj')
+            
             loaded.traverse(child => {
               if (child instanceof THREE.Mesh) {
-                if (isObjFile) {
-                  // OBJ files need a material applied
+                if (isObjFile || isTranslucentType) {
+                  // Apply translucent material for walls/shelves, or solid for OBJ files
                   child.material = new THREE.MeshStandardMaterial({
-                    color: targetColor,
-                    roughness: 0.7,
+                    color: isTranslucentType ? 0x88aabb : targetColor,
+                    roughness: isTranslucentType ? 0.3 : 0.7,
                     metalness: 0.1,
+                    transparent: isTranslucentType,
+                    opacity: isTranslucentType ? 0.25 : 1.0,
+                    side: isTranslucentType ? THREE.DoubleSide : THREE.FrontSide,
+                    depthWrite: !isTranslucentType, // Prevent z-fighting flickering
                   })
+                  
+                  // Add edge lines for translucent objects
+                  if (isTranslucentType && child.geometry) {
+                    const edges = new THREE.EdgesGeometry(child.geometry)
+                    const lineMaterial = new THREE.LineBasicMaterial({ 
+                      color: 0x99ccdd,
+                      transparent: true,
+                      opacity: 0.6,
+                    })
+                    const edgeLines = new THREE.LineSegments(edges, lineMaterial)
+                    edgeLines.userData.isEdgeLines = true
+                    child.add(edgeLines)
+                  }
                 }
-                child.castShadow = true
+                child.castShadow = !isTranslucentType
                 child.receiveShadow = true
               }
             })
             loaded.userData.objectId = obj.id
             loaded.userData.isCustomModel = true
+            loaded.userData.isTranslucent = isTranslucentType
+            // Set render order for transparent objects to render after opaque
+            if (isTranslucentType) {
+              loaded.renderOrder = 1
+            }
             scene.add(loaded)
             objectMeshesRef.current.set(obj.id, loaded)
             obj3d = loaded
@@ -1336,15 +1376,43 @@ export default function MainViewport({
         // Fallback to box geometry if no custom model or loading failed
         if (!obj3d) {
           const geometry = new THREE.BoxGeometry(1, 1, 1)
+          
+          // Check if this object type should be translucent (walls, shelves)
+          const isTranslucentType = obj.type === 'wall' || obj.type === 'shelf'
+          
           const material = new THREE.MeshStandardMaterial({
-            color: targetColor,
-            roughness: 0.7,
-            metalness: 0.1,
+            color: isTranslucentType ? 0x88aabb : targetColor, // Light blue-grey for translucent
+            roughness: isTranslucentType ? 0.3 : 0.7,
+            metalness: isTranslucentType ? 0.1 : 0.1,
+            transparent: isTranslucentType,
+            opacity: isTranslucentType ? 0.25 : 1.0,
+            side: isTranslucentType ? THREE.DoubleSide : THREE.FrontSide,
+            depthWrite: !isTranslucentType, // Prevent z-fighting flickering
           })
+          
           const mesh = new THREE.Mesh(geometry, material)
-          mesh.castShadow = true
+          mesh.castShadow = !isTranslucentType
           mesh.receiveShadow = true
           mesh.userData.objectId = obj.id
+          mesh.userData.isTranslucent = isTranslucentType
+          // Set render order for transparent objects to render after opaque
+          if (isTranslucentType) {
+            mesh.renderOrder = 1
+          }
+          
+          // Add edge lines for translucent objects (glass-like effect)
+          if (isTranslucentType) {
+            const edges = new THREE.EdgesGeometry(geometry)
+            const lineMaterial = new THREE.LineBasicMaterial({ 
+              color: 0x99ccdd,
+              transparent: true,
+              opacity: 0.6,
+            })
+            const edgeLines = new THREE.LineSegments(edges, lineMaterial)
+            edgeLines.userData.isEdgeLines = true
+            mesh.add(edgeLines)
+          }
+          
           scene.add(mesh)
           objectMeshesRef.current.set(obj.id, mesh)
           obj3d = mesh
@@ -1384,11 +1452,15 @@ export default function MainViewport({
       obj3d.position.set(obj.position.x, yOffset, obj.position.z)
 
       // Update material color and selection state
-      const targetColor = obj.color ? parseInt(obj.color.replace('#', ''), 16) : COLORS[obj.type as keyof typeof COLORS]
+      const isTranslucentType = obj.type === 'wall' || obj.type === 'shelf'
+      const targetColor = isTranslucentType ? 0x88aabb : (obj.color ? parseInt(obj.color.replace('#', ''), 16) : COLORS[obj.type as keyof typeof COLORS])
       obj3d.traverse(child => {
         if (child instanceof THREE.Mesh) {
           const mat = child.material as THREE.MeshStandardMaterial
-          mat.color.setHex(targetColor)
+          // Only update color if not edge lines
+          if (!child.userData.isEdgeLines) {
+            mat.color.setHex(targetColor)
+          }
           if (obj.id === selectedObjectId) {
             mat.emissive.setHex(COLORS.selected)
             mat.emissiveIntensity = 0.3
@@ -2023,13 +2095,15 @@ export default function MainViewport({
   
   // Toggle layer visibility - ROI Zones
   useEffect(() => {
-    roiMeshesRef.current.forEach(group => {
+    roiMeshesRef.current.forEach((group, roiId) => {
       group.visible = showRoiLayer
     })
-    roiVertexHandlesRef.current.forEach(handles => {
-      handles.forEach(h => { h.visible = showRoiLayer })
+    // Vertex handles only visible when ROI is selected AND layer is visible
+    roiVertexHandlesRef.current.forEach((handles, roiId) => {
+      const isSelected = roiId === selectedRoiId
+      handles.forEach(h => { h.visible = showRoiLayer && isSelected })
     })
-  }, [showRoiLayer, regions])
+  }, [showRoiLayer, regions, selectedRoiId])
   
   // Toggle layer visibility - Tracks
   useEffect(() => {

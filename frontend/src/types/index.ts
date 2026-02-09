@@ -42,7 +42,7 @@ export type LidarStatus = 'online' | 'offline' | 'connecting' | 'error';
 export interface LidarPlacement {
   id: string;
   venueId: string;
-  deviceId: string;
+  deviceId?: string; // Optional - allows unassigned positions from LiDAR Planner
   position: Vector3;
   rotation: Vector3;
   mountHeight: number;

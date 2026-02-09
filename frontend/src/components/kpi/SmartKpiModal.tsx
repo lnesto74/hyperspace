@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
-import { X, Zap, ShoppingCart, DoorOpen, Package, Check, Loader2, Eye, Sparkles, AlertCircle, Settings2, Maximize2, RefreshCw } from 'lucide-react'
+import { X, Zap, ShoppingCart, DoorOpen, Package, Check, Loader2, Eye, Sparkles, AlertCircle, Settings2, Maximize2, RefreshCw, PenTool, Trash2, Plus, MousePointer } from 'lucide-react'
 import { useVenue } from '../../context/VenueContext'
 import { useRoi } from '../../context/RoiContext'
 
@@ -143,8 +143,13 @@ export default function SmartKpiModal({ isOpen, onClose, dwgLayoutId: propDwgLay
   const [previewRois, setPreviewRois] = useState<PreviewRoi[]>([])
   const [engagementDepth, setEngagementDepth] = useState(1.5)
   
-  // Tab state: 'generate' or 'adjust'
-  const [activeTab, setActiveTab] = useState<'generate' | 'adjust'>('generate')
+  // Tab state: 'generate', 'adjust', or 'custom'
+  const [activeTab, setActiveTab] = useState<'generate' | 'adjust' | 'custom'>('generate')
+  
+  // Custom zone drawing state
+  const [customZones, setCustomZones] = useState<PreviewRoi[]>([])
+  const [isDrawingCustom, setIsDrawingCustom] = useState(false)
+  const [drawingPoints, setDrawingPoints] = useState<{ x: number; z: number }[]>([])
   
   // ROI dimension adjustments per type
   const [roiDimensions, setRoiDimensions] = useState<Record<string, RoiDimensionConfig>>({
@@ -319,6 +324,14 @@ export default function SmartKpiModal({ isOpen, onClose, dwgLayoutId: propDwgLay
       }
       // Pass dimension overrides
       options.roiDimensions = roiDimensions
+      // Pass custom zones to be saved along with generated zones
+      if (customZones.length > 0) {
+        options.customZones = customZones.map(z => ({
+          name: z.name,
+          vertices: z.vertices,
+          roiType: 'custom'
+        }))
+      }
       
       // Use different endpoint for DWG mode
       const url = isDwgMode
@@ -408,6 +421,20 @@ export default function SmartKpiModal({ isOpen, onClose, dwgLayoutId: propDwgLay
           >
             <Settings2 className="w-4 h-4" />
             Adjust Dimensions
+          </button>
+          <button
+            onClick={() => setActiveTab('custom')}
+            disabled={previewRois.length === 0}
+            className={`flex-1 px-4 py-2.5 text-sm font-medium flex items-center justify-center gap-2 transition-colors ${
+              activeTab === 'custom'
+                ? 'text-green-400 border-b-2 border-green-500 bg-green-900/20'
+                : previewRois.length === 0
+                  ? 'text-gray-600 cursor-not-allowed'
+                  : 'text-gray-400 hover:text-gray-300'
+            }`}
+          >
+            <PenTool className="w-4 h-4" />
+            Custom Zones
           </button>
         </div>
 
@@ -575,6 +602,300 @@ export default function SmartKpiModal({ isOpen, onClose, dwgLayoutId: propDwgLay
                 <p className="text-xs text-gray-500 mt-2 text-center">
                   Click "Apply" after adjusting dimensions to update preview
                 </p>
+              </div>
+            </div>
+          ) : activeTab === 'custom' ? (
+            /* Custom Zones Tab */
+            <div className="grid grid-cols-2 gap-6">
+              {/* Left: Drawing Canvas */}
+              <div>
+                <div className="flex items-center justify-between mb-3">
+                  <h3 className="text-sm font-medium text-gray-300 flex items-center gap-2">
+                    <PenTool className="w-4 h-4 text-green-400" />
+                    Draw Custom Zone
+                  </h3>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => {
+                        setIsDrawingCustom(!isDrawingCustom)
+                        setDrawingPoints([])
+                      }}
+                      className={`text-xs px-2 py-1 rounded flex items-center gap-1 transition-colors ${
+                        isDrawingCustom
+                          ? 'bg-green-600 text-white'
+                          : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+                      }`}
+                    >
+                      {isDrawingCustom ? <MousePointer className="w-3 h-3" /> : <Plus className="w-3 h-3" />}
+                      {isDrawingCustom ? 'Drawing...' : 'New Zone'}
+                    </button>
+                  </div>
+                </div>
+                
+                {/* Interactive 2D Canvas - with locked aspect ratio */}
+                {(() => {
+                  // Pre-calculate bounds for aspect ratio
+                  const seenTypesForBounds = new Set<string>()
+                  const representativeRoisForBounds = previewRois.filter(roi => {
+                    const nameParts = roi.name.split(' - ')
+                    const roiType = nameParts.length > 1 ? nameParts[nameParts.length - 1].toLowerCase() : 'unknown'
+                    if (seenTypesForBounds.has(roiType)) return false
+                    seenTypesForBounds.add(roiType)
+                    return true
+                  })
+                  
+                  const boundsPoints = [...representativeRoisForBounds, ...customZones].flatMap(r => r.vertices)
+                  const padding = 2 // World units padding
+                  const minX = boundsPoints.length > 0 ? Math.min(...boundsPoints.map(p => p.x)) - padding : 0
+                  const maxX = boundsPoints.length > 0 ? Math.max(...boundsPoints.map(p => p.x)) + padding : 10
+                  const minZ = boundsPoints.length > 0 ? Math.min(...boundsPoints.map(p => p.z)) - padding : 0
+                  const maxZ = boundsPoints.length > 0 ? Math.max(...boundsPoints.map(p => p.z)) + padding : 10
+                  const worldWidth = maxX - minX || 1
+                  const worldDepth = maxZ - minZ || 1
+                  const aspectRatio = worldWidth / worldDepth
+                  
+                  return (
+                <div 
+                  className="bg-gray-800 border border-gray-700 rounded-lg relative overflow-hidden"
+                  style={{ 
+                    width: '100%',
+                    maxHeight: '300px',
+                    aspectRatio: aspectRatio.toString()
+                  }}
+                >
+                  <svg 
+                    viewBox={`${minX} ${minZ} ${worldWidth} ${worldDepth}`}
+                    preserveAspectRatio="xMidYMid meet"
+                    className="w-full h-full cursor-crosshair"
+                    onClick={(e) => {
+                      if (!isDrawingCustom) return
+                      const svg = e.currentTarget
+                      // Use SVG's native coordinate transformation for precision
+                      const pt = svg.createSVGPoint()
+                      pt.x = e.clientX
+                      pt.y = e.clientY
+                      const ctm = svg.getScreenCTM()
+                      if (!ctm) return
+                      const svgPt = pt.matrixTransform(ctm.inverse())
+                      
+                      setDrawingPoints(prev => [...prev, { x: svgPt.x, z: svgPt.y }])
+                    }}
+                    onContextMenu={(e) => {
+                      e.preventDefault()
+                      if (isDrawingCustom && drawingPoints.length >= 3) {
+                        // Complete the zone
+                        const newZone: PreviewRoi = {
+                          id: `custom-${Date.now()}`,
+                          name: `Custom Area ${customZones.length + 1}`,
+                          vertices: drawingPoints,
+                          color: '#10b981',
+                          opacity: 0.4,
+                          roiType: 'custom'
+                        }
+                        setCustomZones(prev => [...prev, newZone])
+                        setDrawingPoints([])
+                        setIsDrawingCustom(false)
+                      }
+                    }}
+                  >
+                    {/* Grid - scaled to world units */}
+                    <defs>
+                      <pattern id="customGrid" width="1" height="1" patternUnits="userSpaceOnUse">
+                        <path d="M 1 0 L 0 0 0 1" fill="none" stroke="#374151" strokeWidth="0.02" />
+                      </pattern>
+                    </defs>
+                    <rect x={minX} y={minZ} width={worldWidth} height={worldDepth} fill="url(#customGrid)" />
+                    
+                    {/* Show only ONE zone per type as reference (not all zones) */}
+                    {(() => {
+                      // Get one representative zone per type for cleaner drawing reference
+                      const seenTypes = new Set<string>()
+                      const representativeRois = previewRois.filter(roi => {
+                        // Extract type from name (e.g., "Cashier 1 - Service" -> "service")
+                        const nameParts = roi.name.split(' - ')
+                        const roiType = nameParts.length > 1 ? nameParts[nameParts.length - 1].toLowerCase() : 'unknown'
+                        if (seenTypes.has(roiType)) return false
+                        seenTypes.add(roiType)
+                        return true
+                      })
+                      
+                      // World coords ARE SVG coords now (viewBox origin is minX, minZ)
+                      const toSvg = (wx: number, wz: number) => ({
+                        x: wx,
+                        y: wz,
+                      })
+                      
+                      // Dynamic stroke width based on world size
+                      const strokeW = Math.max(0.05, worldWidth * 0.005)
+                      
+                      // Calculate fixture center from service zone (it's positioned at the fixture)
+                      const serviceZone = representativeRois.find(r => r.name.toLowerCase().includes('service'))
+                      let fixtureCenter: { x: number, z: number } | null = null
+                      let fixtureSize = { w: 2, d: 0.8 } // Default checkout size
+                      if (serviceZone && serviceZone.vertices.length >= 3) {
+                        const xs = serviceZone.vertices.map(v => v.x)
+                        const zs = serviceZone.vertices.map(v => v.z)
+                        const sMinX = Math.min(...xs)
+                        const sMaxX = Math.max(...xs)
+                        const sMinZ = Math.min(...zs)
+                        // Fixture is at the back edge of service zone
+                        fixtureCenter = { x: (sMinX + sMaxX) / 2, z: sMinZ }
+                        fixtureSize = { w: sMaxX - sMinX, d: 0.6 }
+                      }
+                      
+                      return (
+                        <>
+                          {/* Fixture indicator (checkout object) */}
+                          {fixtureCenter && (
+                            <g>
+                              <rect
+                                x={fixtureCenter.x - fixtureSize.w / 2}
+                                y={fixtureCenter.z - fixtureSize.d}
+                                width={fixtureSize.w}
+                                height={fixtureSize.d}
+                                fill="#4b5563"
+                                stroke="#9ca3af"
+                                strokeWidth={strokeW}
+                                rx={0.1}
+                              />
+                              <text
+                                x={fixtureCenter.x}
+                                y={fixtureCenter.z - fixtureSize.d / 2}
+                                textAnchor="middle"
+                                dominantBaseline="middle"
+                                fill="#d1d5db"
+                                fontSize={Math.max(0.3, worldWidth * 0.02)}
+                              >
+                                Checkout
+                              </text>
+                            </g>
+                          )}
+                          
+                          {/* Representative zones (one per type) */}
+                          {representativeRois.map((roi, idx) => {
+                            if (roi.vertices.length < 3) return null
+                            const points = roi.vertices.map(v => toSvg(v.x, v.z))
+                            const pathD = `M ${points.map(p => `${p.x},${p.y}`).join(' L ')} Z`
+                            return (
+                              <path
+                                key={roi.id || idx}
+                                d={pathD}
+                                fill={roi.color}
+                                fillOpacity={0.3}
+                                stroke={roi.color}
+                                strokeWidth={strokeW}
+                              />
+                            )
+                          })}
+                          
+                          {/* Custom zones */}
+                          {customZones.map((roi, idx) => {
+                            if (roi.vertices.length < 3) return null
+                            const points = roi.vertices.map(v => toSvg(v.x, v.z))
+                            const pathD = `M ${points.map(p => `${p.x},${p.y}`).join(' L ')} Z`
+                            return (
+                              <path
+                                key={roi.id || idx}
+                                d={pathD}
+                                fill="#10b981"
+                                fillOpacity={0.4}
+                                stroke="#10b981"
+                                strokeWidth={strokeW * 1.5}
+                              />
+                            )
+                          })}
+                          
+                          {/* Drawing points */}
+                          {drawingPoints.length > 0 && (
+                            <>
+                              {drawingPoints.map((p, i) => {
+                                const svg = toSvg(p.x, p.z)
+                                return (
+                                  <circle
+                                    key={i}
+                                    cx={svg.x}
+                                    cy={svg.y}
+                                    r={Math.max(0.15, worldWidth * 0.015)}
+                                    fill="#10b981"
+                                    stroke="white"
+                                    strokeWidth={strokeW * 0.5}
+                                  />
+                                )
+                              })}
+                              {drawingPoints.length > 1 && (
+                                <polyline
+                                  points={drawingPoints.map(p => {
+                                    const svg = toSvg(p.x, p.z)
+                                    return `${svg.x},${svg.y}`
+                                  }).join(' ')}
+                                  fill="none"
+                                  stroke="#10b981"
+                                  strokeWidth={strokeW}
+                                  strokeDasharray={`${strokeW * 3},${strokeW * 2}`}
+                                />
+                              )}
+                            </>
+                          )}
+                        </>
+                      )
+                    })()}
+                  </svg>
+                </div>
+                  )
+                })()}
+                
+                <p className="text-xs text-gray-500 mt-2 text-center">
+                  {isDrawingCustom 
+                    ? 'Click to add points. Right-click to complete zone (min 3 points).'
+                    : 'Shows one zone per type as reference. Click "New Zone" to draw a custom area.'
+                  }
+                </p>
+              </div>
+              
+              {/* Right: Custom Zones List */}
+              <div>
+                <h3 className="text-sm font-medium text-gray-300 mb-3 flex items-center gap-2">
+                  <Eye className="w-4 h-4 text-green-400" />
+                  Custom Zones ({customZones.length})
+                </h3>
+                
+                <div className="space-y-2 max-h-[300px] overflow-y-auto">
+                  {customZones.length === 0 ? (
+                    <div className="bg-gray-800/50 border border-dashed border-gray-600 rounded-lg p-6 text-center">
+                      <PenTool className="w-8 h-8 text-gray-600 mx-auto mb-2" />
+                      <p className="text-sm text-gray-500">No custom zones yet</p>
+                      <p className="text-xs text-gray-600 mt-1">Draw zones to add monitoring areas</p>
+                    </div>
+                  ) : (
+                    customZones.map((zone, idx) => (
+                      <div
+                        key={zone.id}
+                        className="bg-gray-800/50 border border-gray-700 rounded-lg p-3 flex items-center justify-between"
+                      >
+                        <div className="flex items-center gap-2">
+                          <div className="w-3 h-3 rounded bg-green-500" />
+                          <span className="text-sm text-white">{zone.name}</span>
+                          <span className="text-xs text-gray-500">
+                            {zone.vertices.length} points
+                          </span>
+                        </div>
+                        <button
+                          onClick={() => setCustomZones(prev => prev.filter((_, i) => i !== idx))}
+                          className="p-1 text-gray-500 hover:text-red-400 transition-colors"
+                          title="Delete zone"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    ))
+                  )}
+                </div>
+                
+                {customZones.length > 0 && (
+                  <p className="text-xs text-gray-500 mt-3">
+                    Custom zones will be saved with the generated KPI zones.
+                  </p>
+                )}
               </div>
             </div>
           ) : (
@@ -774,7 +1095,7 @@ export default function SmartKpiModal({ isOpen, onClose, dwgLayoutId: propDwgLay
               ) : (
                 <>
                   <Zap className="w-4 h-4" />
-                  Generate {previewRois.length} Zones
+                  Generate {previewRois.length + customZones.length} Zones
                 </>
               )}
             </button>

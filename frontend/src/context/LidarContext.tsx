@@ -14,7 +14,8 @@ interface LidarContextType {
   connectDevice: (deviceId: string) => Promise<void>
   disconnectDevice: (deviceId: string) => Promise<void>
   
-  addPlacement: (deviceId: string, position: Vector3) => LidarPlacement
+  addPlacement: (deviceId: string | undefined, position: Vector3) => LidarPlacement
+  pairPlacement: (placementId: string, deviceId: string | undefined) => void
   updatePlacement: (id: string, updates: Partial<LidarPlacement>) => void
   removePlacement: (id: string) => void
   selectPlacement: (id: string | null) => void
@@ -89,7 +90,7 @@ export function LidarProvider({ children }: { children: ReactNode }) {
     }
   }, [addToast])
 
-  const addPlacement = useCallback((deviceId: string, position: Vector3): LidarPlacement => {
+  const addPlacement = useCallback((deviceId: string | undefined, position: Vector3): LidarPlacement => {
     const placement: LidarPlacement = {
       id: uuidv4(),
       venueId: venue?.id || '',
@@ -106,6 +107,10 @@ export function LidarProvider({ children }: { children: ReactNode }) {
     setSelectedPlacementId(placement.id)
     return placement
   }, [venue, snapToGrid])
+
+  const pairPlacement = useCallback((placementId: string, deviceId: string | undefined) => {
+    setPlacements(prev => prev.map(p => p.id === placementId ? { ...p, deviceId } : p))
+  }, [])
 
   const updatePlacement = useCallback((id: string, updates: Partial<LidarPlacement>) => {
     setPlacements(prev => prev.map(p => p.id === id ? { ...p, ...updates } : p))
@@ -142,6 +147,7 @@ export function LidarProvider({ children }: { children: ReactNode }) {
       connectDevice,
       disconnectDevice,
       addPlacement,
+      pairPlacement,
       updatePlacement,
       removePlacement,
       selectPlacement,
