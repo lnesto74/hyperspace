@@ -242,7 +242,7 @@ export function CheckoutManager({ enabled, onToggle }: CheckoutManagerProps) {
           )}
 
           {/* Aggregate Stats */}
-          {status && (
+          {status?.aggregate && (
             <div className="grid grid-cols-3 gap-2 text-xs">
               <div className="bg-gray-700/50 rounded p-1.5 text-center">
                 <div className="text-gray-400">Open</div>
@@ -281,7 +281,7 @@ export function CheckoutManager({ enabled, onToggle }: CheckoutManagerProps) {
           )}
 
           {/* Lane List */}
-          {status && (
+          {status?.lanes && status.lanes.length > 0 && (
             <div className="space-y-1 max-h-48 overflow-y-auto">
               {status.lanes.map((lane) => (
                 <div
