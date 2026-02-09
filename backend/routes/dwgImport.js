@@ -1205,6 +1205,243 @@ export default function createDwgImportRoutes(db) {
   });
 
   /**
+   * GET /api/dwg/layout/:layoutVersionId/as-venue-bootstrap - Convert DWG layout to venue-ready payload
+   * This is a STATELESS endpoint - it does NOT create venues or save objects.
+   * It only converts DWG data into standard VenueObject format.
+   */
+  router.get('/layout/:layoutVersionId/as-venue-bootstrap', (req, res) => {
+    try {
+      const { layoutVersionId } = req.params;
+      // Allow scaleCorrection to be passed as query param (from localStorage on frontend)
+      const scaleCorrection = parseFloat(req.query.scaleCorrection) || 1.0;
+      
+      // Get the layout
+      const layout = db.prepare('SELECT * FROM dwg_layout_versions WHERE id = ?').get(layoutVersionId);
+      if (!layout) {
+        return res.status(404).json({ error: 'Layout version not found' });
+      }
+      
+      const layoutData = JSON.parse(layout.layout_json || '{}');
+      const fixtures = layoutData.fixtures || [];
+      const unitScale = layoutData.unit_scale_to_m || 0.001;
+      
+      // Get LiDAR instances for this layout
+      const lidarInstances = db.prepare('SELECT * FROM lidar_instances WHERE layout_version_id = ?').all(layoutVersionId);
+      const lidarModels = db.prepare('SELECT * FROM lidar_models').all();
+      const modelMap = new Map(lidarModels.map(m => [m.id, m]));
+      
+      // Calculate bounds and center offset (EXACT same math as Layout3DPreview.tsx)
+      console.log(`[DWG Bootstrap] unitScale=${unitScale}, scaleCorrection=${scaleCorrection}`);
+      const effectiveScale = unitScale * scaleCorrection;
+      
+      // Use RAW DWG bounds for center offset (SAME as Layout3DPreview)
+      // Layout3DPreview uses layoutData.bounds, not computed fixture bounds
+      const rawBounds = layoutData.bounds || { minX: 0, maxX: 20000, minY: 0, maxY: 15000 };
+      const centerX = ((rawBounds.minX + rawBounds.maxX) / 2) * effectiveScale;
+      const centerZ = ((rawBounds.minY + rawBounds.maxY) / 2) * effectiveScale;
+      
+      console.log(`[DWG Bootstrap] Raw bounds: minX=${rawBounds.minX}, maxX=${rawBounds.maxX}, minY=${rawBounds.minY}, maxY=${rawBounds.maxY}`);
+      console.log(`[DWG Bootstrap] Center offset: ${centerX.toFixed(3)}, ${centerZ.toFixed(3)}`);
+      
+      // Calculate content bounds from fixtures (for venue sizing, not centering)
+      let fMinX = Infinity, fMaxX = -Infinity, fMinY = Infinity, fMaxY = -Infinity;
+      
+      fixtures.forEach(f => {
+        const { footprint, pose2d } = f;
+        const points = footprint?.points || [];
+        if (points.length > 0) {
+          points.forEach(pt => {
+            fMinX = Math.min(fMinX, pt.x);
+            fMaxX = Math.max(fMaxX, pt.x);
+            fMinY = Math.min(fMinY, pt.y);
+            fMaxY = Math.max(fMaxY, pt.y);
+          });
+        } else if (pose2d) {
+          const hw = (footprint?.w || 1000) / 2;
+          const hd = (footprint?.d || 1000) / 2;
+          fMinX = Math.min(fMinX, pose2d.x - hw);
+          fMaxX = Math.max(fMaxX, pose2d.x + hw);
+          fMinY = Math.min(fMinY, pose2d.y - hd);
+          fMaxY = Math.max(fMaxY, pose2d.y + hd);
+        }
+      });
+      
+      // Handle empty fixtures case
+      if (!isFinite(fMinX)) {
+        fMinX = 0; fMaxX = 20000; fMinY = 0; fMaxY = 15000; // Default 20x15m in mm
+      }
+      
+      // Calculate venue dimensions from content bounds (in meters)
+      const contentWidth = (fMaxX - fMinX) * effectiveScale;
+      const contentDepth = (fMaxY - fMinY) * effectiveScale;
+      
+      // Add padding for venue size
+      const padding = 4; // 4m padding on each side
+      const venueWidth = Math.ceil(contentWidth + padding * 2);
+      const venueDepth = Math.ceil(contentDepth + padding * 2);
+      
+      // Calculate content center offset (where objects are centered after DWG transform)
+      // Layout3DPreview centers content at contentCenterX/Z, but MainViewport floor is at (venueWidth/2, venueDepth/2)
+      // We need to shift objects so they're centered on the venue floor
+      const contentCenterX = ((fMinX + fMaxX) / 2) * effectiveScale - centerX;
+      const contentCenterZ = ((fMinY + fMaxY) / 2) * effectiveScale - centerZ;
+      const venueFloorCenterX = venueWidth / 2;
+      const venueFloorCenterZ = venueDepth / 2;
+      const shiftX = venueFloorCenterX - contentCenterX;
+      const shiftZ = venueFloorCenterZ - contentCenterZ;
+      
+      console.log(`[DWG Bootstrap] Content center: (${contentCenterX.toFixed(2)}, ${contentCenterZ.toFixed(2)})`);
+      console.log(`[DWG Bootstrap] Venue floor center: (${venueFloorCenterX.toFixed(2)}, ${venueFloorCenterZ.toFixed(2)})`);
+      console.log(`[DWG Bootstrap] Shift offset: (${shiftX.toFixed(2)}, ${shiftZ.toFixed(2)})`);
+      
+      // Convert fixtures to VenueObjects
+      const objectsDraft = fixtures.map((fixture, idx) => {
+        const { pose2d, footprint, mapping, source, id: fixtureId } = fixture;
+        const points = footprint?.points || [];
+        
+        let x, z, width, depth, rotationY;
+        
+        // MATCH EXACTLY Layout3DPreview.tsx logic
+        if (points.length >= 3) {
+          // Use centroid of polygon points (same as Layout3DPreview)
+          const sumX = points.reduce((sum, pt) => sum + pt.x, 0);
+          const sumY = points.reduce((sum, pt) => sum + pt.y, 0);
+          const centroidX = sumX / points.length;
+          const centroidY = sumY / points.length;
+          x = centroidX * effectiveScale - centerX;
+          z = centroidY * effectiveScale - centerZ;
+          
+          // Calculate rotation from first edge direction (same as Layout3DPreview)
+          const p0 = points[0];
+          const p1 = points[1];
+          const edgeDx = p1.x - p0.x;
+          const edgeDy = p1.y - p0.y;
+          // Negate for Three.js Y-up coordinate system
+          rotationY = -Math.atan2(edgeDy, edgeDx);
+          
+          // Calculate bounding box for dimensions
+          const minPtX = Math.min(...points.map(p => p.x));
+          const maxPtX = Math.max(...points.map(p => p.x));
+          const minPtY = Math.min(...points.map(p => p.y));
+          const maxPtY = Math.max(...points.map(p => p.y));
+          width = (maxPtX - minPtX) * effectiveScale;
+          depth = (maxPtY - minPtY) * effectiveScale;
+        } else {
+          // Fallback to pose2d and footprint dimensions
+          x = pose2d.x * effectiveScale - centerX;
+          z = pose2d.y * effectiveScale - centerZ;
+          rotationY = -(pose2d?.rot_deg || 0) * Math.PI / 180; // Negate like Layout3DPreview
+          width = (footprint?.w || 1000) * effectiveScale;
+          depth = (footprint?.d || 1000) * effectiveScale;
+        }
+        
+        // Ensure minimum size
+        if (width < 0.1) width = 1;
+        if (depth < 0.1) depth = 1;
+        
+        const height = fixture.customHeight || mapping?.height || Math.max(0.5, Math.min(width, depth) * 0.5);
+        
+        // Determine object type from mapping
+        const type = mapping?.type || 'custom';
+        
+        // Generate NEW UUID for VenueObject (never reuse DWG fixture ID)
+        const venueObjectId = uuidv4();
+        
+        if (idx < 5) {
+          console.log(`[DWG Bootstrap] Fixture #${idx} "${fixtureId}":`);
+          console.log(`  - Raw pose2d: x=${pose2d?.x}, y=${pose2d?.y}, rot=${pose2d?.rot_deg}°`);
+          console.log(`  - Raw footprint: w=${footprint?.w}, d=${footprint?.d}, points=${points.length}`);
+          console.log(`  - Computed position: x=${x.toFixed(3)}, z=${z.toFixed(3)} (before shift)`);
+          console.log(`  - Final position: x=${(x + shiftX).toFixed(3)}, z=${(z + shiftZ).toFixed(3)} (after shift)`);
+          console.log(`  - Computed scale: width=${width.toFixed(3)}, height=${height.toFixed(3)}, depth=${depth.toFixed(3)}`);
+          console.log(`  - Computed rotation: ${(rotationY * 180 / Math.PI).toFixed(1)}°`);
+        }
+        
+        // Apply shift to center objects on venue floor
+        const finalX = x + shiftX;
+        const finalZ = z + shiftZ;
+        
+        return {
+          id: venueObjectId,
+          venueId: '', // Will be set when venue is created
+          type: type,
+          name: fixture.name || source?.layer || `${type} ${idx + 1}`,
+          position: { x: finalX, y: 0, z: finalZ },
+          rotation: { x: 0, y: rotationY, z: 0 },
+          scale: { x: width, y: height, z: depth },
+          color: null, // Will use default color from VenueContext
+          metadata: {
+            source: 'dwg',
+            dwg_fixture_id: fixtureId,
+            dwg_layout_version_id: layoutVersionId
+          }
+        };
+      });
+      
+      // Convert LiDAR instances to LidarPlacement format
+      const lidarDraft = lidarInstances.map(inst => {
+        const model = modelMap.get(inst.model_id);
+        
+        // Position with center offset applied (same as Layout3DPreview)
+        // Also apply shift to center on venue floor
+        const x = inst.x_m - centerX + shiftX;
+        const z = inst.z_m - centerZ + shiftZ;
+        const mountHeight = inst.mount_y_m || 3;
+        
+        return {
+          id: uuidv4(), // Generate new ID
+          venueId: '', // Will be set when venue is created
+          deviceId: inst.id, // Reference to original
+          position: { x, y: mountHeight, z },
+          rotation: { x: 0, y: (inst.yaw_deg * Math.PI) / 180, z: 0 },
+          mountHeight: mountHeight,
+          fovHorizontal: model?.hfov_deg || 360,
+          fovVertical: model?.vfov_deg || 30,
+          range: inst.range_m || model?.range_m || 10,
+          enabled: true,
+          metadata: {
+            source: 'dwg',
+            dwg_lidar_instance_id: inst.id,
+            dwg_layout_version_id: layoutVersionId,
+            model_id: inst.model_id
+          }
+        };
+      });
+      
+      // Build response (MANDATORY SHAPE per spec)
+      res.json({
+        venueDefaults: {
+          width: venueWidth,
+          depth: venueDepth,
+          height: 4,
+          tileSize: 1
+        },
+        objectsDraft,
+        lidarDraft,
+        transform: {
+          effectiveScale,
+          centerOffset: { x: centerX, z: centerZ },
+          bounds: {
+            minX: fMinX * effectiveScale,
+            maxX: fMaxX * effectiveScale,
+            minZ: fMinY * effectiveScale,
+            maxZ: fMaxY * effectiveScale
+          }
+        },
+        dwgMetadata: {
+          layoutVersionId,
+          importId: layout.import_id,
+          layoutName: layout.name
+        }
+      });
+      
+    } catch (err) {
+      console.error('DWG venue bootstrap error:', err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  /**
    * GET /api/dwg/feature-status - Check if feature is enabled
    */
   router.get('/feature-status', (req, res) => {

@@ -4,6 +4,7 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { CSS2DRenderer, CSS2DObject } from 'three/examples/jsm/renderers/CSS2DRenderer.js'
 import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
+import { Hand, Move3D, RotateCcw, Save, Download, Layers, Eye, EyeOff } from 'lucide-react'
 import { useVenue } from '../../context/VenueContext'
 import { useLidar } from '../../context/LidarContext'
 import { useTracking } from '../../context/TrackingContext'
@@ -94,6 +95,19 @@ export default function MainViewport({
   
   // Custom models state
   const [customModels, setCustomModels] = useState<Map<string, CustomModel>>(new Map())
+  
+  // Camera controls state
+  const [panMode, setPanMode] = useState(false)
+  const [hasSavedView, setHasSavedView] = useState(false)
+  const [justSaved, setJustSaved] = useState(false)
+  
+  // Layers panel state
+  const [showLayersPanel, setShowLayersPanel] = useState(false)
+  const [showObjectsLayer, setShowObjectsLayer] = useState(true)
+  const [showLidarLayer, setShowLidarLayer] = useState(true)
+  const [showGridLayer, setShowGridLayer] = useState(true)
+  const [showRoiLayer, setShowRoiLayer] = useState(true)
+  const [showTracksLayer, setShowTracksLayer] = useState(true)
   
   // Drag state
   const isDraggingRef = useRef(false)
@@ -278,9 +292,10 @@ export default function MainViewport({
   // Load ROIs when venue changes
   useEffect(() => {
     if (venue?.id) {
-      loadRegions(venue.id)
+      // Pass dwg_layout_version_id for DWG venues to load correct ROIs
+      loadRegions(venue.id, venue.dwg_layout_version_id)
     }
-  }, [venue?.id, loadRegions])
+  }, [venue?.id, venue?.dwg_layout_version_id, loadRegions])
 
   // Initialize Three.js scene
   useEffect(() => {
@@ -1338,17 +1353,32 @@ export default function MainViewport({
 
       // Update transform
       obj3d.rotation.set(obj.rotation.x, obj.rotation.y, obj.rotation.z)
-      obj3d.scale.set(obj.scale.x, obj.scale.y, obj.scale.z)
       
       // Calculate Y position to place object base on floor
       let yOffset = obj.scale.y / 2 // Default for box geometry (centered origin)
       
-      if (obj3d.userData.isCustomModel) {
-        // For custom models, compute bounding box to find the bottom
+      // Check if this is a DWG-sourced venue (needs special GLTF scaling)
+      const isDwgVenue = venueRef.current?.scene_source === 'dwg'
+      
+      if (obj3d.userData.isCustomModel && obj3d.userData.originalSize && isDwgVenue) {
+        // For DWG venues with GLTF models, scale relative to original size (same as Layout3DPreview)
+        const originalSize = obj3d.userData.originalSize as THREE.Vector3
+        const scaleX = obj.scale.x / originalSize.x
+        const scaleZ = obj.scale.z / originalSize.z
+        const scaleY = obj.scale.y / originalSize.y
+        obj3d.scale.set(scaleX, scaleY, scaleZ)
+        
+        // Compute bounding box after scaling to find the bottom
         const box = new THREE.Box3().setFromObject(obj3d)
-        const modelHeight = box.max.y - box.min.y
-        // Adjust Y so bottom of model is at floor level
         yOffset = -box.min.y
+      } else if (obj3d.userData.isCustomModel) {
+        // For manual mode with GLTF models, apply scale and compute bounding box for yOffset
+        obj3d.scale.set(obj.scale.x, obj.scale.y, obj.scale.z)
+        const box = new THREE.Box3().setFromObject(obj3d)
+        yOffset = -box.min.y
+      } else {
+        // For box geometry, scale is the actual size
+        obj3d.scale.set(obj.scale.x, obj.scale.y, obj.scale.z)
       }
       
       obj3d.position.set(obj.position.x, yOffset, obj.position.z)
@@ -1780,8 +1810,13 @@ export default function MainViewport({
     })
 
     // Add/update ROIs
-    regions.forEach(roi => {
+    console.log(`[MainViewport] Rendering ${regions.length} ROIs`)
+    regions.forEach((roi, idx) => {
       if (roi.vertices.length < 3) return
+      
+      if (idx === 0) {
+        console.log(`[MainViewport] First ROI: "${roi.name}" vertices:`, roi.vertices.slice(0, 2))
+      }
       
       let group = roiMeshesRef.current.get(roi.id)
       const isSelected = roi.id === selectedRoiId
@@ -1957,7 +1992,303 @@ export default function MainViewport({
     }
   }, [isDrawing, drawingVertices])
 
+  // Camera view storage key
+  const cameraStorageKey = `venue-camera-view-${venue?.id || 'default'}`
+  
+  // Check if saved camera view exists
+  useEffect(() => {
+    const savedView = localStorage.getItem(cameraStorageKey)
+    setHasSavedView(!!savedView)
+  }, [cameraStorageKey])
+  
+  // Toggle layer visibility - Objects
+  useEffect(() => {
+    objectMeshesRef.current.forEach(obj3d => {
+      obj3d.visible = showObjectsLayer
+    })
+  }, [showObjectsLayer, objects])
+  
+  // Toggle layer visibility - LiDAR
+  useEffect(() => {
+    lidarMeshesRef.current.forEach(group => {
+      group.visible = showLidarLayer
+    })
+  }, [showLidarLayer, placements])
+  
+  // Toggle layer visibility - Grid & Floor
+  useEffect(() => {
+    if (gridRef.current) gridRef.current.visible = showGridLayer
+    if (floorRef.current) floorRef.current.visible = showGridLayer
+  }, [showGridLayer])
+  
+  // Toggle layer visibility - ROI Zones
+  useEffect(() => {
+    roiMeshesRef.current.forEach(group => {
+      group.visible = showRoiLayer
+    })
+    roiVertexHandlesRef.current.forEach(handles => {
+      handles.forEach(h => { h.visible = showRoiLayer })
+    })
+  }, [showRoiLayer, regions])
+  
+  // Toggle layer visibility - Tracks
+  useEffect(() => {
+    trackMeshesRef.current.forEach(group => {
+      group.visible = showTracksLayer
+    })
+  }, [showTracksLayer, tracks])
+  
+  // Toggle pan mode
+  const togglePanMode = useCallback(() => {
+    if (!controlsRef.current) return
+    
+    const newPanMode = !panMode
+    setPanMode(newPanMode)
+    
+    if (newPanMode) {
+      controlsRef.current.mouseButtons = {
+        LEFT: THREE.MOUSE.PAN,
+        MIDDLE: THREE.MOUSE.DOLLY,
+        RIGHT: THREE.MOUSE.ROTATE
+      }
+    } else {
+      controlsRef.current.mouseButtons = {
+        LEFT: THREE.MOUSE.ROTATE,
+        MIDDLE: THREE.MOUSE.DOLLY,
+        RIGHT: THREE.MOUSE.PAN
+      }
+    }
+  }, [panMode])
+  
+  // Save current camera view
+  const saveCameraView = useCallback(() => {
+    if (!cameraRef.current || !controlsRef.current) return
+    
+    const viewData = {
+      position: cameraRef.current.position.toArray(),
+      target: controlsRef.current.target.toArray(),
+      zoom: cameraRef.current.zoom
+    }
+    localStorage.setItem(cameraStorageKey, JSON.stringify(viewData))
+    setHasSavedView(true)
+    setJustSaved(true)
+    setTimeout(() => setJustSaved(false), 1500)
+  }, [cameraStorageKey])
+  
+  // Restore saved camera view
+  const restoreCameraView = useCallback(() => {
+    if (!cameraRef.current || !controlsRef.current) return
+    
+    const saved = localStorage.getItem(cameraStorageKey)
+    if (!saved) return
+    
+    try {
+      const viewData = JSON.parse(saved)
+      cameraRef.current.position.fromArray(viewData.position)
+      controlsRef.current.target.fromArray(viewData.target)
+      if (viewData.zoom) cameraRef.current.zoom = viewData.zoom
+      cameraRef.current.updateProjectionMatrix()
+      controlsRef.current.update()
+    } catch (err) {
+      console.error('Failed to restore camera view:', err)
+    }
+  }, [cameraStorageKey])
+  
+  // Set preset camera views
+  const setCameraPreset = useCallback((preset: 'top' | 'front' | 'side' | 'reset') => {
+    if (!cameraRef.current || !controlsRef.current || !venue) return
+    
+    const distance = Math.max(venue.width, venue.depth) * 1.2
+    
+    switch (preset) {
+      case 'top':
+        cameraRef.current.position.set(0, distance, 0.01)
+        controlsRef.current.target.set(0, 0, 0)
+        break
+      case 'front':
+        cameraRef.current.position.set(0, venue.height / 2, distance)
+        controlsRef.current.target.set(0, venue.height / 2, 0)
+        break
+      case 'side':
+        cameraRef.current.position.set(distance, venue.height / 2, 0)
+        controlsRef.current.target.set(0, venue.height / 2, 0)
+        break
+      case 'reset':
+        cameraRef.current.position.set(venue.width * 0.8, venue.height * 2, venue.depth * 0.8)
+        controlsRef.current.target.set(0, 0, 0)
+        break
+    }
+    
+    cameraRef.current.updateProjectionMatrix()
+    controlsRef.current.update()
+  }, [venue])
+
   return (
-    <div ref={containerRef} className="w-full h-full" />
+    <div className="w-full h-full flex flex-col">
+      {/* Camera Controls Toolbar */}
+      <div className="h-10 border-b border-border-dark flex items-center px-3 gap-2 bg-panel-bg flex-shrink-0">
+        <span className="text-sm font-medium text-white">3D Venue</span>
+        <div className="flex-1" />
+        
+        {/* Pan/Rotate Mode */}
+        <div className="flex items-center gap-1 border-l border-gray-700 pl-2 ml-2">
+          <button
+            onClick={togglePanMode}
+            className={`p-1.5 rounded transition-colors ${panMode ? 'bg-blue-900/50 text-blue-400' : 'text-gray-400 hover:text-white hover:bg-gray-700'}`}
+            title={panMode ? 'Pan Mode ON (left-click to pan)' : 'Click to enable Pan Mode'}
+          >
+            <Hand className="w-4 h-4" />
+          </button>
+          <button
+            onClick={() => { if (panMode) togglePanMode() }}
+            className={`p-1.5 rounded transition-colors ${!panMode ? 'bg-blue-900/50 text-blue-400' : 'text-gray-400 hover:text-white hover:bg-gray-700'}`}
+            title={!panMode ? 'Rotate Mode ON (left-click to rotate)' : 'Click to enable Rotate Mode'}
+          >
+            <Move3D className="w-4 h-4" />
+          </button>
+        </div>
+        
+        {/* View Presets */}
+        <div className="flex items-center gap-1 border-l border-gray-700 pl-2 ml-2">
+          <button
+            onClick={() => setCameraPreset('top')}
+            className="px-2 py-1 text-xs text-gray-400 hover:text-white rounded hover:bg-gray-700 transition-colors"
+            title="Top View (T or 7)"
+          >
+            Top
+          </button>
+          <button
+            onClick={() => setCameraPreset('front')}
+            className="px-2 py-1 text-xs text-gray-400 hover:text-white rounded hover:bg-gray-700 transition-colors"
+            title="Front View (F)"
+          >
+            Front
+          </button>
+          <button
+            onClick={() => setCameraPreset('side')}
+            className="px-2 py-1 text-xs text-gray-400 hover:text-white rounded hover:bg-gray-700 transition-colors"
+            title="Side View (S or 3)"
+          >
+            Side
+          </button>
+          <button
+            onClick={() => setCameraPreset('reset')}
+            className="p-1.5 text-gray-400 hover:text-white rounded hover:bg-gray-700 transition-colors"
+            title="Reset View (R or 1)"
+          >
+            <RotateCcw className="w-4 h-4" />
+          </button>
+        </div>
+        
+        {/* Save/Restore View */}
+        <div className="flex items-center gap-1 border-l border-gray-700 pl-2 ml-2">
+          <button
+            onClick={saveCameraView}
+            className={`px-2 py-1 text-xs rounded transition-colors flex items-center gap-1 ${
+              hasSavedView 
+                ? 'bg-green-900/50 text-green-400 hover:bg-green-600 hover:text-white' 
+                : 'text-gray-400 hover:text-white hover:bg-gray-700'
+            }`}
+            title={hasSavedView ? 'Save current view as default - click again to update' : 'Save current view as default'}
+          >
+            <Save className="w-3 h-3" />
+            {justSaved ? 'Saved!' : hasSavedView ? 'Update View' : 'Save View'}
+          </button>
+          {hasSavedView && (
+            <button
+              onClick={restoreCameraView}
+              className="px-2 py-1 text-xs text-gray-400 hover:text-white rounded hover:bg-gray-700 transition-colors flex items-center gap-1"
+              title="Restore saved view"
+            >
+              <Download className="w-3 h-3" />
+              Restore
+            </button>
+          )}
+        </div>
+      </div>
+      
+      {/* 3D Canvas */}
+      <div ref={containerRef} className="flex-1 relative">
+        {/* Floating Layers Panel - Top Right */}
+        <div className="absolute top-3 right-3 z-10">
+          <button
+            onClick={() => setShowLayersPanel(!showLayersPanel)}
+            className={`p-2 rounded-lg shadow-lg transition-colors ${
+              showLayersPanel
+                ? 'bg-blue-600 text-white'
+                : 'bg-gray-800/90 text-gray-300 hover:text-white hover:bg-gray-700'
+            }`}
+            title="Toggle Layers Panel"
+          >
+            <Layers className="w-5 h-5" />
+          </button>
+          {showLayersPanel && (
+            <div className="absolute top-full right-0 mt-2 bg-gray-800/95 backdrop-blur border border-gray-700 rounded-lg shadow-xl p-3 min-w-[180px]">
+              <div className="text-xs font-medium text-gray-300 mb-2">Layers</div>
+              <label className="flex items-center gap-2 py-1.5 px-2 rounded hover:bg-gray-700 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={showObjectsLayer}
+                  onChange={(e) => setShowObjectsLayer(e.target.checked)}
+                  className="rounded border-gray-600 bg-gray-700 text-green-500"
+                />
+                <span className="text-sm text-gray-300 flex items-center gap-1.5">
+                  {showObjectsLayer ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5 text-gray-500" />}
+                  Objects
+                </span>
+              </label>
+              <label className="flex items-center gap-2 py-1.5 px-2 rounded hover:bg-gray-700 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={showLidarLayer}
+                  onChange={(e) => setShowLidarLayer(e.target.checked)}
+                  className="rounded border-gray-600 bg-gray-700 text-blue-500"
+                />
+                <span className="text-sm text-gray-300 flex items-center gap-1.5">
+                  {showLidarLayer ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5 text-gray-500" />}
+                  LiDAR Devices
+                </span>
+              </label>
+              <label className="flex items-center gap-2 py-1.5 px-2 rounded hover:bg-gray-700 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={showGridLayer}
+                  onChange={(e) => setShowGridLayer(e.target.checked)}
+                  className="rounded border-gray-600 bg-gray-700 text-cyan-500"
+                />
+                <span className="text-sm text-gray-300 flex items-center gap-1.5">
+                  {showGridLayer ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5 text-gray-500" />}
+                  Grid & Floor
+                </span>
+              </label>
+              <label className="flex items-center gap-2 py-1.5 px-2 rounded hover:bg-gray-700 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={showRoiLayer}
+                  onChange={(e) => setShowRoiLayer(e.target.checked)}
+                  className="rounded border-gray-600 bg-gray-700 text-yellow-500"
+                />
+                <span className="text-sm text-gray-300 flex items-center gap-1.5">
+                  {showRoiLayer ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5 text-gray-500" />}
+                  ROI Zones
+                </span>
+              </label>
+              <label className="flex items-center gap-2 py-1.5 px-2 rounded hover:bg-gray-700 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={showTracksLayer}
+                  onChange={(e) => setShowTracksLayer(e.target.checked)}
+                  className="rounded border-gray-600 bg-gray-700 text-purple-500"
+                />
+                <span className="text-sm text-gray-300 flex items-center gap-1.5">
+                  {showTracksLayer ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5 text-gray-500" />}
+                  Tracks
+                </span>
+              </label>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
   )
 }

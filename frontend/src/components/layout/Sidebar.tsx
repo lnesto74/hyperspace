@@ -29,7 +29,7 @@ export default function Sidebar({ activeTab, onTabChange, onOpenDwgImporter, onO
   const [showWhiteLabel, setShowWhiteLabel] = useState(false)
 
   return (
-    <div className="w-64 flex-shrink-0 h-full bg-panel-bg border-r border-border-dark flex flex-col overflow-hidden">
+    <div className="w-72 flex-shrink-0 h-full bg-panel-bg border-r border-border-dark flex flex-col overflow-hidden">
       {/* Header */}
       <div className="h-14 border-b border-border-dark flex items-center px-4">
         <div className="flex items-center gap-2">

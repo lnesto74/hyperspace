@@ -93,6 +93,7 @@ export default function Layout3DPreview({ layoutVersionId, lidarInstances = [], 
   const controlsRef = useRef<OrbitControls | null>(null)
   const animationIdRef = useRef<number>(0)
   const fixturesGroupRef = useRef<THREE.Group | null>(null)
+  const wireframesGroupRef = useRef<THREE.Group | null>(null)
   const lidarGroupRef = useRef<THREE.Group | null>(null)
   const gltfLoaderRef = useRef<GLTFLoader>(new GLTFLoader())
   const loadedModelsRef = useRef<Map<string, THREE.Group>>(new Map())
@@ -112,6 +113,7 @@ export default function Layout3DPreview({ layoutVersionId, lidarInstances = [], 
   const [justSaved, setJustSaved] = useState(false)
   const [panMode, setPanMode] = useState(false)
   const [showLidarLayer, setShowLidarLayer] = useState(true)
+  const [showFixturesLayer, setShowFixturesLayer] = useState(true)
   const [showLayersPanel, setShowLayersPanel] = useState(false)
 
   // Toggle pan mode - swap left mouse button behavior
@@ -315,11 +317,17 @@ export default function Layout3DPreview({ layoutVersionId, lidarInstances = [], 
     // Grid and floor will be created dynamically when layout data is loaded
     // (see the layoutData useEffect below)
 
-    // Fixtures group
+    // Fixtures group (3D models/boxes)
     const fixturesGroup = new THREE.Group()
     fixturesGroup.name = 'DWGFixtures'
     scene.add(fixturesGroup)
     fixturesGroupRef.current = fixturesGroup
+
+    // Wireframes group (2D outlines on ground)
+    const wireframesGroup = new THREE.Group()
+    wireframesGroup.name = 'Wireframes'
+    scene.add(wireframesGroup)
+    wireframesGroupRef.current = wireframesGroup
 
     // LiDAR group
     const lidarGroup = new THREE.Group()
@@ -491,6 +499,18 @@ export default function Layout3DPreview({ layoutVersionId, lidarInstances = [], 
         }
       }
     }
+    
+    // Clear existing wireframes
+    if (wireframesGroupRef.current) {
+      const wireGroup = wireframesGroupRef.current
+      while (wireGroup.children.length > 0) {
+        const child = wireGroup.children[0]
+        wireGroup.remove(child)
+        if (child instanceof THREE.Mesh || child instanceof THREE.Line) {
+          (child as THREE.Mesh).geometry?.dispose()
+        }
+      }
+    }
 
     const { fixtures, unit_scale_to_m, bounds } = layoutData
     const scene = sceneRef.current
@@ -636,8 +656,11 @@ export default function Layout3DPreview({ layoutVersionId, lidarInstances = [], 
       
       const h = Math.max(0.5, Math.min(w, d) * 0.5) // Height based on size
       
-      if (idx < 3) {
-        console.log(`Fixture ${fixture.id}: pos(${x.toFixed(2)}, ${z.toFixed(2)}) size(${w.toFixed(2)}x${d.toFixed(2)}) rot(${(rotationRad * 180 / Math.PI).toFixed(1)}°)`)
+      if (idx < 5) {
+        console.log(`[Layout3DPreview] Fixture #${idx}: "${fixture.id}" type=${mapping?.type || 'default'}`)
+        console.log(`    position: x=${x.toFixed(3)}, z=${z.toFixed(3)}`)
+        console.log(`    scale: x=${w.toFixed(3)}, y=${h.toFixed(3)}, z=${d.toFixed(3)}`)
+        console.log(`    rotation: y=${(rotationRad * 180 / Math.PI).toFixed(1)}°`)
       }
       
       // Color based on type
@@ -694,7 +717,9 @@ export default function Layout3DPreview({ layoutVersionId, lidarInstances = [], 
       addFixtureMesh()
 
       // Add 2D wireframe outline on ground plane - use actual DWG polygon if available
-      if (showWireframe) {
+      // Wireframes go to separate group so they can be toggled independently
+      if (showWireframe && wireframesGroupRef.current) {
+        const wireGroup = wireframesGroupRef.current
         let outlinePoints: THREE.Vector3[]
         
         // Check if we have polygon points from the DWG
@@ -714,7 +739,7 @@ export default function Layout3DPreview({ layoutVersionId, lidarInstances = [], 
           const outlineMaterial = new THREE.LineBasicMaterial({ color: 0x00ffff, linewidth: 2 }) // Cyan for actual DWG
           const outline = new THREE.Line(outlineGeometry, outlineMaterial)
           // No position offset or rotation needed - points are in world coords
-          group.add(outline)
+          wireGroup.add(outline)
         } else {
           // Fallback: simple rectangle based on footprint w/d
           outlinePoints = [
@@ -729,7 +754,7 @@ export default function Layout3DPreview({ layoutVersionId, lidarInstances = [], 
           const outline = new THREE.Line(outlineGeometry, outlineMaterial)
           outline.position.set(x, 0, z)
           outline.rotation.y = rotationRad
-          group.add(outline)
+          wireGroup.add(outline)
         }
 
         // Add center marker and direction indicator for 3D box position
@@ -738,7 +763,7 @@ export default function Layout3DPreview({ layoutVersionId, lidarInstances = [], 
         const marker = new THREE.Mesh(markerGeometry, markerMaterial)
         marker.position.set(x, 0.03, z)
         marker.rotation.x = -Math.PI / 2
-        group.add(marker)
+        wireGroup.add(marker)
 
         // Direction arrow from center
         const arrowPoints = [
@@ -750,7 +775,7 @@ export default function Layout3DPreview({ layoutVersionId, lidarInstances = [], 
         const arrow = new THREE.Line(arrowGeometry, arrowMaterial)
         arrow.position.set(x, 0, z)
         arrow.rotation.y = rotationRad
-        group.add(arrow)
+        wireGroup.add(arrow)
       }
     })
 
@@ -770,6 +795,20 @@ export default function Layout3DPreview({ layoutVersionId, lidarInstances = [], 
     }
 
   }, [layoutData, showWireframe, loadModel, customModels, loadSavedCameraView, scaleCorrection])
+
+  // Toggle fixtures layer visibility
+  useEffect(() => {
+    if (fixturesGroupRef.current) {
+      fixturesGroupRef.current.visible = showFixturesLayer
+    }
+  }, [showFixturesLayer])
+
+  // Toggle wireframes layer visibility
+  useEffect(() => {
+    if (wireframesGroupRef.current) {
+      wireframesGroupRef.current.visible = showWireframe
+    }
+  }, [showWireframe])
 
   // Render LiDAR devices in 3D
   useEffect(() => {
@@ -1165,6 +1204,18 @@ export default function Layout3DPreview({ layoutVersionId, lidarInstances = [], 
           {showLayersPanel && (
             <div className="absolute top-full right-0 mt-2 bg-gray-800/95 backdrop-blur border border-gray-700 rounded-lg shadow-xl p-3 min-w-[180px]">
               <div className="text-xs font-medium text-gray-300 mb-2">Layers</div>
+              <label className="flex items-center gap-2 py-1.5 px-2 rounded hover:bg-gray-700 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={showFixturesLayer}
+                  onChange={(e) => setShowFixturesLayer(e.target.checked)}
+                  className="rounded border-gray-600 bg-gray-700 text-green-500"
+                />
+                <span className="text-sm text-gray-300 flex items-center gap-1.5">
+                  {showFixturesLayer ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5 text-gray-500" />}
+                  Fixtures
+                </span>
+              </label>
               <label className="flex items-center gap-2 py-1.5 px-2 rounded hover:bg-gray-700 cursor-pointer">
                 <input
                   type="checkbox"

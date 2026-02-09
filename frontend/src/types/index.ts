@@ -8,6 +8,8 @@ export interface Venue {
   tileSize: number;
   createdAt: string;
   updatedAt: string;
+  scene_source?: 'manual' | 'dwg';
+  dwg_layout_version_id?: string;
 }
 
 export interface VenueObject {

@@ -11,6 +11,27 @@ interface VenueListItem {
   updatedAt: string
 }
 
+interface DwgBootstrapResult {
+  venueDefaults: {
+    width: number
+    depth: number
+    height: number
+    tileSize: number
+  }
+  objectsDraft: VenueObject[]
+  lidarDraft: unknown[]
+  transform: {
+    effectiveScale: number
+    centerOffset: { x: number; z: number }
+    bounds: { minX: number; maxX: number; minZ: number; maxZ: number }
+  }
+  dwgMetadata: {
+    layoutVersionId: string
+    importId: string
+    layoutName: string
+  }
+}
+
 interface VenueContextType {
   venue: Venue | null
   objects: VenueObject[]
@@ -23,6 +44,7 @@ interface VenueContextType {
   fetchVenueList: () => Promise<void>
   deleteVenue: (id: string) => Promise<void>
   createVenue: (name: string, width: number, depth: number, height: number, tileSize: number) => void
+  createVenueFromDwg: (layoutVersionId: string, venueName: string, scaleCorrection?: number, onLidarsLoaded?: (lidars: unknown[]) => void) => Promise<void>
   updateVenue: (updates: Partial<Venue>) => void
   loadVenue: (id: string, onPlacementsLoaded?: (placements: unknown[]) => void) => Promise<void>
   saveVenue: (placements?: unknown[]) => Promise<void>
@@ -131,6 +153,84 @@ export function VenueProvider({ children }: { children: ReactNode }) {
     setObjects([])
     setSelectedObjectId(null)
     addToast('success', `Created venue: ${name}`)
+  }, [addToast])
+
+  const createVenueFromDwg = useCallback(async (
+    layoutVersionId: string, 
+    venueName: string,
+    scaleCorrection: number = 1.0,
+    onLidarsLoaded?: (lidars: unknown[]) => void
+  ) => {
+    setIsLoading(true)
+    try {
+      // Step 1: Fetch DWG bootstrap data (STATELESS - doesn't create anything)
+      const bootstrapUrl = `/api/dwg/layout/${layoutVersionId}/as-venue-bootstrap?scaleCorrection=${scaleCorrection}`
+      console.log(`[DWG Venue Bootstrap] Calling: ${bootstrapUrl}`)
+      const bootstrapRes = await fetch(bootstrapUrl)
+      if (!bootstrapRes.ok) {
+        const err = await bootstrapRes.json().catch(() => ({}))
+        throw new Error(err.error || 'Failed to fetch DWG bootstrap data')
+      }
+      const bootstrap: DwgBootstrapResult = await bootstrapRes.json()
+      
+      // DEBUG: Log first 5 objects to compare with Layout3DPreview
+      console.log('[DWG Venue Bootstrap] Received objects:')
+      bootstrap.objectsDraft.slice(0, 5).forEach((obj, i) => {
+        console.log(`  Object #${i}: "${obj.name}" type=${obj.type}`)
+        console.log(`    position: x=${obj.position.x.toFixed(3)}, z=${obj.position.z.toFixed(3)}`)
+        console.log(`    scale: x=${obj.scale.x.toFixed(3)}, y=${obj.scale.y.toFixed(3)}, z=${obj.scale.z.toFixed(3)}`)
+        console.log(`    rotation: y=${(obj.rotation.y * 180 / Math.PI).toFixed(1)}°`)
+      })
+      console.log(`  Total objects: ${bootstrap.objectsDraft.length}`)
+      console.log(`  Venue dimensions: ${bootstrap.venueDefaults.width}m x ${bootstrap.venueDefaults.depth}m x ${bootstrap.venueDefaults.height}m`)
+      
+      // Step 2: Create a new venue with DWG metadata
+      const newVenueId = uuidv4()
+      const now = new Date().toISOString()
+      const newVenue: Venue = {
+        id: newVenueId,
+        name: venueName || bootstrap.dwgMetadata.layoutName || 'DWG Venue',
+        width: bootstrap.venueDefaults.width,
+        depth: bootstrap.venueDefaults.depth,
+        height: bootstrap.venueDefaults.height,
+        tileSize: bootstrap.venueDefaults.tileSize,
+        createdAt: now,
+        updatedAt: now,
+        scene_source: 'dwg',
+        dwg_layout_version_id: bootstrap.dwgMetadata.layoutVersionId,
+      }
+      
+      // Step 3: Update objects with the new venue ID and apply default colors
+      const venueObjects: VenueObject[] = bootstrap.objectsDraft.map(obj => ({
+        ...obj,
+        venueId: newVenueId,
+        color: obj.color || DEFAULT_OBJECT_COLORS[obj.type as keyof typeof DEFAULT_OBJECT_COLORS] || DEFAULT_OBJECT_COLORS.custom,
+      }))
+      
+      // Step 4: Set state (same as manual mode from this point)
+      setVenue(newVenue)
+      setObjects(venueObjects)
+      setSelectedObjectId(null)
+      setSelectedObjectIds(new Set())
+      
+      // Step 5: Notify about LiDAR placements if callback provided
+      if (onLidarsLoaded && bootstrap.lidarDraft.length > 0) {
+        // Update lidar placements with new venue ID
+        const lidarPlacements = bootstrap.lidarDraft.map((lidar) => ({
+          ...(lidar as Record<string, unknown>),
+          venueId: newVenueId,
+        }))
+        onLidarsLoaded(lidarPlacements)
+      }
+      
+      addToast('success', `Created venue from DWG: ${newVenue.name} (${venueObjects.length} objects)`)
+      
+    } catch (err) {
+      console.error('Failed to create venue from DWG:', err)
+      addToast('error', `Failed to create venue from DWG: ${err}`)
+    } finally {
+      setIsLoading(false)
+    }
   }, [addToast])
 
   const updateVenue = useCallback((updates: Partial<Venue>) => {
@@ -319,6 +419,7 @@ export function VenueProvider({ children }: { children: ReactNode }) {
       fetchVenueList,
       deleteVenue,
       createVenue,
+      createVenueFromDwg,
       updateVenue,
       loadVenue,
       saveVenue,

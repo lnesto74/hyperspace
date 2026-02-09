@@ -46,6 +46,8 @@ export default function venuesRoutes(db) {
           tileSize: venue.tile_size,
           createdAt: venue.created_at,
           updatedAt: venue.updated_at,
+          scene_source: venue.scene_source,
+          dwg_layout_version_id: venue.dwg_layout_version_id,
         },
         objects,
         placements,
@@ -99,6 +101,9 @@ export default function venuesRoutes(db) {
             depth: venue.depth || 15,
             height: venue.height || 4,
             tileSize: venue.tileSize || 1,
+            sceneSource: venue.scene_source || 'manual',
+            dwgLayoutVersionId: venue.dwg_layout_version_id || null,
+            dwgTransformJson: venue.dwg_transform_json || null,
             createdAt: new Date().toISOString(),
             updatedAt: new Date().toISOString(),
           });

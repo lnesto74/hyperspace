@@ -26,8 +26,12 @@ export function initDatabase() {
       depth REAL NOT NULL DEFAULT 15,
       height REAL NOT NULL DEFAULT 4,
       tile_size REAL NOT NULL DEFAULT 1,
+      scene_source TEXT NOT NULL DEFAULT 'manual',
+      dwg_layout_version_id TEXT DEFAULT NULL,
+      dwg_transform_json TEXT DEFAULT NULL,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (dwg_layout_version_id) REFERENCES dwg_layout_versions(id) ON DELETE SET NULL
     );
 
     -- Venue objects table
@@ -273,6 +277,27 @@ export function initDatabase() {
       ('hesai-xt32', 'Hesai XT32', 360, 31, 120, 1, '{"manufacturer":"Hesai","type":"spinning","channels":32}');
   `);
 
+  // Migration: Add DWG-related columns to venues table if they don't exist
+  try {
+    const venueColumns = db.prepare("PRAGMA table_info(venues)").all();
+    const columnNames = venueColumns.map(c => c.name);
+    
+    if (!columnNames.includes('scene_source')) {
+      db.exec("ALTER TABLE venues ADD COLUMN scene_source TEXT NOT NULL DEFAULT 'manual'");
+      console.log('📦 Migration: Added scene_source column to venues');
+    }
+    if (!columnNames.includes('dwg_layout_version_id')) {
+      db.exec("ALTER TABLE venues ADD COLUMN dwg_layout_version_id TEXT DEFAULT NULL");
+      console.log('📦 Migration: Added dwg_layout_version_id column to venues');
+    }
+    if (!columnNames.includes('dwg_transform_json')) {
+      db.exec("ALTER TABLE venues ADD COLUMN dwg_transform_json TEXT DEFAULT NULL");
+      console.log('📦 Migration: Added dwg_transform_json column to venues');
+    }
+  } catch (migrationErr) {
+    console.log('📦 Migration check completed (columns may already exist)');
+  }
+
   console.log('📦 Database initialized');
   return db;
 }
@@ -285,8 +310,8 @@ export const venueQueries = {
   
   create: (db, venue) => {
     const stmt = db.prepare(`
-      INSERT INTO venues (id, name, width, depth, height, tile_size, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO venues (id, name, width, depth, height, tile_size, scene_source, dwg_layout_version_id, dwg_transform_json, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     return stmt.run(
       venue.id,
@@ -295,6 +320,9 @@ export const venueQueries = {
       venue.depth,
       venue.height,
       venue.tileSize,
+      venue.sceneSource || 'manual',
+      venue.dwgLayoutVersionId || null,
+      venue.dwgTransformJson ? JSON.stringify(venue.dwgTransformJson) : null,
       venue.createdAt,
       venue.updatedAt
     );

@@ -176,6 +176,18 @@ export class SmartKpiService {
     let queueDepth = config.queueDepth;
     let serviceZoneDepth = config.serviceZoneDepth;
     
+    // Apply roiDimensions overrides if provided
+    if (options.roiDimensions) {
+      if (options.roiDimensions.service) {
+        serviceZoneDepth = options.roiDimensions.service.depth || serviceZoneDepth;
+        // Width will be applied per-cashier below
+      }
+      if (options.roiDimensions.queue) {
+        queueDepth = options.roiDimensions.queue.depth || queueDepth;
+      }
+      console.log(`[SmartKPI] Using custom dimensions: service depth=${serviceZoneDepth}m, queue depth=${queueDepth}m`);
+    }
+    
     if (options.sceneSize && options.sceneBounds) {
       // Calculate available space from checkout positions to scene edge
       // Checkouts are at specific Z positions, queue extends toward the scene edge
@@ -278,8 +290,22 @@ export class SmartKpiService {
         cashierDepth = Math.max(scale?.x || 1.5, scale?.z || 0.8);
       }
       
-      // Queue zone width (cashier width + small padding, no overlap with neighbors)
-      const queueWidth = cashierWidth + config.queueWidthPadding * 2;
+      // Queue zone width (use roiDimensions override if provided, otherwise cashier width + padding)
+      let actualQueueWidth = cashierWidth + config.queueWidthPadding * 2;
+      let actualServiceWidth = actualQueueWidth;
+      let serviceOffsetX = 0, serviceOffsetZ = 0;
+      let queueOffsetX = 0, queueOffsetZ = 0;
+      
+      if (options.roiDimensions?.service) {
+        if (options.roiDimensions.service.width) actualServiceWidth = options.roiDimensions.service.width;
+        serviceOffsetX = options.roiDimensions.service.offsetX || 0;
+        serviceOffsetZ = options.roiDimensions.service.offsetZ || 0;
+      }
+      if (options.roiDimensions?.queue) {
+        if (options.roiDimensions.queue.width) actualQueueWidth = options.roiDimensions.queue.width;
+        queueOffsetX = options.roiDimensions.queue.offsetX || 0;
+        queueOffsetZ = options.roiDimensions.queue.offsetZ || 0;
+      }
       
       // ROI rotation: the "depth" dimension should extend in the facing direction
       // In createRectangularRoi, depth extends in +Z before rotation
@@ -290,12 +316,12 @@ export class SmartKpiService {
       // Extra offset toward exit direction (-Z = 1 tile = 1 meter)
       const exitOffset = -1.0;
       
-      // Service zone (right at the counter, shifted 1m toward exit)
+      // Service zone (right at the counter, shifted 1m toward exit + user offsets)
       const serviceZone = this.createRectangularRoi({
         name: `${name} - Service`,
-        centerX: position.x + facingX * (cashierDepth / 2 + serviceZoneDepth / 2 + exitOffset),
-        centerZ: position.z + facingZ * (cashierDepth / 2 + serviceZoneDepth / 2 + exitOffset),
-        width: queueWidth,
+        centerX: position.x + facingX * (cashierDepth / 2 + serviceZoneDepth / 2 + exitOffset) + serviceOffsetX,
+        centerZ: position.z + facingZ * (cashierDepth / 2 + serviceZoneDepth / 2 + exitOffset) + serviceOffsetZ,
+        width: actualServiceWidth,
         depth: serviceZoneDepth,
         rotation: roiRotation,
         color: config.serviceColor,
@@ -310,12 +336,12 @@ export class SmartKpiService {
       });
       rois.push(serviceZone);
 
-      // Queue zone (in front of service zone, shifted 1m toward exit)
+      // Queue zone (in front of service zone, shifted 1m toward exit + user offsets)
       const queueZone = this.createRectangularRoi({
         name: `${name} - Queue`,
-        centerX: position.x + facingX * (cashierDepth / 2 + serviceZoneDepth + queueDepth / 2 + exitOffset),
-        centerZ: position.z + facingZ * (cashierDepth / 2 + serviceZoneDepth + queueDepth / 2 + exitOffset),
-        width: queueWidth,
+        centerX: position.x + facingX * (cashierDepth / 2 + serviceZoneDepth + queueDepth / 2 + exitOffset) + queueOffsetX,
+        centerZ: position.z + facingZ * (cashierDepth / 2 + serviceZoneDepth + queueDepth / 2 + exitOffset) + queueOffsetZ,
+        width: actualQueueWidth,
         depth: queueDepth,
         rotation: roiRotation,
         color: config.color,
@@ -585,32 +611,43 @@ export class SmartKpiService {
   /**
    * Get DWG layout data with fixtures transformed to Three.js scene coordinates
    * 
-   * Coordinate transformation (must match MainViewport.tsx DWG rendering):
+   * Coordinate transformation (must match dwgImport.js as-venue-bootstrap):
    * 1. DWG fixtures are in mm (pose2d.x, pose2d.y)
-   * 2. Convert to meters using unit_scale_to_m
-   * 3. Calculate center from FIXTURE BOUNDS (not full DWG bounds)
-   * 4. Center to origin (x - centerX, y - centerY)
-   * 
-   * NOTE: MainViewport uses fixture bounds to center, NOT the full DWG bounds!
+   * 2. Convert to meters using unit_scale_to_m * scaleCorrection
+   * 3. Calculate center from RAW DWG BOUNDS (not fixture bounds)
+   * 4. Apply shift to center on venue floor
    */
   getDwgLayoutFixtures(layoutId, venue) {
     const layout = this.db.prepare('SELECT * FROM dwg_layout_versions WHERE id = ?').get(layoutId);
     if (!layout) return null;
 
     const layoutData = JSON.parse(layout.layout_json);
-    const { fixtures, unit_scale_to_m: unitScale } = layoutData;
+    const { fixtures, unit_scale_to_m: unitScale, bounds: rawBounds } = layoutData;
 
     if (!fixtures || fixtures.length === 0) return { fixtures: [], layoutData };
 
-    // Calculate fixture bounds (EXACTLY like MainViewport.tsx)
-    // MainViewport checks footprint.points first, then falls back to pose2d +/- dimensions
+    // Get scaleCorrection from venue transform if available, default to 1.0
+    let scaleCorrection = 1.0;
+    if (venue.dwg_transform_json) {
+      try {
+        const transform = JSON.parse(venue.dwg_transform_json);
+        scaleCorrection = transform.scaleCorrection || 1.0;
+      } catch (e) {}
+    }
+    const effectiveScale = unitScale * scaleCorrection;
+
+    // Use RAW DWG bounds for center offset (SAME as dwgImport.js bootstrap)
+    const dwgBounds = rawBounds || { minX: 0, maxX: 20000, minY: 0, maxY: 15000 };
+    const centerX = ((dwgBounds.minX + dwgBounds.maxX) / 2) * effectiveScale;
+    const centerZ = ((dwgBounds.minY + dwgBounds.maxY) / 2) * effectiveScale;
+
+    // Calculate fixture bounds for venue sizing
     let fMinX = Infinity, fMaxX = -Infinity, fMinY = Infinity, fMaxY = -Infinity;
     fixtures.forEach(fixture => {
       const { footprint, pose2d } = fixture;
       const points = footprint?.points || [];
       
       if (points.length > 0) {
-        // Use footprint polygon points
         points.forEach(pt => {
           fMinX = Math.min(fMinX, pt.x);
           fMaxX = Math.max(fMaxX, pt.x);
@@ -618,7 +655,6 @@ export class SmartKpiService {
           fMaxY = Math.max(fMaxY, pt.y);
         });
       } else if (pose2d) {
-        // Fallback: use pose2d center +/- half dimensions
         const hw = (footprint?.w || 1000) / 2;
         const hd = (footprint?.d || 1000) / 2;
         fMinX = Math.min(fMinX, pose2d.x - hw);
@@ -628,31 +664,44 @@ export class SmartKpiService {
       }
     });
 
-    // Center offset from fixture bounds (same as MainViewport.tsx)
-    const centerX = ((fMinX + fMaxX) / 2) * unitScale;
-    const centerZ = ((fMinY + fMaxY) / 2) * unitScale;
+    // Calculate shift to center on venue floor (SAME as dwgImport.js bootstrap)
+    const contentCenterX = ((fMinX + fMaxX) / 2) * effectiveScale - centerX;
+    const contentCenterZ = ((fMinY + fMaxY) / 2) * effectiveScale - centerZ;
+    const venueFloorCenterX = venue.width / 2;
+    const venueFloorCenterZ = venue.depth / 2;
+    const shiftX = venueFloorCenterX - contentCenterX;
+    const shiftZ = venueFloorCenterZ - contentCenterZ;
 
-    console.log(`[SmartKPI] Fixture bounds: ${fMinX.toFixed(0)} to ${fMaxX.toFixed(0)} x ${fMinY.toFixed(0)} to ${fMaxY.toFixed(0)}`);
-    console.log(`[SmartKPI] Center offset: ${centerX.toFixed(2)}, ${centerZ.toFixed(2)}`);
+    console.log(`[SmartKPI] Raw DWG bounds: ${dwgBounds.minX?.toFixed(0)} to ${dwgBounds.maxX?.toFixed(0)} x ${dwgBounds.minY?.toFixed(0)} to ${dwgBounds.maxY?.toFixed(0)}`);
+    console.log(`[SmartKPI] Center offset: ${centerX.toFixed(2)}, ${centerZ.toFixed(2)}, effectiveScale: ${effectiveScale}`);
+    console.log(`[SmartKPI] Shift to venue floor: ${shiftX.toFixed(2)}, ${shiftZ.toFixed(2)}`);
 
-    // Transform fixtures to Three.js scene coordinates (centered at origin)
+    // Transform fixtures to Three.js scene coordinates (centered on venue floor)
     const transformedFixtures = fixtures.map(fixture => {
-      // Convert pose2d from mm to meters
-      const xMeters = fixture.pose2d.x * unitScale;
-      const yMeters = fixture.pose2d.y * unitScale;
-
-      // Center to origin (same as MainViewport: x * scale - centerX)
-      // DWG Y maps to Three.js Z (floor plane)
-      const sceneX = xMeters - centerX;
-      const sceneZ = yMeters - centerZ;
+      const points = fixture.footprint?.points || [];
+      let xRaw, zRaw;
+      
+      // Use centroid for polygon fixtures (same as bootstrap)
+      if (points.length >= 3) {
+        const sumX = points.reduce((sum, pt) => sum + pt.x, 0);
+        const sumY = points.reduce((sum, pt) => sum + pt.y, 0);
+        xRaw = (sumX / points.length) * effectiveScale - centerX;
+        zRaw = (sumY / points.length) * effectiveScale - centerZ;
+      } else {
+        xRaw = fixture.pose2d.x * effectiveScale - centerX;
+        zRaw = fixture.pose2d.y * effectiveScale - centerZ;
+      }
+      
+      // Apply shift to center on venue floor (SAME as bootstrap)
+      const sceneX = xRaw + shiftX;
+      const sceneZ = zRaw + shiftZ;
 
       // Get fixture dimensions in meters
-      const widthM = (fixture.footprint?.w || fixture.group_size?.w || 1000) * unitScale;
-      const depthM = (fixture.footprint?.d || fixture.group_size?.d || 1000) * unitScale;
+      const widthM = (fixture.footprint?.w || fixture.group_size?.w || 1000) * effectiveScale;
+      const depthM = (fixture.footprint?.d || fixture.group_size?.d || 1000) * effectiveScale;
 
       // Get fixture type from mapping
       const fixtureType = fixture.mapping?.type || 'unknown';
-      const fixtureAsset = fixture.mapping?.catalog_asset_id || fixtureType;
 
       return {
         id: fixture.id,
@@ -660,14 +709,14 @@ export class SmartKpiService {
         type: fixtureType,
         name: fixture.mapping?.custom_name || `${fixtureType}-${fixture.id.slice(-4)}`,
         position: { x: sceneX, y: 0, z: sceneZ },
-        rotation: { x: 0, y: (fixture.pose2d.rot_deg || 0) * Math.PI / 180, z: 0 },
+        rotation: { x: 0, y: -(fixture.pose2d.rot_deg || 0) * Math.PI / 180, z: 0 }, // Negate like bootstrap
         scale: { x: widthM, y: 1, z: depthM },
         source: 'dwg',
         originalFixture: fixture,
       };
     });
 
-    return { fixtures: transformedFixtures, layoutData, unitScale, centerX, centerZ };
+    return { fixtures: transformedFixtures, layoutData, effectiveScale, centerX, centerZ, shiftX, shiftZ };
   }
 
   /**
@@ -740,6 +789,9 @@ export class SmartKpiService {
 
   /**
    * Generate ROIs for a DWG layout template
+   * 
+   * IMPORTANT: For DWG venues, we use venue_objects (which have correct scale from bootstrap)
+   * instead of re-reading from DWG layout (which would have raw footprint dimensions).
    */
   generateRoisForDwgTemplate(layoutId, venueId, templateId, options = {}) {
     const template = SMART_KPI_TEMPLATES[templateId];
@@ -752,21 +804,24 @@ export class SmartKpiService {
       return { error: 'Venue not found', rois: [] };
     }
 
-    const dwgData = this.getDwgLayoutFixtures(layoutId, venue);
-    if (!dwgData) {
-      return { error: 'DWG layout not found', rois: [] };
+    // Use venue_objects instead of DWG layout fixtures
+    // venue_objects already have correct scale from the DWG bootstrap process
+    const venueObjects = this.getVenueObjects(venueId);
+    if (!venueObjects || venueObjects.length === 0) {
+      return { error: 'No venue objects found', rois: [] };
     }
+    
+    console.log(`[SmartKPI DWG] Using ${venueObjects.length} venue_objects for ROI generation`);
 
-    const matchingFixtures = this.findMatchingDwgFixtures(dwgData.fixtures, template);
+    const matchingFixtures = this.findMatchingDwgFixtures(venueObjects, template);
 
     if (matchingFixtures.length === 0) {
       return { error: 'No matching fixtures found', rois: [] };
     }
 
-    // Calculate scene size and bounds from fixture positions for DWG mode
-    const allFixtures = dwgData.fixtures;
+    // Calculate scene size and bounds from venue objects
     let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
-    allFixtures.forEach(f => {
+    venueObjects.forEach(f => {
       minX = Math.min(minX, f.position.x);
       maxX = Math.max(maxX, f.position.x);
       minZ = Math.min(minZ, f.position.z);
