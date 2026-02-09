@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Box, Package, Radar, Settings, Hexagon, FileUp, Target, Map } from 'lucide-react'
+import { Box, Package, Radar, Settings, Hexagon, FileUp, Target, Map, Play, X } from 'lucide-react'
 import { SidebarTab } from './AppShell'
 import VenuePanel from '../venue/VenuePanel'
 import VenueDwgPanel from '../venue/VenueDwgPanel'
@@ -7,6 +7,7 @@ import ObjectLibrary from '../objects/ObjectLibrary'
 import LidarNetworkPanel from '../lidar/LidarNetworkPanel'
 import RoiPanel from '../roi/RoiPanel'
 import WhiteLabelSettings from '../settings/WhiteLabelSettings'
+import SimulatorControl from '../settings/SimulatorControl'
 import { useVenue } from '../../context/VenueContext'
 
 interface SidebarProps {
@@ -27,6 +28,7 @@ const tabs: { id: SidebarTab; icon: typeof Box; label: string }[] = [
 export default function Sidebar({ activeTab, onTabChange, onOpenDwgImporter, onOpenLidarPlanner }: SidebarProps) {
   const { venue } = useVenue()
   const [showWhiteLabel, setShowWhiteLabel] = useState(false)
+  const [showSimulator, setShowSimulator] = useState(false)
 
   return (
     <div className="w-72 flex-shrink-0 h-full bg-panel-bg border-r border-border-dark flex flex-col overflow-hidden">
@@ -98,6 +100,13 @@ export default function Sidebar({ activeTab, onTabChange, onOpenDwgImporter, onO
               <Target className="w-4 h-4" />
             </button>
           )}
+          <button 
+            onClick={() => setShowSimulator(true)}
+            className="text-gray-400 hover:text-orange-400 transition-colors"
+            title="Edge Simulator Control"
+          >
+            <Play className="w-4 h-4" />
+          </button>
           <img 
             src="/assets/ulisse-logo.png" 
             alt="Ulisse" 
@@ -114,6 +123,21 @@ export default function Sidebar({ activeTab, onTabChange, onOpenDwgImporter, onO
           isOpen={showWhiteLabel}
           onClose={() => setShowWhiteLabel(false)}
         />
+      )}
+      
+      {/* Simulator Control Modal */}
+      {showSimulator && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
+          <div className="relative max-w-md w-full mx-4">
+            <button
+              onClick={() => setShowSimulator(false)}
+              className="absolute -top-2 -right-2 z-10 p-1 bg-gray-700 hover:bg-gray-600 rounded-full text-white"
+            >
+              <X className="w-4 h-4" />
+            </button>
+            <SimulatorControl />
+          </div>
+        </div>
       )}
     </div>
   )

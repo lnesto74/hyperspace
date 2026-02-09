@@ -2209,8 +2209,8 @@ export default function MainViewport({
       
       {/* 3D Canvas */}
       <div ref={containerRef} className="flex-1 relative">
-        {/* Floating Layers Panel - Top Right */}
-        <div className="absolute top-3 right-3 z-10">
+        {/* Floating Layers Panel - Top Left */}
+        <div className="absolute top-14 left-3 z-10">
           <button
             onClick={() => setShowLayersPanel(!showLayersPanel)}
             className={`p-2 rounded-lg shadow-lg transition-colors ${
@@ -2223,7 +2223,7 @@ export default function MainViewport({
             <Layers className="w-5 h-5" />
           </button>
           {showLayersPanel && (
-            <div className="absolute top-full right-0 mt-2 bg-gray-800/95 backdrop-blur border border-gray-700 rounded-lg shadow-xl p-3 min-w-[180px]">
+            <div className="absolute top-full left-0 mt-2 bg-gray-800/95 backdrop-blur border border-gray-700 rounded-lg shadow-xl p-3 min-w-[180px]">
               <div className="text-xs font-medium text-gray-300 mb-2">Layers</div>
               <label className="flex items-center gap-2 py-1.5 px-2 rounded hover:bg-gray-700 cursor-pointer">
                 <input

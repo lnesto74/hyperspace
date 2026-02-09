@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { Play, Square, RefreshCw, Users, Clock, Gauge, AlertCircle, CheckCircle2, Wifi, WifiOff } from 'lucide-react'
+import { Play, Square, RefreshCw, Users, Clock, Gauge, AlertCircle, CheckCircle2, Wifi, WifiOff, MapPin } from 'lucide-react'
 
 interface SimulatorConfig {
   targetPeopleCount: number
@@ -7,6 +7,14 @@ interface SimulatorConfig {
   frequencyHz: number
   simulationMode: string
   queueSpawnInterval: number
+  venueId?: string
+}
+
+interface Venue {
+  id: string
+  name: string
+  width: number
+  depth: number
 }
 
 interface SimulatorStatus {
@@ -33,6 +41,19 @@ export function SimulatorControl() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [configDirty, setConfigDirty] = useState(false)
+  const [venues, setVenues] = useState<Venue[]>([])
+  const [selectedVenueId, setSelectedVenueId] = useState<string>('')
+
+  // Fetch available venues
+  const fetchVenues = useCallback(async () => {
+    try {
+      const res = await fetch(`${API_BASE}/api/venues`)
+      const data = await res.json()
+      setVenues(data)
+    } catch (err) {
+      console.error('Failed to fetch venues:', err)
+    }
+  }, [])
 
   const fetchStatus = useCallback(async () => {
     try {
@@ -47,19 +68,24 @@ export function SimulatorControl() {
           simulationMode: data.config.simulationMode || 'mixed',
           queueSpawnInterval: data.config.queueSpawnInterval || 6,
         })
+        // Set selected venue from edge server config
+        if (data.config.venueId && !selectedVenueId) {
+          setSelectedVenueId(data.config.venueId)
+        }
       }
       setError(null)
     } catch (err) {
       setError('Failed to connect to edge server')
       setStatus({ connected: false, isRunning: false, activePeopleCount: 0, uptime: 0, tracksSent: 0 })
     }
-  }, [configDirty])
+  }, [configDirty, selectedVenueId])
 
   useEffect(() => {
+    fetchVenues()
     fetchStatus()
     const interval = setInterval(fetchStatus, 3000)
     return () => clearInterval(interval)
-  }, [fetchStatus])
+  }, [fetchStatus, fetchVenues])
 
   const handleStart = async () => {
     setLoading(true)
@@ -88,13 +114,22 @@ export function SimulatorControl() {
     setConfigDirty(true)
   }
 
+  const handleVenueChange = (venueId: string) => {
+    setSelectedVenueId(venueId)
+    setConfigDirty(true)
+  }
+
   const handleApplyConfig = async () => {
     setLoading(true)
     try {
+      const configToSend = {
+        ...config,
+        venueId: selectedVenueId,
+      }
       await fetch(`${API_BASE}/api/edge-simulator/config`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(config),
+        body: JSON.stringify(configToSend),
       })
       setConfigDirty(false)
       await fetchStatus()
@@ -235,6 +270,25 @@ export function SimulatorControl() {
               className="w-full mt-1 px-2 py-1 bg-gray-700 border border-gray-600 rounded text-white text-sm"
             />
           </div>
+        </div>
+
+        {/* Venue Selector */}
+        <div>
+          <label className="text-xs text-gray-400 flex items-center gap-1">
+            <MapPin className="w-3 h-3" /> Target Venue
+          </label>
+          <select
+            value={selectedVenueId}
+            onChange={(e) => handleVenueChange(e.target.value)}
+            className="w-full mt-1 px-2 py-1 bg-gray-700 border border-gray-600 rounded text-white text-sm"
+          >
+            <option value="">Select a venue...</option>
+            {venues.map(v => (
+              <option key={v.id} value={v.id}>
+                {v.name} ({v.width}m × {v.depth}m)
+              </option>
+            ))}
+          </select>
         </div>
 
         <div>

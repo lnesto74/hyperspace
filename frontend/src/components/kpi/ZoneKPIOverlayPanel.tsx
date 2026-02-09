@@ -71,7 +71,7 @@ export default function ZoneKPIOverlayPanel({ onZoneClick }: ZoneKPIOverlayPanel
   }
 
   return (
-    <div className="absolute top-4 right-4 z-20 flex gap-3">
+    <div className="absolute top-14 right-4 z-20 flex gap-3">
       {/* Category Filter Pills - horizontal row on left */}
       {availableCategories.length > 1 && (
         <div className="flex flex-col gap-1 pt-1">
@@ -108,7 +108,7 @@ export default function ZoneKPIOverlayPanel({ onZoneClick }: ZoneKPIOverlayPanel
       )}
 
       {/* KPI Cards column - fixed width */}
-      <div className="flex flex-col gap-2 max-h-[calc(100vh-120px)] overflow-y-auto pr-1 w-[168px]">
+      <div className="flex flex-col gap-2 max-h-[calc(100vh-200px)] overflow-y-auto pr-1 w-[168px]">
         {filteredRegions.map((roi) => (
           <ZoneKPIIndicator
             key={roi.id}

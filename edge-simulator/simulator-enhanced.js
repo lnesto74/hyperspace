@@ -158,14 +158,55 @@ class EnhancedLidarSimulator {
   }
 
   spawnRandomWalker() {
+    // Build obstacles from venue objects
+    const obstacles = (this.geometry.objects || []).map(obj => ({
+      x: obj.position?.x || obj.x || 0,
+      z: obj.position?.z || obj.z || 0,
+      width: obj.scale?.x || obj.width || 1,
+      depth: obj.scale?.z || obj.depth || 1
+    }))
+    
+    // Find entrance objects (type: 'entrance') - these are the actual entry points
+    const entrances = (this.geometry.objects || [])
+      .filter(obj => obj.type === 'entrance')
+      .map(obj => ({
+        x: obj.position?.x || obj.x || 0,
+        z: obj.position?.z || obj.z || 0,
+        width: obj.scale?.x || obj.width || 3,
+        depth: obj.scale?.z || obj.depth || 3
+      }))
+    
+    console.log(`[Simulator] Found ${entrances.length} entrance objects`)
+    
+    // Calculate actual bounds from objects if available
+    let boundsMinX = 0, boundsMinZ = 0
+    let boundsMaxX = this.geometry.venue.width
+    let boundsMaxZ = this.geometry.venue.depth
+    
+    if (this.geometry.objects && this.geometry.objects.length > 0) {
+      const positions = this.geometry.objects.map(o => o.position || { x: o.x || 0, z: o.z || 0 })
+      boundsMinX = Math.min(...positions.map(p => p.x)) - 5
+      boundsMaxX = Math.max(...positions.map(p => p.x)) + 5
+      boundsMinZ = Math.min(...positions.map(p => p.z)) - 5
+      boundsMaxZ = Math.max(...positions.map(p => p.z)) + 5
+    }
+    
     const agent = new RandomWalkAgent(
       this.nextAgentId++,
       DEVICE_ID,
       this.geometry.venue.width,
-      this.geometry.venue.depth
+      this.geometry.venue.depth,
+      {
+        obstacles,
+        entrances,
+        boundsMinX,
+        boundsMinZ,
+        boundsMaxX,
+        boundsMaxZ
+      }
     )
     this.agents.push(agent)
-    console.log(`[Simulator] Spawned random walker ${agent.id}`)
+    console.log(`[Simulator] Spawned random walker ${agent.id} with ${obstacles.length} obstacles`)
   }
 
   spawnQueueAgent() {
