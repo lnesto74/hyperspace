@@ -291,6 +291,70 @@ app.get('/api/edge-simulator/debug/agents', async (req, res) => {
   }
 });
 
+// ========== CHECKOUT MANAGER PROXY ENDPOINTS ==========
+
+// Get checkout status for all lanes
+app.get('/api/edge-sim/checkout/status', async (req, res) => {
+  try {
+    const response = await fetch(`${EDGE_SERVER_URL}/api/sim/control/checkout/status`);
+    const data = await response.json();
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Set lane state (open/close)
+app.post('/api/edge-sim/checkout/set_lane_state', async (req, res) => {
+  try {
+    const response = await fetch(`${EDGE_SERVER_URL}/api/sim/control/checkout/set_lane_state`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(req.body),
+    });
+    const data = await response.json();
+    console.log('🎯 Checkout lane state change:', req.body, '->', data);
+    res.json(data);
+  } catch (err) {
+    console.error('❌ Failed to set lane state:', err.message);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// Update queue pressure thresholds
+app.post('/api/edge-sim/checkout/thresholds', async (req, res) => {
+  try {
+    const response = await fetch(`${EDGE_SERVER_URL}/api/sim/control/checkout/thresholds`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(req.body),
+    });
+    const data = await response.json();
+    console.log('⚙️ Checkout thresholds updated:', req.body);
+    res.json(data);
+  } catch (err) {
+    console.error('❌ Failed to update thresholds:', err.message);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// Clear manual override for a lane
+app.post('/api/edge-sim/checkout/clear_override', async (req, res) => {
+  try {
+    const response = await fetch(`${EDGE_SERVER_URL}/api/sim/control/checkout/clear_override`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(req.body),
+    });
+    const data = await response.json();
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// ========== END CHECKOUT MANAGER PROXY ==========
+
 // Start server
 httpServer.listen(PORT, () => {
   console.log(`
