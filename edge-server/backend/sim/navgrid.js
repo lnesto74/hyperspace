@@ -219,6 +219,13 @@ export class NavGrid {
         );
         
         if (!existing) {
+          // Debug: log raw vertices to check format
+          const qV = queueRoi.vertices || [];
+          const sV = serviceRoi.vertices || [];
+          if (qV.length > 0) {
+            console.log(`[NavGrid DEBUG] Queue ROI "${queueRoi.name}" vertex[0]:`, JSON.stringify(qV[0]));
+          }
+          
           this.cashiers.push({
             x: serviceCenter.x,
             z: serviceCenter.z,
@@ -226,8 +233,10 @@ export class NavGrid {
             name: prefix,
             queueCenter,
             serviceCenter,
+            queueRoiVertices: qV,
+            serviceRoiVertices: sV,
           });
-          console.log(`[NavGrid] Added lane "${prefix}" from ROIs: service=(${serviceCenter.x.toFixed(1)}, ${serviceCenter.z.toFixed(1)})`);
+          console.log(`[NavGrid] Added lane "${prefix}" from ROIs: service=(${serviceCenter.x.toFixed(1)}, ${serviceCenter.z.toFixed(1)}), queueVertices=${qV.length}, serviceVertices=${sV.length}`);
         }
       }
     }

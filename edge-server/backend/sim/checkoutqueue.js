@@ -39,6 +39,30 @@ export class CheckoutQueueSubsystem {
     
     // Reference to lane states (set by simulator)
     this.laneStates = null;
+    
+    // Reference to all agents (set by simulator for position-based counting)
+    this.allAgents = null;
+  }
+  
+  // Set reference to all agents for position-based queue counting
+  setAllAgents(agents) {
+    this.allAgents = agents;
+  }
+  
+  // Point-in-polygon test (ray casting algorithm)
+  isPointInPolygon(x, z, vertices) {
+    if (!vertices || vertices.length < 3) return false;
+    
+    let inside = false;
+    for (let i = 0, j = vertices.length - 1; i < vertices.length; j = i++) {
+      const xi = vertices[i].x, zi = vertices[i].z || vertices[i].y;
+      const xj = vertices[j].x, zj = vertices[j].z || vertices[j].y;
+      
+      if (((zi > z) !== (zj > z)) && (x < (xj - xi) * (z - zi) / (zj - zi) + xi)) {
+        inside = !inside;
+      }
+    }
+    return inside;
   }
   
   // Set lane states reference (called by simulator)
@@ -222,6 +246,17 @@ export class CheckoutQueueSubsystem {
   }
 
   /**
+   * Mark agent as arrived at queue position (called when agent transitions to IN_QUEUE state)
+   */
+  setAgentInQueue(agentId) {
+    const data = this.agents.get(agentId);
+    if (data && data.state === QUEUE_STATE.WALKING_TO_QUEUE) {
+      data.state = QUEUE_STATE.IN_QUEUE;
+      console.log(`[Queue] Agent ${agentId} arrived at queue position (lane ${data.queueIdx})`);
+    }
+  }
+
+  /**
    * Start service timer
    */
   startService(agentId, agent) {
@@ -325,29 +360,40 @@ export class CheckoutQueueSubsystem {
   }
   
   /**
-   * Get queue info for a specific lane
+   * Get queue info for a specific lane - REALISTIC counting
+   * Only counts agents that have actually arrived at queue/service position
    * @param {number} laneId - Lane index
-   * @returns {Array|null} Array of agent IDs in queue (including service), or null if invalid
+   * @returns {Array|null} Array of agent IDs physically in queue/service area
    */
   getQueueInfo(laneId) {
     if (laneId < 0 || laneId >= this.queues.length) return null;
+    
     const queue = this.queues[laneId];
-    // Return all agents: one in service + those waiting
-    const agents = [...queue.queueAgents];
-    if (queue.serviceAgent !== null) {
-      agents.unshift(queue.serviceAgent);
+    const agentsInZone = [];
+    
+    // Count agents that are IN_QUEUE or SERVICE state for THIS lane
+    // These states mean the agent has physically arrived at the queue position
+    for (const [agentId, agentData] of this.agents.entries()) {
+      if (agentData.queueIdx !== laneId) continue;
+      
+      // Only count if agent has arrived (IN_QUEUE or IN_SERVICE state)
+      if (agentData.state === QUEUE_STATE.IN_QUEUE || 
+          agentData.state === QUEUE_STATE.IN_SERVICE) {
+        agentsInZone.push(agentId);
+      }
     }
-    return agents;
+    
+    return agentsInZone;
   }
   
   /**
-   * Get total queue count across all lanes
+   * Get total queue count across all lanes - POSITION-BASED
    */
   getTotalQueueCount() {
     let total = 0;
-    for (const queue of this.queues) {
-      total += queue.queueAgents.length;
-      if (queue.serviceAgent !== null) total++;
+    for (let i = 0; i < this.queues.length; i++) {
+      const info = this.getQueueInfo(i);
+      total += info ? info.length : 0;
     }
     return total;
   }

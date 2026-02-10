@@ -170,7 +170,8 @@ export class AgentV2 {
         break;
         
       case STATE.IN_QUEUE:
-        // Just wait - handled in update
+        // Notify queue subsystem that agent has arrived at queue position
+        this.queueManager.setAgentInQueue(this.id);
         this.speed = 0;
         break;
         

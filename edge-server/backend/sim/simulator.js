@@ -113,6 +113,9 @@ export class SimulatorV2 {
       this.queueManager.setLaneStates(this.laneStates);
     }
     
+    // Pass agent list reference for position-based queue counting
+    this.queueManager.setAllAgents(this.agents);
+    
     this.initialized = true;
     console.log('[SimV2] Initialization complete');
     console.log('[SimV2] NavGrid zones:', this.navGrid.zoneBounds);
