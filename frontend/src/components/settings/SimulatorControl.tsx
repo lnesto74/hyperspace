@@ -1,6 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
 import { Play, Square, RefreshCw, Users, Clock, Gauge, AlertCircle, CheckCircle2, Wifi, WifiOff, MapPin, UserCheck, Coffee, AlertTriangle } from 'lucide-react'
-import { CheckoutManager } from './CheckoutManager'
 
 interface SimulatorConfig {
   targetPeopleCount: number
@@ -15,10 +14,6 @@ interface SimulatorConfig {
   cashierBreakProb: number
   laneOpenConfirmSec: number
   enableIdConfusion: boolean
-  // Checkout Manager settings
-  enableCheckoutManager: boolean
-  queuePressureThreshold: number
-  inflowRateThreshold: number
 }
 
 interface Venue {
@@ -54,10 +49,6 @@ export function SimulatorControl() {
     cashierBreakProb: 15,
     laneOpenConfirmSec: 120,
     enableIdConfusion: false,
-    // Checkout Manager defaults
-    enableCheckoutManager: false,
-    queuePressureThreshold: 5,
-    inflowRateThreshold: 10,
   })
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -94,10 +85,6 @@ export function SimulatorControl() {
           cashierBreakProb: data.config.cashierBreakProb || 15,
           laneOpenConfirmSec: data.config.laneOpenConfirmSec || 120,
           enableIdConfusion: data.config.enableIdConfusion ?? false,
-          // Checkout Manager settings
-          enableCheckoutManager: data.config.enableCheckoutManager ?? false,
-          queuePressureThreshold: data.config.queuePressureThreshold || 5,
-          inflowRateThreshold: data.config.inflowRateThreshold || 10,
         })
         // Set selected venue from edge server config
         if (data.config.venueId && !selectedVenueId) {
@@ -125,7 +112,8 @@ export function SimulatorControl() {
       const selectedVenue = venues.find(v => v.id === selectedVenueId)
       const configToSend = {
         ...config,
-        venueId: selectedVenueId,
+        // Only send venueId if user has selected one, otherwise keep edge server's existing config
+        ...(selectedVenueId && { venueId: selectedVenueId }),
         ...(selectedVenue && {
           venueWidth: selectedVenue.width,
           venueDepth: selectedVenue.depth,
@@ -175,7 +163,8 @@ export function SimulatorControl() {
       const selectedVenue = venues.find(v => v.id === selectedVenueId)
       const configToSend = {
         ...config,
-        venueId: selectedVenueId,
+        // Only send venueId if user has selected one, otherwise keep edge server's existing config
+        ...(selectedVenueId && { venueId: selectedVenueId }),
         // Include venue dimensions so edge server can properly initialize
         ...(selectedVenue && {
           venueWidth: selectedVenue.width,
@@ -437,12 +426,6 @@ export function SimulatorControl() {
             </div>
           )}
         </div>
-
-        {/* Checkout Manager Panel */}
-        <CheckoutManager
-          enabled={config.enableCheckoutManager}
-          onToggle={(enabled) => handleConfigChange('enableCheckoutManager', enabled)}
-        />
 
         <button
           onClick={handleApplyConfig}
