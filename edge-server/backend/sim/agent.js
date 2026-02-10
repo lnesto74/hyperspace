@@ -29,7 +29,7 @@ export const STATE = {
 export { QUEUE_STATE };
 
 export class AgentV2 {
-  constructor(id, navGrid, pathPlanner, gateManager, antiGlitch, queueManager, rng) {
+  constructor(id, navGrid, pathPlanner, gateManager, antiGlitch, queueManager, rng, pressureConfig = {}) {
     this.id = id;
     this.navGrid = navGrid;
     this.pathPlanner = pathPlanner;
@@ -38,13 +38,20 @@ export class AgentV2 {
     this.queueManager = queueManager;
     this.rng = rng;
     
+    // Queue pressure multipliers (for KPI-driven simulation)
+    const checkoutProbMult = pressureConfig.checkoutProbMultiplier || 1.0;
+    const browsingSpeedMult = pressureConfig.browsingSpeedMultiplier || 1.0;
+    
     this.persona = selectPersona(rng);
     const cfg = SIM_CONFIG.personas[this.persona];
     
     this.baseSpeed = rng.range(cfg.speedRange[0], cfg.speedRange[1]);
     this.numStops = rng.rangeInt(cfg.stopsRange[0], cfg.stopsRange[1]);
-    this.targetStayTime = rng.range(cfg.stayTimeMinRange[0], cfg.stayTimeMinRange[1]) * 60;
-    this.willCheckout = rng.next() < cfg.checkoutProb;
+    // Apply browsing speed multiplier: higher = less time browsing = faster to checkout
+    this.targetStayTime = rng.range(cfg.stayTimeMinRange[0], cfg.stayTimeMinRange[1]) * 60 / browsingSpeedMult;
+    // Apply checkout probability multiplier: higher = more likely to checkout
+    const adjustedCheckoutProb = Math.min(1.0, cfg.checkoutProb * checkoutProbMult);
+    this.willCheckout = rng.next() < adjustedCheckoutProb;
     
     this.x = navGrid.entrancePos.x;
     this.z = navGrid.entrancePos.z;

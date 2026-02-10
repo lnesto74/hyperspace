@@ -219,7 +219,11 @@ export class SimulatorV2 {
       this.gateManager,
       this.antiGlitch,
       this.queueManager,
-      this.rng
+      this.rng,
+      {
+        checkoutProbMultiplier: this.config.checkoutProbMultiplier || 1.0,
+        browsingSpeedMultiplier: this.config.browsingSpeedMultiplier || 1.0,
+      }
     );
     
     this.agents.push(agent);

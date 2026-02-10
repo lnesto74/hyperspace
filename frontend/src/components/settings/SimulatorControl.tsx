@@ -17,6 +17,10 @@ interface SimulatorConfig {
   // Checkout Manager settings
   enableCheckoutManager?: boolean
   queuePressureThreshold?: number
+  // Queue Pressure Controls (for KPI-driven simulation)
+  checkoutProbMultiplier?: number
+  browsingSpeedMultiplier?: number
+  arrivalRateMultiplier?: number
 }
 
 interface LaneStatus {
@@ -115,6 +119,10 @@ export function SimulatorControl() {
           // Checkout Manager settings
           enableCheckoutManager: data.config.enableCheckoutManager ?? false,
           queuePressureThreshold: data.config.queuePressureThreshold || 5,
+          // Queue Pressure Controls
+          checkoutProbMultiplier: data.config.checkoutProbMultiplier || 1.0,
+          browsingSpeedMultiplier: data.config.browsingSpeedMultiplier || 1.0,
+          arrivalRateMultiplier: data.config.arrivalRateMultiplier || 1.0,
         })
         // Set selected venue from edge server config
         if (data.config.venueId && !selectedVenueId) {
@@ -528,6 +536,65 @@ export function SimulatorControl() {
                     className="w-full mt-1 px-2 py-1 bg-gray-700 border border-gray-600 rounded text-white text-sm"
                   />
                   <p className="text-xs text-gray-500 mt-1">Suggest opening lane when avg queue &gt; this</p>
+                </div>
+
+                {/* Queue Pressure Controls */}
+                <div className="border-t border-gray-600 pt-2 mt-2">
+                  <div className="text-xs text-gray-400 mb-2 flex items-center gap-1">
+                    <Gauge className="w-3 h-3" /> Queue Pressure Controls
+                  </div>
+                  
+                  {/* Checkout Probability Multiplier */}
+                  <div className="mb-2">
+                    <div className="flex justify-between text-xs">
+                      <span className="text-gray-500">Checkout Rate</span>
+                      <span className="text-blue-400">{((config.checkoutProbMultiplier || 1) * 100).toFixed(0)}%</span>
+                    </div>
+                    <input
+                      type="range"
+                      min={50}
+                      max={200}
+                      step={10}
+                      value={(config.checkoutProbMultiplier || 1) * 100}
+                      onChange={(e) => handleConfigChange('checkoutProbMultiplier', parseInt(e.target.value) / 100)}
+                      className="w-full h-1 bg-gray-600 rounded-lg appearance-none cursor-pointer accent-blue-500"
+                    />
+                  </div>
+
+                  {/* Browsing Speed Multiplier */}
+                  <div className="mb-2">
+                    <div className="flex justify-between text-xs">
+                      <span className="text-gray-500">Browsing Speed</span>
+                      <span className="text-amber-400">{((config.browsingSpeedMultiplier || 1) * 100).toFixed(0)}%</span>
+                    </div>
+                    <input
+                      type="range"
+                      min={50}
+                      max={300}
+                      step={10}
+                      value={(config.browsingSpeedMultiplier || 1) * 100}
+                      onChange={(e) => handleConfigChange('browsingSpeedMultiplier', parseInt(e.target.value) / 100)}
+                      className="w-full h-1 bg-gray-600 rounded-lg appearance-none cursor-pointer accent-amber-500"
+                    />
+                  </div>
+
+                  {/* Arrival Rate Multiplier */}
+                  <div className="mb-2">
+                    <div className="flex justify-between text-xs">
+                      <span className="text-gray-500">Arrival Rate</span>
+                      <span className="text-green-400">{((config.arrivalRateMultiplier || 1) * 100).toFixed(0)}%</span>
+                    </div>
+                    <input
+                      type="range"
+                      min={50}
+                      max={300}
+                      step={10}
+                      value={(config.arrivalRateMultiplier || 1) * 100}
+                      onChange={(e) => handleConfigChange('arrivalRateMultiplier', parseInt(e.target.value) / 100)}
+                      className="w-full h-1 bg-gray-600 rounded-lg appearance-none cursor-pointer accent-green-500"
+                    />
+                  </div>
+                  <p className="text-xs text-gray-500">Adjust to simulate different traffic patterns</p>
                 </div>
 
                 {/* Lane Control Panel - Only show when simulation is running */}

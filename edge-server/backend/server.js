@@ -49,6 +49,10 @@ const defaultConfig = {
   // Checkout Manager settings
   enableCheckoutManager: false, // Manual lane control (false = auto cashier scheduling)
   queuePressureThreshold: 5, // Suggest opening lane when avg queue > this
+  // Queue Pressure Controls (for KPI-driven simulation)
+  checkoutProbMultiplier: 1.0, // Multiplier for checkout probability (1.0 = default, 2.0 = double checkout rate)
+  browsingSpeedMultiplier: 1.0, // Multiplier for browsing speed (1.0 = default, 2.0 = finish browsing 2x faster)
+  arrivalRateMultiplier: 1.0, // Multiplier for arrival rate (1.0 = default, 2.0 = double arrivals)
 };
 
 // SimulatorV2 instance
@@ -962,10 +966,12 @@ const startSimulation = async () => {
 
       // ========== V2 SIMULATION ==========
       if (config.useSimV2 && simulatorV2) {
-        // Spawn new agents if below target
+        // Spawn new agents if below target (apply arrival rate multiplier)
         const activeCount = simulatorV2.getActiveCount();
-        if (activeCount < config.targetPeopleCount) {
-          const spawnChance = Math.min(0.5, (config.targetPeopleCount - activeCount) / config.targetPeopleCount);
+        const arrivalMultiplier = config.arrivalRateMultiplier || 1.0;
+        const effectiveTarget = Math.floor(config.targetPeopleCount * arrivalMultiplier);
+        if (activeCount < effectiveTarget) {
+          const spawnChance = Math.min(0.5, (effectiveTarget - activeCount) / effectiveTarget) * arrivalMultiplier;
           if (Math.random() < spawnChance * dt * 2) {
             simulatorV2.spawnAgent();
           }
