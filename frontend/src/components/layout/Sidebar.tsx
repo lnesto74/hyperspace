@@ -128,7 +128,7 @@ export default function Sidebar({ activeTab, onTabChange, onOpenDwgImporter, onO
       {/* Simulator Control Modal */}
       {showSimulator && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
-          <div className="relative max-w-md w-full mx-4">
+          <div className="relative max-w-4xl w-full mx-4">
             <button
               onClick={() => setShowSimulator(false)}
               className="absolute -top-2 -right-2 z-10 p-1 bg-gray-700 hover:bg-gray-600 rounded-full text-white"
