@@ -53,6 +53,9 @@ const defaultConfig = {
   checkoutProbMultiplier: 1.0, // Multiplier for checkout probability (1.0 = default, 2.0 = double checkout rate)
   browsingSpeedMultiplier: 1.0, // Multiplier for browsing speed (1.0 = default, 2.0 = finish browsing 2x faster)
   arrivalRateMultiplier: 1.0, // Multiplier for arrival rate (1.0 = default, 2.0 = double arrivals)
+  // Wait time thresholds (minutes) for queue visualization colors
+  waitTimeWarningMin: 2, // Green -> Orange threshold
+  waitTimeCriticalMin: 5, // Orange -> Red threshold
 };
 
 // SimulatorV2 instance

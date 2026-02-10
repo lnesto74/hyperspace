@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { Play, Square, RefreshCw, Users, Clock, Gauge, AlertCircle, CheckCircle2, Wifi, WifiOff, MapPin, UserCheck, Coffee, AlertTriangle, ShoppingCart, ToggleLeft, ToggleRight } from 'lucide-react'
+import { QueueCircles, QueuedPerson } from './QueueCircles'
 
 interface SimulatorConfig {
   targetPeopleCount: number
@@ -21,6 +22,9 @@ interface SimulatorConfig {
   checkoutProbMultiplier?: number
   browsingSpeedMultiplier?: number
   arrivalRateMultiplier?: number
+  // Wait time thresholds (minutes)
+  waitTimeWarningMin?: number
+  waitTimeCriticalMin?: number
 }
 
 interface LaneStatus {
@@ -28,6 +32,7 @@ interface LaneStatus {
   desiredState: 'open' | 'closed'
   status: 'OPEN' | 'CLOSED' | 'OPENING' | 'CLOSING'
   queueCount: number
+  queuedPeople?: QueuedPerson[]
 }
 
 interface CheckoutStatus {
@@ -123,6 +128,9 @@ export function SimulatorControl() {
           checkoutProbMultiplier: data.config.checkoutProbMultiplier || 1.0,
           browsingSpeedMultiplier: data.config.browsingSpeedMultiplier || 1.0,
           arrivalRateMultiplier: data.config.arrivalRateMultiplier || 1.0,
+          // Wait time thresholds
+          waitTimeWarningMin: data.config.waitTimeWarningMin || 2,
+          waitTimeCriticalMin: data.config.waitTimeCriticalMin || 5,
         })
         // Set selected venue from edge server config
         if (data.config.venueId && !selectedVenueId) {
@@ -538,6 +546,51 @@ export function SimulatorControl() {
                   <p className="text-xs text-gray-500 mt-1">Suggest opening lane when avg queue &gt; this</p>
                 </div>
 
+                {/* Wait Time Thresholds */}
+                <div className="bg-gray-700/30 rounded p-2 mt-2">
+                  <div className="text-xs text-gray-400 mb-2 flex items-center gap-1">
+                    <Clock className="w-3 h-3" /> Wait Time Colors
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <div className="flex items-center gap-1 text-xs">
+                        <div className="w-2 h-2 rounded-full bg-green-500" />
+                        <span className="text-gray-500">→</span>
+                        <div className="w-2 h-2 rounded-full bg-amber-500" />
+                      </div>
+                      <div className="flex items-center gap-1 mt-1">
+                        <input
+                          type="number"
+                          min={1}
+                          max={10}
+                          value={config.waitTimeWarningMin || 2}
+                          onChange={(e) => handleConfigChange('waitTimeWarningMin', parseInt(e.target.value) || 2)}
+                          className="w-12 px-1 py-0.5 bg-gray-700 border border-gray-600 rounded text-white text-xs text-center"
+                        />
+                        <span className="text-xs text-gray-500">min</span>
+                      </div>
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-1 text-xs">
+                        <div className="w-2 h-2 rounded-full bg-amber-500" />
+                        <span className="text-gray-500">→</span>
+                        <div className="w-2 h-2 rounded-full bg-red-500" />
+                      </div>
+                      <div className="flex items-center gap-1 mt-1">
+                        <input
+                          type="number"
+                          min={1}
+                          max={30}
+                          value={config.waitTimeCriticalMin || 5}
+                          onChange={(e) => handleConfigChange('waitTimeCriticalMin', parseInt(e.target.value) || 5)}
+                          className="w-12 px-1 py-0.5 bg-gray-700 border border-gray-600 rounded text-white text-xs text-center"
+                        />
+                        <span className="text-xs text-gray-500">min</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
                 {/* Queue Pressure Controls */}
                 <div className="border-t border-gray-600 pt-2 mt-2">
                   <div className="text-xs text-gray-400 mb-2 flex items-center gap-1">
@@ -628,42 +681,48 @@ export function SimulatorControl() {
                       </div>
                     </div>
 
-                    {/* Lane List */}
-                    <div className="space-y-1 max-h-40 overflow-y-auto">
+                    {/* Lane List with Visual Circles */}
+                    <div className="space-y-1.5 max-h-48 overflow-y-auto">
                       {checkoutStatus.lanes.map((lane) => (
                         <div 
                           key={lane.laneId} 
-                          className="flex items-center justify-between bg-gray-700/50 rounded px-2 py-1"
+                          className="bg-gray-700/50 rounded px-2 py-1.5"
                         >
-                          <div className="flex items-center gap-2">
-                            <span className="text-xs text-gray-400">Lane {lane.laneId}</span>
-                            <span className={`text-xs px-1.5 py-0.5 rounded ${
-                              lane.status === 'OPEN' ? 'bg-green-500/30 text-green-400' :
-                              lane.status === 'OPENING' ? 'bg-yellow-500/30 text-yellow-400' :
-                              lane.status === 'CLOSING' ? 'bg-orange-500/30 text-orange-400' :
-                              'bg-gray-600 text-gray-400'
-                            }`}>
-                              {lane.status}
-                            </span>
-                            {lane.queueCount > 0 && (
-                              <span className="text-xs text-blue-400">({lane.queueCount} queued)</span>
-                            )}
+                          <div className="flex items-center justify-between mb-1">
+                            <div className="flex items-center gap-2">
+                              <span className="text-xs font-medium text-gray-300">Lane {lane.laneId}</span>
+                              <span className={`text-xs px-1.5 py-0.5 rounded ${
+                                lane.status === 'OPEN' ? 'bg-green-500/30 text-green-400' :
+                                lane.status === 'OPENING' ? 'bg-yellow-500/30 text-yellow-400' :
+                                lane.status === 'CLOSING' ? 'bg-orange-500/30 text-orange-400' :
+                                'bg-gray-600 text-gray-400'
+                              }`}>
+                                {lane.status}
+                              </span>
+                            </div>
+                            <button
+                              onClick={() => handleSetLaneState(lane.laneId, lane.desiredState === 'open' ? 'closed' : 'open')}
+                              disabled={checkoutLoading}
+                              className={`p-0.5 rounded transition-colors ${
+                                lane.desiredState === 'open' 
+                                  ? 'text-green-400 hover:bg-green-500/20' 
+                                  : 'text-gray-500 hover:bg-gray-600'
+                              }`}
+                            >
+                              {lane.desiredState === 'open' ? (
+                                <ToggleRight className="w-4 h-4" />
+                              ) : (
+                                <ToggleLeft className="w-4 h-4" />
+                              )}
+                            </button>
                           </div>
-                          <button
-                            onClick={() => handleSetLaneState(lane.laneId, lane.desiredState === 'open' ? 'closed' : 'open')}
-                            disabled={checkoutLoading}
-                            className={`p-1 rounded transition-colors ${
-                              lane.desiredState === 'open' 
-                                ? 'text-green-400 hover:bg-green-500/20' 
-                                : 'text-gray-500 hover:bg-gray-600'
-                            }`}
-                          >
-                            {lane.desiredState === 'open' ? (
-                              <ToggleRight className="w-5 h-5" />
-                            ) : (
-                              <ToggleLeft className="w-5 h-5" />
-                            )}
-                          </button>
+                          {/* Queue Visualization with Circles */}
+                          <QueueCircles 
+                            count={lane.queueCount} 
+                            queuedPeople={lane.queuedPeople}
+                            warningMin={config.waitTimeWarningMin || 2}
+                            criticalMin={config.waitTimeCriticalMin || 5}
+                          />
                         </div>
                       ))}
                     </div>
