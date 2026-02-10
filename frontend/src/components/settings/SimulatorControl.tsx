@@ -275,9 +275,13 @@ export function SimulatorControl() {
     return `${h}h ${m}m ${s}s`
   }
 
+  // Check if checkout manager panel should be shown
+  const showCheckoutPanel = config.enableCashiers && config.enableCheckoutManager
+
   return (
-    <div className="bg-gray-800 rounded-lg p-4 space-y-4">
-      <div className="flex items-center justify-between">
+    <div className="bg-gray-800 rounded-lg p-4">
+      {/* Header */}
+      <div className="flex items-center justify-between mb-4">
         <h3 className="text-lg font-semibold text-white flex items-center gap-2">
           <Gauge className="w-5 h-5" />
           Edge Simulator Control
@@ -294,465 +298,463 @@ export function SimulatorControl() {
       </div>
 
       {error && (
-        <div className="bg-red-900/50 text-red-300 px-3 py-2 rounded flex items-center gap-2 text-sm">
+        <div className="bg-red-900/50 text-red-300 px-3 py-2 rounded flex items-center gap-2 text-sm mb-4">
           <AlertCircle className="w-4 h-4" /> {error}
         </div>
       )}
 
-      {/* Status */}
-      <div className="grid grid-cols-4 gap-3 text-sm">
-        <div className="bg-gray-700 rounded p-2 text-center">
-          <div className="text-gray-400">Status</div>
-          <div className={status?.isRunning ? 'text-green-400' : 'text-gray-500'}>
-            {status?.isRunning ? 'Running' : 'Stopped'}
-          </div>
-        </div>
-        <div className="bg-gray-700 rounded p-2 text-center">
-          <div className="text-gray-400">People</div>
-          <div className="text-white font-mono">{status?.activePeopleCount || 0}</div>
-        </div>
-        <div className="bg-gray-700 rounded p-2 text-center">
-          <div className="text-gray-400">Uptime</div>
-          <div className="text-white font-mono text-xs">{formatUptime(status?.uptime || 0)}</div>
-        </div>
-        <div className="bg-gray-700 rounded p-2 text-center">
-          <div className="text-gray-400">Tracks</div>
-          <div className="text-white font-mono text-xs">{(status?.tracksSent || 0).toLocaleString()}</div>
-        </div>
-      </div>
-
-      {/* Controls */}
-      <div className="flex gap-2">
-        <button
-          onClick={handleStart}
-          disabled={loading || status?.isRunning}
-          className="flex-1 flex items-center justify-center gap-2 px-4 py-2 bg-green-600 hover:bg-green-700 disabled:bg-gray-600 disabled:cursor-not-allowed rounded text-white font-medium transition-colors"
-        >
-          <Play className="w-4 h-4" /> Start
-        </button>
-        <button
-          onClick={handleStop}
-          disabled={loading || !status?.isRunning}
-          className="flex-1 flex items-center justify-center gap-2 px-4 py-2 bg-red-600 hover:bg-red-700 disabled:bg-gray-600 disabled:cursor-not-allowed rounded text-white font-medium transition-colors"
-        >
-          <Square className="w-4 h-4" /> Stop
-        </button>
-        <button
-          onClick={fetchStatus}
-          disabled={loading}
-          className="px-3 py-2 bg-gray-600 hover:bg-gray-500 rounded text-white transition-colors"
-        >
-          <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
-        </button>
-      </div>
-
-      {/* Config */}
-      <div className="border-t border-gray-700 pt-4 space-y-3">
-        <h4 className="text-sm font-medium text-gray-300">Configuration</h4>
+      {/* Two-Panel Layout */}
+      <div className={`grid gap-4 ${showCheckoutPanel ? 'grid-cols-2' : 'grid-cols-1'}`}>
         
-        <div className="grid grid-cols-2 gap-3">
-          <div>
-            <label className="text-xs text-gray-400 flex items-center gap-1">
-              <Users className="w-3 h-3" /> Target People
-            </label>
-            <input
-              type="number"
-              min={1}
-              max={200}
-              value={config.targetPeopleCount}
-              onChange={(e) => handleConfigChange('targetPeopleCount', parseInt(e.target.value) || 1)}
-              className="w-full mt-1 px-2 py-1 bg-gray-700 border border-gray-600 rounded text-white text-sm"
-            />
+        {/* ========== LEFT PANEL ========== */}
+        <div className="space-y-4">
+          {/* Status */}
+          <div className="grid grid-cols-4 gap-2 text-sm">
+            <div className="bg-gray-700 rounded p-2 text-center">
+              <div className="text-gray-400 text-xs">Status</div>
+              <div className={status?.isRunning ? 'text-green-400' : 'text-gray-500'}>
+                {status?.isRunning ? 'Running' : 'Stopped'}
+              </div>
+            </div>
+            <div className="bg-gray-700 rounded p-2 text-center">
+              <div className="text-gray-400 text-xs">People</div>
+              <div className="text-white font-mono">{status?.activePeopleCount || 0}</div>
+            </div>
+            <div className="bg-gray-700 rounded p-2 text-center">
+              <div className="text-gray-400 text-xs">Uptime</div>
+              <div className="text-white font-mono text-xs">{formatUptime(status?.uptime || 0)}</div>
+            </div>
+            <div className="bg-gray-700 rounded p-2 text-center">
+              <div className="text-gray-400 text-xs">Tracks</div>
+              <div className="text-white font-mono text-xs">{(status?.tracksSent || 0).toLocaleString()}</div>
+            </div>
           </div>
-          <div>
-            <label className="text-xs text-gray-400 flex items-center gap-1">
-              <Clock className="w-3 h-3" /> Avg Stay (min)
-            </label>
-            <input
-              type="number"
-              min={1}
-              max={60}
-              value={config.avgStayTime}
-              onChange={(e) => handleConfigChange('avgStayTime', parseInt(e.target.value) || 1)}
-              className="w-full mt-1 px-2 py-1 bg-gray-700 border border-gray-600 rounded text-white text-sm"
-            />
-          </div>
-          <div>
-            <label className="text-xs text-gray-400">Frequency (Hz)</label>
-            <input
-              type="number"
-              min={1}
-              max={30}
-              value={config.frequencyHz}
-              onChange={(e) => handleConfigChange('frequencyHz', parseInt(e.target.value) || 1)}
-              className="w-full mt-1 px-2 py-1 bg-gray-700 border border-gray-600 rounded text-white text-sm"
-            />
-          </div>
-          <div>
-            <label className="text-xs text-gray-400">Queue Interval (s)</label>
-            <input
-              type="number"
-              min={1}
-              max={30}
-              value={config.queueSpawnInterval}
-              onChange={(e) => handleConfigChange('queueSpawnInterval', parseInt(e.target.value) || 1)}
-              className="w-full mt-1 px-2 py-1 bg-gray-700 border border-gray-600 rounded text-white text-sm"
-            />
-          </div>
-        </div>
 
-        {/* Venue Selector */}
-        <div>
-          <label className="text-xs text-gray-400 flex items-center gap-1">
-            <MapPin className="w-3 h-3" /> Target Venue
-          </label>
-          <select
-            value={selectedVenueId}
-            onChange={(e) => handleVenueChange(e.target.value)}
-            className="w-full mt-1 px-2 py-1 bg-gray-700 border border-gray-600 rounded text-white text-sm"
-          >
-            <option value="">Select a venue...</option>
-            {venues.map(v => (
-              <option key={v.id} value={v.id}>
-                {v.name} ({v.width}m × {v.depth}m)
-              </option>
-            ))}
-          </select>
-        </div>
-
-        <div>
-          <label className="text-xs text-gray-400">Simulation Mode</label>
-          <select
-            value={config.simulationMode}
-            onChange={(e) => handleConfigChange('simulationMode', e.target.value)}
-            className="w-full mt-1 px-2 py-1 bg-gray-700 border border-gray-600 rounded text-white text-sm"
-          >
-            <option value="mixed">Mixed (Queue + Browsing)</option>
-            <option value="queue">Queue Only</option>
-            <option value="browsing">Browsing Only</option>
-          </select>
-        </div>
-
-        {/* Cashier Agents Section */}
-        <div className="border-t border-gray-600 pt-3 mt-3">
-          <div className="flex items-center justify-between mb-2">
-            <label className="text-xs text-gray-400 flex items-center gap-1">
-              <UserCheck className="w-3 h-3 text-red-400" /> Cashier Agents
-            </label>
+          {/* Controls */}
+          <div className="flex gap-2">
             <button
-              onClick={() => handleConfigChange('enableCashiers', !config.enableCashiers)}
-              className={`px-2 py-0.5 rounded text-xs font-medium transition-colors ${
-                config.enableCashiers
-                  ? 'bg-red-600/30 text-red-400 border border-red-500/50'
-                  : 'bg-gray-700 text-gray-400 border border-gray-600'
-              }`}
+              onClick={handleStart}
+              disabled={loading || status?.isRunning}
+              className="flex-1 flex items-center justify-center gap-2 px-3 py-2 bg-green-600 hover:bg-green-700 disabled:bg-gray-600 disabled:cursor-not-allowed rounded text-white font-medium transition-colors text-sm"
             >
-              {config.enableCashiers ? 'ON' : 'OFF'}
+              <Play className="w-4 h-4" /> Start
+            </button>
+            <button
+              onClick={handleStop}
+              disabled={loading || !status?.isRunning}
+              className="flex-1 flex items-center justify-center gap-2 px-3 py-2 bg-red-600 hover:bg-red-700 disabled:bg-gray-600 disabled:cursor-not-allowed rounded text-white font-medium transition-colors text-sm"
+            >
+              <Square className="w-4 h-4" /> Stop
+            </button>
+            <button
+              onClick={fetchStatus}
+              disabled={loading}
+              className="px-3 py-2 bg-gray-600 hover:bg-gray-500 rounded text-white transition-colors"
+            >
+              <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
             </button>
           </div>
 
-          {config.enableCashiers && (
-            <div className="space-y-2 pl-2 border-l border-red-500/30">
-              <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <label className="text-xs text-gray-500 flex items-center gap-1">
-                    <Clock className="w-3 h-3" /> Shift (min)
-                  </label>
-                  <input
-                    type="number"
-                    min={10}
-                    max={180}
-                    value={config.cashierShiftMin}
-                    onChange={(e) => handleConfigChange('cashierShiftMin', parseInt(e.target.value) || 60)}
-                    className="w-full mt-1 px-2 py-1 bg-gray-700 border border-gray-600 rounded text-white text-sm"
-                  />
-                </div>
-                <div>
-                  <label className="text-xs text-gray-500 flex items-center gap-1">
-                    <Coffee className="w-3 h-3" /> Break %/hr
-                  </label>
-                  <input
-                    type="number"
-                    min={0}
-                    max={50}
-                    value={config.cashierBreakProb}
-                    onChange={(e) => handleConfigChange('cashierBreakProb', parseInt(e.target.value) || 0)}
-                    className="w-full mt-1 px-2 py-1 bg-gray-700 border border-gray-600 rounded text-white text-sm"
-                  />
-                </div>
-              </div>
+          {/* Simulation Config */}
+          <div className="border-t border-gray-700 pt-3 space-y-3">
+            <h4 className="text-sm font-medium text-gray-300">Simulation</h4>
+            
+            <div className="grid grid-cols-2 gap-2">
               <div>
-                <label className="text-xs text-gray-500">Lane Open Confirm (sec)</label>
+                <label className="text-xs text-gray-400 flex items-center gap-1">
+                  <Users className="w-3 h-3" /> Target People
+                </label>
                 <input
                   type="number"
-                  min={5}
-                  max={300}
-                  value={config.laneOpenConfirmSec}
-                  onChange={(e) => handleConfigChange('laneOpenConfirmSec', parseInt(e.target.value) || 120)}
+                  min={1}
+                  max={200}
+                  value={config.targetPeopleCount}
+                  onChange={(e) => handleConfigChange('targetPeopleCount', parseInt(e.target.value) || 1)}
                   className="w-full mt-1 px-2 py-1 bg-gray-700 border border-gray-600 rounded text-white text-sm"
                 />
               </div>
-              <div className="flex items-center justify-between py-1">
-                <label className="text-xs text-gray-500 flex items-center gap-1">
-                  <AlertTriangle className="w-3 h-3 text-yellow-500" /> ID Confusion
+              <div>
+                <label className="text-xs text-gray-400 flex items-center gap-1">
+                  <Clock className="w-3 h-3" /> Avg Stay (min)
+                </label>
+                <input
+                  type="number"
+                  min={1}
+                  max={60}
+                  value={config.avgStayTime}
+                  onChange={(e) => handleConfigChange('avgStayTime', parseInt(e.target.value) || 1)}
+                  className="w-full mt-1 px-2 py-1 bg-gray-700 border border-gray-600 rounded text-white text-sm"
+                />
+              </div>
+              <div>
+                <label className="text-xs text-gray-400">Frequency (Hz)</label>
+                <input
+                  type="number"
+                  min={1}
+                  max={30}
+                  value={config.frequencyHz}
+                  onChange={(e) => handleConfigChange('frequencyHz', parseInt(e.target.value) || 1)}
+                  className="w-full mt-1 px-2 py-1 bg-gray-700 border border-gray-600 rounded text-white text-sm"
+                />
+              </div>
+              <div>
+                <label className="text-xs text-gray-400">Queue Interval (s)</label>
+                <input
+                  type="number"
+                  min={1}
+                  max={30}
+                  value={config.queueSpawnInterval}
+                  onChange={(e) => handleConfigChange('queueSpawnInterval', parseInt(e.target.value) || 1)}
+                  className="w-full mt-1 px-2 py-1 bg-gray-700 border border-gray-600 rounded text-white text-sm"
+                />
+              </div>
+            </div>
+
+            {/* Venue Selector */}
+            <div>
+              <label className="text-xs text-gray-400 flex items-center gap-1">
+                <MapPin className="w-3 h-3" /> Target Venue
+              </label>
+              <select
+                value={selectedVenueId}
+                onChange={(e) => handleVenueChange(e.target.value)}
+                className="w-full mt-1 px-2 py-1 bg-gray-700 border border-gray-600 rounded text-white text-sm"
+              >
+                <option value="">Select a venue...</option>
+                {venues.map(v => (
+                  <option key={v.id} value={v.id}>
+                    {v.name} ({v.width}m × {v.depth}m)
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="text-xs text-gray-400">Simulation Mode</label>
+              <select
+                value={config.simulationMode}
+                onChange={(e) => handleConfigChange('simulationMode', e.target.value)}
+                className="w-full mt-1 px-2 py-1 bg-gray-700 border border-gray-600 rounded text-white text-sm"
+              >
+                <option value="mixed">Mixed (Queue + Browsing)</option>
+                <option value="queue">Queue Only</option>
+                <option value="browsing">Browsing Only</option>
+              </select>
+            </div>
+          </div>
+
+          {/* Cashier Agents Section */}
+          <div className="border-t border-gray-600 pt-3">
+            <div className="flex items-center justify-between mb-2">
+              <label className="text-xs text-gray-400 flex items-center gap-1">
+                <UserCheck className="w-3 h-3 text-red-400" /> Cashier Agents
+              </label>
+              <button
+                onClick={() => handleConfigChange('enableCashiers', !config.enableCashiers)}
+                className={`px-2 py-0.5 rounded text-xs font-medium transition-colors ${
+                  config.enableCashiers
+                    ? 'bg-red-600/30 text-red-400 border border-red-500/50'
+                    : 'bg-gray-700 text-gray-400 border border-gray-600'
+                }`}
+              >
+                {config.enableCashiers ? 'ON' : 'OFF'}
+              </button>
+            </div>
+
+            {config.enableCashiers && (
+              <div className="space-y-2 pl-2 border-l border-red-500/30">
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="text-xs text-gray-500 flex items-center gap-1">
+                      <Clock className="w-3 h-3" /> Shift (min)
+                    </label>
+                    <input
+                      type="number"
+                      min={10}
+                      max={180}
+                      value={config.cashierShiftMin}
+                      onChange={(e) => handleConfigChange('cashierShiftMin', parseInt(e.target.value) || 60)}
+                      className="w-full mt-1 px-2 py-1 bg-gray-700 border border-gray-600 rounded text-white text-sm"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs text-gray-500 flex items-center gap-1">
+                      <Coffee className="w-3 h-3" /> Break %/hr
+                    </label>
+                    <input
+                      type="number"
+                      min={0}
+                      max={50}
+                      value={config.cashierBreakProb}
+                      onChange={(e) => handleConfigChange('cashierBreakProb', parseInt(e.target.value) || 0)}
+                      className="w-full mt-1 px-2 py-1 bg-gray-700 border border-gray-600 rounded text-white text-sm"
+                    />
+                  </div>
+                </div>
+                <div>
+                  <label className="text-xs text-gray-500">Lane Open Confirm (sec)</label>
+                  <input
+                    type="number"
+                    min={5}
+                    max={300}
+                    value={config.laneOpenConfirmSec}
+                    onChange={(e) => handleConfigChange('laneOpenConfirmSec', parseInt(e.target.value) || 120)}
+                    className="w-full mt-1 px-2 py-1 bg-gray-700 border border-gray-600 rounded text-white text-sm"
+                  />
+                </div>
+                <div className="flex items-center justify-between py-1">
+                  <label className="text-xs text-gray-500 flex items-center gap-1">
+                    <AlertTriangle className="w-3 h-3 text-yellow-500" /> ID Confusion
+                  </label>
+                  <button
+                    onClick={() => handleConfigChange('enableIdConfusion', !config.enableIdConfusion)}
+                    className={`w-8 h-4 rounded-full transition-colors ${
+                      config.enableIdConfusion ? 'bg-yellow-600' : 'bg-gray-600'
+                    }`}
+                  >
+                    <div className={`w-3 h-3 rounded-full bg-white transition-transform ${
+                      config.enableIdConfusion ? 'translate-x-4' : 'translate-x-0.5'
+                    }`} />
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Checkout Manager Toggle */}
+          {config.enableCashiers && (
+            <div className="border-t border-gray-600 pt-3">
+              <div className="flex items-center justify-between">
+                <label className="text-xs text-gray-400 flex items-center gap-1">
+                  <ShoppingCart className="w-3 h-3 text-green-400" /> Checkout Manager
                 </label>
                 <button
-                  onClick={() => handleConfigChange('enableIdConfusion', !config.enableIdConfusion)}
-                  className={`w-8 h-4 rounded-full transition-colors ${
-                    config.enableIdConfusion ? 'bg-yellow-600' : 'bg-gray-600'
+                  onClick={() => handleConfigChange('enableCheckoutManager', !config.enableCheckoutManager)}
+                  className={`px-2 py-0.5 rounded text-xs font-medium transition-colors ${
+                    config.enableCheckoutManager
+                      ? 'bg-green-600/30 text-green-400 border border-green-500/50'
+                      : 'bg-gray-700 text-gray-400 border border-gray-600'
                   }`}
                 >
-                  <div className={`w-3 h-3 rounded-full bg-white transition-transform ${
-                    config.enableIdConfusion ? 'translate-x-4' : 'translate-x-0.5'
-                  }`} />
+                  {config.enableCheckoutManager ? 'MANUAL' : 'AUTO'}
                 </button>
               </div>
             </div>
           )}
+
+          {/* Apply Button */}
+          <button
+            onClick={handleApplyConfig}
+            disabled={loading || !configDirty}
+            className={`w-full flex items-center justify-center gap-2 px-3 py-2 rounded text-white font-medium transition-colors text-sm ${
+              configDirty 
+                ? 'bg-blue-600 hover:bg-blue-700' 
+                : 'bg-gray-600 cursor-not-allowed'
+            }`}
+          >
+            <CheckCircle2 className="w-4 h-4" />
+            {configDirty ? 'Apply Changes' : 'No Changes'}
+          </button>
         </div>
 
-        {/* Checkout Manager Section */}
-        {config.enableCashiers && (
-          <div className="border-t border-gray-600 pt-3 mt-3">
-            <div className="flex items-center justify-between mb-2">
-              <label className="text-xs text-gray-400 flex items-center gap-1">
-                <ShoppingCart className="w-3 h-3 text-green-400" /> Checkout Manager
-              </label>
-              <button
-                onClick={() => handleConfigChange('enableCheckoutManager', !config.enableCheckoutManager)}
-                className={`px-2 py-0.5 rounded text-xs font-medium transition-colors ${
-                  config.enableCheckoutManager
-                    ? 'bg-green-600/30 text-green-400 border border-green-500/50'
-                    : 'bg-gray-700 text-gray-400 border border-gray-600'
-                }`}
-              >
-                {config.enableCheckoutManager ? 'MANUAL' : 'AUTO'}
-              </button>
+        {/* ========== RIGHT PANEL: Checkout Manager ========== */}
+        {showCheckoutPanel && (
+          <div className="space-y-3 border-l border-gray-700 pl-4">
+            <h4 className="text-sm font-medium text-green-400 flex items-center gap-2">
+              <ShoppingCart className="w-4 h-4" /> Checkout Manager
+            </h4>
+
+            {/* Wait Time Thresholds */}
+            <div className="bg-gray-700/30 rounded p-2">
+              <div className="text-xs text-gray-400 mb-2 flex items-center gap-1">
+                <Clock className="w-3 h-3" /> Wait Time Thresholds
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <div className="flex items-center gap-1 text-xs">
+                    <div className="w-2 h-2 rounded-full bg-green-500" />
+                    <span className="text-gray-500">→</span>
+                    <div className="w-2 h-2 rounded-full bg-amber-500" />
+                    <span className="text-gray-400 ml-1">Warning</span>
+                  </div>
+                  <div className="flex items-center gap-1 mt-1">
+                    <input
+                      type="number"
+                      min={1}
+                      max={10}
+                      value={config.waitTimeWarningMin || 2}
+                      onChange={(e) => handleConfigChange('waitTimeWarningMin', parseInt(e.target.value) || 2)}
+                      className="w-12 px-1 py-0.5 bg-gray-700 border border-gray-600 rounded text-white text-xs text-center"
+                    />
+                    <span className="text-xs text-gray-500">min</span>
+                  </div>
+                </div>
+                <div>
+                  <div className="flex items-center gap-1 text-xs">
+                    <div className="w-2 h-2 rounded-full bg-amber-500" />
+                    <span className="text-gray-500">→</span>
+                    <div className="w-2 h-2 rounded-full bg-red-500" />
+                    <span className="text-gray-400 ml-1">Critical</span>
+                  </div>
+                  <div className="flex items-center gap-1 mt-1">
+                    <input
+                      type="number"
+                      min={1}
+                      max={30}
+                      value={config.waitTimeCriticalMin || 5}
+                      onChange={(e) => handleConfigChange('waitTimeCriticalMin', parseInt(e.target.value) || 5)}
+                      className="w-12 px-1 py-0.5 bg-gray-700 border border-gray-600 rounded text-white text-xs text-center"
+                    />
+                    <span className="text-xs text-gray-500">min</span>
+                  </div>
+                </div>
+              </div>
             </div>
 
-            {config.enableCheckoutManager && (
-              <div className="space-y-2 pl-2 border-l border-green-500/30">
-                {/* Queue Pressure Threshold */}
+            {/* Queue Pressure Controls */}
+            <div className="bg-gray-700/30 rounded p-2">
+              <div className="text-xs text-gray-400 mb-2 flex items-center gap-1">
+                <Gauge className="w-3 h-3" /> Queue Pressure
+              </div>
+              <div className="space-y-2">
                 <div>
-                  <label className="text-xs text-gray-500">Queue Pressure Threshold</label>
+                  <div className="flex justify-between text-xs">
+                    <span className="text-gray-500">Checkout Rate</span>
+                    <span className="text-blue-400">{((config.checkoutProbMultiplier || 1) * 100).toFixed(0)}%</span>
+                  </div>
                   <input
-                    type="number"
-                    min={1}
-                    max={20}
-                    value={config.queuePressureThreshold || 5}
-                    onChange={(e) => handleConfigChange('queuePressureThreshold', parseInt(e.target.value) || 5)}
-                    className="w-full mt-1 px-2 py-1 bg-gray-700 border border-gray-600 rounded text-white text-sm"
+                    type="range"
+                    min={50}
+                    max={200}
+                    step={10}
+                    value={(config.checkoutProbMultiplier || 1) * 100}
+                    onChange={(e) => handleConfigChange('checkoutProbMultiplier', parseInt(e.target.value) / 100)}
+                    className="w-full h-1 bg-gray-600 rounded-lg appearance-none cursor-pointer accent-blue-500"
                   />
-                  <p className="text-xs text-gray-500 mt-1">Suggest opening lane when avg queue &gt; this</p>
+                </div>
+                <div>
+                  <div className="flex justify-between text-xs">
+                    <span className="text-gray-500">Browsing Speed</span>
+                    <span className="text-amber-400">{((config.browsingSpeedMultiplier || 1) * 100).toFixed(0)}%</span>
+                  </div>
+                  <input
+                    type="range"
+                    min={50}
+                    max={300}
+                    step={10}
+                    value={(config.browsingSpeedMultiplier || 1) * 100}
+                    onChange={(e) => handleConfigChange('browsingSpeedMultiplier', parseInt(e.target.value) / 100)}
+                    className="w-full h-1 bg-gray-600 rounded-lg appearance-none cursor-pointer accent-amber-500"
+                  />
+                </div>
+                <div>
+                  <div className="flex justify-between text-xs">
+                    <span className="text-gray-500">Arrival Rate</span>
+                    <span className="text-green-400">{((config.arrivalRateMultiplier || 1) * 100).toFixed(0)}%</span>
+                  </div>
+                  <input
+                    type="range"
+                    min={50}
+                    max={300}
+                    step={10}
+                    value={(config.arrivalRateMultiplier || 1) * 100}
+                    onChange={(e) => handleConfigChange('arrivalRateMultiplier', parseInt(e.target.value) / 100)}
+                    className="w-full h-1 bg-gray-600 rounded-lg appearance-none cursor-pointer accent-green-500"
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* Lane Status */}
+            {status?.isRunning && checkoutStatus?.lanes && checkoutStatus.lanes.length > 0 && (
+              <div className="bg-gray-700/30 rounded p-2">
+                <div className="text-xs text-gray-400 mb-2">Lane Status</div>
+                
+                {/* Queue Pressure Alert */}
+                {checkoutStatus.pressure?.shouldOpenMore && (
+                  <div className="bg-yellow-500/20 border border-yellow-500/50 rounded p-2 mb-2 flex items-center gap-2">
+                    <AlertTriangle className="w-3 h-3 text-yellow-400" />
+                    <span className="text-xs text-yellow-400">
+                      Open Lane {checkoutStatus.pressure.suggestedLaneToOpen}
+                    </span>
+                  </div>
+                )}
+
+                {/* Stats Row */}
+                <div className="grid grid-cols-3 gap-1 mb-2 text-center">
+                  <div className="bg-gray-800/50 rounded p-1">
+                    <div className="text-sm font-medium text-green-400">{checkoutStatus.pressure?.openLaneCount || 0}</div>
+                    <div className="text-xs text-gray-500">Open</div>
+                  </div>
+                  <div className="bg-gray-800/50 rounded p-1">
+                    <div className="text-sm font-medium text-blue-400">{checkoutStatus.pressure?.totalQueueCount || 0}</div>
+                    <div className="text-xs text-gray-500">Queued</div>
+                  </div>
+                  <div className="bg-gray-800/50 rounded p-1">
+                    <div className="text-sm font-medium text-gray-300">{checkoutStatus.pressure?.avgQueuePerLane?.toFixed(1) || '0'}</div>
+                    <div className="text-xs text-gray-500">Avg</div>
+                  </div>
                 </div>
 
-                {/* Wait Time Thresholds */}
-                <div className="bg-gray-700/30 rounded p-2 mt-2">
-                  <div className="text-xs text-gray-400 mb-2 flex items-center gap-1">
-                    <Clock className="w-3 h-3" /> Wait Time Colors
-                  </div>
-                  <div className="grid grid-cols-2 gap-2">
-                    <div>
-                      <div className="flex items-center gap-1 text-xs">
-                        <div className="w-2 h-2 rounded-full bg-green-500" />
-                        <span className="text-gray-500">→</span>
-                        <div className="w-2 h-2 rounded-full bg-amber-500" />
-                      </div>
-                      <div className="flex items-center gap-1 mt-1">
-                        <input
-                          type="number"
-                          min={1}
-                          max={10}
-                          value={config.waitTimeWarningMin || 2}
-                          onChange={(e) => handleConfigChange('waitTimeWarningMin', parseInt(e.target.value) || 2)}
-                          className="w-12 px-1 py-0.5 bg-gray-700 border border-gray-600 rounded text-white text-xs text-center"
-                        />
-                        <span className="text-xs text-gray-500">min</span>
-                      </div>
-                    </div>
-                    <div>
-                      <div className="flex items-center gap-1 text-xs">
-                        <div className="w-2 h-2 rounded-full bg-amber-500" />
-                        <span className="text-gray-500">→</span>
-                        <div className="w-2 h-2 rounded-full bg-red-500" />
-                      </div>
-                      <div className="flex items-center gap-1 mt-1">
-                        <input
-                          type="number"
-                          min={1}
-                          max={30}
-                          value={config.waitTimeCriticalMin || 5}
-                          onChange={(e) => handleConfigChange('waitTimeCriticalMin', parseInt(e.target.value) || 5)}
-                          className="w-12 px-1 py-0.5 bg-gray-700 border border-gray-600 rounded text-white text-xs text-center"
-                        />
-                        <span className="text-xs text-gray-500">min</span>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Queue Pressure Controls */}
-                <div className="border-t border-gray-600 pt-2 mt-2">
-                  <div className="text-xs text-gray-400 mb-2 flex items-center gap-1">
-                    <Gauge className="w-3 h-3" /> Queue Pressure Controls
-                  </div>
-                  
-                  {/* Checkout Probability Multiplier */}
-                  <div className="mb-2">
-                    <div className="flex justify-between text-xs">
-                      <span className="text-gray-500">Checkout Rate</span>
-                      <span className="text-blue-400">{((config.checkoutProbMultiplier || 1) * 100).toFixed(0)}%</span>
-                    </div>
-                    <input
-                      type="range"
-                      min={50}
-                      max={200}
-                      step={10}
-                      value={(config.checkoutProbMultiplier || 1) * 100}
-                      onChange={(e) => handleConfigChange('checkoutProbMultiplier', parseInt(e.target.value) / 100)}
-                      className="w-full h-1 bg-gray-600 rounded-lg appearance-none cursor-pointer accent-blue-500"
-                    />
-                  </div>
-
-                  {/* Browsing Speed Multiplier */}
-                  <div className="mb-2">
-                    <div className="flex justify-between text-xs">
-                      <span className="text-gray-500">Browsing Speed</span>
-                      <span className="text-amber-400">{((config.browsingSpeedMultiplier || 1) * 100).toFixed(0)}%</span>
-                    </div>
-                    <input
-                      type="range"
-                      min={50}
-                      max={300}
-                      step={10}
-                      value={(config.browsingSpeedMultiplier || 1) * 100}
-                      onChange={(e) => handleConfigChange('browsingSpeedMultiplier', parseInt(e.target.value) / 100)}
-                      className="w-full h-1 bg-gray-600 rounded-lg appearance-none cursor-pointer accent-amber-500"
-                    />
-                  </div>
-
-                  {/* Arrival Rate Multiplier */}
-                  <div className="mb-2">
-                    <div className="flex justify-between text-xs">
-                      <span className="text-gray-500">Arrival Rate</span>
-                      <span className="text-green-400">{((config.arrivalRateMultiplier || 1) * 100).toFixed(0)}%</span>
-                    </div>
-                    <input
-                      type="range"
-                      min={50}
-                      max={300}
-                      step={10}
-                      value={(config.arrivalRateMultiplier || 1) * 100}
-                      onChange={(e) => handleConfigChange('arrivalRateMultiplier', parseInt(e.target.value) / 100)}
-                      className="w-full h-1 bg-gray-600 rounded-lg appearance-none cursor-pointer accent-green-500"
-                    />
-                  </div>
-                  <p className="text-xs text-gray-500">Adjust to simulate different traffic patterns</p>
-                </div>
-
-                {/* Lane Control Panel - Only show when simulation is running */}
-                {status?.isRunning && checkoutStatus?.lanes && checkoutStatus.lanes.length > 0 && (
-                  <div className="mt-3">
-                    <div className="text-xs text-gray-400 mb-2">Lane Control</div>
-                    
-                    {/* Queue Pressure Alert */}
-                    {checkoutStatus.pressure?.shouldOpenMore && (
-                      <div className="bg-yellow-500/20 border border-yellow-500/50 rounded p-2 mb-2 flex items-center gap-2">
-                        <AlertTriangle className="w-4 h-4 text-yellow-400" />
-                        <span className="text-xs text-yellow-400">
-                          High queue pressure! Suggest opening Lane {checkoutStatus.pressure.suggestedLaneToOpen}
-                        </span>
-                      </div>
-                    )}
-
-                    {/* Stats */}
-                    <div className="grid grid-cols-3 gap-2 mb-2 text-center">
-                      <div className="bg-gray-700/50 rounded p-1">
-                        <div className="text-sm font-medium text-green-400">{checkoutStatus.pressure?.openLaneCount || 0}</div>
-                        <div className="text-xs text-gray-500">Open</div>
-                      </div>
-                      <div className="bg-gray-700/50 rounded p-1">
-                        <div className="text-sm font-medium text-blue-400">{checkoutStatus.pressure?.totalQueueCount || 0}</div>
-                        <div className="text-xs text-gray-500">In Queue</div>
-                      </div>
-                      <div className="bg-gray-700/50 rounded p-1">
-                        <div className="text-sm font-medium text-gray-300">{checkoutStatus.pressure?.avgQueuePerLane?.toFixed(1) || '0'}</div>
-                        <div className="text-xs text-gray-500">Avg/Lane</div>
-                      </div>
-                    </div>
-
-                    {/* Lane List with Visual Circles */}
-                    <div className="space-y-1.5 max-h-48 overflow-y-auto">
-                      {checkoutStatus.lanes.map((lane) => (
-                        <div 
-                          key={lane.laneId} 
-                          className="bg-gray-700/50 rounded px-2 py-1.5"
-                        >
-                          <div className="flex items-center justify-between mb-1">
-                            <div className="flex items-center gap-2">
-                              <span className="text-xs font-medium text-gray-300">Lane {lane.laneId}</span>
-                              <span className={`text-xs px-1.5 py-0.5 rounded ${
-                                lane.status === 'OPEN' ? 'bg-green-500/30 text-green-400' :
-                                lane.status === 'OPENING' ? 'bg-yellow-500/30 text-yellow-400' :
-                                lane.status === 'CLOSING' ? 'bg-orange-500/30 text-orange-400' :
-                                'bg-gray-600 text-gray-400'
-                              }`}>
-                                {lane.status}
-                              </span>
-                            </div>
-                            <button
-                              onClick={() => handleSetLaneState(lane.laneId, lane.desiredState === 'open' ? 'closed' : 'open')}
-                              disabled={checkoutLoading}
-                              className={`p-0.5 rounded transition-colors ${
-                                lane.desiredState === 'open' 
-                                  ? 'text-green-400 hover:bg-green-500/20' 
-                                  : 'text-gray-500 hover:bg-gray-600'
-                              }`}
-                            >
-                              {lane.desiredState === 'open' ? (
-                                <ToggleRight className="w-4 h-4" />
-                              ) : (
-                                <ToggleLeft className="w-4 h-4" />
-                              )}
-                            </button>
-                          </div>
-                          {/* Queue Visualization with Circles */}
-                          <QueueCircles 
-                            count={lane.queueCount} 
-                            queuedPeople={lane.queuedPeople}
-                            warningMin={config.waitTimeWarningMin || 2}
-                            criticalMin={config.waitTimeCriticalMin || 5}
-                          />
+                {/* Lane List with Visual Circles */}
+                <div className="space-y-1.5 max-h-64 overflow-y-auto">
+                  {checkoutStatus.lanes.map((lane) => (
+                    <div 
+                      key={lane.laneId} 
+                      className="bg-gray-800/50 rounded px-2 py-1.5"
+                    >
+                      <div className="flex items-center justify-between mb-1">
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs font-medium text-gray-300">Lane {lane.laneId}</span>
+                          <span className={`text-xs px-1.5 py-0.5 rounded ${
+                            lane.status === 'OPEN' ? 'bg-green-500/30 text-green-400' :
+                            lane.status === 'OPENING' ? 'bg-yellow-500/30 text-yellow-400' :
+                            lane.status === 'CLOSING' ? 'bg-orange-500/30 text-orange-400' :
+                            'bg-gray-600 text-gray-400'
+                          }`}>
+                            {lane.status}
+                          </span>
                         </div>
-                      ))}
+                        <button
+                          onClick={() => handleSetLaneState(lane.laneId, lane.desiredState === 'open' ? 'closed' : 'open')}
+                          disabled={checkoutLoading}
+                          className={`p-0.5 rounded transition-colors ${
+                            lane.desiredState === 'open' 
+                              ? 'text-green-400 hover:bg-green-500/20' 
+                              : 'text-gray-500 hover:bg-gray-600'
+                          }`}
+                        >
+                          {lane.desiredState === 'open' ? (
+                            <ToggleRight className="w-4 h-4" />
+                          ) : (
+                            <ToggleLeft className="w-4 h-4" />
+                          )}
+                        </button>
+                      </div>
+                      {/* Queue Visualization */}
+                      <QueueCircles 
+                        count={lane.queueCount} 
+                        queuedPeople={lane.queuedPeople}
+                        warningMin={config.waitTimeWarningMin || 2}
+                        criticalMin={config.waitTimeCriticalMin || 5}
+                      />
                     </div>
-                  </div>
-                )}
+                  ))}
+                </div>
+              </div>
+            )}
 
-                {status?.isRunning && (!checkoutStatus?.lanes || checkoutStatus.lanes.length === 0) && (
-                  <div className="text-xs text-gray-500 italic">No checkout lanes detected</div>
-                )}
+            {status?.isRunning && (!checkoutStatus?.lanes || checkoutStatus.lanes.length === 0) && (
+              <div className="text-xs text-gray-500 italic">No checkout lanes detected</div>
+            )}
 
-                {!status?.isRunning && (
-                  <div className="text-xs text-gray-500 italic">Start simulation to control lanes</div>
-                )}
+            {!status?.isRunning && (
+              <div className="bg-gray-700/30 rounded p-3 text-center">
+                <div className="text-xs text-gray-500">Start simulation to see lane status</div>
               </div>
             )}
           </div>
         )}
-
-        <button
-          onClick={handleApplyConfig}
-          disabled={loading || !configDirty}
-          className={`w-full flex items-center justify-center gap-2 px-4 py-2 rounded text-white font-medium transition-colors ${
-            configDirty 
-              ? 'bg-blue-600 hover:bg-blue-700' 
-              : 'bg-gray-600 cursor-not-allowed'
-          }`}
-        >
-          <CheckCircle2 className="w-4 h-4" />
-          {configDirty ? 'Apply Changes' : 'No Changes'}
-        </button>
       </div>
     </div>
   )
