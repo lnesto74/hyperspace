@@ -584,7 +584,7 @@ class Person {
 
 // Queue customer - simulates realistic queue behavior
 class QueuePerson {
-  constructor(id, queueZone, serviceZone) {
+  constructor(id, queueZone, serviceZone, config = {}) {
     this.id = id;
     this.queueZone = queueZone;
     this.serviceZone = serviceZone;
@@ -619,8 +619,9 @@ class QueuePerson {
     this.vx = 0;
     this.vz = 0;
     
-    this.targetWaitTime = 5 + Math.random() * 20;
-    this.targetServiceTime = 3 + Math.random() * 8;
+    const checkoutRate = config.checkoutProbMultiplier || 1.0;
+    this.targetWaitTime = (5 + Math.random() * 20) / checkoutRate;
+    this.targetServiceTime = (3 + Math.random() * 8) / checkoutRate;
     
     this.color = '#f59e0b'; // Orange for queue customers
     this.width = 0.4 + Math.random() * 0.2;
@@ -824,7 +825,7 @@ const connectMqtt = () => {
 const spawnQueuePerson = () => {
   if (cashierZones.length === 0) return;
   const zone = cashierZones[Math.floor(Math.random() * cashierZones.length)];
-  const person = new QueuePerson(nextQueueId++, zone.queueZone, zone.serviceZone);
+  const person = new QueuePerson(nextQueueId++, zone.queueZone, zone.serviceZone, config);
   queuePeople.push(person);
   console.log(`Spawned queue customer ${person.id} at ${zone.name}`);
 };
