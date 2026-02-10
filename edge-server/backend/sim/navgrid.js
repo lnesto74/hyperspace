@@ -174,6 +174,9 @@ export class NavGrid {
       }
     }
     
+    // Parse checkout lanes from ROIs (Queue + Service pairs)
+    this.parseCheckoutLanesFromROIs(rois);
+    
     // Derive zone bounds from scene
     this.deriveZoneBounds(objects, checkoutObjs, entranceObj);
     
@@ -188,6 +191,63 @@ export class NavGrid {
     
     console.log(`NavGrid built: ${this.cashiers.length} cashiers, entrance at (${this.entrancePos.x.toFixed(1)}, ${this.entrancePos.z.toFixed(1)})`);
     console.log(`Safe waypoints: entrance=${this.safeWaypoints.entrance.length}, bypass=${this.safeWaypoints.bypass.length}, shopping=${this.safeWaypoints.shopping.length}, aisles=${this.safeWaypoints.aisles.length}`);
+  }
+  
+  // Parse checkout lanes from ROI pairs (e.g., "Checkout 1 - Queue" + "Checkout 1 - Service")
+  parseCheckoutLanesFromROIs(rois) {
+    if (!rois || rois.length === 0) return;
+    
+    // Find Queue and Service ROI pairs
+    const queueRois = rois.filter(r => r.name && r.name.includes('- Queue'));
+    const serviceRois = rois.filter(r => r.name && r.name.includes('- Service'));
+    
+    console.log(`[NavGrid] Parsing ROIs: ${queueRois.length} Queue, ${serviceRois.length} Service`);
+    
+    // Match Queue/Service pairs by prefix (e.g., "Checkout 1")
+    for (const queueRoi of queueRois) {
+      const prefix = queueRoi.name.replace('- Queue', '').trim();
+      const serviceRoi = serviceRois.find(s => s.name.replace('- Service', '').trim() === prefix);
+      
+      if (serviceRoi) {
+        // Calculate center of service ROI as cashier position
+        const serviceCenter = this.calculateROICenter(serviceRoi);
+        const queueCenter = this.calculateROICenter(queueRoi);
+        
+        // Check if this cashier position already exists (from 3D objects)
+        const existing = this.cashiers.find(c => 
+          Math.abs(c.x - serviceCenter.x) < 2 && Math.abs(c.z - serviceCenter.z) < 2
+        );
+        
+        if (!existing) {
+          this.cashiers.push({
+            x: serviceCenter.x,
+            z: serviceCenter.z,
+            width: 1.5,
+            name: prefix,
+            queueCenter,
+            serviceCenter,
+          });
+          console.log(`[NavGrid] Added lane "${prefix}" from ROIs: service=(${serviceCenter.x.toFixed(1)}, ${serviceCenter.z.toFixed(1)})`);
+        }
+      }
+    }
+  }
+  
+  // Calculate center of an ROI from its vertices
+  calculateROICenter(roi) {
+    if (!roi.vertices || roi.vertices.length === 0) {
+      return { x: 0, z: 0 };
+    }
+    
+    let sumX = 0, sumZ = 0;
+    for (const v of roi.vertices) {
+      sumX += v.x;
+      sumZ += v.z || v.y; // Some ROIs use y for z-coordinate
+    }
+    return {
+      x: sumX / roi.vertices.length,
+      z: sumZ / roi.vertices.length,
+    };
   }
   
   // Block cells occupied by an object

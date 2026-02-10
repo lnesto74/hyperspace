@@ -1,406 +1,283 @@
 /**
- * LaneStateController - Manages manual open/close commands for checkout lanes
- * Works alongside automatic cashier shift scheduling
+ * LaneStateController - Manual checkout lane control
  * 
- * Features:
- * - Manual lane open/close via API commands
- * - Graceful close (cashier finishes serving then leaves)
- * - Queue pressure metrics and suggestions
- * - Idempotent command handling
+ * Manages manual open/close state for checkout lanes.
+ * Only active when config.enableCheckoutManager = true.
+ * Does NOT interfere with existing auto-scheduling when disabled.
  */
 
-import { CASHIER_STATE } from './cashieragent.js';
-
-export const LANE_COMMAND = {
-  OPEN: 'open',
-  CLOSE: 'closed',
-};
-
-export const LANE_STATUS = {
-  CLOSED: 'CLOSED',
-  OPENING: 'OPENING',
-  OPEN: 'OPEN',
-  CLOSING: 'CLOSING',
-};
-
 export class LaneStateController {
-  constructor(simulatorV2, config = {}) {
-    this.simulator = simulatorV2;
-    
-    // Configuration with defaults
+  constructor(simulator, config = {}) {
+    this.simulator = simulator
     this.config = {
-      // Queue pressure thresholds (parametric)
-      queuePressureThreshold: config.queuePressureThreshold || 5, // avg queue per open lane
-      inflowRateThreshold: config.inflowRateThreshold || 10, // customers/min
-      inflowWindowSec: config.inflowWindowSec || 120, // rolling window for inflow calc
-      
-      // Timing
-      openConfirmWindowSec: config.openConfirmWindowSec || 10,
-      closeGraceWindowSec: config.closeGraceWindowSec || 30,
-      
-      ...config,
-    };
+      queuePressureThreshold: config.queuePressureThreshold || 5,
+      inflowRateThreshold: config.inflowRateThreshold || 10,
+      ...config
+    }
     
-    // Desired state per lane (set by commands)
-    // null = automatic mode, 'open'/'closed' = manual override
-    this.desiredStates = new Map();
+    // Lane states indexed by laneId
+    // { laneId: { desiredState, status, cashierAgentId, queueCount, lastChangeTs } }
+    this.lanes = new Map()
     
-    // Command history for debugging
-    this.commandHistory = [];
-    this.maxHistorySize = 100;
-    
-    // Queue metrics tracking
-    this.queueMetrics = new Map(); // laneId -> { count, inflowHistory }
-    this.lastMetricsUpdate = Date.now();
-    
-    // Inflow tracking (rolling window)
-    this.inflowEvents = []; // { timestamp, laneId }
-    
-    console.log('[LaneStateController] Initialized with config:', this.config);
+    // Track spawned cashiers by lane
+    this.cashiersByLane = new Map()
   }
-  
+
   /**
-   * Set desired state for a lane (manual command)
-   * @param {number} laneId 
-   * @param {string} desiredState - 'open' or 'closed'
-   * @param {string} reason - 'manual' or 'auto'
-   * @returns {object} result with applied state
+   * Initialize lanes from venue geometry checkout objects
+   * @param {Array} checkoutObjects - Array of checkout lane definitions from venue
    */
-  setLaneState(laneId, desiredState, reason = 'manual') {
-    const laneStates = this.simulator.getLaneStates();
+  initializeLanes(checkoutObjects) {
+    this.lanes.clear()
+    this.cashiersByLane.clear()
     
-    if (laneId < 0 || laneId >= laneStates.length) {
-      return { ok: false, error: `Invalid laneId: ${laneId}` };
+    if (!checkoutObjects || !Array.isArray(checkoutObjects)) {
+      console.log('[LaneStateController] No checkout objects to initialize')
+      return
     }
-    
-    const cashierAgent = this.getCashierForLane(laneId);
-    if (!cashierAgent) {
-      return { ok: false, error: `No cashier agent for lane ${laneId}` };
-    }
-    
-    const currentState = laneStates[laneId];
-    const timestamp = Date.now();
-    
-    // Record command
-    this.commandHistory.push({
-      timestamp,
-      laneId,
-      desiredState,
-      reason,
-      previousState: currentState.isOpen ? 'open' : 'closed',
-      cashierState: cashierAgent.state,
-    });
-    
-    // Trim history
-    if (this.commandHistory.length > this.maxHistorySize) {
-      this.commandHistory.shift();
-    }
-    
-    // Store desired state
-    this.desiredStates.set(laneId, desiredState);
-    
-    // Apply command to cashier agent
-    if (desiredState === LANE_COMMAND.OPEN) {
-      return this.openLane(laneId, cashierAgent, reason);
-    } else {
-      return this.closeLane(laneId, cashierAgent, reason);
-    }
-  }
-  
-  /**
-   * Open a lane - spawn cashier if needed
-   */
-  openLane(laneId, cashierAgent, reason) {
-    const currentState = cashierAgent.state;
-    
-    // Already open or arriving - idempotent
-    if (currentState === CASHIER_STATE.WORKING || 
-        currentState === CASHIER_STATE.ARRIVE ||
-        currentState === CASHIER_STATE.RETURN) {
-      console.log(`[LaneStateController] Lane ${laneId} already open/opening (${currentState})`);
-      return {
-        ok: true,
+
+    for (const checkout of checkoutObjects) {
+      const laneId = checkout.laneId || checkout.id
+      this.lanes.set(laneId, {
         laneId,
-        appliedState: 'open',
-        status: this.getLaneStatus(laneId),
-        cashierTrackId: `cashier-${cashierAgent.id}`,
-        idempotent: true,
-      };
+        desiredState: 'closed',  // Start all lanes closed in manual mode
+        status: 'CLOSED',
+        cashierAgentId: null,
+        queueCount: 0,
+        lastChangeTs: Date.now(),
+        // Store geometry for cashier spawning
+        serviceArea: checkout.serviceArea,
+        queueArea: checkout.queueArea,
+        standPoint: checkout.standPoint
+      })
     }
     
-    // Cashier is leaving or on break - recall them
-    if (currentState === CASHIER_STATE.LEAVE || 
-        currentState === CASHIER_STATE.BREAK) {
-      console.log(`[LaneStateController] Lane ${laneId}: Recalling cashier from ${currentState}`);
-      cashierAgent.transitionTo(CASHIER_STATE.RETURN);
-    }
-    // Cashier is off shift - bring them in
-    else if (currentState === CASHIER_STATE.OFFSHIFT || 
-             currentState === CASHIER_STATE.DONE) {
-      console.log(`[LaneStateController] Lane ${laneId}: Spawning cashier`);
-      // Reset and spawn
-      cashierAgent.spawned = true;
-      cashierAgent.state = CASHIER_STATE.OFFSHIFT;
-      cashierAgent.transitionTo(CASHIER_STATE.ARRIVE);
-    }
-    
-    return {
-      ok: true,
-      laneId,
-      appliedState: 'open',
-      status: LANE_STATUS.OPENING,
-      cashierTrackId: `cashier-${cashierAgent.id}`,
-      reason,
-    };
+    console.log(`[LaneStateController] Initialized ${this.lanes.size} lanes (all closed)`)
   }
-  
+
   /**
-   * Close a lane - graceful close (finish serving then leave)
+   * Get status of all lanes
+   * @returns {Array} Array of lane status objects
    */
-  closeLane(laneId, cashierAgent, reason) {
-    const currentState = cashierAgent.state;
-    
-    // Already closed or leaving - idempotent
-    if (currentState === CASHIER_STATE.OFFSHIFT || 
-        currentState === CASHIER_STATE.LEAVE ||
-        currentState === CASHIER_STATE.DONE) {
-      console.log(`[LaneStateController] Lane ${laneId} already closed/closing (${currentState})`);
-      return {
-        ok: true,
+  getAllLaneStatus() {
+    const result = []
+    for (const [laneId, lane] of this.lanes) {
+      result.push({
         laneId,
-        appliedState: 'closed',
-        status: this.getLaneStatus(laneId),
-        cashierTrackId: `cashier-${cashierAgent.id}`,
-        idempotent: true,
-      };
+        desiredState: lane.desiredState,
+        status: lane.status,
+        cashierAgentId: lane.cashierAgentId,
+        queueCount: lane.queueCount,
+        lastChangeTs: lane.lastChangeTs
+      })
     }
-    
-    // Mark for graceful close
-    // The cashier will finish current work then leave
-    if (currentState === CASHIER_STATE.WORKING) {
-      console.log(`[LaneStateController] Lane ${laneId}: Marking for graceful close`);
-      // Set a flag for graceful close - cashier will transition to LEAVE
-      // after completing current service
-      cashierAgent.pendingClose = true;
-      cashierAgent.transitionTo(CASHIER_STATE.LEAVE);
-    }
-    // Arriving or returning - just turn around and leave
-    else if (currentState === CASHIER_STATE.ARRIVE || 
-             currentState === CASHIER_STATE.RETURN) {
-      console.log(`[LaneStateController] Lane ${laneId}: Aborting arrival, leaving`);
-      cashierAgent.transitionTo(CASHIER_STATE.LEAVE);
-    }
-    // On break - just don't return
-    else if (currentState === CASHIER_STATE.BREAK) {
-      console.log(`[LaneStateController] Lane ${laneId}: Ending break, not returning`);
-      cashierAgent.transitionTo(CASHIER_STATE.DONE);
-    }
-    
-    return {
-      ok: true,
-      laneId,
-      appliedState: 'closed',
-      status: LANE_STATUS.CLOSING,
-      cashierTrackId: `cashier-${cashierAgent.id}`,
-      reason,
-    };
+    return result
   }
-  
+
   /**
-   * Get cashier agent for a lane
-   */
-  getCashierForLane(laneId) {
-    return this.simulator.cashierAgents.find(c => c.laneId === laneId);
-  }
-  
-  /**
-   * Get current status for a lane
+   * Get status of a specific lane
+   * @param {string|number} laneId 
+   * @returns {Object|null} Lane status or null if not found
    */
   getLaneStatus(laneId) {
-    const laneStates = this.simulator.getLaneStates();
-    if (laneId < 0 || laneId >= laneStates.length) return LANE_STATUS.CLOSED;
-    
-    const cashier = this.getCashierForLane(laneId);
-    if (!cashier) return LANE_STATUS.CLOSED;
-    
-    const state = cashier.state;
-    const isInServiceArea = cashier.isInServiceArea();
-    
-    if (state === CASHIER_STATE.WORKING && isInServiceArea) {
-      return LANE_STATUS.OPEN;
-    } else if (state === CASHIER_STATE.ARRIVE || state === CASHIER_STATE.RETURN) {
-      return LANE_STATUS.OPENING;
-    } else if (state === CASHIER_STATE.LEAVE) {
-      return LANE_STATUS.CLOSING;
+    return this.lanes.get(laneId) || null
+  }
+
+  /**
+   * Set desired state for a lane (manual control)
+   * @param {string|number} laneId 
+   * @param {string} desiredState - 'open' or 'closed'
+   * @returns {Object} Result with success/error
+   */
+  setLaneState(laneId, desiredState) {
+    const lane = this.lanes.get(laneId)
+    if (!lane) {
+      return { success: false, error: `Lane ${laneId} not found` }
+    }
+
+    if (desiredState !== 'open' && desiredState !== 'closed') {
+      return { success: false, error: `Invalid state: ${desiredState}` }
+    }
+
+    // No-op if already in desired state
+    if (lane.desiredState === desiredState) {
+      return { success: true, status: lane.status, message: 'Already in desired state' }
+    }
+
+    lane.desiredState = desiredState
+    lane.lastChangeTs = Date.now()
+
+    if (desiredState === 'open') {
+      return this._openLane(lane)
     } else {
-      return LANE_STATUS.CLOSED;
+      return this._closeLane(lane)
     }
   }
-  
+
   /**
-   * Update queue metrics (call each simulation tick)
+   * Open a lane - spawn or reactivate cashier
+   * @private
    */
-  updateMetrics(dt) {
-    const now = Date.now();
+  _openLane(lane) {
+    lane.status = 'OPENING'
     
-    // Clean old inflow events
-    const windowStart = now - (this.config.inflowWindowSec * 1000);
-    this.inflowEvents = this.inflowEvents.filter(e => e.timestamp >= windowStart);
+    // Check if we have an existing cashier for this lane
+    let cashier = this.cashiersByLane.get(lane.laneId)
     
-    this.lastMetricsUpdate = now;
-  }
-  
-  /**
-   * Record a customer entering a queue
-   */
-  recordQueueEntry(laneId) {
-    this.inflowEvents.push({
-      timestamp: Date.now(),
-      laneId,
-    });
-  }
-  
-  /**
-   * Get queue count for a lane from the queue manager
-   */
-  getQueueCount(laneId) {
-    const queueManager = this.simulator.queueManager;
-    if (!queueManager) return 0;
-    
-    const queue = queueManager.queues?.get(laneId);
-    return queue ? queue.length : 0;
-  }
-  
-  /**
-   * Get inflow rate (customers/min) for a lane
-   */
-  getInflowRate(laneId) {
-    const windowMs = this.config.inflowWindowSec * 1000;
-    const windowStart = Date.now() - windowMs;
-    
-    const events = this.inflowEvents.filter(
-      e => e.laneId === laneId && e.timestamp >= windowStart
-    );
-    
-    // Convert to per-minute rate
-    const windowMin = this.config.inflowWindowSec / 60;
-    return events.length / windowMin;
-  }
-  
-  /**
-   * Get total inflow rate across all lanes
-   */
-  getTotalInflowRate() {
-    const windowMs = this.config.inflowWindowSec * 1000;
-    const windowStart = Date.now() - windowMs;
-    
-    const events = this.inflowEvents.filter(e => e.timestamp >= windowStart);
-    
-    const windowMin = this.config.inflowWindowSec / 60;
-    return events.length / windowMin;
-  }
-  
-  /**
-   * Get full checkout status for all lanes
-   */
-  getCheckoutStatus() {
-    const laneStates = this.simulator.getLaneStates();
-    
-    const lanes = laneStates.map((ls, idx) => {
-      const cashier = this.getCashierForLane(idx);
-      const desiredState = this.desiredStates.get(idx);
-      
-      return {
-        laneId: idx,
-        desiredState: desiredState || 'auto',
-        appliedState: ls.isOpen ? 'open' : 'closed',
-        status: this.getLaneStatus(idx),
-        cashierPresent: cashier ? cashier.spawned && cashier.state !== CASHIER_STATE.DONE : false,
-        cashierTrackId: cashier ? `cashier-${cashier.id}` : null,
-        cashierState: cashier ? cashier.state : null,
-        queueCount: this.getQueueCount(idx),
-        inflowRate: Math.round(this.getInflowRate(idx) * 10) / 10,
-        lastChangeTs: ls.openSince || ls.closedSince || null,
-      };
-    });
-    
-    // Aggregate metrics
-    const openLanes = lanes.filter(l => l.appliedState === 'open');
-    const totalQueueCount = lanes.reduce((sum, l) => sum + l.queueCount, 0);
-    const totalInflowRate = this.getTotalInflowRate();
-    
-    // Queue pressure calculation
-    const avgQueuePerLane = openLanes.length > 0 
-      ? totalQueueCount / openLanes.length 
-      : totalQueueCount;
-    
-    // Suggestion logic
-    let suggestion = null;
-    const closedLanes = lanes.filter(l => l.status === LANE_STATUS.CLOSED);
-    
-    if (closedLanes.length > 0) {
-      if (avgQueuePerLane > this.config.queuePressureThreshold) {
-        suggestion = {
-          type: 'OPEN_LANE',
-          message: `High queue pressure (${avgQueuePerLane.toFixed(1)} avg/lane) - consider opening lane ${closedLanes[0].laneId}`,
-          suggestedLaneId: closedLanes[0].laneId,
-          reason: 'queue_pressure',
-        };
-      } else if (totalInflowRate > this.config.inflowRateThreshold) {
-        suggestion = {
-          type: 'OPEN_LANE',
-          message: `High inflow rate (${totalInflowRate.toFixed(1)}/min) - consider opening lane ${closedLanes[0].laneId}`,
-          suggestedLaneId: closedLanes[0].laneId,
-          reason: 'inflow_rate',
-        };
+    if (cashier && cashier.state !== 'DONE') {
+      // Reactivate existing cashier
+      cashier.setManualCommand('open')
+      console.log(`[LaneStateController] Reactivating cashier for lane ${lane.laneId}`)
+    } else {
+      // Need to spawn new cashier via simulator
+      cashier = this.simulator.spawnCashierForLane(lane.laneId, lane)
+      if (cashier) {
+        this.cashiersByLane.set(lane.laneId, cashier)
+        lane.cashierAgentId = cashier.id
+        console.log(`[LaneStateController] Spawned new cashier ${cashier.id} for lane ${lane.laneId}`)
+      } else {
+        lane.status = 'CLOSED'
+        lane.desiredState = 'closed'
+        return { success: false, error: 'Failed to spawn cashier' }
       }
     }
-    
-    return {
-      lanes,
-      aggregate: {
-        totalLanes: lanes.length,
-        openLanes: openLanes.length,
-        totalQueueCount,
-        totalInflowRate: Math.round(totalInflowRate * 10) / 10,
-        avgQueuePerLane: Math.round(avgQueuePerLane * 10) / 10,
-      },
-      thresholds: {
-        queuePressure: this.config.queuePressureThreshold,
-        inflowRate: this.config.inflowRateThreshold,
-      },
-      suggestion,
-    };
+
+    return { success: true, status: lane.status }
   }
-  
+
   /**
-   * Update thresholds (parametric configuration)
+   * Close a lane - tell cashier to finish and leave
+   * @private
+   */
+  _closeLane(lane) {
+    lane.status = 'CLOSING'
+    
+    const cashier = this.cashiersByLane.get(lane.laneId)
+    if (cashier) {
+      cashier.setManualCommand('close')
+      console.log(`[LaneStateController] Closing lane ${lane.laneId}, cashier will finish and leave`)
+    } else {
+      // No cashier, just mark as closed
+      lane.status = 'CLOSED'
+    }
+
+    return { success: true, status: lane.status }
+  }
+
+  /**
+   * Update lane statuses based on cashier states
+   * Called each simulation tick
+   */
+  update() {
+    for (const [laneId, lane] of this.lanes) {
+      const cashier = this.cashiersByLane.get(laneId)
+      
+      if (!cashier) {
+        if (lane.status !== 'CLOSED') {
+          lane.status = 'CLOSED'
+        }
+        continue
+      }
+
+      // Update status based on cashier state
+      const cashierState = cashier.state
+      
+      if (lane.desiredState === 'open') {
+        if (cashierState === 'WORKING') {
+          lane.status = 'OPEN'
+        } else if (cashierState === 'ARRIVE') {
+          lane.status = 'OPENING'
+        }
+      } else if (lane.desiredState === 'closed') {
+        if (cashierState === 'OFFSHIFT' || cashierState === 'DONE') {
+          lane.status = 'CLOSED'
+        } else if (cashierState === 'LEAVE') {
+          lane.status = 'CLOSING'
+        } else if (cashierState === 'WORKING') {
+          // Still serving customer, will close after
+          lane.status = 'CLOSING'
+        }
+      }
+
+      // Update queue count from simulator's queue manager
+      if (this.simulator.queueManager) {
+        const queueInfo = this.simulator.queueManager.getQueueInfo(laneId)
+        lane.queueCount = queueInfo ? queueInfo.length : 0
+      }
+    }
+  }
+
+  /**
+   * Calculate queue pressure metrics
+   * @returns {Object} Pressure metrics and suggestions
+   */
+  getQueuePressure() {
+    let totalQueueCount = 0
+    let openLaneCount = 0
+    const closedLanes = []
+
+    for (const [laneId, lane] of this.lanes) {
+      totalQueueCount += lane.queueCount
+      if (lane.status === 'OPEN') {
+        openLaneCount++
+      } else if (lane.status === 'CLOSED') {
+        closedLanes.push(laneId)
+      }
+    }
+
+    const avgQueuePerLane = openLaneCount > 0 ? totalQueueCount / openLaneCount : 0
+    const shouldOpenMore = avgQueuePerLane > this.config.queuePressureThreshold && closedLanes.length > 0
+
+    return {
+      totalQueueCount,
+      openLaneCount,
+      closedLaneCount: closedLanes.length,
+      avgQueuePerLane: Math.round(avgQueuePerLane * 10) / 10,
+      pressureThreshold: this.config.queuePressureThreshold,
+      shouldOpenMore,
+      suggestedLaneToOpen: shouldOpenMore ? closedLanes[0] : null
+    }
+  }
+
+  /**
+   * Update thresholds
+   * @param {Object} thresholds 
    */
   updateThresholds(thresholds) {
     if (thresholds.queuePressureThreshold !== undefined) {
-      this.config.queuePressureThreshold = thresholds.queuePressureThreshold;
+      this.config.queuePressureThreshold = thresholds.queuePressureThreshold
     }
     if (thresholds.inflowRateThreshold !== undefined) {
-      this.config.inflowRateThreshold = thresholds.inflowRateThreshold;
+      this.config.inflowRateThreshold = thresholds.inflowRateThreshold
     }
-    console.log('[LaneStateController] Updated thresholds:', this.config);
+    console.log('[LaneStateController] Updated thresholds:', this.config)
   }
-  
+
   /**
-   * Clear manual override for a lane (return to auto mode)
+   * Get open lane count
    */
-  clearManualOverride(laneId) {
-    this.desiredStates.delete(laneId);
-    console.log(`[LaneStateController] Cleared manual override for lane ${laneId}`);
+  getOpenLaneCount() {
+    let count = 0
+    for (const lane of this.lanes.values()) {
+      if (lane.status === 'OPEN' || lane.status === 'OPENING') {
+        count++
+      }
+    }
+    return count
   }
-  
+
   /**
-   * Clear all manual overrides
+   * Get all open lane IDs
    */
-  clearAllOverrides() {
-    this.desiredStates.clear();
-    console.log('[LaneStateController] Cleared all manual overrides');
+  getOpenLaneIds() {
+    const ids = []
+    for (const [laneId, lane] of this.lanes) {
+      if (lane.status === 'OPEN') {
+        ids.push(laneId)
+      }
+    }
+    return ids
   }
 }
 
-export default LaneStateController;
+export default LaneStateController

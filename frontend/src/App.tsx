@@ -11,11 +11,12 @@ import ZoneKPIPopup from './components/kpi/ZoneKPIPopup'
 import ZoneKPIOverlayPanel from './components/kpi/ZoneKPIOverlayPanel'
 import ActivityLedger from './components/kpi/ActivityLedger'
 import HeatmapViewerModal from './components/heatmap/HeatmapViewerModal'
+import CheckoutManagerModal from './components/checkout/CheckoutManagerModal'
 import SmartKpiModal from './components/kpi/SmartKpiModal'
 import PlanogramBuilder from './components/planogram/PlanogramBuilder'
 import { DwgImporterPage } from './components/dwgImporter'
 import LidarPlannerPage from './components/lidarPlanner/LidarPlannerPage'
-import { BarChart3, Bell, Thermometer, Zap, LayoutGrid } from 'lucide-react'
+import { BarChart3, Bell, Thermometer, Zap, LayoutGrid, ShoppingCart } from 'lucide-react'
 import { useState, useEffect, createContext, useContext } from 'react'
 import { useVenue } from './context/VenueContext'
 
@@ -50,6 +51,7 @@ function KPIOverlayToggle() {
   const [showLedger, setShowLedger] = useState(false)
   const [showHeatmapModal, setShowHeatmapModal] = useState(false)
   const [showSmartKpiModal, setShowSmartKpiModal] = useState(false)
+  const [showCheckoutManager, setShowCheckoutManager] = useState(false)
   const [unreadCount, setUnreadCount] = useState(0)
   
   // Debug: log dwgLayoutId
@@ -85,6 +87,12 @@ function KPIOverlayToggle() {
       <HeatmapViewerModal 
         isOpen={showHeatmapModal} 
         onClose={() => setShowHeatmapModal(false)} 
+      />
+      
+      {/* Checkout Manager Modal */}
+      <CheckoutManagerModal
+        isOpen={showCheckoutManager}
+        onClose={() => setShowCheckoutManager(false)}
       />
       
       {/* Smart KPI Modal */}
@@ -129,6 +137,19 @@ function KPIOverlayToggle() {
           title="Open Heatmap Viewer"
         >
           <Thermometer className="w-4 h-4" />
+        </button>
+        
+        {/* Checkout Manager Button */}
+        <button
+          onClick={() => setShowCheckoutManager(true)}
+          className={`flex items-center justify-center w-10 h-10 rounded-lg shadow-lg transition-all ${
+            showCheckoutManager 
+              ? 'bg-green-600 hover:bg-green-700 text-white' 
+              : 'bg-gray-800 hover:bg-gray-700 text-gray-300 border border-gray-600'
+          }`}
+          title="Checkout Manager"
+        >
+          <ShoppingCart className="w-4 h-4" />
         </button>
         
         {/* Activity Ledger Button */}

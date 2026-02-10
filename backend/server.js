@@ -291,69 +291,119 @@ app.get('/api/edge-simulator/debug/agents', async (req, res) => {
   }
 });
 
-// ========== CHECKOUT MANAGER PROXY ENDPOINTS ==========
-
-// Get checkout status for all lanes
-app.get('/api/edge-sim/checkout/status', async (req, res) => {
+// Checkout Manager API proxies
+app.get('/api/edge-simulator/checkout/status', async (req, res) => {
   try {
-    const response = await fetch(`${EDGE_SERVER_URL}/api/sim/control/checkout/status`);
+    const response = await fetch(`${EDGE_SERVER_URL}/api/checkout/status`);
     const data = await response.json();
-    res.json(data);
+    res.json({ connected: true, ...data });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.json({ connected: false, error: err.message });
   }
 });
 
-// Set lane state (open/close)
-app.post('/api/edge-sim/checkout/set_lane_state', async (req, res) => {
+app.post('/api/edge-simulator/checkout/set_lane_state', async (req, res) => {
   try {
-    const response = await fetch(`${EDGE_SERVER_URL}/api/sim/control/checkout/set_lane_state`, {
+    const response = await fetch(`${EDGE_SERVER_URL}/api/checkout/set_lane_state`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(req.body),
     });
     const data = await response.json();
-    console.log('🎯 Checkout lane state change:', req.body, '->', data);
-    res.json(data);
+    console.log('🛒 Checkout lane state changed:', req.body);
+    res.json({ success: true, ...data });
   } catch (err) {
     console.error('❌ Failed to set lane state:', err.message);
-    res.status(500).json({ ok: false, error: err.message });
+    res.status(500).json({ success: false, error: err.message });
   }
 });
 
-// Update queue pressure thresholds
-app.post('/api/edge-sim/checkout/thresholds', async (req, res) => {
+app.post('/api/edge-simulator/checkout/thresholds', async (req, res) => {
   try {
-    const response = await fetch(`${EDGE_SERVER_URL}/api/sim/control/checkout/thresholds`, {
+    const response = await fetch(`${EDGE_SERVER_URL}/api/checkout/thresholds`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(req.body),
     });
     const data = await response.json();
     console.log('⚙️ Checkout thresholds updated:', req.body);
-    res.json(data);
+    res.json({ success: true, ...data });
   } catch (err) {
     console.error('❌ Failed to update thresholds:', err.message);
-    res.status(500).json({ ok: false, error: err.message });
+    res.status(500).json({ success: false, error: err.message });
   }
 });
 
-// Clear manual override for a lane
-app.post('/api/edge-sim/checkout/clear_override', async (req, res) => {
+// ========== LIVE CHECKOUT STATUS API ==========
+// Get live checkout status from ROI occupancy data
+app.get('/api/venues/:venueId/checkout/live-status', async (req, res) => {
+  const { venueId } = req.params;
+  
   try {
-    const response = await fetch(`${EDGE_SERVER_URL}/api/sim/control/checkout/clear_override`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(req.body),
+    // Get all ROIs for this venue
+    const rois = await new Promise((resolve, reject) => {
+      db.all('SELECT * FROM rois WHERE venue_id = ?', [venueId], (err, rows) => {
+        if (err) reject(err);
+        else resolve(rows || []);
+      });
     });
-    const data = await response.json();
-    res.json(data);
+    
+    // Find Queue and Service ROI pairs
+    const queueRois = rois.filter(r => r.name && r.name.includes('- Queue'));
+    const serviceRois = rois.filter(r => r.name && r.name.includes('- Service'));
+    
+    // Build lane status from ROI pairs
+    const lanes = [];
+    let totalQueueCount = 0;
+    
+    for (let i = 0; i < queueRois.length; i++) {
+      const queueRoi = queueRois[i];
+      const prefix = queueRoi.name.replace('- Queue', '').trim();
+      const serviceRoi = serviceRois.find(s => s.name.replace('- Service', '').trim() === prefix);
+      
+      // Get current occupancy for the queue ROI
+      const queueCount = trackAggregator.getZoneOccupancy(queueRoi.id) || 0;
+      const serviceOccupied = serviceRoi ? (trackAggregator.getZoneOccupancy(serviceRoi.id) || 0) > 0 : false;
+      
+      totalQueueCount += queueCount;
+      
+      lanes.push({
+        laneId: i,
+        name: prefix,
+        desiredState: 'open', // In live mode, lanes are always "open" (no manual control)
+        status: serviceOccupied ? 'OPEN' : 'CLOSED',
+        queueCount: queueCount,
+        cashierAgentId: null
+      });
+    }
+    
+    const openLaneCount = lanes.filter(l => l.status === 'OPEN').length;
+    const closedLaneCount = lanes.filter(l => l.status === 'CLOSED').length;
+    const avgQueuePerLane = openLaneCount > 0 ? totalQueueCount / openLaneCount : 0;
+    const queuePressureThreshold = 5; // Default threshold
+    
+    res.json({
+      lanes,
+      pressure: {
+        totalQueueCount,
+        openLaneCount,
+        closedLaneCount,
+        avgQueuePerLane: Math.round(avgQueuePerLane * 10) / 10,
+        pressureThreshold: queuePressureThreshold,
+        shouldOpenMore: avgQueuePerLane > queuePressureThreshold && closedLaneCount > 0,
+        suggestedLaneToOpen: avgQueuePerLane > queuePressureThreshold ? lanes.find(l => l.status === 'CLOSED')?.laneId : null
+      },
+      thresholds: {
+        queuePressureThreshold,
+        inflowRateThreshold: 10
+      },
+      source: 'live'
+    });
   } catch (err) {
-    res.status(500).json({ ok: false, error: err.message });
+    console.error('❌ Failed to get live checkout status:', err.message);
+    res.status(500).json({ error: err.message });
   }
 });
-
-// ========== END CHECKOUT MANAGER PROXY ==========
 
 // Start server
 httpServer.listen(PORT, () => {

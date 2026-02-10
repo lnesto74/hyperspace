@@ -97,6 +97,10 @@ export class CashierAgent {
     // Spawned flag (matches AgentV2 interface)
     this.spawned = false;
     
+    // Manual mode flag (for Checkout Manager control)
+    this.manualMode = false;
+    this.pendingManualCommand = null;  // 'open' or 'close'
+    
     // Visual properties
     this.color = '#ef4444'; // Red for cashiers
     this.width = 0.5;
@@ -214,20 +218,30 @@ export class CashierAgent {
   updateWorking(dt) {
     const cfg = SIM_CONFIG.cashierBehavior;
     
-    // Check for shift end
-    if (this.stateTime >= this.shiftDuration) {
+    // Check for pending manual close command
+    if (this.manualMode && this.pendingManualCommand === 'close') {
+      this.pendingManualCommand = null;
       this.transitionTo(CASHIER_STATE.LEAVE);
       return;
     }
     
-    // Check for break
-    this.breakCheckTimer += dt;
-    if (this.breakCheckTimer >= cfg.breakCheckIntervalSec) {
-      this.breakCheckTimer = 0;
-      const breakProb = cfg.breakProbabilityPerHour / 60; // per minute
-      if (this.rng.next() < breakProb) {
-        this.transitionTo(CASHIER_STATE.BREAK);
+    // Skip auto-scheduling in manual mode
+    if (!this.manualMode) {
+      // Check for shift end
+      if (this.stateTime >= this.shiftDuration) {
+        this.transitionTo(CASHIER_STATE.LEAVE);
         return;
+      }
+      
+      // Check for break
+      this.breakCheckTimer += dt;
+      if (this.breakCheckTimer >= cfg.breakCheckIntervalSec) {
+        this.breakCheckTimer = 0;
+        const breakProb = cfg.breakProbabilityPerHour / 60; // per minute
+        if (this.rng.next() < breakProb) {
+          this.transitionTo(CASHIER_STATE.BREAK);
+          return;
+        }
       }
     }
     
@@ -417,6 +431,40 @@ export class CashierAgent {
         state: this.state,
       },
     };
+  }
+  
+  /**
+   * Set manual command from Checkout Manager
+   * @param {string} command - 'open' or 'close'
+   */
+  setManualCommand(command) {
+    this.manualMode = true;
+    
+    if (command === 'open') {
+      if (this.state === CASHIER_STATE.OFFSHIFT || this.state === CASHIER_STATE.DONE) {
+        // Reset position to staff exit and start arriving
+        this.x = this.staffExitPoint.x;
+        this.z = this.staffExitPoint.z;
+        this.spawned = true;
+        this.state = CASHIER_STATE.OFFSHIFT;  // Reset state
+        this.transitionTo(CASHIER_STATE.ARRIVE);
+        console.log(`[CashierAgent ${this.id}] Manual OPEN command - arriving at lane ${this.laneId}`);
+      } else if (this.state === CASHIER_STATE.LEAVE) {
+        // Cancel leaving, go back to working
+        this.transitionTo(CASHIER_STATE.ARRIVE);
+        console.log(`[CashierAgent ${this.id}] Manual OPEN command - canceling leave, returning to lane ${this.laneId}`);
+      }
+    } else if (command === 'close') {
+      if (this.state === CASHIER_STATE.WORKING) {
+        // Set pending close - will be handled in updateWorking after current service
+        this.pendingManualCommand = 'close';
+        console.log(`[CashierAgent ${this.id}] Manual CLOSE command - will leave after current service`);
+      } else if (this.state === CASHIER_STATE.ARRIVE) {
+        // Cancel arrival, go back
+        this.transitionTo(CASHIER_STATE.LEAVE);
+        console.log(`[CashierAgent ${this.id}] Manual CLOSE command - canceling arrival`);
+      }
+    }
   }
   
   /**

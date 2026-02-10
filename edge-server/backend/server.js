@@ -6,10 +6,7 @@ import { dirname, join } from 'path';
 import fs from 'fs';
 
 // V2 Simulation modules
-import { SimulatorV2, SIM_CONFIG, STATE, LaneStateController, LANE_STATUS } from './sim/index.js';
-
-// Lane state controller for checkout management
-let laneStateController = null;
+import { SimulatorV2, SIM_CONFIG, STATE } from './sim/index.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -50,9 +47,8 @@ const defaultConfig = {
   laneOpenConfirmSec: 120, // Seconds cashier must be present before lane marked open
   enableIdConfusion: false, // Simulate LiDAR ID tracking errors
   // Checkout Manager settings
-  enableCheckoutManager: false, // Feature flag for checkout manager
-  queuePressureThreshold: 5, // Avg queue per lane before suggesting to open more
-  inflowRateThreshold: 10, // Customers/min before suggesting to open more
+  enableCheckoutManager: false, // Manual lane control (false = auto cashier scheduling)
+  queuePressureThreshold: 5, // Suggest opening lane when avg queue > this
 };
 
 // SimulatorV2 instance
@@ -884,6 +880,9 @@ const startSimulation = async () => {
           // Cashier feature flags
           ENABLE_CASHIER_AGENTS: config.enableCashiers,
           ENABLE_ID_CONFUSION: config.enableIdConfusion,
+          // Checkout Manager settings
+          enableCheckoutManager: config.enableCheckoutManager,
+          queuePressureThreshold: config.queuePressureThreshold || 5,
         };
         
         // Override cashier behavior settings if provided
@@ -902,15 +901,6 @@ const startSimulation = async () => {
         
         simulatorV2 = new SimulatorV2(config.venueWidth, config.venueDepth, simV2Config);
         simulatorV2.initFromScene(venueGeometry.objects || [], venueGeometry.rois || []);
-        
-        // Initialize lane state controller for checkout management
-        if (config.enableCheckoutManager) {
-          laneStateController = new LaneStateController(simulatorV2, {
-            queuePressureThreshold: config.queuePressureThreshold || 5,
-            inflowRateThreshold: config.inflowRateThreshold || 10,
-          });
-          console.log('[SimV2] LaneStateController initialized for checkout management');
-        }
         
         // Log cashier status
         const cashierCount = simulatorV2.cashierAgents?.length || 0;
@@ -1105,10 +1095,6 @@ const stopSimulation = () => {
   if (simulatorV2) {
     simulatorV2.reset();
   }
-  if (laneStateController) {
-    laneStateController.clearAllOverrides();
-    laneStateController = null;
-  }
   isRunning = false;
   stats.mqttConnected = false;
   console.log('Simulation stopped');
@@ -1253,6 +1239,96 @@ app.get('/api/debug/agents', (req, res) => {
   });
 });
 
+// ========== CHECKOUT MANAGER API ENDPOINTS ==========
+
+// Get checkout lanes status
+app.get('/api/checkout/status', (req, res) => {
+  if (!config.useSimV2 || !simulatorV2) {
+    return res.status(400).json({ error: 'SimV2 not enabled' });
+  }
+  
+  if (!config.enableCheckoutManager) {
+    return res.status(400).json({ error: 'Checkout Manager not enabled' });
+  }
+  
+  const laneStateController = simulatorV2.laneStateController;
+  if (!laneStateController) {
+    return res.status(400).json({ error: 'LaneStateController not initialized' });
+  }
+  
+  res.json({
+    lanes: laneStateController.getAllLaneStatus(),
+    pressure: laneStateController.getQueuePressure(),
+    thresholds: {
+      queuePressureThreshold: laneStateController.config.queuePressureThreshold,
+      inflowRateThreshold: laneStateController.config.inflowRateThreshold,
+    }
+  });
+});
+
+// Set lane state (open/close)
+app.post('/api/checkout/set_lane_state', (req, res) => {
+  if (!config.useSimV2 || !simulatorV2) {
+    return res.status(400).json({ error: 'SimV2 not enabled' });
+  }
+  
+  if (!config.enableCheckoutManager) {
+    return res.status(400).json({ error: 'Checkout Manager not enabled' });
+  }
+  
+  const laneStateController = simulatorV2.laneStateController;
+  if (!laneStateController) {
+    return res.status(400).json({ error: 'LaneStateController not initialized' });
+  }
+  
+  const { laneId, state } = req.body;
+  if (laneId === undefined || !state) {
+    return res.status(400).json({ error: 'laneId and state are required' });
+  }
+  
+  console.log(`[Checkout Manager] Setting lane ${laneId} to ${state}`);
+  const result = laneStateController.setLaneState(laneId, state);
+  res.json(result);
+});
+
+// Update thresholds
+app.post('/api/checkout/thresholds', (req, res) => {
+  if (!config.useSimV2 || !simulatorV2) {
+    return res.status(400).json({ error: 'SimV2 not enabled' });
+  }
+  
+  if (!config.enableCheckoutManager) {
+    return res.status(400).json({ error: 'Checkout Manager not enabled' });
+  }
+  
+  const laneStateController = simulatorV2.laneStateController;
+  if (!laneStateController) {
+    return res.status(400).json({ error: 'LaneStateController not initialized' });
+  }
+  
+  const { queuePressureThreshold, inflowRateThreshold } = req.body;
+  laneStateController.updateThresholds({ queuePressureThreshold, inflowRateThreshold });
+  
+  // Also save to config
+  if (queuePressureThreshold !== undefined) {
+    config.queuePressureThreshold = queuePressureThreshold;
+  }
+  if (inflowRateThreshold !== undefined) {
+    config.inflowRateThreshold = inflowRateThreshold;
+  }
+  saveConfig();
+  
+  res.json({ 
+    success: true, 
+    thresholds: {
+      queuePressureThreshold: laneStateController.config.queuePressureThreshold,
+      inflowRateThreshold: laneStateController.config.inflowRateThreshold,
+    }
+  });
+});
+
+// ========== END CHECKOUT MANAGER API ==========
+
 app.post('/api/start', async (req, res) => {
   const result = await startSimulation();
   res.json(result);
@@ -1263,89 +1339,6 @@ app.post('/api/stop', (req, res) => {
   const result = stopSimulation();
   res.json(result);
 });
-
-// ========== CHECKOUT MANAGER API ENDPOINTS ==========
-
-// Get checkout status for all lanes
-app.get('/api/sim/control/checkout/status', (req, res) => {
-  if (!config.enableCheckoutManager) {
-    return res.status(400).json({ error: 'Checkout Manager not enabled' });
-  }
-  if (!laneStateController) {
-    return res.status(400).json({ error: 'Lane state controller not initialized' });
-  }
-  
-  const status = laneStateController.getCheckoutStatus();
-  res.json(status);
-});
-
-// Set lane state (open/close)
-app.post('/api/sim/control/checkout/set_lane_state', (req, res) => {
-  if (!config.enableCheckoutManager) {
-    return res.status(400).json({ ok: false, error: 'Checkout Manager not enabled' });
-  }
-  if (!laneStateController) {
-    return res.status(400).json({ ok: false, error: 'Lane state controller not initialized' });
-  }
-  
-  const { laneId, desiredState, reason } = req.body;
-  
-  if (laneId === undefined || !desiredState) {
-    return res.status(400).json({ ok: false, error: 'Missing laneId or desiredState' });
-  }
-  
-  if (!['open', 'closed'].includes(desiredState)) {
-    return res.status(400).json({ ok: false, error: 'desiredState must be "open" or "closed"' });
-  }
-  
-  console.log(`[Checkout API] Setting lane ${laneId} to ${desiredState} (reason: ${reason || 'manual'})`);
-  const result = laneStateController.setLaneState(laneId, desiredState, reason || 'manual');
-  res.json(result);
-});
-
-// Update queue pressure thresholds
-app.post('/api/sim/control/checkout/thresholds', (req, res) => {
-  if (!config.enableCheckoutManager) {
-    return res.status(400).json({ ok: false, error: 'Checkout Manager not enabled' });
-  }
-  if (!laneStateController) {
-    return res.status(400).json({ ok: false, error: 'Lane state controller not initialized' });
-  }
-  
-  const { queuePressureThreshold, inflowRateThreshold } = req.body;
-  
-  laneStateController.updateThresholds({ queuePressureThreshold, inflowRateThreshold });
-  
-  // Also persist to config
-  if (queuePressureThreshold !== undefined) {
-    config.queuePressureThreshold = queuePressureThreshold;
-  }
-  if (inflowRateThreshold !== undefined) {
-    config.inflowRateThreshold = inflowRateThreshold;
-  }
-  saveConfig();
-  
-  res.json({ ok: true, thresholds: laneStateController.config });
-});
-
-// Clear manual override for a lane (return to auto mode)
-app.post('/api/sim/control/checkout/clear_override', (req, res) => {
-  if (!laneStateController) {
-    return res.status(400).json({ ok: false, error: 'Lane state controller not initialized' });
-  }
-  
-  const { laneId } = req.body;
-  
-  if (laneId !== undefined) {
-    laneStateController.clearManualOverride(laneId);
-  } else {
-    laneStateController.clearAllOverrides();
-  }
-  
-  res.json({ ok: true });
-});
-
-// ========== END CHECKOUT MANAGER API ==========
 
 // Serve frontend for all other routes
 app.get('*', (req, res) => {

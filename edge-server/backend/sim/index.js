@@ -12,7 +12,6 @@ import { CheckoutQueueSubsystem, QUEUE_STATE } from './checkoutqueue.js';
 import { AgentV2, STATE } from './agent.js';
 import { CashierAgent, CASHIER_STATE } from './cashieragent.js';
 import { IDConfusionManager } from './idconfusion.js';
-import { LaneStateController, LANE_COMMAND, LANE_STATUS } from './lanestatecontroller.js';
 import SimulatorV2 from './simulator.js';
 
 export {
@@ -40,9 +39,6 @@ export {
   CashierAgent,
   CASHIER_STATE,
   IDConfusionManager,
-  LaneStateController,
-  LANE_COMMAND,
-  LANE_STATUS,
   SimulatorV2,
 };
 

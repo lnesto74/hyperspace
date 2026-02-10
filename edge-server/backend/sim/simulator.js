@@ -12,6 +12,7 @@ import { CheckoutQueueSubsystem } from './checkoutqueue.js';
 import { AgentV2, STATE } from './agent.js';
 import { CashierAgent, CASHIER_STATE } from './cashieragent.js';
 import { IDConfusionManager } from './idconfusion.js';
+import { LaneStateController } from './lanestatecontroller.js';
 
 export class SimulatorV2 {
   constructor(venueWidth, venueDepth, config = {}) {
@@ -41,6 +42,9 @@ export class SimulatorV2 {
     
     // ID confusion manager (optional LiDAR tracking errors)
     this.idConfusion = new IDConfusionManager(this.rng);
+    
+    // Lane state controller for manual checkout control (Checkout Manager feature)
+    this.laneStateController = null;  // Initialized only when enableCheckoutManager=true
     
     // Stats
     this.stats = {
@@ -77,7 +81,34 @@ export class SimulatorV2 {
     
     // Spawn cashiers if enabled
     if (this.config.ENABLE_CASHIER_AGENTS) {
-      this.spawnCashiers();
+      // Check if Checkout Manager (manual control) is enabled
+      if (this.config.enableCheckoutManager) {
+        // Initialize LaneStateController for manual control
+        this.laneStateController = new LaneStateController(this, {
+          queuePressureThreshold: this.config.queuePressureThreshold || 5,
+          inflowRateThreshold: this.config.inflowRateThreshold || 10,
+        });
+        // Initialize lanes from navGrid cashiers (all start closed)
+        const checkoutObjects = (this.navGrid.cashiers || []).map((pos, i) => ({
+          laneId: i,
+          serviceArea: pos,
+          queueArea: pos,
+          standPoint: pos,
+        }));
+        this.laneStateController.initializeLanes(checkoutObjects);
+        // Initialize empty lane states (no cashiers spawned yet in manual mode)
+        this.laneStates = checkoutObjects.map((_, i) => ({
+          laneId: i,
+          isOpen: false,
+          openSince: null,
+          closedSince: null,
+          cashierAgentId: null,
+        }));
+        console.log('[SimV2] Checkout Manager enabled - lanes start closed, waiting for manual control');
+      } else {
+        // Auto mode: spawn all cashiers at start
+        this.spawnCashiers();
+      }
       // Pass lane states to queue manager so it knows which lanes are open
       this.queueManager.setLaneStates(this.laneStates);
     }
@@ -121,6 +152,51 @@ export class SimulatorV2 {
     }
     
     console.log(`[SimV2] Spawned ${this.cashierAgents.length} cashier agents`);
+  }
+  
+  // Spawn a cashier for a specific lane (used by Checkout Manager manual control)
+  spawnCashierForLane(laneId, laneConfig = {}) {
+    if (!this.initialized) return null;
+    
+    const cashiers = this.navGrid.cashiers || [];
+    if (laneId < 0 || laneId >= cashiers.length) {
+      console.error(`[SimV2] Cannot spawn cashier for invalid lane ${laneId}`);
+      return null;
+    }
+    
+    // Check if there's already a cashier for this lane
+    const existingCashier = this.cashierAgents.find(c => c.laneId === laneId);
+    if (existingCashier && existingCashier.state !== CASHIER_STATE.DONE) {
+      // Reactivate existing cashier
+      existingCashier.setManualCommand('open');
+      return existingCashier;
+    }
+    
+    // Create new cashier agent
+    const cashierPos = cashiers[laneId];
+    const cashierAgent = new CashierAgent(
+      this.nextCashierId++,
+      laneId,
+      cashierPos,
+      this.navGrid,
+      this.pathPlanner,
+      this.rng
+    );
+    
+    // Enable manual mode and start arriving
+    cashierAgent.manualMode = true;
+    cashierAgent.spawned = true;
+    cashierAgent.transitionTo(CASHIER_STATE.ARRIVE);
+    
+    this.cashierAgents.push(cashierAgent);
+    
+    // Update lane state
+    if (laneId < this.laneStates.length) {
+      this.laneStates[laneId].cashierAgentId = cashierAgent.id;
+    }
+    
+    console.log(`[SimV2] Spawned manual cashier ${cashierAgent.id} for lane ${laneId}`);
+    return cashierAgent;
   }
   
   // Spawn a new agent
@@ -177,6 +253,11 @@ export class SimulatorV2 {
     
     // Update cashier agents
     if (this.config.ENABLE_CASHIER_AGENTS) {
+      // Update lane state controller if in manual mode
+      if (this.laneStateController) {
+        this.laneStateController.update();
+      }
+      
       for (const cashier of this.cashierAgents) {
         cashier.update(dt, this.cashierAgents);
         

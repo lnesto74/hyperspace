@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { Play, Square, RefreshCw, Users, Clock, Gauge, AlertCircle, CheckCircle2, Wifi, WifiOff, MapPin, UserCheck, Coffee, AlertTriangle } from 'lucide-react'
+import { Play, Square, RefreshCw, Users, Clock, Gauge, AlertCircle, CheckCircle2, Wifi, WifiOff, MapPin, UserCheck, Coffee, AlertTriangle, ShoppingCart, ToggleLeft, ToggleRight } from 'lucide-react'
 
 interface SimulatorConfig {
   targetPeopleCount: number
@@ -14,6 +14,31 @@ interface SimulatorConfig {
   cashierBreakProb: number
   laneOpenConfirmSec: number
   enableIdConfusion: boolean
+  // Checkout Manager settings
+  enableCheckoutManager?: boolean
+  queuePressureThreshold?: number
+}
+
+interface LaneStatus {
+  laneId: number
+  desiredState: 'open' | 'closed'
+  status: 'OPEN' | 'CLOSED' | 'OPENING' | 'CLOSING'
+  queueCount: number
+}
+
+interface CheckoutStatus {
+  connected: boolean
+  lanes: LaneStatus[]
+  pressure: {
+    totalQueueCount: number
+    openLaneCount: number
+    avgQueuePerLane: number
+    shouldOpenMore: boolean
+    suggestedLaneToOpen: number | null
+  }
+  thresholds: {
+    queuePressureThreshold: number
+  }
 }
 
 interface Venue {
@@ -55,6 +80,8 @@ export function SimulatorControl() {
   const [configDirty, setConfigDirty] = useState(false)
   const [venues, setVenues] = useState<Venue[]>([])
   const [selectedVenueId, setSelectedVenueId] = useState<string>('')
+  const [checkoutStatus, setCheckoutStatus] = useState<CheckoutStatus | null>(null)
+  const [checkoutLoading, setCheckoutLoading] = useState(false)
 
   // Fetch available venues
   const fetchVenues = useCallback(async () => {
@@ -85,6 +112,9 @@ export function SimulatorControl() {
           cashierBreakProb: data.config.cashierBreakProb || 15,
           laneOpenConfirmSec: data.config.laneOpenConfirmSec || 120,
           enableIdConfusion: data.config.enableIdConfusion ?? false,
+          // Checkout Manager settings
+          enableCheckoutManager: data.config.enableCheckoutManager ?? false,
+          queuePressureThreshold: data.config.queuePressureThreshold || 5,
         })
         // Set selected venue from edge server config
         if (data.config.venueId && !selectedVenueId) {
@@ -145,6 +175,44 @@ export function SimulatorControl() {
     }
     setLoading(false)
   }
+
+  // Checkout Manager functions
+  const fetchCheckoutStatus = useCallback(async () => {
+    if (!config.enableCheckoutManager) return
+    try {
+      const res = await fetch(`${API_BASE}/api/edge-simulator/checkout/status`)
+      const data = await res.json()
+      if (data.connected !== false) {
+        setCheckoutStatus(data)
+      }
+    } catch (err) {
+      console.error('Failed to fetch checkout status:', err)
+    }
+  }, [config.enableCheckoutManager])
+
+  const handleSetLaneState = async (laneId: number, state: 'open' | 'closed') => {
+    setCheckoutLoading(true)
+    try {
+      await fetch(`${API_BASE}/api/edge-simulator/checkout/set_lane_state`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ laneId, state }),
+      })
+      await fetchCheckoutStatus()
+    } catch (err) {
+      console.error('Failed to set lane state:', err)
+    }
+    setCheckoutLoading(false)
+  }
+
+  // Fetch checkout status when simulation is running and checkout manager is enabled
+  useEffect(() => {
+    if (status?.isRunning && config.enableCheckoutManager) {
+      fetchCheckoutStatus()
+      const interval = setInterval(fetchCheckoutStatus, 2000)
+      return () => clearInterval(interval)
+    }
+  }, [status?.isRunning, config.enableCheckoutManager, fetchCheckoutStatus])
 
   const handleConfigChange = (key: keyof SimulatorConfig, value: number | string | boolean) => {
     setConfig(prev => ({ ...prev, [key]: value }))
@@ -426,6 +494,126 @@ export function SimulatorControl() {
             </div>
           )}
         </div>
+
+        {/* Checkout Manager Section */}
+        {config.enableCashiers && (
+          <div className="border-t border-gray-600 pt-3 mt-3">
+            <div className="flex items-center justify-between mb-2">
+              <label className="text-xs text-gray-400 flex items-center gap-1">
+                <ShoppingCart className="w-3 h-3 text-green-400" /> Checkout Manager
+              </label>
+              <button
+                onClick={() => handleConfigChange('enableCheckoutManager', !config.enableCheckoutManager)}
+                className={`px-2 py-0.5 rounded text-xs font-medium transition-colors ${
+                  config.enableCheckoutManager
+                    ? 'bg-green-600/30 text-green-400 border border-green-500/50'
+                    : 'bg-gray-700 text-gray-400 border border-gray-600'
+                }`}
+              >
+                {config.enableCheckoutManager ? 'MANUAL' : 'AUTO'}
+              </button>
+            </div>
+
+            {config.enableCheckoutManager && (
+              <div className="space-y-2 pl-2 border-l border-green-500/30">
+                {/* Queue Pressure Threshold */}
+                <div>
+                  <label className="text-xs text-gray-500">Queue Pressure Threshold</label>
+                  <input
+                    type="number"
+                    min={1}
+                    max={20}
+                    value={config.queuePressureThreshold || 5}
+                    onChange={(e) => handleConfigChange('queuePressureThreshold', parseInt(e.target.value) || 5)}
+                    className="w-full mt-1 px-2 py-1 bg-gray-700 border border-gray-600 rounded text-white text-sm"
+                  />
+                  <p className="text-xs text-gray-500 mt-1">Suggest opening lane when avg queue &gt; this</p>
+                </div>
+
+                {/* Lane Control Panel - Only show when simulation is running */}
+                {status?.isRunning && checkoutStatus?.lanes && checkoutStatus.lanes.length > 0 && (
+                  <div className="mt-3">
+                    <div className="text-xs text-gray-400 mb-2">Lane Control</div>
+                    
+                    {/* Queue Pressure Alert */}
+                    {checkoutStatus.pressure?.shouldOpenMore && (
+                      <div className="bg-yellow-500/20 border border-yellow-500/50 rounded p-2 mb-2 flex items-center gap-2">
+                        <AlertTriangle className="w-4 h-4 text-yellow-400" />
+                        <span className="text-xs text-yellow-400">
+                          High queue pressure! Suggest opening Lane {checkoutStatus.pressure.suggestedLaneToOpen}
+                        </span>
+                      </div>
+                    )}
+
+                    {/* Stats */}
+                    <div className="grid grid-cols-3 gap-2 mb-2 text-center">
+                      <div className="bg-gray-700/50 rounded p-1">
+                        <div className="text-sm font-medium text-green-400">{checkoutStatus.pressure?.openLaneCount || 0}</div>
+                        <div className="text-xs text-gray-500">Open</div>
+                      </div>
+                      <div className="bg-gray-700/50 rounded p-1">
+                        <div className="text-sm font-medium text-blue-400">{checkoutStatus.pressure?.totalQueueCount || 0}</div>
+                        <div className="text-xs text-gray-500">In Queue</div>
+                      </div>
+                      <div className="bg-gray-700/50 rounded p-1">
+                        <div className="text-sm font-medium text-gray-300">{checkoutStatus.pressure?.avgQueuePerLane?.toFixed(1) || '0'}</div>
+                        <div className="text-xs text-gray-500">Avg/Lane</div>
+                      </div>
+                    </div>
+
+                    {/* Lane List */}
+                    <div className="space-y-1 max-h-40 overflow-y-auto">
+                      {checkoutStatus.lanes.map((lane) => (
+                        <div 
+                          key={lane.laneId} 
+                          className="flex items-center justify-between bg-gray-700/50 rounded px-2 py-1"
+                        >
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs text-gray-400">Lane {lane.laneId}</span>
+                            <span className={`text-xs px-1.5 py-0.5 rounded ${
+                              lane.status === 'OPEN' ? 'bg-green-500/30 text-green-400' :
+                              lane.status === 'OPENING' ? 'bg-yellow-500/30 text-yellow-400' :
+                              lane.status === 'CLOSING' ? 'bg-orange-500/30 text-orange-400' :
+                              'bg-gray-600 text-gray-400'
+                            }`}>
+                              {lane.status}
+                            </span>
+                            {lane.queueCount > 0 && (
+                              <span className="text-xs text-blue-400">({lane.queueCount} queued)</span>
+                            )}
+                          </div>
+                          <button
+                            onClick={() => handleSetLaneState(lane.laneId, lane.desiredState === 'open' ? 'closed' : 'open')}
+                            disabled={checkoutLoading}
+                            className={`p-1 rounded transition-colors ${
+                              lane.desiredState === 'open' 
+                                ? 'text-green-400 hover:bg-green-500/20' 
+                                : 'text-gray-500 hover:bg-gray-600'
+                            }`}
+                          >
+                            {lane.desiredState === 'open' ? (
+                              <ToggleRight className="w-5 h-5" />
+                            ) : (
+                              <ToggleLeft className="w-5 h-5" />
+                            )}
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {status?.isRunning && (!checkoutStatus?.lanes || checkoutStatus.lanes.length === 0) && (
+                  <div className="text-xs text-gray-500 italic">No checkout lanes detected</div>
+                )}
+
+                {!status?.isRunning && (
+                  <div className="text-xs text-gray-500 italic">Start simulation to control lanes</div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
 
         <button
           onClick={handleApplyConfig}

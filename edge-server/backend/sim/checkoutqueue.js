@@ -323,6 +323,34 @@ export class CheckoutQueueSubsystem {
       })),
     };
   }
+  
+  /**
+   * Get queue info for a specific lane
+   * @param {number} laneId - Lane index
+   * @returns {Array|null} Array of agent IDs in queue (including service), or null if invalid
+   */
+  getQueueInfo(laneId) {
+    if (laneId < 0 || laneId >= this.queues.length) return null;
+    const queue = this.queues[laneId];
+    // Return all agents: one in service + those waiting
+    const agents = [...queue.queueAgents];
+    if (queue.serviceAgent !== null) {
+      agents.unshift(queue.serviceAgent);
+    }
+    return agents;
+  }
+  
+  /**
+   * Get total queue count across all lanes
+   */
+  getTotalQueueCount() {
+    let total = 0;
+    for (const queue of this.queues) {
+      total += queue.queueAgents.length;
+      if (queue.serviceAgent !== null) total++;
+    }
+    return total;
+  }
 }
 
 export default CheckoutQueueSubsystem;
