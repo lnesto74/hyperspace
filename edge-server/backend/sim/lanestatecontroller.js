@@ -62,12 +62,26 @@ export class LaneStateController {
   getAllLaneStatus() {
     const result = []
     for (const [laneId, lane] of this.lanes) {
+      // Get queue info with wait times from queueManager
+      let avgWaitTimeSec = 0
+      let queuedPeople = []
+      
+      if (this.simulator.queueManager) {
+        const queueInfo = this.simulator.queueManager.getQueueInfo(laneId)
+        if (queueInfo) {
+          avgWaitTimeSec = queueInfo.avgWaitTimeSec || 0
+          queuedPeople = queueInfo.queuedPeople || []
+        }
+      }
+      
       result.push({
         laneId,
         desiredState: lane.desiredState,
         status: lane.status,
         cashierAgentId: lane.cashierAgentId,
         queueCount: lane.queueCount,
+        avgWaitTimeSec,
+        queuedPeople,
         lastChangeTs: lane.lastChangeTs
       })
     }

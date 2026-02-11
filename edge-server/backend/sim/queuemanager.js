@@ -68,7 +68,7 @@ export class QueueManager {
     const position = this.queues[cashierId].length;
     this.queues[cashierId].push(agentId);
     
-    const info = { cashierId, position };
+    const info = { cashierId, position, joinedAt: Date.now() };
     this.agentQueueInfo.set(agentId, info);
     
     console.log(`[QueueManager] Agent ${agentId} joined queue ${cashierId} at position ${position}`);
@@ -184,6 +184,35 @@ export class QueueManager {
     for (let i = 0; i < this.queues.length; i++) {
       console.log(`Queue ${i}: [${this.queues[i].join(', ')}]`);
     }
+  }
+}
+
+  // Get detailed queue info for a lane (for checkout alerts)
+  getQueueInfo(laneId) {
+    const cashierId = typeof laneId === 'number' ? laneId : parseInt(laneId);
+    if (isNaN(cashierId) || cashierId >= this.queues.length || cashierId < 0) return null;
+    
+    const queue = this.queues[cashierId];
+    const now = Date.now();
+    
+    const queuedPeople = queue.map(agentId => {
+      const info = this.agentQueueInfo.get(agentId);
+      const joinedAt = info?.joinedAt || now;
+      return {
+        id: String(agentId),
+        waitTimeSec: Math.floor((now - joinedAt) / 1000)
+      };
+    });
+    
+    const avgWaitTimeSec = queuedPeople.length > 0 
+      ? queuedPeople.reduce((sum, p) => sum + p.waitTimeSec, 0) / queuedPeople.length 
+      : 0;
+    
+    return {
+      length: queue.length,
+      queuedPeople,
+      avgWaitTimeSec
+    };
   }
 }
 
