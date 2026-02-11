@@ -39,10 +39,12 @@ export default function PointCloudViewer({
   const [showAxes, setShowAxes] = useState(true)
   const [colorMode, setColorMode] = useState<'height' | 'intensity' | 'distance'>('height')
   const [pointSize, setPointSize] = useState(2)
-  const [streamMode, setStreamMode] = useState<'http' | 'websocket'>('http')
+  const [streamMode, setStreamMode] = useState<'http' | 'websocket' | 'ros'>('http')
   const [wsConnected, setWsConnected] = useState(false)
+  const [rosConnected, setRosConnected] = useState(false)
   const [fps, setFps] = useState(0)
   const wsRef = useRef<WebSocket | null>(null)
+  const rosWsRef = useRef<WebSocket | null>(null)
   const frameCountRef = useRef(0)
   const lastFpsTimeRef = useRef(Date.now())
 
@@ -405,6 +407,186 @@ export default function PointCloudViewer({
     }
   }, [streamMode, autoRefresh, tailscaleIp, lidarIp, lidarModel, updatePointsFromBuffer])
 
+  // ROS streaming mode (via rosbridge)
+  useEffect(() => {
+    if (streamMode !== 'ros' || !autoRefresh) {
+      if (rosWsRef.current) {
+        rosWsRef.current.close()
+        rosWsRef.current = null
+        setRosConnected(false)
+      }
+      return
+    }
+
+    // Connect to rosbridge on edge server port 9090
+    const rosWsUrl = `ws://${tailscaleIp}:9090`
+    console.log('[PointCloud] Connecting to rosbridge:', rosWsUrl)
+
+    const ws = new WebSocket(rosWsUrl)
+    rosWsRef.current = ws
+
+    ws.onopen = () => {
+      console.log('[PointCloud] Rosbridge connected')
+      setRosConnected(true)
+      setError(null)
+
+      // Subscribe to point cloud topic
+      const subscribeMsg = {
+        op: 'subscribe',
+        topic: '/rslidar_points',
+        type: 'sensor_msgs/msg/PointCloud2',
+        throttle_rate: 100, // 10 Hz max
+        queue_length: 1,
+        compression: 'cbor-raw' // Use CBOR for binary efficiency
+      }
+      ws.send(JSON.stringify(subscribeMsg))
+    }
+
+    ws.onmessage = (event) => {
+      try {
+        const msg = JSON.parse(event.data)
+        if (msg.op === 'publish' && msg.topic === '/rslidar_points') {
+          parsePointCloud2(msg.msg)
+        }
+      } catch (e) {
+        // Binary CBOR message - handle separately if needed
+        console.log('[PointCloud] Received binary ROS message')
+      }
+    }
+
+    ws.onerror = (err) => {
+      console.error('[PointCloud] Rosbridge error:', err)
+      setError('ROS connection error - is rosbridge running on port 9090?')
+      setRosConnected(false)
+    }
+
+    ws.onclose = () => {
+      console.log('[PointCloud] Rosbridge disconnected')
+      setRosConnected(false)
+    }
+
+    return () => {
+      // Unsubscribe before closing
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ op: 'unsubscribe', topic: '/rslidar_points' }))
+      }
+      ws.close()
+      rosWsRef.current = null
+      setRosConnected(false)
+    }
+  }, [streamMode, autoRefresh, tailscaleIp])
+
+  // Parse PointCloud2 message from ROS
+  const parsePointCloud2 = useCallback((msg: {
+    height: number
+    width: number
+    fields: Array<{ name: string; offset: number; datatype: number; count: number }>
+    is_bigendian: boolean
+    point_step: number
+    row_step: number
+    data: string // Base64 encoded
+  }) => {
+    if (!sceneRef.current) return
+
+    // Decode base64 data
+    const binaryString = atob(msg.data)
+    const bytes = new Uint8Array(binaryString.length)
+    for (let i = 0; i < binaryString.length; i++) {
+      bytes[i] = binaryString.charCodeAt(i)
+    }
+    const dataView = new DataView(bytes.buffer)
+
+    const numPoints = msg.height * msg.width
+    const pointStep = msg.point_step
+    const isLittleEndian = !msg.is_bigendian
+
+    // Find field offsets
+    let xOffset = 0, yOffset = 4, zOffset = 8, intensityOffset = 12
+    for (const field of msg.fields) {
+      if (field.name === 'x') xOffset = field.offset
+      else if (field.name === 'y') yOffset = field.offset
+      else if (field.name === 'z') zOffset = field.offset
+      else if (field.name === 'intensity') intensityOffset = field.offset
+    }
+
+    const positions = new Float32Array(numPoints * 3)
+    const colors = new Float32Array(numPoints * 3)
+
+    let minZ = Infinity, maxZ = -Infinity
+    let validPoints = 0
+
+    // First pass: read points and find Z range
+    for (let i = 0; i < numPoints; i++) {
+      const offset = i * pointStep
+      const x = dataView.getFloat32(offset + xOffset, isLittleEndian)
+      const y = dataView.getFloat32(offset + yOffset, isLittleEndian)
+      const z = dataView.getFloat32(offset + zOffset, isLittleEndian)
+
+      // Filter out invalid points (NaN, Inf, or very far)
+      if (!isFinite(x) || !isFinite(y) || !isFinite(z)) continue
+      if (Math.abs(x) > 100 || Math.abs(y) > 100 || Math.abs(z) > 100) continue
+
+      if (z < minZ) minZ = z
+      if (z > maxZ) maxZ = z
+
+      positions[validPoints * 3] = x
+      positions[validPoints * 3 + 1] = z // Swap Y/Z for Three.js
+      positions[validPoints * 3 + 2] = -y
+      validPoints++
+    }
+
+    const zRange = maxZ - minZ || 1
+
+    // Second pass: color by height
+    for (let i = 0; i < validPoints; i++) {
+      const z = positions[i * 3 + 1] // Already swapped
+      const t = (z - minZ) / zRange
+      const color = new THREE.Color().setHSL(0.7 - t * 0.7, 1, 0.5)
+      colors[i * 3] = color.r
+      colors[i * 3 + 1] = color.g
+      colors[i * 3 + 2] = color.b
+    }
+
+    // Trim arrays to valid size
+    const trimmedPositions = positions.slice(0, validPoints * 3)
+    const trimmedColors = colors.slice(0, validPoints * 3)
+
+    // Update geometry
+    if (pointsRef.current) {
+      const geometry = pointsRef.current.geometry
+      geometry.setAttribute('position', new THREE.BufferAttribute(trimmedPositions, 3))
+      geometry.setAttribute('color', new THREE.BufferAttribute(trimmedColors, 3))
+      geometry.attributes.position.needsUpdate = true
+      geometry.attributes.color.needsUpdate = true
+    } else {
+      const geometry = new THREE.BufferGeometry()
+      geometry.setAttribute('position', new THREE.BufferAttribute(trimmedPositions, 3))
+      geometry.setAttribute('color', new THREE.BufferAttribute(trimmedColors, 3))
+
+      const material = new THREE.PointsMaterial({
+        size: pointSize,
+        vertexColors: true,
+        sizeAttenuation: true,
+      })
+
+      const points = new THREE.Points(geometry, material)
+      sceneRef.current.add(points)
+      pointsRef.current = points
+    }
+
+    setPointCount(validPoints)
+    setLastUpdate(new Date())
+
+    // FPS counter
+    frameCountRef.current++
+    const now = Date.now()
+    if (now - lastFpsTimeRef.current >= 1000) {
+      setFps(frameCountRef.current)
+      frameCountRef.current = 0
+      lastFpsTimeRef.current = now
+    }
+  }, [pointSize])
+
   // Reset camera view
   const resetView = () => {
     if (!cameraRef.current || !controlsRef.current) return
@@ -532,10 +714,20 @@ export default function PointCloudViewer({
               className={`px-2 py-1 rounded text-xs flex items-center gap-1 ${
                 streamMode === 'websocket' ? 'bg-blue-600 text-white' : 'text-gray-400'
               }`}
-              title="WebSocket Streaming (10 FPS)"
+              title="WebSocket Streaming via Node.js (10 FPS)"
             >
               {wsConnected ? <Wifi className="w-3 h-3" /> : <WifiOff className="w-3 h-3" />}
               WS
+            </button>
+            <button
+              onClick={() => setStreamMode('ros')}
+              className={`px-2 py-1 rounded text-xs flex items-center gap-1 ${
+                streamMode === 'ros' ? 'bg-green-600 text-white' : 'text-gray-400'
+              }`}
+              title="ROS2 via rosbridge (requires ROS Docker)"
+            >
+              {rosConnected ? <Wifi className="w-3 h-3" /> : <WifiOff className="w-3 h-3" />}
+              ROS
             </button>
           </div>
 
@@ -544,14 +736,14 @@ export default function PointCloudViewer({
             onClick={() => setAutoRefresh(!autoRefresh)}
             className={`px-3 py-1 rounded text-sm flex items-center gap-1 ${
               autoRefresh 
-                ? wsConnected && streamMode === 'websocket'
+                ? (wsConnected && streamMode === 'websocket') || (rosConnected && streamMode === 'ros')
                   ? 'bg-green-600 text-white' 
                   : 'bg-amber-600 text-white'
                 : 'bg-gray-700 text-gray-300'
             }`}
           >
             {autoRefresh ? (
-              streamMode === 'websocket' && wsConnected ? (
+              (streamMode === 'websocket' && wsConnected) || (streamMode === 'ros' && rosConnected) ? (
                 <>{fps} FPS</>
               ) : (
                 'Polling'

@@ -1,0 +1,12 @@
+common:
+  msg_source: 1
+  send_point_cloud_ros: true
+
+lidar:
+  - driver:
+      lidar_type: RSAIRY
+      msop_port: 6699
+      difop_port: 7788
+    ros:
+      ros_frame_id: rslidar
+      ros_send_point_cloud_topic: /rslidar_points

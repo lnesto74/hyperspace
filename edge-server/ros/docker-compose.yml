@@ -1,0 +1,21 @@
+version: '3.8'
+
+services:
+  ros-lidar:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ros-lidar
+    network_mode: host  # Required to receive UDP from LiDAR on ports 6699/7788
+    privileged: true    # Required for network access
+    environment:
+      - ROS_DOMAIN_ID=0
+      - RMW_IMPLEMENTATION=rmw_fastrtps_cpp
+    volumes:
+      - ./config/rslidar.yaml:/ros2_ws/src/rslidar_sdk/config/config.yaml:ro
+      - ./data:/data
+    restart: unless-stopped
+    # Ports exposed via host network:
+    # - 9090: rosbridge WebSocket
+    # - 6699: LiDAR MSOP (UDP)
+    # - 7788: LiDAR DIFOP (UDP)
