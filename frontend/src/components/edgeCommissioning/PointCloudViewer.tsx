@@ -38,7 +38,7 @@ export default function PointCloudViewer({
   const [autoRefresh, setAutoRefresh] = useState(false)
   const [showAxes, setShowAxes] = useState(true)
   const [colorMode, setColorMode] = useState<'height' | 'intensity' | 'distance'>('height')
-  const [pointSize, setPointSize] = useState(2)
+  const [pointSize, setPointSize] = useState(4)
   const [streamMode, setStreamMode] = useState<'http' | 'websocket' | 'ros'>('http')
   const [wsConnected, setWsConnected] = useState(false)
   const [rosConnected, setRosConnected] = useState(false)
@@ -236,9 +236,12 @@ export default function PointCloudViewer({
       geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3))
 
       const material = new THREE.PointsMaterial({
-        size: pointSize * 0.01,
+        size: pointSize * 0.02,
         vertexColors: true,
         sizeAttenuation: true,
+        transparent: true,
+        opacity: 0.9,
+        depthWrite: true,
       })
 
       const points = new THREE.Points(geometry, material)
@@ -322,9 +325,12 @@ export default function PointCloudViewer({
       geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3))
 
       const material = new THREE.PointsMaterial({
-        size: pointSize * 0.01,
+        size: pointSize * 0.02,
         vertexColors: true,
         sizeAttenuation: true,
+        transparent: true,
+        opacity: 0.9,
+        depthWrite: true,
       })
 
       const points = new THREE.Points(geometry, material)
@@ -357,7 +363,7 @@ export default function PointCloudViewer({
       return
     }
 
-    const wsUrl = `${WS_BASE}/ws/pcl?tailscaleIp=${tailscaleIp}&lidarIp=${lidarIp}&model=${lidarModel}&downsample=2`
+    const wsUrl = `${WS_BASE}/ws/pcl?tailscaleIp=${tailscaleIp}&lidarIp=${lidarIp}&model=${lidarModel}&downsample=1`
     console.log('[PointCloud] Connecting WebSocket:', wsUrl)
 
     const ws = new WebSocket(wsUrl)

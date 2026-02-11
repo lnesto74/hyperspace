@@ -30,11 +30,36 @@ const RS32_VERTICAL_ANGLES = [
   4.74, 4.94, 5.15, 5.36, 5.58, 5.81, 6.05, 6.31
 ];
 
+// RS-Helios / RSAIRY vertical angles (32 channels, -16° to +15°)
+const RSAIRY_VERTICAL_ANGLES = [
+  -16, -15, -14, -13, -12, -11, -10, -9,
+  -8, -7, -6, -5, -4, -3, -2, -1,
+  0, 1, 2, 3, 4, 5, 6, 7,
+  8, 9, 10, 11, 12, 13, 14, 15
+];
+
 // Distance resolution (meters per unit)
 const DISTANCE_RESOLUTION = 0.005; // 5mm
 
 // Debug: log first packet header
 let debugLogged = false;
+
+/**
+ * Get vertical angles for the specified LiDAR model
+ */
+function getVerticalAngles(model) {
+  switch (model.toUpperCase()) {
+    case 'RS32':
+      return RS32_VERTICAL_ANGLES;
+    case 'RSAIRY':
+    case 'RSHELIOS':
+    case 'HELIOS':
+      return RSAIRY_VERTICAL_ANGLES;
+    case 'RS16':
+    default:
+      return RS16_VERTICAL_ANGLES;
+  }
+}
 
 /**
  * Decode a single MSOP packet into XYZ points
@@ -115,12 +140,12 @@ function decodeMsopPacket(buffer, verticalAngles = RS16_VERTICAL_ANGLES) {
 export function capturePointCloudSnapshot(lidarIp, options = {}) {
   const {
     duration = 100, // ms - capture window (100ms = ~1 rotation at 10Hz)
-    maxPoints = 50000, // Max points to return
-    downsample = 1, // Keep every Nth point
-    model = 'RS16', // LiDAR model: RS16 or RS32
+    maxPoints = 100000, // Max points to return
+    downsample = 1, // Keep every Nth point (1 = no downsampling)
+    model = 'RSAIRY', // LiDAR model: RS16, RS32, RSAIRY
   } = options;
   
-  const verticalAngles = model === 'RS32' ? RS32_VERTICAL_ANGLES : RS16_VERTICAL_ANGLES;
+  const verticalAngles = getVerticalAngles(model);
   
   return new Promise((resolve, reject) => {
     const socket = dgram.createSocket({ type: 'udp4', reuseAddr: true });
@@ -174,12 +199,12 @@ export function capturePointCloudSnapshot(lidarIp, options = {}) {
 export function startPointCloudStream(lidarIp, onFrame, options = {}) {
   const {
     frameInterval = 100, // ms between frames
-    maxPointsPerFrame = 20000,
-    downsample = 2,
-    model = 'RS16',
+    maxPointsPerFrame = 100000, // Increased for full density
+    downsample = 1, // No downsampling for full density
+    model = 'RSAIRY',
   } = options;
   
-  const verticalAngles = model === 'RS32' ? RS32_VERTICAL_ANGLES : RS16_VERTICAL_ANGLES;
+  const verticalAngles = getVerticalAngles(model);
   const socket = dgram.createSocket({ type: 'udp4', reuseAddr: true });
   let framePoints = [];
   let isRunning = true;
