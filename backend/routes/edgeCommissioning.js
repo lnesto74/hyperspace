@@ -123,15 +123,76 @@ function computeConfigHash(config) {
 // GET /api/edge-commissioning/scan-edges
 router.get('/scan-edges', async (req, res) => {
   try {
+    const db = req.app.get('db');
     const devices = await getEdgeDevices();
+    
+    // Merge with custom display names from database
+    const edgesWithNames = devices.map(device => {
+      const stored = db.prepare('SELECT display_name, notes FROM edge_devices WHERE edge_id = ?').get(device.edgeId);
+      return {
+        ...device,
+        displayName: stored?.display_name || device.hostname,
+        notes: stored?.notes || null,
+      };
+    });
+    
     res.json({
-      edges: devices,
+      edges: edgesWithNames,
       scanTime: new Date().toISOString(),
-      count: devices.length,
+      count: edgesWithNames.length,
     });
   } catch (err) {
     console.error('❌ Edge scan failed:', err.message);
     res.status(500).json({ error: 'Failed to scan for edge devices', message: err.message });
+  }
+});
+
+// PUT /api/edge-commissioning/edge/:edgeId/name - Update edge display name
+router.put('/edge/:edgeId/name', async (req, res) => {
+  try {
+    const db = req.app.get('db');
+    const { edgeId } = req.params;
+    const { displayName, notes } = req.body;
+
+    if (!displayName || displayName.trim().length === 0) {
+      return res.status(400).json({ error: 'displayName is required' });
+    }
+
+    // Get edge info from tailscale
+    const edges = await getEdgeDevices();
+    const edge = edges.find(e => e.edgeId === edgeId);
+    
+    const now = new Date().toISOString();
+    
+    // Upsert the edge device record
+    db.prepare(`
+      INSERT INTO edge_devices (edge_id, display_name, tailscale_ip, original_hostname, notes, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(edge_id) DO UPDATE SET
+        display_name = excluded.display_name,
+        notes = excluded.notes,
+        updated_at = excluded.updated_at
+    `).run(
+      edgeId,
+      displayName.trim(),
+      edge?.tailscaleIp || null,
+      edge?.hostname || null,
+      notes || null,
+      now,
+      now
+    );
+
+    console.log(`✏️ Edge ${edgeId} renamed to "${displayName}"`);
+    
+    res.json({
+      success: true,
+      edgeId,
+      displayName: displayName.trim(),
+      notes: notes || null,
+    });
+  } catch (err) {
+    console.error(`❌ Failed to update edge name:`, err.message);
+    res.status(500).json({ error: 'Failed to update edge name', message: err.message });
   }
 });
 

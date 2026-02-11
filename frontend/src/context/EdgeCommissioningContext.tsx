@@ -7,11 +7,13 @@ const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3001'
 export interface EdgeDevice {
   edgeId: string
   hostname: string
+  displayName: string
   tailscaleIp: string
   online: boolean
   lastSeen: string
   os: string
   tags: string[]
+  notes?: string | null
 }
 
 export interface EdgeLidar {
@@ -152,6 +154,9 @@ interface EdgeCommissioningContextType {
   getPairingForPlacement: (placementId: string) => EdgePairing | undefined
   getLidarById: (lidarId: string) => EdgeLidar | undefined
   getMergedLidars: () => EdgeLidar[]
+  
+  // Edge name management
+  updateEdgeName: (edgeId: string, displayName: string, notes?: string) => Promise<void>
 }
 
 const EdgeCommissioningContext = createContext<EdgeCommissioningContextType | null>(null)
@@ -454,6 +459,28 @@ export function EdgeCommissioningProvider({ children }: Props) {
     })
   }, [edgeInventory, commissionedLidars])
 
+  // Update edge device display name
+  const updateEdgeName = useCallback(async (edgeId: string, displayName: string, notes?: string) => {
+    try {
+      const res = await fetch(`${API_BASE}/api/edge-commissioning/edge/${edgeId}/name`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ displayName, notes }),
+      })
+      if (!res.ok) throw new Error('Failed to update edge name')
+      
+      // Update local state
+      setEdges(prev => prev.map(e => 
+        e.edgeId === edgeId 
+          ? { ...e, displayName, notes: notes || null } 
+          : e
+      ))
+      addToast('success', `Edge renamed to "${displayName}"`)
+    } catch (err: any) {
+      addToast('error', `Failed to update edge name: ${err.message}`)
+    }
+  }, [addToast])
+
   const value: EdgeCommissioningContextType = {
     edges,
     selectedEdgeId,
@@ -484,6 +511,7 @@ export function EdgeCommissioningProvider({ children }: Props) {
     getPairingForPlacement,
     getLidarById,
     getMergedLidars,
+    updateEdgeName,
   }
 
   return (

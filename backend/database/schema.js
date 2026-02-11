@@ -323,6 +323,17 @@ export function initDatabase() {
     CREATE INDEX IF NOT EXISTS idx_commissioned_lidars_venue_id ON commissioned_lidars(venue_id);
     CREATE INDEX IF NOT EXISTS idx_commissioned_lidars_edge_id ON commissioned_lidars(edge_id);
 
+    -- Edge devices table (stores custom display names for Tailscale edges)
+    CREATE TABLE IF NOT EXISTS edge_devices (
+      edge_id TEXT PRIMARY KEY,
+      display_name TEXT,
+      tailscale_ip TEXT,
+      original_hostname TEXT,
+      notes TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
     -- Insert default LiDAR models if not exist
     INSERT OR IGNORE INTO lidar_models (id, name, hfov_deg, vfov_deg, range_m, dome_mode, notes_json) VALUES
       ('livox-mid360', 'Livox Mid-360', 360, 59, 40, 1, '{"manufacturer":"Livox","type":"solid-state"}'),

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { 
   Server, Radio, Wifi, WifiOff, RefreshCw, Search, Upload, 
-  Check, X, AlertCircle, Clock, Link2, Unlink, Download, Wand2, Camera
+  Check, X, AlertCircle, Clock, Link2, Unlink, Download, Wand2, Camera, Pencil
 } from 'lucide-react'
 import { useEdgeCommissioning, EdgeDevice, EdgeLidar, EdgePlacement, EdgePairing, RoiBounds } from '../../context/EdgeCommissioningContext'
 import { useVenue } from '../../context/VenueContext'
@@ -37,12 +37,15 @@ export default function EdgeCommissioningPage({ onClose }: { onClose: () => void
     loadCommissionedLidars,
     getPairingForPlacement,
     getMergedLidars,
+    updateEdgeName,
   } = useEdgeCommissioning()
 
   const [draggedLidar, setDraggedLidar] = useState<EdgeLidar | null>(null)
   const [showDeployHistory, setShowDeployHistory] = useState(false)
   const [showCommissioningWizard, setShowCommissioningWizard] = useState(false)
   const [pointCloudLidar, setPointCloudLidar] = useState<{ ip: string; tailscaleIp: string } | null>(null)
+  const [editingEdge, setEditingEdge] = useState<EdgeDevice | null>(null)
+  const [editName, setEditName] = useState('')
 
   // Load data when venue changes
   useEffect(() => {
@@ -235,6 +238,10 @@ export default function EdgeCommissioningPage({ onClose }: { onClose: () => void
                   edge={edge}
                   isSelected={edge.edgeId === selectedEdgeId}
                   onClick={() => selectEdge(edge.edgeId)}
+                  onEditName={() => {
+                    setEditingEdge(edge)
+                    setEditName(edge.displayName || edge.hostname)
+                  }}
                 />
               ))
             )}
@@ -369,6 +376,7 @@ export default function EdgeCommissioningPage({ onClose }: { onClose: () => void
                       placements={placements} 
                       roiBounds={roiBounds}
                       pairings={pairings}
+                      mergedLidars={mergedLidars}
                     />
                   )}
                   
@@ -383,6 +391,7 @@ export default function EdgeCommissioningPage({ onClose }: { onClose: () => void
                         onDrop={() => handleDrop(placement)}
                         onUnpair={() => venue?.id && unpairPlacement(venue.id, placement.id)}
                         roiBounds={roiBounds}
+                        mergedLidars={mergedLidars}
                       />
                     ))}
                   </div>
@@ -392,6 +401,51 @@ export default function EdgeCommissioningPage({ onClose }: { onClose: () => void
           )}
         </div>
       </div>
+
+      {/* Edit Edge Name Modal */}
+      {editingEdge && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
+          <div className="bg-gray-800 rounded-lg p-6 w-96 border border-gray-700">
+            <h3 className="text-lg font-medium text-white mb-4">Edit Edge Name</h3>
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm text-gray-400 mb-1">Display Name</label>
+                <input
+                  type="text"
+                  value={editName}
+                  onChange={(e) => setEditName(e.target.value)}
+                  className="w-full px-3 py-2 bg-gray-900 border border-gray-600 rounded text-white text-sm focus:outline-none focus:border-blue-500"
+                  placeholder="Enter display name"
+                  autoFocus
+                />
+              </div>
+              <div className="text-xs text-gray-500">
+                Original hostname: <span className="text-gray-400">{editingEdge.hostname}</span>
+              </div>
+              <div className="flex justify-end gap-2">
+                <button
+                  onClick={() => setEditingEdge(null)}
+                  className="px-4 py-2 text-sm text-gray-400 hover:text-white"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={async () => {
+                    if (editName.trim()) {
+                      await updateEdgeName(editingEdge.edgeId, editName.trim())
+                      setEditingEdge(null)
+                    }
+                  }}
+                  disabled={!editName.trim()}
+                  className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm rounded disabled:opacity-50"
+                >
+                  Save
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -400,16 +454,18 @@ export default function EdgeCommissioningPage({ onClose }: { onClose: () => void
 function EdgeDeviceCard({ 
   edge, 
   isSelected, 
-  onClick 
+  onClick,
+  onEditName,
 }: { 
   edge: EdgeDevice
   isSelected: boolean
-  onClick: () => void 
+  onClick: () => void
+  onEditName: () => void
 }) {
   return (
     <div
       onClick={onClick}
-      className={`p-3 rounded-lg cursor-pointer transition-colors border ${
+      className={`group p-3 rounded-lg cursor-pointer transition-colors border ${
         isSelected
           ? 'bg-blue-900/40 border-blue-500'
           : 'bg-gray-800 border-gray-700 hover:bg-gray-750 hover:border-gray-600'
@@ -417,15 +473,28 @@ function EdgeDeviceCard({
     >
       <div className="flex items-center gap-2">
         <Server className="w-4 h-4 text-gray-400" />
-        <span className="font-medium text-white text-sm truncate">{edge.hostname}</span>
+        <span className="font-medium text-white text-sm truncate flex-1">{edge.displayName || edge.hostname}</span>
+        <button
+          onClick={(e) => {
+            e.stopPropagation()
+            onEditName()
+          }}
+          className="p-1 hover:bg-gray-700 rounded opacity-0 group-hover:opacity-100 transition-opacity"
+          title="Edit name"
+        >
+          <Pencil className="w-3 h-3 text-gray-400 hover:text-white" />
+        </button>
         {edge.online ? (
           <Wifi className="w-3 h-3 text-green-400 ml-auto" />
         ) : (
           <WifiOff className="w-3 h-3 text-red-400 ml-auto" />
         )}
       </div>
-      <div className="mt-1 text-xs text-gray-500">
-        {edge.tailscaleIp}
+      <div className="mt-1 text-xs text-gray-500 flex items-center gap-2">
+        <span>{edge.tailscaleIp}</span>
+        {edge.displayName && edge.displayName !== edge.hostname && (
+          <span className="text-gray-600">({edge.hostname})</span>
+        )}
       </div>
       {edge.tags.length > 0 && (
         <div className="mt-1 flex flex-wrap gap-1">
@@ -510,6 +579,7 @@ function PlacementCard({
   onDrop,
   onUnpair,
   roiBounds,
+  mergedLidars,
 }: {
   placement: EdgePlacement
   pairing?: EdgePairing
@@ -517,6 +587,7 @@ function PlacementCard({
   onDrop: () => void
   onUnpair: () => void
   roiBounds: RoiBounds | null
+  mergedLidars: EdgeLidar[]
 }) {
   const [isOver, setIsOver] = useState(false)
 
@@ -539,18 +610,34 @@ function PlacementCard({
   const roiX = roiBounds ? placement.position.x - roiBounds.minX : placement.position.x
   const roiZ = roiBounds ? placement.position.z - roiBounds.minZ : placement.position.z
 
+  // Check if paired lidar is online
+  const pairedLidar = pairing 
+    ? mergedLidars.find(l => l.lidarId === pairing.lidarId || l.ip === pairing.lidarIp)
+    : null
+  const isOnline = pairedLidar?.reachable ?? false
+
+  // Determine card colors based on state
+  let cardClasses = 'p-3 rounded-lg border transition-all '
+  if (pairing) {
+    if (isOnline) {
+      // Paired + Online - green
+      cardClasses += 'bg-green-900/20 border-green-600'
+    } else {
+      // Paired + Offline - amber
+      cardClasses += 'bg-amber-900/20 border-amber-600'
+    }
+  } else if (isOver && isDragOver) {
+    cardClasses += 'bg-blue-900/30 border-blue-500 border-dashed'
+  } else {
+    cardClasses += 'bg-gray-800 border-gray-700'
+  }
+
   return (
     <div
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
-      className={`p-3 rounded-lg border transition-all ${
-        pairing
-          ? 'bg-green-900/20 border-green-600'
-          : isOver && isDragOver
-            ? 'bg-blue-900/30 border-blue-500 border-dashed'
-            : 'bg-gray-800 border-gray-700'
-      }`}
+      className={cardClasses}
     >
       <div className="flex items-center justify-between mb-2">
         <span className="text-xs font-mono text-gray-400">
@@ -590,9 +677,10 @@ function PlacementCard({
 
       {pairing ? (
         <div className="mt-2 pt-2 border-t border-gray-700">
-          <div className="flex items-center gap-1 text-xs text-green-400">
+          <div className={`flex items-center gap-1 text-xs ${isOnline ? 'text-green-400' : 'text-amber-400'}`}>
             <Check className="w-3 h-3" />
             <span>Paired: {pairing.lidarId}</span>
+            {!isOnline && <span className="text-amber-500 ml-1">(Offline)</span>}
           </div>
           {pairing.lidarIp && (
             <div className="text-xs text-gray-500 mt-0.5">{pairing.lidarIp}</div>
@@ -615,10 +703,12 @@ function RoiWireframe({
   placements,
   roiBounds,
   pairings,
+  mergedLidars,
 }: {
   placements: EdgePlacement[]
   roiBounds: RoiBounds
   pairings: EdgePairing[]
+  mergedLidars: EdgeLidar[]
 }) {
   const width = roiBounds.maxX - roiBounds.minX
   const height = roiBounds.maxZ - roiBounds.minZ
@@ -687,19 +777,52 @@ function RoiWireframe({
         
         {/* LiDAR positions */}
         {placements.map((p, idx) => {
-          const isPaired = pairings.some(pair => pair.placementId === p.id)
+          const pairing = pairings.find(pair => pair.placementId === p.id)
+          const isPaired = !!pairing
+          // Check if the paired lidar is online
+          const pairedLidar = pairing 
+            ? mergedLidars.find(l => l.lidarId === pairing.lidarId || l.ip === pairing.lidarIp)
+            : null
+          const isOnline = pairedLidar?.reachable ?? false
+          
           const cx = toSvgX(p.position.x)
           const cy = toSvgY(p.position.z)
           
+          // Color logic: blue=unpaired, translucent green=paired+offline, solid green=paired+online
+          let fillColor: string
+          let strokeColor: string
+          let fillOpacity: number
+          let markerFill: string
+          
+          if (!isPaired) {
+            // Unpaired - blue
+            fillColor = 'rgba(59, 130, 246, 0.1)'
+            strokeColor = '#3b82f6'
+            markerFill = '#3b82f6'
+            fillOpacity = 1
+          } else if (isOnline) {
+            // Paired + Online - solid green
+            fillColor = 'rgba(34, 197, 94, 0.15)'
+            strokeColor = '#22c55e'
+            markerFill = '#22c55e'
+            fillOpacity = 1
+          } else {
+            // Paired + Offline - amber/orange tone (visible but distinct)
+            fillColor = 'rgba(245, 158, 11, 0.15)'
+            strokeColor = '#f59e0b'
+            markerFill = '#f59e0b'
+            fillOpacity = 1
+          }
+          
           return (
-            <g key={p.id}>
+            <g key={p.id} style={{ opacity: fillOpacity }}>
               {/* Coverage circle */}
               <circle
                 cx={cx}
                 cy={cy}
                 r={p.range * scale * 0.9}
-                fill={isPaired ? 'rgba(34, 197, 94, 0.1)' : 'rgba(59, 130, 246, 0.1)'}
-                stroke={isPaired ? '#22c55e' : '#3b82f6'}
+                fill={fillColor}
+                stroke={strokeColor}
                 strokeWidth="1"
                 strokeOpacity="0.5"
               />
@@ -708,7 +831,7 @@ function RoiWireframe({
                 cx={cx}
                 cy={cy}
                 r="5"
-                fill={isPaired ? '#22c55e' : '#3b82f6'}
+                fill={markerFill}
               />
               {/* Index label */}
               <text
@@ -745,7 +868,10 @@ function RoiWireframe({
           <span className="w-2 h-2 rounded-full bg-blue-500"></span> Unpaired
         </span>
         <span className="flex items-center gap-1">
-          <span className="w-2 h-2 rounded-full bg-green-500"></span> Paired
+          <span className="w-2 h-2 rounded-full bg-amber-500"></span> Paired (Offline)
+        </span>
+        <span className="flex items-center gap-1">
+          <span className="w-2 h-2 rounded-full bg-green-500"></span> Paired (Online)
         </span>
       </div>
     </div>
