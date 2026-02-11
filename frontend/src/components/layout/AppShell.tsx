@@ -43,9 +43,10 @@ const defaultTracking: TrackingSettings = {
 interface AppShellProps {
   onOpenDwgImporter?: () => void
   onOpenLidarPlanner?: () => void
+  onOpenEdgeCommissioning?: () => void
 }
 
-export default function AppShell({ onOpenDwgImporter, onOpenLidarPlanner }: AppShellProps) {
+export default function AppShell({ onOpenDwgImporter, onOpenLidarPlanner, onOpenEdgeCommissioning }: AppShellProps) {
   const [activeTab, setActiveTab] = useState<SidebarTab>('venue')
   const [cameraView, setCameraView] = useState<CameraView>('perspective')
   const [showLightingPopup, setShowLightingPopup] = useState(false)
@@ -89,7 +90,7 @@ export default function AppShell({ onOpenDwgImporter, onOpenLidarPlanner }: AppS
   return (
     <div className="h-screen w-screen flex bg-app-bg overflow-hidden">
       {/* Left Sidebar */}
-      <Sidebar activeTab={activeTab} onTabChange={setActiveTab} onOpenDwgImporter={onOpenDwgImporter} onOpenLidarPlanner={onOpenLidarPlanner} />
+      <Sidebar activeTab={activeTab} onTabChange={setActiveTab} onOpenDwgImporter={onOpenDwgImporter} onOpenLidarPlanner={onOpenLidarPlanner} onOpenEdgeCommissioning={onOpenEdgeCommissioning} />
       
       {/* Main 3D Viewport - flex-1 min-w-0 ensures it shrinks when panels open */}
       <div className="flex-1 min-w-0 relative overflow-hidden">

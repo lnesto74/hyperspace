@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Box, Package, Radar, Settings, Hexagon, FileUp, Target, Map, Play, X } from 'lucide-react'
+import { Box, Package, Radar, Settings, Hexagon, FileUp, Target, Map, Play, X, Server } from 'lucide-react'
 import { SidebarTab } from './AppShell'
 import VenuePanel from '../venue/VenuePanel'
 import VenueDwgPanel from '../venue/VenueDwgPanel'
@@ -15,6 +15,7 @@ interface SidebarProps {
   onTabChange: (tab: SidebarTab) => void
   onOpenDwgImporter?: () => void
   onOpenLidarPlanner?: () => void
+  onOpenEdgeCommissioning?: () => void
 }
 
 const tabs: { id: SidebarTab; icon: typeof Box; label: string }[] = [
@@ -25,7 +26,7 @@ const tabs: { id: SidebarTab; icon: typeof Box; label: string }[] = [
   { id: 'regions', icon: Hexagon, label: 'Regions' },
 ]
 
-export default function Sidebar({ activeTab, onTabChange, onOpenDwgImporter, onOpenLidarPlanner }: SidebarProps) {
+export default function Sidebar({ activeTab, onTabChange, onOpenDwgImporter, onOpenLidarPlanner, onOpenEdgeCommissioning }: SidebarProps) {
   const { venue } = useVenue()
   const [showWhiteLabel, setShowWhiteLabel] = useState(false)
   const [showSimulator, setShowSimulator] = useState(false)
@@ -98,6 +99,15 @@ export default function Sidebar({ activeTab, onTabChange, onOpenDwgImporter, onO
               title="LiDAR Coverage Planner"
             >
               <Target className="w-4 h-4" />
+            </button>
+          )}
+          {onOpenEdgeCommissioning && (
+            <button 
+              onClick={onOpenEdgeCommissioning}
+              className="text-gray-400 hover:text-cyan-400 transition-colors"
+              title="Edge Commissioning Portal"
+            >
+              <Server className="w-4 h-4" />
             </button>
           )}
           <button 

@@ -72,6 +72,7 @@ class MqttTrajectoryService {
   handleMessage(topic, message) {
     try {
       const data = JSON.parse(message.toString())
+      console.log(`[MQTT] Received trajectory on ${topic}:`, JSON.stringify(data).slice(0, 200))
       
       // Expected format: hyperspace/trajectories/{deviceId}
       const topicParts = topic.split('/')

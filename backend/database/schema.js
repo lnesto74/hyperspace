@@ -269,6 +269,60 @@ export function initDatabase() {
     CREATE INDEX IF NOT EXISTS idx_lidar_instances_source ON lidar_instances(source);
     CREATE INDEX IF NOT EXISTS idx_lidar_plan_runs_layout_version_id ON lidar_plan_runs(layout_version_id);
 
+    -- Edge Commissioning Portal tables
+    CREATE TABLE IF NOT EXISTS edge_lidar_pairings (
+      id TEXT PRIMARY KEY,
+      venue_id TEXT NOT NULL,
+      edge_id TEXT NOT NULL,
+      edge_tailscale_ip TEXT,
+      placement_id TEXT NOT NULL,
+      lidar_id TEXT NOT NULL,
+      lidar_ip TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (venue_id) REFERENCES venues(id) ON DELETE CASCADE,
+      UNIQUE(venue_id, placement_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS edge_deploy_history (
+      id TEXT PRIMARY KEY,
+      venue_id TEXT NOT NULL,
+      edge_id TEXT NOT NULL,
+      edge_tailscale_ip TEXT,
+      config_hash TEXT NOT NULL,
+      config_json TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      edge_response_json TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (venue_id) REFERENCES venues(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_edge_lidar_pairings_venue_id ON edge_lidar_pairings(venue_id);
+    CREATE INDEX IF NOT EXISTS idx_edge_lidar_pairings_edge_id ON edge_lidar_pairings(edge_id);
+    CREATE INDEX IF NOT EXISTS idx_edge_deploy_history_venue_id ON edge_deploy_history(venue_id);
+    CREATE INDEX IF NOT EXISTS idx_edge_deploy_history_edge_id ON edge_deploy_history(edge_id);
+
+    -- Commissioned LiDARs table (persists assigned IPs per venue)
+    CREATE TABLE IF NOT EXISTS commissioned_lidars (
+      id TEXT PRIMARY KEY,
+      venue_id TEXT NOT NULL,
+      edge_id TEXT NOT NULL,
+      assigned_ip TEXT NOT NULL,
+      label TEXT,
+      original_ip TEXT DEFAULT '192.168.1.200',
+      vendor TEXT DEFAULT 'RoboSense',
+      model TEXT,
+      mac_address TEXT,
+      commissioned_at TEXT NOT NULL DEFAULT (datetime('now')),
+      last_seen_at TEXT,
+      status TEXT NOT NULL DEFAULT 'active',
+      FOREIGN KEY (venue_id) REFERENCES venues(id) ON DELETE CASCADE,
+      UNIQUE(venue_id, assigned_ip)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_commissioned_lidars_venue_id ON commissioned_lidars(venue_id);
+    CREATE INDEX IF NOT EXISTS idx_commissioned_lidars_edge_id ON commissioned_lidars(edge_id);
+
     -- Insert default LiDAR models if not exist
     INSERT OR IGNORE INTO lidar_models (id, name, hfov_deg, vfov_deg, range_m, dome_mode, notes_json) VALUES
       ('livox-mid360', 'Livox Mid-360', 360, 59, 40, 1, '{"manufacturer":"Livox","type":"solid-state"}'),

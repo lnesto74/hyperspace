@@ -16,12 +16,14 @@ import SmartKpiModal from './components/kpi/SmartKpiModal'
 import PlanogramBuilder from './components/planogram/PlanogramBuilder'
 import { DwgImporterPage } from './components/dwgImporter'
 import LidarPlannerPage from './components/lidarPlanner/LidarPlannerPage'
+import { EdgeCommissioningPage } from './components/edgeCommissioning'
+import { EdgeCommissioningProvider } from './context/EdgeCommissioningContext'
 import { BarChart3, Bell, Thermometer, Zap, LayoutGrid, ShoppingCart } from 'lucide-react'
 import { useState, useEffect, createContext, useContext } from 'react'
 import { useVenue } from './context/VenueContext'
 
 // App view mode context
-type ViewMode = 'main' | 'planogram' | 'dwgImporter' | 'lidarPlanner'
+type ViewMode = 'main' | 'planogram' | 'dwgImporter' | 'lidarPlanner' | 'edgeCommissioning'
 const ViewModeContext = createContext<{ mode: ViewMode; setMode: (m: ViewMode) => void }>({ mode: 'main', setMode: () => {} })
 export const useViewMode = () => useContext(ViewModeContext)
 
@@ -232,6 +234,12 @@ function MainApp() {
             </div>
           </div>
         )}
+        {/* Edge Commissioning Portal View */}
+        {viewMode === 'edgeCommissioning' && (
+          <EdgeCommissioningProvider>
+            <EdgeCommissioningPage onClose={() => setViewMode('main')} />
+          </EdgeCommissioningProvider>
+        )}
         {/* Planogram View */}
         <div style={{ display: viewMode === 'planogram' ? 'block' : 'none' }}>
           <PlanogramBuilder />
@@ -241,6 +249,7 @@ function MainApp() {
           <AppShell 
             onOpenDwgImporter={() => setViewMode('dwgImporter')}
             onOpenLidarPlanner={() => setViewMode('lidarPlanner')}
+            onOpenEdgeCommissioning={() => setViewMode('edgeCommissioning')}
           />
           <KPIPopupWrapper />
           <KPIOverlayToggle />

@@ -25,6 +25,7 @@ import createSmartKpiRoutes from './routes/smartKpi.js';
 import createPlanogramRoutes from './routes/planogram.js';
 import createDwgImportRoutes from './routes/dwgImport.js';
 import lidarPlannerRoutes from './routes/lidarPlanner.js';
+import edgeCommissioningRoutes, { setupPointCloudWebSocket } from './routes/edgeCommissioning.js';
 
 const PORT = process.env.PORT || 3001;
 const MOCK_LIDAR = process.env.MOCK_LIDAR === 'true';
@@ -195,6 +196,9 @@ app.use('/api/dwg', createDwgImportRoutes(db));
 // LiDAR Planner routes (feature-flagged)
 app.set('db', db); // Make db available to lidarPlanner routes
 app.use('/api/lidar', lidarPlannerRoutes);
+
+// Edge Commissioning Portal routes (NEW - separate from legacy LiDAR routes)
+app.use('/api/edge-commissioning', edgeCommissioningRoutes);
 
 // Serve uploaded logos
 app.use('/api/uploads/logos', express.static(path.join(__dirname, 'uploads', 'logos')));
@@ -405,6 +409,9 @@ app.get('/api/venues/:venueId/checkout/live-status', async (req, res) => {
   }
 });
 
+// Setup point cloud WebSocket proxy
+setupPointCloudWebSocket(httpServer);
+
 // Start server
 httpServer.listen(PORT, () => {
   console.log(`
@@ -426,7 +433,7 @@ httpServer.listen(PORT, () => {
 ║   - POST /api/lidars/:id/disconnect                  ║
 ║   - CRUD /api/models                                 ║
 ║                                                      ║
-║   WebSocket: /tracking                               ║
+║   WebSocket: /tracking, /ws/pcl                      ║
 ║                                                      ║
 ╚══════════════════════════════════════════════════════╝
   `);

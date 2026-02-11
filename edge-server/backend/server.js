@@ -4,6 +4,13 @@ import mqtt from 'mqtt';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import fs from 'fs';
+import net from 'net';
+import crypto from 'crypto';
+import dgram from 'dgram';
+import http from 'http';
+import { WebSocketServer } from 'ws';
+import { listenForDifop, probeRoboSense, setLidarIpViaHttp, getLidarConfigViaHttp } from './robosense-commissioner.js';
+import { capturePointCloudSnapshot, pointsToBuffer, pointsToPly, startPointCloudStream } from './robosense-pointcloud.js';
 
 // V2 Simulation modules
 import { SimulatorV2, SIM_CONFIG, STATE } from './sim/index.js';
@@ -1339,6 +1346,640 @@ app.post('/api/checkout/thresholds', (req, res) => {
 
 // ========== END CHECKOUT MANAGER API ==========
 
+// ========== EDGE COMMISSIONING API ==========
+// These endpoints are called by the main server's Edge Commissioning Portal
+
+// In-memory LiDAR inventory (would be populated by real LAN scans in production)
+let lidarInventory = [];
+let appliedConfigHash = null;
+let appliedConfig = null;
+
+// Known LiDAR ports and vendors
+const LIDAR_SIGNATURES = [
+  { vendor: 'RoboSense', ports: [6699, 7788, 80], httpCheck: true }, // RoboSense (MSOP/DIFOP/Web)
+  { vendor: 'Livox', ports: [56000, 56001], httpCheck: false },
+  { vendor: 'Ouster', ports: [7502, 7503], httpCheck: false },
+  { vendor: 'Velodyne', ports: [2368, 8308], httpCheck: false },
+  { vendor: 'Hesai', ports: [2368, 9870], httpCheck: false },
+];
+
+// Scan a single IP for LiDAR devices
+async function probeLidarIp(ip, timeout = 2000) {
+  const results = [];
+  
+  for (const sig of LIDAR_SIGNATURES) {
+    for (const port of sig.ports) {
+      try {
+        // Try TCP connect
+        const isOpen = await new Promise((resolve) => {
+          const socket = new net.Socket();
+          socket.setTimeout(timeout);
+          
+          socket.on('connect', () => {
+            socket.destroy();
+            resolve(true);
+          });
+          socket.on('timeout', () => {
+            socket.destroy();
+            resolve(false);
+          });
+          socket.on('error', () => {
+            socket.destroy();
+            resolve(false);
+          });
+          
+          socket.connect(port, ip);
+        });
+        
+        if (isOpen) {
+          // Try HTTP check for web interface (RoboSense has web UI)
+          let model = 'Unknown';
+          if (sig.httpCheck && port === 80) {
+            try {
+              const controller = new AbortController();
+              const timeoutId = setTimeout(() => controller.abort(), timeout);
+              const httpRes = await fetch(`http://${ip}/`, { signal: controller.signal });
+              clearTimeout(timeoutId);
+              const html = await httpRes.text();
+              if (html.includes('robosense') || html.includes('RoboSense')) {
+                model = 'RoboSense LiDAR';
+              }
+            } catch (e) { /* ignore */ }
+          }
+          
+          results.push({
+            lidarId: `lidar-${ip.replace(/\./g, '-')}`,
+            ip,
+            vendor: sig.vendor,
+            model,
+            port,
+            reachable: true,
+          });
+          break; // Found a match for this vendor, no need to check other ports
+        }
+      } catch (err) {
+        // Ignore connection errors
+      }
+    }
+  }
+  
+  return results;
+}
+
+// POST /api/edge/lidar/scan - Trigger LAN scan for LiDAR devices
+app.post('/api/edge/lidar/scan', async (req, res) => {
+  console.log('[Edge Commissioning] LiDAR LAN scan triggered');
+  
+  const { subnet, targetIps, quickScan } = req.body;
+  const baseSubnet = subnet || '192.168.1';
+  
+  const startTime = Date.now();
+  const foundLidars = [];
+  
+  // If specific IPs provided, only scan those
+  if (targetIps && Array.isArray(targetIps) && targetIps.length > 0) {
+    console.log(`[Edge Commissioning] Scanning ${targetIps.length} specific IPs...`);
+    const results = await Promise.all(targetIps.map(ip => probeLidarIp(ip, 2000)));
+    for (const r of results) foundLidars.push(...r);
+  } 
+  // Quick scan: only common LiDAR IPs (1, 100, 150, 200, 201, 202, etc.)
+  else if (quickScan !== false) {
+    const commonIps = [
+      `${baseSubnet}.1`, `${baseSubnet}.2`,
+      `${baseSubnet}.100`, `${baseSubnet}.101`, `${baseSubnet}.102`,
+      `${baseSubnet}.150`, `${baseSubnet}.151`, `${baseSubnet}.152`,
+      `${baseSubnet}.200`, `${baseSubnet}.201`, `${baseSubnet}.202`, `${baseSubnet}.203`,
+      `${baseSubnet}.210`, `${baseSubnet}.211`, `${baseSubnet}.212`,
+      `${baseSubnet}.220`, `${baseSubnet}.221`, `${baseSubnet}.222`,
+      `${baseSubnet}.250`, `${baseSubnet}.251`, `${baseSubnet}.252`,
+    ];
+    console.log(`[Edge Commissioning] Quick scan: ${commonIps.length} common LiDAR IPs...`);
+    const results = await Promise.all(commonIps.map(ip => probeLidarIp(ip, 1000)));
+    for (const r of results) foundLidars.push(...r);
+  }
+  // Full scan (slow)
+  else {
+    console.log(`[Edge Commissioning] Full scan: ${baseSubnet}.0/24 (this may take a while)...`);
+    const ipsToScan = [];
+    for (let i = 1; i <= 254; i++) ipsToScan.push(`${baseSubnet}.${i}`);
+    
+    const batchSize = 50;
+    for (let i = 0; i < ipsToScan.length; i += batchSize) {
+      const batch = ipsToScan.slice(i, i + batchSize);
+      const batchResults = await Promise.all(batch.map(ip => probeLidarIp(ip, 500)));
+      for (const r of batchResults) foundLidars.push(...r);
+    }
+  }
+  
+  const scanDuration = Date.now() - startTime;
+  console.log(`[Edge Commissioning] Scan complete: found ${foundLidars.length} LiDARs in ${scanDuration}ms`);
+  
+  lidarInventory = foundLidars;
+  
+  res.json({
+    ok: true,
+    foundCount: lidarInventory.length,
+    lidars: lidarInventory,
+    scanTime: new Date().toISOString(),
+    scanDurationMs: scanDuration,
+  });
+});
+
+// GET /api/edge/lidar/inventory - Get discovered LiDAR devices
+app.get('/api/edge/lidar/inventory', (req, res) => {
+  console.log('[Edge Commissioning] Inventory requested');
+  
+  res.json({
+    lidars: lidarInventory,
+    lastScanTime: lidarInventory.length > 0 ? new Date().toISOString() : null,
+  });
+});
+
+// ========== ROBOSENSE COMMISSIONING API ==========
+
+// Commissioned LiDARs storage
+let commissionedLidars = [];
+const COMMISSIONED_FILE = join(__dirname, 'data', 'commissioned-lidars.json');
+
+// Load commissioned LiDARs from file
+function loadCommissionedLidars() {
+  try {
+    if (fs.existsSync(COMMISSIONED_FILE)) {
+      commissionedLidars = JSON.parse(fs.readFileSync(COMMISSIONED_FILE, 'utf-8'));
+      console.log(`[Commissioner] Loaded ${commissionedLidars.length} commissioned LiDARs`);
+    }
+  } catch (err) {
+    console.error('[Commissioner] Error loading commissioned LiDARs:', err.message);
+  }
+}
+
+// Save commissioned LiDARs to file
+function saveCommissionedLidars() {
+  try {
+    const dir = dirname(COMMISSIONED_FILE);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(COMMISSIONED_FILE, JSON.stringify(commissionedLidars, null, 2));
+  } catch (err) {
+    console.error('[Commissioner] Error saving commissioned LiDARs:', err.message);
+  }
+}
+
+// Initialize
+loadCommissionedLidars();
+
+// POST /api/edge/lidar/discover-robosense - Listen for RoboSense DIFOP broadcasts
+app.post('/api/edge/lidar/discover-robosense', async (req, res) => {
+  const { timeout = 5000 } = req.body;
+  console.log(`[Commissioner] Starting RoboSense discovery (${timeout}ms)...`);
+  
+  try {
+    const devices = await listenForDifop(timeout);
+    res.json({
+      ok: true,
+      foundCount: devices.length,
+      devices,
+    });
+  } catch (err) {
+    console.error('[Commissioner] Discovery error:', err.message);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// POST /api/edge/lidar/probe - Probe specific IP for RoboSense
+app.post('/api/edge/lidar/probe', async (req, res) => {
+  const { ip = '192.168.1.200' } = req.body;
+  console.log(`[Commissioner] Probing ${ip}...`);
+  
+  try {
+    const result = await probeRoboSense(ip, 3000);
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// GET /api/edge/lidar/commissioned - Get list of commissioned LiDARs
+app.get('/api/edge/lidar/commissioned', (req, res) => {
+  res.json({
+    lidars: commissionedLidars,
+    nextAvailableIp: getNextAvailableIp(),
+  });
+});
+
+// Helper: Get next available IP for commissioning
+function getNextAvailableIp(baseSubnet = '192.168.1', startFrom = 201) {
+  const usedIps = new Set(commissionedLidars.map(l => l.assignedIp));
+  for (let i = startFrom; i <= 254; i++) {
+    const ip = `${baseSubnet}.${i}`;
+    if (!usedIps.has(ip)) return ip;
+  }
+  return null;
+}
+
+// POST /api/edge/lidar/commission - Commission a LiDAR (assign new IP)
+app.post('/api/edge/lidar/commission', async (req, res) => {
+  const { 
+    currentIp = '192.168.1.200', 
+    newIp,
+    label,
+    destIp = '192.168.1.102' // Edge server's IP for receiving data
+  } = req.body;
+  
+  const assignedIp = newIp || getNextAvailableIp();
+  
+  if (!assignedIp) {
+    return res.status(400).json({ ok: false, error: 'No available IPs' });
+  }
+  
+  console.log(`[Commissioner] Commissioning LiDAR at ${currentIp} -> ${assignedIp}`);
+  
+  // For now, we can't auto-change IP without knowing exact protocol
+  // Instead, provide instructions and register the intent
+  
+  const commissionRecord = {
+    id: `lidar-${Date.now()}`,
+    originalIp: currentIp,
+    assignedIp,
+    destIp,
+    label: label || `LiDAR-${assignedIp.split('.').pop()}`,
+    commissionedAt: new Date().toISOString(),
+    status: 'pending', // pending = needs manual IP change, active = confirmed
+  };
+  
+  commissionedLidars.push(commissionRecord);
+  saveCommissionedLidars();
+  
+  res.json({
+    ok: true,
+    message: 'Commission record created. Change LiDAR IP via web interface.',
+    record: commissionRecord,
+    instructions: [
+      `1. Open browser to http://${currentIp}`,
+      `2. Go to Network Settings`,
+      `3. Change LiDAR IP to: ${assignedIp}`,
+      `4. Set Destination IP to: ${destIp}`,
+      `5. Save and reboot LiDAR`,
+      `6. Label physical device: "${commissionRecord.label}"`,
+      `7. Call /api/edge/lidar/confirm-commission to verify`,
+    ],
+  });
+});
+
+// POST /api/edge/lidar/confirm-commission - Confirm a commissioned LiDAR is reachable
+app.post('/api/edge/lidar/confirm-commission', async (req, res) => {
+  const { lidarId, ip } = req.body;
+  
+  // Find the commission record
+  const record = commissionedLidars.find(l => 
+    l.id === lidarId || l.assignedIp === ip
+  );
+  
+  if (!record) {
+    return res.status(404).json({ ok: false, error: 'Commission record not found' });
+  }
+  
+  // Try to reach the LiDAR at assigned IP
+  const testIp = ip || record.assignedIp;
+  console.log(`[Commissioner] Confirming LiDAR at ${testIp}...`);
+  
+  try {
+    const isReachable = await new Promise((resolve) => {
+      const socket = new net.Socket();
+      socket.setTimeout(2000);
+      socket.on('connect', () => { socket.destroy(); resolve(true); });
+      socket.on('timeout', () => { socket.destroy(); resolve(false); });
+      socket.on('error', () => { socket.destroy(); resolve(false); });
+      socket.connect(80, testIp);
+    });
+    
+    if (isReachable) {
+      record.status = 'active';
+      record.confirmedAt = new Date().toISOString();
+      saveCommissionedLidars();
+      
+      res.json({
+        ok: true,
+        message: 'LiDAR confirmed active',
+        record,
+      });
+    } else {
+      res.json({
+        ok: false,
+        message: `LiDAR not reachable at ${testIp}`,
+        record,
+      });
+    }
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// DELETE /api/edge/lidar/commissioned/:id - Remove a commissioned LiDAR
+app.delete('/api/edge/lidar/commissioned/:id', (req, res) => {
+  const { id } = req.params;
+  const idx = commissionedLidars.findIndex(l => l.id === id);
+  
+  if (idx === -1) {
+    return res.status(404).json({ ok: false, error: 'Not found' });
+  }
+  
+  const removed = commissionedLidars.splice(idx, 1)[0];
+  saveCommissionedLidars();
+  
+  res.json({ ok: true, removed });
+});
+
+// POST /api/edge/lidar/set-ip - Try to change LiDAR IP via HTTP
+app.post('/api/edge/lidar/set-ip', async (req, res) => {
+  const { currentIp = '192.168.1.200', newIp, destIp = '192.168.1.102' } = req.body;
+  
+  if (!newIp) {
+    return res.status(400).json({ ok: false, error: 'newIp is required' });
+  }
+  
+  console.log(`[Commissioner] Attempting to change IP: ${currentIp} -> ${newIp}`);
+  
+  try {
+    const result = await setLidarIpViaHttp(currentIp, newIp, destIp);
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// GET /api/edge/lidar/get-config/:ip - Get LiDAR config via HTTP
+app.get('/api/edge/lidar/get-config/:ip', async (req, res) => {
+  const { ip } = req.params;
+  
+  console.log(`[Commissioner] Getting config from ${ip}...`);
+  
+  try {
+    const result = await getLidarConfigViaHttp(ip);
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// ========== END ROBOSENSE COMMISSIONING API ==========
+
+// ========== POINT CLOUD STREAMING API ==========
+
+// GET /api/edge/pcl/snapshot - Capture a single frame point cloud from a LiDAR
+app.get('/api/edge/pcl/snapshot', async (req, res) => {
+  const { 
+    ip = '192.168.1.200', 
+    duration = 100,
+    maxPoints = 30000,
+    downsample = 2,
+    format = 'json', // json, binary, ply
+    model = 'RS16'
+  } = req.query;
+  
+  console.log(`[PointCloud] Snapshot requested from ${ip} (format=${format}, duration=${duration}ms)`);
+  
+  try {
+    const result = await capturePointCloudSnapshot(ip, {
+      duration: parseInt(duration),
+      maxPoints: parseInt(maxPoints),
+      downsample: parseInt(downsample),
+      model,
+    });
+    
+    if (!result.success || result.pointCount === 0) {
+      return res.status(404).json({
+        success: false,
+        error: 'No point cloud data received',
+        lidarIp: ip,
+        packetsReceived: result.packetsReceived || 0,
+      });
+    }
+    
+    // Return based on requested format
+    if (format === 'binary') {
+      const buffer = pointsToBuffer(result.points);
+      res.setHeader('Content-Type', 'application/octet-stream');
+      res.setHeader('X-Point-Count', result.pointCount);
+      res.setHeader('X-Lidar-IP', ip);
+      return res.send(buffer);
+    }
+    
+    if (format === 'ply') {
+      const ply = pointsToPly(result.points);
+      res.setHeader('Content-Type', 'text/plain');
+      res.setHeader('Content-Disposition', `attachment; filename="pointcloud-${ip.replace(/\./g, '-')}.ply"`);
+      return res.send(ply);
+    }
+    
+    // Default: JSON (but with compact points array for efficiency)
+    res.json({
+      success: true,
+      lidarIp: ip,
+      pointCount: result.pointCount,
+      packetsReceived: result.packetsReceived,
+      timestamp: Date.now(),
+      // Compact format: flat array [x,y,z,i, x,y,z,i, ...]
+      points: result.points.flatMap(p => [
+        Math.round(p.x * 1000) / 1000,
+        Math.round(p.y * 1000) / 1000,
+        Math.round(p.z * 1000) / 1000,
+        p.intensity
+      ]),
+    });
+  } catch (err) {
+    console.error('[PointCloud] Snapshot error:', err.message);
+    res.status(500).json({
+      success: false,
+      error: err.message,
+      lidarIp: ip,
+    });
+  }
+});
+
+// POST /api/edge/pcl/snapshot - Same as GET but with body params
+app.post('/api/edge/pcl/snapshot', async (req, res) => {
+  const { 
+    ip = '192.168.1.200', 
+    duration = 100,
+    maxPoints = 30000,
+    downsample = 2,
+    format = 'json',
+    model = 'RS16'
+  } = req.body;
+  
+  console.log(`[PointCloud] Snapshot requested from ${ip} (format=${format}, duration=${duration}ms)`);
+  
+  try {
+    const result = await capturePointCloudSnapshot(ip, {
+      duration: parseInt(duration),
+      maxPoints: parseInt(maxPoints),
+      downsample: parseInt(downsample),
+      model,
+    });
+    
+    if (!result.success || result.pointCount === 0) {
+      return res.status(404).json({
+        success: false,
+        error: 'No point cloud data received',
+        lidarIp: ip,
+        packetsReceived: result.packetsReceived || 0,
+      });
+    }
+    
+    // Return based on requested format
+    if (format === 'binary') {
+      const buffer = pointsToBuffer(result.points);
+      res.setHeader('Content-Type', 'application/octet-stream');
+      res.setHeader('X-Point-Count', result.pointCount);
+      res.setHeader('X-Lidar-IP', ip);
+      return res.send(buffer);
+    }
+    
+    if (format === 'ply') {
+      const ply = pointsToPly(result.points);
+      res.setHeader('Content-Type', 'text/plain');
+      res.setHeader('Content-Disposition', `attachment; filename="pointcloud-${ip.replace(/\./g, '-')}.ply"`);
+      return res.send(ply);
+    }
+    
+    // Default: JSON with compact points
+    res.json({
+      success: true,
+      lidarIp: ip,
+      pointCount: result.pointCount,
+      packetsReceived: result.packetsReceived,
+      timestamp: Date.now(),
+      points: result.points.flatMap(p => [
+        Math.round(p.x * 1000) / 1000,
+        Math.round(p.y * 1000) / 1000,
+        Math.round(p.z * 1000) / 1000,
+        p.intensity
+      ]),
+    });
+  } catch (err) {
+    console.error('[PointCloud] Snapshot error:', err.message);
+    res.status(500).json({
+      success: false,
+      error: err.message,
+      lidarIp: ip,
+    });
+  }
+});
+
+// ========== END POINT CLOUD STREAMING API ==========
+
+// POST /api/edge/config/apply - Apply extrinsics configuration from main server
+app.post('/api/edge/config/apply', (req, res) => {
+  console.log('[Edge Commissioning] Config apply received');
+  
+  const extrinsicsPackage = req.body;
+  
+  if (!extrinsicsPackage || !extrinsicsPackage.deploymentId) {
+    return res.status(400).json({ ok: false, error: 'Invalid extrinsics package' });
+  }
+  
+  // Compute config hash for idempotency
+  const sortedConfig = JSON.stringify(extrinsicsPackage, Object.keys(extrinsicsPackage).sort());
+  const configHash = crypto.createHash('sha256').update(sortedConfig).digest('hex').substring(0, 16);
+  
+  // Check if already applied (idempotent)
+  if (appliedConfigHash === configHash) {
+    console.log(`[Edge Commissioning] Config already applied (hash: ${configHash})`);
+    return res.json({
+      ok: true,
+      appliedConfigHash: configHash,
+      message: 'Configuration already applied',
+      alreadyApplied: true,
+    });
+  }
+  
+  // Apply the configuration
+  try {
+    // Update MQTT settings
+    if (extrinsicsPackage.mqtt) {
+      config.mqttBroker = extrinsicsPackage.mqtt.broker || config.mqttBroker;
+      // Topic pattern is usually fixed per edge, but venueId can be updated
+    }
+    
+    // Update venueId
+    if (extrinsicsPackage.venueId) {
+      config.venueId = extrinsicsPackage.venueId;
+    }
+    
+    // Store the extrinsics for use by the fusion stack
+    // In production, this would configure the actual LiDAR processing pipeline
+    appliedConfig = extrinsicsPackage;
+    appliedConfigHash = configHash;
+    
+    // Save updated config
+    saveConfig();
+    
+    console.log(`[Edge Commissioning] Config applied successfully:`);
+    console.log(`  - Deployment ID: ${extrinsicsPackage.deploymentId}`);
+    console.log(`  - Venue ID: ${extrinsicsPackage.venueId}`);
+    console.log(`  - LiDARs configured: ${extrinsicsPackage.lidars?.length || 0}`);
+    console.log(`  - Config hash: ${configHash}`);
+    
+    // If simulation is running, reconnect MQTT with new settings
+    if (isRunning && mqttClient) {
+      console.log('[Edge Commissioning] Reconnecting MQTT with new settings...');
+      mqttClient.end();
+      mqttClient = mqtt.connect(config.mqttBroker);
+      mqttClient.on('connect', () => {
+        console.log('[Edge Commissioning] MQTT reconnected');
+        stats.mqttConnected = true;
+      });
+      mqttClient.on('error', (err) => {
+        console.error('[Edge Commissioning] MQTT error:', err.message);
+        stats.lastError = err.message;
+        stats.mqttConnected = false;
+      });
+    }
+    
+    res.json({
+      ok: true,
+      appliedConfigHash: configHash,
+      message: 'Configuration applied successfully',
+      lidarCount: extrinsicsPackage.lidars?.length || 0,
+    });
+  } catch (err) {
+    console.error('[Edge Commissioning] Failed to apply config:', err.message);
+    res.status(500).json({
+      ok: false,
+      error: 'Failed to apply configuration',
+      message: err.message,
+    });
+  }
+});
+
+// GET /api/edge/status - Get edge status for commissioning portal
+app.get('/api/edge/status', (req, res) => {
+  const uptime = stats.startTime ? Math.floor((Date.now() - stats.startTime) / 1000) : 0;
+  
+  // Build lidar connection statuses
+  const lidarConnectionStatuses = {};
+  for (const lidar of lidarInventory) {
+    lidarConnectionStatuses[lidar.lidarId] = lidar.reachable;
+  }
+  
+  res.json({
+    online: true,
+    edgeId: config.deviceId,
+    edgeVersion: '1.0.0',
+    uptime,
+    isRunning,
+    appliedConfigHash,
+    appliedVenueId: appliedConfig?.venueId || null,
+    lidarConnectionStatuses,
+    mqttConnected: stats.mqttConnected,
+    mqttBroker: config.mqttBroker,
+    tracksSent: stats.tracksSent,
+    lastError: stats.lastError,
+  });
+});
+
+// ========== END EDGE COMMISSIONING API ==========
+
 app.post('/api/start', async (req, res) => {
   const result = await startSimulation();
   res.json(result);
@@ -1356,7 +1997,69 @@ app.get('*', (req, res) => {
 });
 
 const PORT = process.env.PORT || 8080;
-app.listen(PORT, '0.0.0.0', () => {
+const WS_PORT = process.env.WS_PORT || 8081;
+
+// Create HTTP server for Express
+const server = http.createServer(app);
+
+// Create WebSocket server for point cloud streaming
+const wss = new WebSocketServer({ port: WS_PORT });
+
+// Track active point cloud streams
+const activeStreams = new Map();
+
+wss.on('connection', (ws, req) => {
+  const url = new URL(req.url, `http://localhost:${WS_PORT}`);
+  const lidarIp = url.searchParams.get('ip') || '192.168.1.200';
+  const model = url.searchParams.get('model') || 'RS16';
+  const downsample = parseInt(url.searchParams.get('downsample') || '2');
+  
+  console.log(`[WebSocket] Client connected for LiDAR ${lidarIp}`);
+  
+  // Start point cloud stream for this client
+  const stopStream = startPointCloudStream(lidarIp, (frame) => {
+    if (ws.readyState === ws.OPEN) {
+      try {
+        // Send binary data for efficiency
+        const buffer = pointsToBuffer(frame.points);
+        ws.send(buffer, { binary: true });
+      } catch (err) {
+        console.error('[WebSocket] Send error:', err.message);
+      }
+    }
+  }, {
+    frameInterval: 100, // 10 FPS
+    maxPointsPerFrame: 30000,
+    downsample,
+    model,
+  });
+  
+  activeStreams.set(ws, { lidarIp, stopStream });
+  
+  ws.on('close', () => {
+    console.log(`[WebSocket] Client disconnected for LiDAR ${lidarIp}`);
+    const stream = activeStreams.get(ws);
+    if (stream) {
+      stream.stopStream();
+      activeStreams.delete(ws);
+    }
+  });
+  
+  ws.on('error', (err) => {
+    console.error(`[WebSocket] Error for LiDAR ${lidarIp}:`, err.message);
+  });
+  
+  // Send initial metadata
+  ws.send(JSON.stringify({
+    type: 'metadata',
+    lidarIp,
+    model,
+    downsample,
+    frameInterval: 100,
+  }));
+});
+
+server.listen(PORT, '0.0.0.0', () => {
   console.log(`
 ╔══════════════════════════════════════════════════════╗
 ║                                                      ║
@@ -1364,6 +2067,7 @@ app.listen(PORT, '0.0.0.0', () => {
 ║                                                      ║
 ║   Web UI: http://localhost:${PORT}                     ║
 ║   API:    http://localhost:${PORT}/api                 ║
+║   WebSocket: ws://localhost:${WS_PORT}                  ║
 ║                                                      ║
 ║   Endpoints:                                         ║
 ║   - GET  /api/config    Get configuration            ║
@@ -1371,6 +2075,7 @@ app.listen(PORT, '0.0.0.0', () => {
 ║   - GET  /api/status    Get simulation status        ║
 ║   - POST /api/start     Start simulation             ║
 ║   - POST /api/stop      Stop simulation              ║
+║   - WS   :${WS_PORT}/?ip=x.x.x.x  Point cloud stream    ║
 ║                                                      ║
 ╚══════════════════════════════════════════════════════╝
   `);
