@@ -1436,32 +1436,43 @@ app.post('/api/edge/lidar/scan', async (req, res) => {
   const startTime = Date.now();
   const foundLidars = [];
   
+  // Step 1: Prioritize commissioned LiDARs first (fastest response)
+  const commissionedIps = commissionedLidars.map(l => l.assignedIp).filter(Boolean);
+  if (commissionedIps.length > 0) {
+    console.log(`[Edge Commissioning] Priority scan: ${commissionedIps.length} commissioned LiDARs first...`);
+    const priorityResults = await Promise.all(commissionedIps.map(ip => probeLidarIp(ip, 1500)));
+    for (const r of priorityResults) foundLidars.push(...r);
+  }
+  
+  // Step 2: Scan remaining IPs
+  const alreadyScanned = new Set(commissionedIps);
+  
   // If specific IPs provided, only scan those
   if (targetIps && Array.isArray(targetIps) && targetIps.length > 0) {
-    console.log(`[Edge Commissioning] Scanning ${targetIps.length} specific IPs...`);
-    const results = await Promise.all(targetIps.map(ip => probeLidarIp(ip, 2000)));
+    const remaining = targetIps.filter(ip => !alreadyScanned.has(ip));
+    console.log(`[Edge Commissioning] Scanning ${remaining.length} specific IPs...`);
+    const results = await Promise.all(remaining.map(ip => probeLidarIp(ip, 2000)));
     for (const r of results) foundLidars.push(...r);
   } 
-  // Quick scan: only common LiDAR IPs (1, 100, 150, 200, 201, 202, etc.)
+  // Quick scan: 200-250 range (covers most LiDAR deployments)
   else if (quickScan !== false) {
-    const commonIps = [
-      `${baseSubnet}.1`, `${baseSubnet}.2`,
-      `${baseSubnet}.100`, `${baseSubnet}.101`, `${baseSubnet}.102`,
-      `${baseSubnet}.150`, `${baseSubnet}.151`, `${baseSubnet}.152`,
-      `${baseSubnet}.200`, `${baseSubnet}.201`, `${baseSubnet}.202`, `${baseSubnet}.203`,
-      `${baseSubnet}.210`, `${baseSubnet}.211`, `${baseSubnet}.212`,
-      `${baseSubnet}.220`, `${baseSubnet}.221`, `${baseSubnet}.222`,
-      `${baseSubnet}.250`, `${baseSubnet}.251`, `${baseSubnet}.252`,
-    ];
-    console.log(`[Edge Commissioning] Quick scan: ${commonIps.length} common LiDAR IPs...`);
-    const results = await Promise.all(commonIps.map(ip => probeLidarIp(ip, 1000)));
+    const scanIps = [];
+    for (let i = 200; i <= 250; i++) {
+      const ip = `${baseSubnet}.${i}`;
+      if (!alreadyScanned.has(ip)) scanIps.push(ip);
+    }
+    console.log(`[Edge Commissioning] Quick scan: ${baseSubnet}.200-250 (${scanIps.length} IPs)...`);
+    const results = await Promise.all(scanIps.map(ip => probeLidarIp(ip, 1000)));
     for (const r of results) foundLidars.push(...r);
   }
   // Full scan (slow)
   else {
     console.log(`[Edge Commissioning] Full scan: ${baseSubnet}.0/24 (this may take a while)...`);
     const ipsToScan = [];
-    for (let i = 1; i <= 254; i++) ipsToScan.push(`${baseSubnet}.${i}`);
+    for (let i = 1; i <= 254; i++) {
+      const ip = `${baseSubnet}.${i}`;
+      if (!alreadyScanned.has(ip)) ipsToScan.push(ip);
+    }
     
     const batchSize = 50;
     for (let i = 0; i < ipsToScan.length; i += batchSize) {
@@ -1485,14 +1496,57 @@ app.post('/api/edge/lidar/scan', async (req, res) => {
   });
 });
 
-// GET /api/edge/lidar/inventory - Get discovered LiDAR devices
-app.get('/api/edge/lidar/inventory', (req, res) => {
-  console.log('[Edge Commissioning] Inventory requested');
+// GET /api/edge/lidar/inventory - Get discovered LiDAR devices with live reachability check
+app.get('/api/edge/lidar/inventory', async (req, res) => {
+  console.log('[Edge Commissioning] Inventory requested - checking reachability...');
   
-  res.json({
-    lidars: lidarInventory,
-    lastScanTime: lidarInventory.length > 0 ? new Date().toISOString() : null,
-  });
+  try {
+    // Quick TCP ping to check if each LiDAR is actually reachable
+    const checkReachable = (ip, port = 80, timeout = 1500) => {
+      return new Promise((resolve) => {
+        try {
+          const socket = new net.Socket();
+          socket.setTimeout(timeout);
+          socket.on('connect', () => { socket.destroy(); resolve(true); });
+          socket.on('error', () => { socket.destroy(); resolve(false); });
+          socket.on('timeout', () => { socket.destroy(); resolve(false); });
+          socket.connect(port, ip);
+        } catch (err) {
+          console.error(`[Edge Commissioning] Ping error for ${ip}:`, err.message);
+          resolve(false);
+        }
+      });
+    };
+    
+    // Check all LiDARs in parallel
+    const lidarsWithStatus = await Promise.all(
+      lidarInventory.map(async (lidar) => {
+        try {
+          const reachable = await checkReachable(lidar.ip, lidar.ports?.[0] || 80);
+          return { ...lidar, reachable };
+        } catch (err) {
+          console.error(`[Edge Commissioning] Error checking ${lidar.ip}:`, err.message);
+          return { ...lidar, reachable: false };
+        }
+      })
+    );
+    
+    const onlineCount = lidarsWithStatus.filter(l => l.reachable).length;
+    console.log(`[Edge Commissioning] Inventory: ${onlineCount}/${lidarsWithStatus.length} LiDARs online`);
+    
+    res.json({
+      lidars: lidarsWithStatus,
+      lastScanTime: lidarInventory.length > 0 ? new Date().toISOString() : null,
+    });
+  } catch (err) {
+    console.error('[Edge Commissioning] Inventory error:', err.message);
+    // Fallback: return inventory without live check
+    res.json({
+      lidars: lidarInventory,
+      lastScanTime: lidarInventory.length > 0 ? new Date().toISOString() : null,
+      error: err.message,
+    });
+  }
 });
 
 // ========== ROBOSENSE COMMISSIONING API ==========

@@ -44,6 +44,8 @@ export interface SlotsStructure {
   levels: LevelData[]
 }
 
+export type SlotFacing = 'front' | 'back' | 'left' | 'right'
+
 export interface ShelfPlanogram {
   id: string
   planogramId: string
@@ -51,6 +53,7 @@ export interface ShelfPlanogram {
   numLevels: number
   slotWidthM: number
   levelHeightM: number | null
+  slotFacings: SlotFacing[]
   slots: SlotsStructure
 }
 
@@ -89,7 +92,7 @@ interface PlanogramContextType {
   activeShelfPlanogram: ShelfPlanogram | null
   loadShelfPlanogram: (shelfId: string) => Promise<void>
   saveShelfPlanogram: (shelfId: string, data: Partial<ShelfPlanogram>) => Promise<void>
-  placeSkusOnShelf: (shelfId: string, skuItemIds: string[], dropTarget: any, shelfWidth: number) => Promise<any>
+  placeSkusOnShelf: (shelfId: string, skuItemIds: string[], dropTarget: any, shelfWidth: number, options?: { fillOrder?: 'sequential' | 'random' }) => Promise<any>
   autoFillShelf: (shelfId: string, params: any) => Promise<any>
   
   // Selection
@@ -108,8 +111,17 @@ interface PlanogramContextType {
   // Filtered items
   filteredSkuItems: SkuItem[]
   
+  // Placed SKUs tracking
+  placedSkuIds: Set<string>
+  getSkuPlacement: (skuId: string) => { shelfId: string; shelfName: string; levelIndex: number; slotIndex: number } | null
+  removeSkuFromSlot: (skuId: string) => Promise<void>
+  
   // Loading states
   loading: boolean
+  
+  // Hover state for SKU highlighting
+  hoveredSkuId: string | null
+  setHoveredSkuId: (id: string | null) => void
 }
 
 const PlanogramContext = createContext<PlanogramContextType | null>(null)
@@ -139,6 +151,12 @@ export function PlanogramProvider({ children }: { children: ReactNode }) {
   
   // Loading
   const [loading, setLoading] = useState(false)
+  
+  // Hover state for SKU highlighting across components
+  const [hoveredSkuId, setHoveredSkuId] = useState<string | null>(null)
+  
+  // Track all placed SKUs across shelves in active planogram
+  const [allShelfPlanograms, setAllShelfPlanograms] = useState<Map<string, ShelfPlanogram>>(new Map())
   
   // Load catalogs
   const loadCatalogs = useCallback(async () => {
@@ -264,6 +282,14 @@ export function PlanogramProvider({ children }: { children: ReactNode }) {
       const res = await fetch(`${API_BASE}/api/planogram/planograms/${activePlanogram.id}/shelves/${shelfId}`)
       const data = await res.json()
       setActiveShelfPlanogram(data)
+      // Update cache for placed SKU tracking
+      if (data) {
+        setAllShelfPlanograms(prev => {
+          const next = new Map(prev)
+          next.set(shelfId, data)
+          return next
+        })
+      }
     } catch (err) {
       console.error('Failed to load shelf planogram:', err)
     }
@@ -280,6 +306,14 @@ export function PlanogramProvider({ children }: { children: ReactNode }) {
       })
       const updated = await res.json()
       setActiveShelfPlanogram(updated)
+      // Update cache for placed SKU tracking
+      if (updated) {
+        setAllShelfPlanograms(prev => {
+          const next = new Map(prev)
+          next.set(shelfId, updated)
+          return next
+        })
+      }
     } catch (err) {
       console.error('Failed to save shelf planogram:', err)
     }
@@ -290,14 +324,15 @@ export function PlanogramProvider({ children }: { children: ReactNode }) {
     shelfId: string,
     skuItemIds: string[],
     dropTarget: any,
-    shelfWidth: number
+    shelfWidth: number,
+    options?: { fillOrder?: 'sequential' | 'random' }
   ) => {
     if (!activePlanogram?.id) return
     try {
       const res = await fetch(`${API_BASE}/api/planogram/planograms/${activePlanogram.id}/shelves/${shelfId}/place`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ skuItemIds, dropTarget, shelfWidth }),
+        body: JSON.stringify({ skuItemIds, dropTarget, shelfWidth, options }),
       })
       const result = await res.json()
       await loadShelfPlanogram(shelfId)
@@ -345,6 +380,86 @@ export function PlanogramProvider({ children }: { children: ReactNode }) {
     }
     return true
   }) || []
+  
+  // Compute placed SKU IDs from all shelf planograms in active planogram
+  const placedSkuIds = new Set<string>()
+  const skuPlacements = new Map<string, { shelfId: string; shelfName: string; levelIndex: number; slotIndex: number }>()
+  
+  // Build placed SKU map from active planogram's shelves
+  if (activePlanogram?.shelves) {
+    activePlanogram.shelves.forEach(sp => {
+      sp.slots?.levels?.forEach(level => {
+        level.slots?.forEach(slot => {
+          if (slot.skuItemId) {
+            placedSkuIds.add(slot.skuItemId)
+            skuPlacements.set(slot.skuItemId, {
+              shelfId: sp.shelfId,
+              shelfName: sp.shelfId, // Will be resolved to actual name
+              levelIndex: level.levelIndex,
+              slotIndex: slot.slotIndex,
+            })
+          }
+        })
+      })
+    })
+  }
+  
+  // Also check allShelfPlanograms cache for recently placed items
+  allShelfPlanograms.forEach((sp, shelfId) => {
+    sp.slots?.levels?.forEach(level => {
+      level.slots?.forEach(slot => {
+        if (slot.skuItemId && !placedSkuIds.has(slot.skuItemId)) {
+          placedSkuIds.add(slot.skuItemId)
+          skuPlacements.set(slot.skuItemId, {
+            shelfId,
+            shelfName: shelfId,
+            levelIndex: level.levelIndex,
+            slotIndex: slot.slotIndex,
+          })
+        }
+      })
+    })
+  })
+  
+  // Get placement info for a SKU
+  const getSkuPlacement = useCallback((skuId: string) => {
+    return skuPlacements.get(skuId) || null
+  }, [skuPlacements])
+  
+  // Remove SKU from its current slot
+  const removeSkuFromSlot = useCallback(async (skuId: string) => {
+    const placement = skuPlacements.get(skuId)
+    if (!placement || !activePlanogram?.id) return
+    
+    // Get current shelf planogram
+    const shelfPlanogram = allShelfPlanograms.get(placement.shelfId) || 
+      activePlanogram.shelves?.find(s => s.shelfId === placement.shelfId)
+    
+    if (!shelfPlanogram) return
+    
+    // Clone and remove the SKU from its slot
+    const newLevels = JSON.parse(JSON.stringify(shelfPlanogram.slots?.levels || []))
+    const level = newLevels.find((l: LevelData) => l.levelIndex === placement.levelIndex)
+    if (level) {
+      const slot = level.slots?.find((s: SlotData) => s.slotIndex === placement.slotIndex)
+      if (slot && slot.skuItemId === skuId) {
+        slot.skuItemId = null
+      }
+    }
+    
+    // Save updated shelf planogram
+    await saveShelfPlanogram(placement.shelfId, {
+      ...shelfPlanogram,
+      slots: { levels: newLevels },
+    })
+    
+    // Update local cache
+    setAllShelfPlanograms(prev => {
+      const next = new Map(prev)
+      next.set(placement.shelfId, { ...shelfPlanogram, slots: { levels: newLevels } })
+      return next
+    })
+  }, [skuPlacements, activePlanogram, allShelfPlanograms, saveShelfPlanogram])
   
   // Load shelf planogram when active shelf changes
   useEffect(() => {
@@ -432,7 +547,12 @@ export function PlanogramProvider({ children }: { children: ReactNode }) {
       searchQuery,
       setSearchQuery,
       filteredSkuItems,
+      placedSkuIds,
+      getSkuPlacement,
+      removeSkuFromSlot,
       loading,
+      hoveredSkuId,
+      setHoveredSkuId,
     }}>
       {children}
     </PlanogramContext.Provider>

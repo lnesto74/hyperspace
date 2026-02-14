@@ -1,7 +1,8 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { X, TrendingUp, Users, Clock, Target, Activity, ArrowUpRight, ArrowDownRight, Minus, HelpCircle, Settings } from 'lucide-react'
+import { X, TrendingUp, Users, Clock, Target, Activity, ArrowUpRight, ArrowDownRight, Minus, HelpCircle, Settings, Package, RefreshCw } from 'lucide-react'
 import { KPI_DEFINITIONS } from './kpiDefinitions'
 import ZoneSettingsPanel from './ZoneSettingsPanel'
+import ProductAnalyticsTab from './ProductAnalyticsTab'
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3001'
 
@@ -52,6 +53,8 @@ interface ZoneKPIPopupProps {
   roiName: string
   roiColor: string
   onClose: () => void
+  shelfId?: string
+  planogramId?: string
 }
 
 type TimePeriod = 'hour' | 'day' | 'week' | 'month'
@@ -307,14 +310,57 @@ function ProgressRing({ value, max = 100, size = 60, strokeWidth = 6, color = '#
   )
 }
 
-export default function ZoneKPIPopup({ roiId, roiName, roiColor, onClose }: ZoneKPIPopupProps) {
+export default function ZoneKPIPopup({ roiId, roiName, roiColor, onClose, shelfId: propShelfId, planogramId: propPlanogramId }: ZoneKPIPopupProps) {
   const [kpis, setKpis] = useState<KPIData | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [period, setPeriod] = useState<TimePeriod>('day')
-  const [activeTab, setActiveTab] = useState<'overview' | 'dwell' | 'flow' | 'velocity'>('overview')
+  const [activeTab, setActiveTab] = useState<'overview' | 'dwell' | 'flow' | 'velocity' | 'products'>('overview')
   const [liveOccupancy, setLiveOccupancy] = useState<number>(0)
   const [showSettings, setShowSettings] = useState(false)
+  
+  // Auto-detected shelf info (fetched from backend)
+  const [detectedShelfId, setDetectedShelfId] = useState<string | null>(null)
+  const [detectedPlanogramId, setDetectedPlanogramId] = useState<string | null>(null)
+  const [shelfInfoLoading, setShelfInfoLoading] = useState(false)
+  
+  // Use props if provided, otherwise use detected values
+  const shelfId = propShelfId || detectedShelfId
+  const planogramId = propPlanogramId || detectedPlanogramId
+  
+  // Check if this is a shelf engagement zone with planogram data
+  const hasProductAnalytics = !!(shelfId && planogramId)
+  
+  // Fetch shelf info for this ROI (auto-detect shelf from zone name/position)
+  useEffect(() => {
+    const fetchShelfInfo = async () => {
+      // Skip if already provided via props
+      if (propShelfId && propPlanogramId) return
+      
+      // Check if this looks like a shelf engagement zone
+      const isLikelyShelfZone = roiName.toLowerCase().includes('engagement') || 
+                                roiName.toLowerCase().includes('shelf')
+      if (!isLikelyShelfZone) return
+      
+      setShelfInfoLoading(true)
+      try {
+        const res = await fetch(`${API_BASE}/api/roi/${roiId}/shelf-info`)
+        if (res.ok) {
+          const data = await res.json()
+          if (data.shelfId) {
+            setDetectedShelfId(data.shelfId)
+            setDetectedPlanogramId(data.planogramId)
+          }
+        }
+      } catch (err) {
+        console.error('Failed to fetch shelf info:', err)
+      } finally {
+        setShelfInfoLoading(false)
+      }
+    }
+    
+    fetchShelfInfo()
+  }, [roiId, roiName, propShelfId, propPlanogramId])
 
   const fetchKPIs = useCallback(async () => {
     setLoading(true)
@@ -345,25 +391,16 @@ export default function ZoneKPIPopup({ roiId, roiName, roiColor, onClose }: Zone
     }
   }, [roiId])
 
+  // Fetch data only on open (no auto-refresh)
   useEffect(() => {
     fetchKPIs()
     fetchLiveOccupancy()
-    
-    // Auto-refresh KPIs every 30 seconds
-    const kpiInterval = setInterval(fetchKPIs, 30000)
-    // Live occupancy every 4 seconds (reduced from 2s to avoid blocking 3D)
-    const liveInterval = setInterval(() => {
-      if ('requestIdleCallback' in window) {
-        (window as any).requestIdleCallback(fetchLiveOccupancy, { timeout: 1500 })
-      } else {
-        setTimeout(fetchLiveOccupancy, 0)
-      }
-    }, 4000)
-    
-    return () => {
-      clearInterval(kpiInterval)
-      clearInterval(liveInterval)
-    }
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Manual refresh handler
+  const handleRefresh = useCallback(() => {
+    fetchKPIs()
+    fetchLiveOccupancy()
   }, [fetchKPIs, fetchLiveOccupancy])
 
   const formatTime = (minutes: number) => {
@@ -378,7 +415,7 @@ export default function ZoneKPIPopup({ roiId, roiName, roiColor, onClose }: Zone
     <>
     <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50" onClick={onClose}>
       <div 
-        className="bg-gray-900 border border-gray-700 rounded-xl shadow-2xl w-[800px] max-h-[90vh] overflow-hidden"
+        className="bg-gray-900 border border-gray-700 rounded-xl shadow-2xl w-[1040px] max-h-[90vh] overflow-hidden"
         onClick={e => e.stopPropagation()}
       >
         {/* Header */}
@@ -442,10 +479,24 @@ export default function ZoneKPIPopup({ roiId, roiName, roiColor, onClose }: Zone
               {tab.charAt(0).toUpperCase() + tab.slice(1)}
             </button>
           ))}
+          {/* Products tab - only shown for shelf engagement zones */}
+          {hasProductAnalytics && (
+            <button
+              onClick={() => setActiveTab('products')}
+              className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors flex items-center gap-1.5 ${
+                activeTab === 'products'
+                  ? 'border-purple-500 text-purple-400'
+                  : 'border-transparent text-gray-400 hover:text-white'
+              }`}
+            >
+              <Package className="w-3.5 h-3.5" />
+              Products
+            </button>
+          )}
         </div>
 
-        {/* Content */}
-        <div className="p-6 overflow-y-auto max-h-[calc(90vh-140px)]">
+        {/* Content - Fixed height to prevent resizing when switching tabs */}
+        <div className="p-6 overflow-y-auto min-h-[520px] max-h-[calc(90vh-140px)]">
           {loading ? (
             <div className="flex items-center justify-center py-12">
               <div className="w-8 h-8 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
@@ -865,6 +916,16 @@ export default function ZoneKPIPopup({ roiId, roiName, roiColor, onClose }: Zone
                   </div>
                 </div>
               )}
+
+              {/* Products Tab Content */}
+              {activeTab === 'products' && hasProductAnalytics && (
+                <ProductAnalyticsTab
+                  shelfId={shelfId!}
+                  planogramId={planogramId!}
+                  roiId={roiId}
+                  period={period}
+                />
+              )}
             </>
           ) : (
             <div className="text-center py-12 text-gray-400">No data available</div>
@@ -875,10 +936,12 @@ export default function ZoneKPIPopup({ roiId, roiName, roiColor, onClose }: Zone
         <div className="px-6 py-3 border-t border-gray-700 flex items-center justify-between text-xs text-gray-400">
           <span>Last updated: {new Date().toLocaleTimeString()}</span>
           <button 
-            onClick={fetchKPIs}
-            className="text-blue-400 hover:underline"
+            onClick={handleRefresh}
+            disabled={loading}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-500 disabled:bg-blue-800 disabled:cursor-not-allowed text-white rounded-md transition-colors"
           >
-            Refresh
+            <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
+            Refresh Data
           </button>
         </div>
       </div>

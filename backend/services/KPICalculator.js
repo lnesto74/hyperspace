@@ -122,6 +122,10 @@ export class KPICalculator {
     const velocityMetrics = this.getVelocityMetrics(roiId, startTime, endTime);
     Object.assign(kpis, velocityMetrics);
     
+    // Get utilization metrics
+    const utilizationMetrics = this.getUtilizationMetrics(roiId, startTime, endTime);
+    Object.assign(kpis, utilizationMetrics);
+    
     // Get time series data
     kpis.visitsByHour = this.getVisitsByHour(roiId, startTime, endTime);
     kpis.occupancyOverTime = this.getOccupancyOverTime(roiId, startTime, endTime);
@@ -515,6 +519,96 @@ export class KPICalculator {
     }
     
     return realTimeData;
+  }
+
+  /**
+   * Get utilization metrics for a zone
+   * Measures how efficiently the zone space is being used over time
+   */
+  getUtilizationMetrics(roiId, startTime, endTime) {
+    // Calculate total time range in minutes
+    const totalRangeMs = endTime - startTime;
+    const totalRangeMin = totalRangeMs / 60000;
+    
+    // Get time intervals where zone had at least 1 person
+    // Using occupancy data sampled every few seconds
+    const occupancyData = this.db.prepare(`
+      SELECT 
+        timestamp,
+        occupancy_count
+      FROM zone_occupancy
+      WHERE roi_id = ? AND timestamp >= ? AND timestamp < ?
+      ORDER BY timestamp ASC
+    `).all(roiId, startTime, endTime);
+    
+    // Calculate utilization time (time with occupancy > 0)
+    let utilizationTimeMs = 0;
+    let lastTimestamp = null;
+    let lastOccupied = false;
+    const samplingInterval = 5000; // Assume 5-second sampling
+    
+    for (const sample of occupancyData) {
+      const isOccupied = sample.occupancy_count > 0;
+      
+      if (lastTimestamp !== null && lastOccupied) {
+        // Add time since last sample if it was occupied
+        const timeDiff = Math.min(sample.timestamp - lastTimestamp, samplingInterval * 2);
+        utilizationTimeMs += timeDiff;
+      }
+      
+      lastTimestamp = sample.timestamp;
+      lastOccupied = isOccupied;
+    }
+    
+    // Add final interval if still occupied
+    if (lastOccupied && lastTimestamp !== null) {
+      utilizationTimeMs += samplingInterval;
+    }
+    
+    const utilizationTimeMin = utilizationTimeMs / 60000;
+    const utilizationRate = totalRangeMin > 0 ? (utilizationTimeMin / totalRangeMin) * 100 : 0;
+    
+    // Calculate hourly utilization (for the most recent hour in range)
+    const hourAgo = Math.max(startTime, endTime - 60 * 60 * 1000);
+    const hourlyOccupancy = this.db.prepare(`
+      SELECT 
+        COUNT(*) as samples,
+        SUM(CASE WHEN occupancy_count > 0 THEN 1 ELSE 0 END) as occupied_samples
+      FROM zone_occupancy
+      WHERE roi_id = ? AND timestamp >= ? AND timestamp < ?
+    `).get(roiId, hourAgo, endTime);
+    
+    const hourlyUtilizationMin = hourlyOccupancy?.occupied_samples 
+      ? (hourlyOccupancy.occupied_samples * samplingInterval) / 60000 
+      : 0;
+    const hourlyUtilizationRate = hourlyOccupancy?.samples > 0 
+      ? (hourlyOccupancy.occupied_samples / hourlyOccupancy.samples) * 100 
+      : 0;
+    
+    // Daily utilization (was zone used at all today?)
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+    const todayStartMs = todayStart.getTime();
+    
+    const dailyCheck = this.db.prepare(`
+      SELECT COUNT(*) as count FROM zone_visits
+      WHERE roi_id = ? AND start_time >= ?
+    `).get(roiId, todayStartMs);
+    
+    const dailyUtilization = (dailyCheck?.count || 0) > 0;
+    
+    // Assuming 12-hour store operating day for daily rate calculation
+    const operatingHours = 12;
+    const dailyUtilizationRate = utilizationRate; // Same as overall for the selected range
+    
+    return {
+      utilizationTimeMin: Math.round(utilizationTimeMin * 10) / 10,
+      utilizationRate: Math.round(utilizationRate * 10) / 10,
+      hourlyUtilization: Math.round(hourlyUtilizationMin * 10) / 10,
+      hourlyUtilizationRate: Math.round(hourlyUtilizationRate * 10) / 10,
+      dailyUtilization,
+      dailyUtilizationRate: Math.round(dailyUtilizationRate * 10) / 10,
+    };
   }
 
   /**

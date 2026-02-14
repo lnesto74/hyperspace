@@ -24,6 +24,8 @@ export interface LightingSettings {
 export interface TrackingSettings {
   trailSeconds: number
   cylinderOpacity: number
+  showSkuDebug: boolean
+  autoShowSlotHighlight: boolean
 }
 
 const defaultLighting: LightingSettings = {
@@ -38,15 +40,18 @@ const defaultLighting: LightingSettings = {
 const defaultTracking: TrackingSettings = {
   trailSeconds: 10,
   cylinderOpacity: 0.5,
+  showSkuDebug: false,
+  autoShowSlotHighlight: false,
 }
 
 interface AppShellProps {
   onOpenDwgImporter?: () => void
   onOpenLidarPlanner?: () => void
   onOpenEdgeCommissioning?: () => void
+  onOpenDoohAnalytics?: () => void
 }
 
-export default function AppShell({ onOpenDwgImporter, onOpenLidarPlanner, onOpenEdgeCommissioning }: AppShellProps) {
+export default function AppShell({ onOpenDwgImporter, onOpenLidarPlanner, onOpenEdgeCommissioning, onOpenDoohAnalytics }: AppShellProps) {
   const [activeTab, setActiveTab] = useState<SidebarTab>('venue')
   const [cameraView, setCameraView] = useState<CameraView>('perspective')
   const [showLightingPopup, setShowLightingPopup] = useState(false)
@@ -90,7 +95,7 @@ export default function AppShell({ onOpenDwgImporter, onOpenLidarPlanner, onOpen
   return (
     <div className="h-screen w-screen flex bg-app-bg overflow-hidden">
       {/* Left Sidebar */}
-      <Sidebar activeTab={activeTab} onTabChange={setActiveTab} onOpenDwgImporter={onOpenDwgImporter} onOpenLidarPlanner={onOpenLidarPlanner} onOpenEdgeCommissioning={onOpenEdgeCommissioning} />
+      <Sidebar activeTab={activeTab} onTabChange={setActiveTab} onOpenDwgImporter={onOpenDwgImporter} onOpenLidarPlanner={onOpenLidarPlanner} onOpenEdgeCommissioning={onOpenEdgeCommissioning} onOpenDoohAnalytics={onOpenDoohAnalytics} />
       
       {/* Main 3D Viewport - flex-1 min-w-0 ensures it shrinks when panels open */}
       <div className="flex-1 min-w-0 relative overflow-hidden">
@@ -248,6 +253,38 @@ export default function AppShell({ onOpenDwgImporter, onOpenLidarPlanner, onOpen
                 />
                 <span className="text-xs text-gray-500">{(tracking.cylinderOpacity * 100).toFixed(0)}%</span>
               </div>
+              <div className="flex items-center justify-between pt-2 border-t border-border-dark">
+                <label className="text-xs text-gray-400">SKU Detection Debug</label>
+                <button
+                  onClick={() => setTracking(prev => ({ ...prev, showSkuDebug: !prev.showSkuDebug }))}
+                  className={`w-10 h-5 rounded-full transition-colors ${
+                    tracking.showSkuDebug ? 'bg-green-500' : 'bg-gray-600'
+                  }`}
+                >
+                  <div className={`w-4 h-4 rounded-full bg-white transition-transform ${
+                    tracking.showSkuDebug ? 'translate-x-5' : 'translate-x-0.5'
+                  }`} />
+                </button>
+              </div>
+              <p className="text-[10px] text-gray-500 mt-1">
+                Shows SKU badges when people dwell near shelves
+              </p>
+              <div className="flex items-center justify-between pt-2 border-t border-border-dark">
+                <label className="text-xs text-gray-400">Auto Slot Highlight</label>
+                <button
+                  onClick={() => setTracking(prev => ({ ...prev, autoShowSlotHighlight: !prev.autoShowSlotHighlight }))}
+                  className={`w-10 h-5 rounded-full transition-colors ${
+                    tracking.autoShowSlotHighlight ? 'bg-green-500' : 'bg-gray-600'
+                  }`}
+                >
+                  <div className={`w-4 h-4 rounded-full bg-white transition-transform ${
+                    tracking.autoShowSlotHighlight ? 'translate-x-5' : 'translate-x-0.5'
+                  }`} />
+                </button>
+              </div>
+              <p className="text-[10px] text-gray-500 mt-1">
+                Auto-show slot rectangles when person enters zone
+              </p>
               <button
                 onClick={() => setTracking(defaultTracking)}
                 className="w-full py-1.5 text-xs text-gray-400 hover:text-white border border-border-dark rounded hover:bg-gray-700 transition-colors"

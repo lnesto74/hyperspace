@@ -1,6 +1,10 @@
 import { Router } from 'express';
+import { ShelfKPIEnricher } from '../services/ShelfKPIEnricher.js';
+import { shelfPlanogramQueries, planogramQueries } from '../database/schema.js';
 
 export default function createKpiRoutes(db, kpiCalculator, trajectoryStorage) {
+  // Initialize shelf KPI enricher
+  const shelfKPIEnricher = new ShelfKPIEnricher(db);
   const router = Router();
 
   /**
@@ -780,6 +784,713 @@ export default function createKpiRoutes(db, kpiCalculator, trajectoryStorage) {
       console.error('Auto-sync failed:', err);
     }
   }, 15 * 60 * 1000);
+
+  // ==================== SKU DETECTION DEBUG ====================
+
+  /**
+   * Real-time SKU detection for a person at a given position
+   * NEW LOGIC: Direct person→shelf distance matching (no ROI dependency)
+   * 
+   * Flow:
+   * 1. Get all shelves with planograms in venue
+   * 2. Calculate distance from person to each shelf
+   * 3. Find closest shelf within engagement distance (1.5m)
+   * 4. Calculate which slot person is facing based on their X position relative to shelf
+   * 5. Return SKUs at that slot position
+   */
+  router.post('/kpi/sku-detection/detect', (req, res) => {
+    try {
+      const { venueId, position, velocity } = req.body;
+      
+      if (!venueId || !position) {
+        return res.status(400).json({ error: 'venueId and position required' });
+      }
+      
+      const { x, z } = position;
+      const ENGAGEMENT_DISTANCE = 1.5; // meters - max distance to be "engaging" with shelf
+      
+      console.log(`[SKU Debug] ═══════════════════════════════════════════`);
+      console.log(`[SKU Debug] Person position: (${x.toFixed(2)}, ${z.toFixed(2)})`);
+      
+      // Get all shelves that have planograms (only these have SKUs)
+      const shelvesWithPlanograms = db.prepare(`
+        SELECT 
+          vo.id, vo.name, vo.position_x, vo.position_z, vo.rotation_y, vo.scale_x, vo.scale_y, vo.scale_z,
+          sp.id as planogram_config_id, sp.planogram_id, sp.slot_width_m, sp.num_levels, sp.slots_json
+        FROM venue_objects vo
+        JOIN shelf_planograms sp ON vo.id = sp.shelf_id
+        WHERE vo.venue_id = ? AND vo.type = 'shelf'
+      `).all(venueId);
+      
+      console.log(`[SKU Debug] Found ${shelvesWithPlanograms.length} shelves with planograms`);
+      
+      // Calculate distance to nearest point on each shelf (not center!)
+      // Shelves are long rectangles running along Z axis
+      let closestShelf = null;
+      let minDistance = Infinity;
+      
+      for (const shelf of shelvesWithPlanograms) {
+        const shelfLength = shelf.scale_z || 1;
+        const shelfWidth = shelf.scale_x || 1;
+        const shelfZStart = shelf.position_z - shelfLength / 2;
+        const shelfZEnd = shelf.position_z + shelfLength / 2;
+        const shelfXStart = shelf.position_x - shelfWidth / 2;
+        const shelfXEnd = shelf.position_x + shelfWidth / 2;
+        
+        // Clamp person position to shelf bounds to find nearest point
+        const nearestX = Math.max(shelfXStart, Math.min(shelfXEnd, x));
+        const nearestZ = Math.max(shelfZStart, Math.min(shelfZEnd, z));
+        
+        // Distance from person to nearest point on shelf
+        const dx = x - nearestX;
+        const dz = z - nearestZ;
+        const distance = Math.sqrt(dx * dx + dz * dz);
+        
+        console.log(`[SKU Debug]   Shelf "${shelf.id.slice(0,8)}..." Z:[${shelfZStart.toFixed(1)}-${shelfZEnd.toFixed(1)}] → nearest:(${nearestX.toFixed(1)},${nearestZ.toFixed(1)}) dist:${distance.toFixed(2)}m`);
+        
+        if (distance < minDistance) {
+          minDistance = distance;
+          closestShelf = shelf;
+        }
+      }
+      
+      // Check if person is within engagement distance
+      if (!closestShelf || minDistance > ENGAGEMENT_DISTANCE) {
+        console.log(`[SKU Debug] No shelf within engagement distance (${ENGAGEMENT_DISTANCE}m). Closest: ${minDistance.toFixed(2)}m`);
+        return res.json({
+          position: { x, z },
+          detectedSkus: [],
+          timestamp: Date.now(),
+          debug: { closestShelfDistance: minDistance, engagementThreshold: ENGAGEMENT_DISTANCE }
+        });
+      }
+      
+      console.log(`[SKU Debug] ✓ Closest shelf: "${closestShelf.id.slice(0,8)}..." at ${minDistance.toFixed(2)}m`);
+      console.log(`[SKU Debug]   Position: (${closestShelf.position_x.toFixed(2)}, ${closestShelf.position_z.toFixed(2)})`);
+      console.log(`[SKU Debug]   Rotation: ${closestShelf.rotation_y?.toFixed(2) || 0} rad`);
+      console.log(`[SKU Debug]   Width (X): ${closestShelf.scale_x}m, Length (Z): ${closestShelf.scale_z}m`);
+      
+      // Calculate which slot person is facing
+      const shelfPos = { x: closestShelf.position_x, z: closestShelf.position_z };
+      const shelfRotY = closestShelf.rotation_y || 0;
+      const shelfWidth = closestShelf.scale_x || 1;  // X dimension (narrow)
+      const shelfDepth = closestShelf.scale_z || 1;  // Z dimension (long)
+      
+      // Auto-detect facing direction (same logic as frontend PlanogramViewport)
+      // If width < depth, use 'left' facing (slots along Z), else 'front' (slots along X)
+      const storedFacings = JSON.parse(closestShelf.slot_facings || '[]');
+      const autoFacing = shelfWidth >= shelfDepth ? 'front' : 'left';
+      const effectiveFacing = storedFacings.length > 0 ? storedFacings[0] : autoFacing;
+      const slotsAlongZ = effectiveFacing === 'left' || effectiveFacing === 'right';
+      
+      console.log(`[SKU Debug]   Width: ${shelfWidth.toFixed(2)}m, Depth: ${shelfDepth.toFixed(2)}m`);
+      console.log(`[SKU Debug]   Facing: ${effectiveFacing} (auto=${autoFacing}), slots along ${slotsAlongZ ? 'Z' : 'X'}`);
+      
+      // Calculate relative position to shelf center
+      const dx = x - shelfPos.x;
+      const dz = z - shelfPos.z;
+      
+      // Determine which side of shelf person is on
+      const zoneType = dx > 0 ? 'right' : 'left';
+      
+      // Get slot configuration
+      const slots = JSON.parse(closestShelf.slots_json || '{}');
+      const slotWidth = closestShelf.slot_width_m || 0.1;
+      const slotSpan = slotsAlongZ ? shelfDepth : shelfWidth;
+      const numSlotsPerLevel = Math.max(1, Math.floor(slotSpan / slotWidth));
+      
+      // Calculate slot start position based on facing (matches frontend getFaceParams)
+      // For 'left' facing: slots start at Z = center - depth/2, X = center - width/2
+      // For 'right' facing: slots start at Z = center - depth/2, X = center + width/2
+      // For 'front' facing: slots start at X = center - width/2, Z = center + depth/2
+      // For 'back' facing: slots start at X = center - width/2, Z = center - depth/2
+      let slotStartX, slotStartZ, slotOffsetX, slotOffsetZ;
+      
+      if (slotsAlongZ) {
+        // Left/Right facing: slots distributed along Z
+        slotStartZ = shelfPos.z - shelfDepth / 2;
+        slotOffsetX = effectiveFacing === 'left' ? -shelfWidth / 2 : shelfWidth / 2;
+        slotStartX = shelfPos.x + slotOffsetX;
+      } else {
+        // Front/Back facing: slots distributed along X
+        slotStartX = shelfPos.x - shelfWidth / 2;
+        slotOffsetZ = effectiveFacing === 'front' ? shelfDepth / 2 : -shelfDepth / 2;
+        slotStartZ = shelfPos.z + slotOffsetZ;
+      }
+      
+      console.log(`[SKU Debug]   Slot start: X=${slotStartX.toFixed(2)}, Z=${slotStartZ.toFixed(2)}`);
+      console.log(`[SKU Debug]   slotSpan=${slotSpan.toFixed(2)}, slotWidth=${slotWidth}, numSlots=${numSlotsPerLevel}`);
+      
+      // Collect ALL slots with SKUs and their world positions
+      const skuSlots = [];
+      const levels = slots.levels || [];
+      
+      for (const level of levels) {
+        for (const slot of (level.slots || [])) {
+          if (slot.skuItemId) {
+            let slotWorldX, slotWorldZ;
+            
+            if (slotsAlongZ) {
+              // Slots along Z axis
+              slotWorldX = slotStartX;
+              slotWorldZ = slotStartZ + (slot.slotIndex + 0.5) * slotWidth;
+            } else {
+              // Slots along X axis
+              slotWorldX = slotStartX + (slot.slotIndex + 0.5) * slotWidth;
+              slotWorldZ = slotStartZ;
+            }
+            
+            // Calculate 2D distance from person to slot
+            const distX = x - slotWorldX;
+            const distZ = z - slotWorldZ;
+            const distanceToSlot = Math.sqrt(distX * distX + distZ * distZ);
+            
+            skuSlots.push({
+              levelIndex: level.levelIndex,
+              slot,
+              slotWorldX,
+              slotWorldZ,
+              distanceToSlot,
+            });
+          }
+        }
+      }
+      
+      // Sort by 2D distance to slot position
+      skuSlots.sort((a, b) => a.distanceToSlot - b.distanceToSlot);
+      
+      console.log(`[SKU Debug]   Found ${skuSlots.length} SKU slots total`);
+      if (skuSlots.length > 0) {
+        console.log(`[SKU Debug]   Nearest SKU at (${skuSlots[0].slotWorldX.toFixed(2)}, ${skuSlots[0].slotWorldZ.toFixed(2)}), dist=${skuSlots[0].distanceToSlot.toFixed(2)}m`);
+      }
+      
+      // Only include SKUs within 2 meters of person's position (2D distance to slot)
+      const MAX_SKU_DISTANCE = 2.0; // meters
+      const detectedSkus = [];
+      
+      for (const skuSlot of skuSlots) {
+        if (skuSlot.distanceToSlot > MAX_SKU_DISTANCE) continue;
+        
+        const sku = db.prepare('SELECT * FROM sku_items WHERE id = ?').get(skuSlot.slot.skuItemId);
+        
+        if (sku) {
+          // Position score based on level (eye level = best)
+          const levelIndex = skuSlot.levelIndex;
+          let positionScore = 0.5;
+          if (levelIndex === 1 || levelIndex === 2) positionScore = 1.0; // Eye/chest level
+          else if (levelIndex === 0) positionScore = 0.6; // Waist level
+          else positionScore = 0.4; // Top/bottom
+          
+          // Attention score based on proximity (closer = higher score)
+          const attentionScore = Math.max(0, 1 - (skuSlot.distanceToSlot / MAX_SKU_DISTANCE));
+          
+          detectedSkus.push({
+            skuId: sku.id,
+            skuCode: sku.sku_code,
+            name: sku.name,
+            brand: sku.brand,
+            category: sku.category,
+            price: sku.price,
+            shelfId: closestShelf.id,
+            shelfName: closestShelf.name,
+            shelfPosition: { x: closestShelf.position_x, z: closestShelf.position_z },
+            shelfRotation: shelfRotY,
+            slotWorldPosition: { x: skuSlot.slotWorldX, z: skuSlot.slotWorldZ },
+            levelIndex,
+            slotIndex: skuSlot.slot.slotIndex,
+            positionScore,
+            attentionScore,
+            zoneType,
+            distanceToShelf: minDistance,
+          });
+        }
+      }
+      
+      // Sort by attention score (closest slot first)
+      detectedSkus.sort((a, b) => b.attentionScore - a.attentionScore);
+      
+      console.log(`[SKU Debug] ✓ Found ${detectedSkus.length} SKUs, returning top 3`);
+      if (detectedSkus.length > 0) {
+        console.log(`[SKU Debug]   Top SKUs:`, detectedSkus.slice(0, 3).map(s => 
+          `${s.name} (L${s.levelIndex} S${s.slotIndex}, att=${s.attentionScore.toFixed(2)})`
+        ));
+      }
+      console.log(`[SKU Debug] ═══════════════════════════════════════════`);
+      
+      res.json({
+        position: { x, z },
+        detectedSkus: detectedSkus.slice(0, 3),
+        timestamp: Date.now(),
+        debug: {
+          closestShelfId: closestShelf.id,
+          closestShelfPosition: { x: closestShelf.position_x, z: closestShelf.position_z },
+          distanceToShelf: minDistance,
+          nearestSlotIndex: detectedSkus.length > 0 ? detectedSkus[0].slotIndex : null,
+          totalSkusFound: detectedSkus.length,
+        }
+      });
+    } catch (err) {
+      console.error('SKU detection error:', err);
+      res.status(500).json({ error: 'Failed to detect SKUs' });
+    }
+  });
+
+  /**
+   * Get real-time SKU detection for all tracked persons in a venue
+   */
+  router.get('/kpi/venues/:venueId/sku-detection/active', (req, res) => {
+    try {
+      const { venueId } = req.params;
+      
+      // Get all shelf engagement zones for this venue
+      const zones = db.prepare(`
+        SELECT r.id, r.name, r.vertices, r.metadata_json,
+               vo.id as shelf_id, vo.name as shelf_name, vo.position_x, vo.position_z, vo.rotation_y,
+               vo.scale_x, vo.scale_y
+        FROM regions_of_interest r
+        LEFT JOIN venue_objects vo ON (
+          r.metadata_json LIKE '%"shelfId":"' || vo.id || '"%'
+          OR r.name LIKE vo.name || ' - Engagement%'
+        )
+        WHERE r.venue_id = ? AND vo.type = 'shelf'
+      `).all(venueId);
+      
+      // Get planograms for these shelves
+      const shelfPlanograms = new Map();
+      for (const zone of zones) {
+        if (zone.shelf_id && !shelfPlanograms.has(zone.shelf_id)) {
+          const sp = db.prepare('SELECT * FROM shelf_planograms WHERE shelf_id = ? LIMIT 1').get(zone.shelf_id);
+          if (sp) {
+            shelfPlanograms.set(zone.shelf_id, {
+              ...sp,
+              slots: JSON.parse(sp.slots_json),
+            });
+          }
+        }
+      }
+      
+      // Return zone info for frontend to use with tracked positions
+      res.json({
+        venueId,
+        zones: zones.map(z => ({
+          roiId: z.id,
+          roiName: z.name,
+          vertices: JSON.parse(z.vertices),
+          shelfId: z.shelf_id,
+          shelfName: z.shelf_name,
+          shelfPosition: { x: z.position_x, z: z.position_z },
+          shelfRotation: z.rotation_y || 0,
+          shelfSize: { width: z.scale_x || 2, height: z.scale_y || 2 },
+          planogram: shelfPlanograms.get(z.shelf_id) || null,
+        })),
+      });
+    } catch (err) {
+      console.error('Failed to get active SKU detection zones:', err);
+      res.status(500).json({ error: 'Failed to get zones' });
+    }
+  });
+
+  // ==================== ENRICHED SHELF KPI ROUTES ====================
+
+  /**
+   * Get shelf info associated with an ROI (engagement zone)
+   * Infers shelfId from ROI metadata or name pattern
+   */
+  router.get('/roi/:roiId/shelf-info', (req, res) => {
+    try {
+      const { roiId } = req.params;
+      
+      // Get ROI details
+      const roi = db.prepare('SELECT * FROM regions_of_interest WHERE id = ?').get(roiId);
+      if (!roi) {
+        return res.status(404).json({ error: 'ROI not found' });
+      }
+      
+      let shelfId = null;
+      let shelfName = null;
+      
+      // Method 1: Check metadata for shelfId
+      if (roi.metadata_json) {
+        const metadata = JSON.parse(roi.metadata_json);
+        if (metadata.shelfId) {
+          shelfId = metadata.shelfId;
+          // Get shelf name
+          const shelf = db.prepare('SELECT name FROM venue_objects WHERE id = ?').get(shelfId);
+          shelfName = shelf?.name || shelfId;
+        }
+      }
+      
+      // Method 2: Parse zone name pattern "ShelfName - Engagement (Left/Right)"
+      if (!shelfId && roi.name) {
+        const match = roi.name.match(/^(.+?)\s*-\s*Engagement/i);
+        if (match) {
+          const extractedName = match[1].trim();
+          // Look up shelf by name
+          const shelf = db.prepare('SELECT id, name FROM venue_objects WHERE venue_id = ? AND name = ? AND type = ?')
+            .get(roi.venue_id, extractedName, 'shelf');
+          if (shelf) {
+            shelfId = shelf.id;
+            shelfName = shelf.name;
+          }
+        }
+      }
+      
+      // Method 3: Find nearest shelf to ROI center
+      if (!shelfId) {
+        const vertices = JSON.parse(roi.vertices);
+        if (vertices.length > 0) {
+          // Calculate ROI center
+          const centerX = vertices.reduce((sum, v) => sum + v.x, 0) / vertices.length;
+          const centerZ = vertices.reduce((sum, v) => sum + v.z, 0) / vertices.length;
+          
+          // Find shelves in the venue
+          const shelves = db.prepare('SELECT id, name, position_x, position_z FROM venue_objects WHERE venue_id = ? AND type = ?')
+            .all(roi.venue_id, 'shelf');
+          
+          // Find closest shelf (within 3 meters)
+          let minDist = 3;
+          for (const shelf of shelves) {
+            const dist = Math.sqrt(Math.pow(shelf.position_x - centerX, 2) + Math.pow(shelf.position_z - centerZ, 2));
+            if (dist < minDist) {
+              minDist = dist;
+              shelfId = shelf.id;
+              shelfName = shelf.name;
+            }
+          }
+        }
+      }
+      
+      if (!shelfId) {
+        return res.json({ roiId, shelfId: null, shelfName: null, planogramId: null, message: 'No shelf found for this ROI' });
+      }
+      
+      // Get active planogram for this shelf
+      let planogramId = null;
+      const shelfPlanogram = db.prepare(`
+        SELECT sp.planogram_id FROM shelf_planograms sp
+        JOIN planograms p ON sp.planogram_id = p.id
+        WHERE sp.shelf_id = ? AND p.status = 'active'
+        ORDER BY p.updated_at DESC LIMIT 1
+      `).get(shelfId);
+      
+      if (shelfPlanogram) {
+        planogramId = shelfPlanogram.planogram_id;
+      } else {
+        // Fallback: any planogram with this shelf
+        const anyPlanogram = db.prepare(`
+          SELECT planogram_id FROM shelf_planograms WHERE shelf_id = ? LIMIT 1
+        `).get(shelfId);
+        planogramId = anyPlanogram?.planogram_id || null;
+      }
+      
+      res.json({
+        roiId,
+        shelfId,
+        shelfName,
+        planogramId,
+      });
+    } catch (err) {
+      console.error('Failed to get shelf info for ROI:', err);
+      res.status(500).json({ error: 'Failed to get shelf info' });
+    }
+  });
+
+  /**
+   * Get enriched shelf KPIs with SKU/category/brand breakdown
+   * Requires: shelfId, planogramId, and optionally roiId for engagement zone
+   */
+  router.get('/shelf/:shelfId/enriched-kpis', (req, res) => {
+    try {
+      const { shelfId } = req.params;
+      const { planogramId, roiId, startTime, endTime, period } = req.query;
+      
+      if (!planogramId) {
+        return res.status(400).json({ error: 'planogramId query parameter required' });
+      }
+      
+      // Calculate time range
+      const now = Date.now();
+      let start = startTime ? parseInt(startTime) : now - 24 * 60 * 60 * 1000;
+      let end = endTime ? parseInt(endTime) : now;
+      
+      if (period) {
+        switch (period) {
+          case 'hour': start = now - 60 * 60 * 1000; break;
+          case 'day': start = now - 24 * 60 * 60 * 1000; break;
+          case 'week': start = now - 7 * 24 * 60 * 60 * 1000; break;
+          case 'month': start = now - 30 * 24 * 60 * 60 * 1000; break;
+        }
+        end = now;
+      }
+      
+      // Get zone KPIs if roiId provided
+      let zoneKPIs = {};
+      if (roiId) {
+        zoneKPIs = kpiCalculator.getZoneKPIs(roiId, start, end);
+      }
+      
+      // Get enriched shelf KPIs
+      const enrichedKPIs = shelfKPIEnricher.getEnrichedShelfKPIs(shelfId, planogramId, zoneKPIs);
+      
+      res.json({
+        shelfId,
+        planogramId,
+        roiId: roiId || null,
+        startTime: start,
+        endTime: end,
+        ...enrichedKPIs,
+      });
+    } catch (err) {
+      console.error('Failed to get enriched shelf KPIs:', err);
+      res.status(500).json({ error: 'Failed to get enriched shelf KPIs' });
+    }
+  });
+
+  /**
+   * Get category breakdown for a shelf
+   */
+  router.get('/shelf/:shelfId/categories', (req, res) => {
+    try {
+      const { shelfId } = req.params;
+      const { planogramId } = req.query;
+      
+      if (!planogramId) {
+        return res.status(400).json({ error: 'planogramId query parameter required' });
+      }
+      
+      const enrichedData = shelfKPIEnricher.getEnrichedShelfData(planogramId, shelfId);
+      if (!enrichedData) {
+        return res.status(404).json({ error: 'No planogram data found for shelf' });
+      }
+      
+      const categoryBreakdown = shelfKPIEnricher.getCategoryBreakdown(enrichedData);
+      
+      res.json({
+        shelfId,
+        planogramId,
+        totalSlots: enrichedData.totalSlots,
+        occupiedSlots: enrichedData.occupiedSlots,
+        categories: categoryBreakdown,
+      });
+    } catch (err) {
+      console.error('Failed to get shelf categories:', err);
+      res.status(500).json({ error: 'Failed to get shelf categories' });
+    }
+  });
+
+  /**
+   * Get brand breakdown for a shelf
+   */
+  router.get('/shelf/:shelfId/brands', (req, res) => {
+    try {
+      const { shelfId } = req.params;
+      const { planogramId } = req.query;
+      
+      if (!planogramId) {
+        return res.status(400).json({ error: 'planogramId query parameter required' });
+      }
+      
+      const enrichedData = shelfKPIEnricher.getEnrichedShelfData(planogramId, shelfId);
+      if (!enrichedData) {
+        return res.status(404).json({ error: 'No planogram data found for shelf' });
+      }
+      
+      const brandBreakdown = shelfKPIEnricher.getBrandBreakdown(enrichedData);
+      
+      res.json({
+        shelfId,
+        planogramId,
+        totalSlots: enrichedData.totalSlots,
+        brands: brandBreakdown,
+      });
+    } catch (err) {
+      console.error('Failed to get shelf brands:', err);
+      res.status(500).json({ error: 'Failed to get shelf brands' });
+    }
+  });
+
+  /**
+   * Get slot-level heatmap for a shelf
+   */
+  router.get('/shelf/:shelfId/heatmap', (req, res) => {
+    try {
+      const { shelfId } = req.params;
+      const { planogramId } = req.query;
+      
+      if (!planogramId) {
+        return res.status(400).json({ error: 'planogramId query parameter required' });
+      }
+      
+      const enrichedData = shelfKPIEnricher.getEnrichedShelfData(planogramId, shelfId);
+      if (!enrichedData) {
+        return res.status(404).json({ error: 'No planogram data found for shelf' });
+      }
+      
+      const heatmap = shelfKPIEnricher.getSlotHeatmap(enrichedData);
+      
+      res.json({
+        shelfId,
+        planogramId,
+        numLevels: enrichedData.numLevels,
+        slotsPerLevel: enrichedData.slotsPerLevel,
+        heatmap,
+      });
+    } catch (err) {
+      console.error('Failed to get shelf heatmap:', err);
+      res.status(500).json({ error: 'Failed to get shelf heatmap' });
+    }
+  });
+
+  /**
+   * Get SKU-level analytics for a specific SKU on a shelf
+   */
+  router.get('/shelf/:shelfId/sku/:skuCode', (req, res) => {
+    try {
+      const { shelfId, skuCode } = req.params;
+      const { planogramId } = req.query;
+      
+      if (!planogramId) {
+        return res.status(400).json({ error: 'planogramId query parameter required' });
+      }
+      
+      const enrichedData = shelfKPIEnricher.getEnrichedShelfData(planogramId, shelfId);
+      if (!enrichedData) {
+        return res.status(404).json({ error: 'No planogram data found for shelf' });
+      }
+      
+      const skuAnalytics = shelfKPIEnricher.getSkuAnalytics(enrichedData, skuCode);
+      if (!skuAnalytics) {
+        return res.status(404).json({ error: 'SKU not found on this shelf' });
+      }
+      
+      res.json({
+        shelfId,
+        planogramId,
+        ...skuAnalytics,
+      });
+    } catch (err) {
+      console.error('Failed to get SKU analytics:', err);
+      res.status(500).json({ error: 'Failed to get SKU analytics' });
+    }
+  });
+
+  /**
+   * Compare a category across multiple shelves in a venue
+   */
+  router.get('/venues/:venueId/category-comparison', (req, res) => {
+    try {
+      const { venueId } = req.params;
+      const { category, planogramId } = req.query;
+      
+      if (!category) {
+        return res.status(400).json({ error: 'category query parameter required' });
+      }
+      
+      // Get active planogram for venue if not specified
+      let activePlanogramId = planogramId;
+      if (!activePlanogramId) {
+        const planograms = planogramQueries.getByVenueId(db, venueId);
+        const activePlanogram = planograms.find(p => p.status === 'active') || planograms[0];
+        if (!activePlanogram) {
+          return res.status(404).json({ error: 'No planogram found for venue' });
+        }
+        activePlanogramId = activePlanogram.id;
+      }
+      
+      const comparison = shelfKPIEnricher.compareCategoryAcrossShelves(venueId, activePlanogramId, category);
+      
+      res.json({
+        venueId,
+        planogramId: activePlanogramId,
+        category,
+        shelvesWithCategory: comparison.length,
+        comparison,
+      });
+    } catch (err) {
+      console.error('Failed to get category comparison:', err);
+      res.status(500).json({ error: 'Failed to get category comparison' });
+    }
+  });
+
+  /**
+   * Get all shelves with enriched data for a planogram
+   */
+  router.get('/planograms/:planogramId/shelves-analytics', (req, res) => {
+    try {
+      const { planogramId } = req.params;
+      const { startTime, endTime, period } = req.query;
+      
+      // Get all shelf planograms
+      const shelfPlanograms = shelfPlanogramQueries.getByPlanogramId(db, planogramId);
+      
+      if (shelfPlanograms.length === 0) {
+        return res.json({ planogramId, shelves: [] });
+      }
+      
+      // Calculate time range
+      const now = Date.now();
+      let start = startTime ? parseInt(startTime) : now - 24 * 60 * 60 * 1000;
+      let end = endTime ? parseInt(endTime) : now;
+      
+      if (period) {
+        switch (period) {
+          case 'hour': start = now - 60 * 60 * 1000; break;
+          case 'day': start = now - 24 * 60 * 60 * 1000; break;
+          case 'week': start = now - 7 * 24 * 60 * 60 * 1000; break;
+          case 'month': start = now - 30 * 24 * 60 * 60 * 1000; break;
+        }
+        end = now;
+      }
+      
+      const shelvesAnalytics = shelfPlanograms.map(sp => {
+        const enrichedData = shelfKPIEnricher.getEnrichedShelfData(planogramId, sp.shelfId);
+        const categoryBreakdown = enrichedData ? shelfKPIEnricher.getCategoryBreakdown(enrichedData) : [];
+        const brandBreakdown = enrichedData ? shelfKPIEnricher.getBrandBreakdown(enrichedData) : [];
+        
+        // Try to find associated ROI for this shelf
+        const roiResult = db.prepare(`
+          SELECT id FROM regions_of_interest 
+          WHERE metadata_json LIKE ? OR name LIKE ?
+          LIMIT 1
+        `).get(`%"shelfId":"${sp.shelfId}"%`, `%${sp.shelfId}%`);
+        
+        let zoneKPIs = {};
+        if (roiResult) {
+          zoneKPIs = kpiCalculator.getZoneKPIs(roiResult.id, start, end);
+        }
+        
+        return {
+          shelfId: sp.shelfId,
+          numLevels: sp.numLevels,
+          totalSlots: enrichedData?.totalSlots || 0,
+          occupiedSlots: enrichedData?.occupiedSlots || 0,
+          occupancyRate: enrichedData 
+            ? (enrichedData.occupiedSlots / enrichedData.totalSlots) * 100 
+            : 0,
+          topCategories: categoryBreakdown.slice(0, 3),
+          topBrands: brandBreakdown.slice(0, 3),
+          zoneKPIs: roiResult ? {
+            roiId: roiResult.id,
+            visits: zoneKPIs.visits || 0,
+            dwellRate: zoneKPIs.dwellRate || 0,
+            engagementRate: zoneKPIs.engagementRate || 0,
+            utilizationRate: zoneKPIs.utilizationRate || 0,
+          } : null,
+        };
+      });
+      
+      res.json({
+        planogramId,
+        startTime: start,
+        endTime: end,
+        totalShelves: shelvesAnalytics.length,
+        shelves: shelvesAnalytics,
+      });
+    } catch (err) {
+      console.error('Failed to get shelves analytics:', err);
+      res.status(500).json({ error: 'Failed to get shelves analytics' });
+    }
+  });
 
   return router;
 }

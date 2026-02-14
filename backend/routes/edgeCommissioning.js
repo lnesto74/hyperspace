@@ -533,6 +533,7 @@ router.get('/placements', (req, res) => {
     // Manual lidar_placements are legacy and not used for commissioning
     let dwgPlacements = [];
     let roiBounds = null;
+    let dwgLayout = null;
     
     if (venue?.dwg_layout_version_id) {
       const dwgRows = db.prepare(`
@@ -558,8 +559,44 @@ router.get('/placements', (req, res) => {
         enabled: true,
       }));
 
-      // Calculate ROI bounds from LiDAR positions (with margin)
-      if (dwgPlacements.length > 0) {
+      // Try to fetch saved LiDAR ROI and layout from dwg_layout_versions
+      try {
+        const layoutVersion = db.prepare(`
+          SELECT lv.lidar_roi_json, lv.layout_json, di.unit_scale_to_m 
+          FROM dwg_layout_versions lv
+          LEFT JOIN dwg_imports di ON lv.import_id = di.id
+          WHERE lv.id = ?
+        `).get(venue.dwg_layout_version_id);
+        if (layoutVersion?.lidar_roi_json) {
+          const roiVertices = JSON.parse(layoutVersion.lidar_roi_json);
+          if (roiVertices && roiVertices.length >= 3) {
+            const xs = roiVertices.map(v => v.x);
+            const zs = roiVertices.map(v => v.z);
+            roiBounds = {
+              minX: Math.min(...xs),
+              maxX: Math.max(...xs),
+              minZ: Math.min(...zs),
+              maxZ: Math.max(...zs),
+            };
+            console.log(`📐 ROI from lidar_roi_json: X[${roiBounds.minX.toFixed(1)}, ${roiBounds.maxX.toFixed(1)}] Z[${roiBounds.minZ.toFixed(1)}, ${roiBounds.maxZ.toFixed(1)}]`);
+          }
+        }
+        // Parse DWG layout for wireframe visualization
+        if (layoutVersion?.layout_json) {
+          const layoutData = JSON.parse(layoutVersion.layout_json);
+          dwgLayout = {
+            fixtures: layoutData.fixtures || [],
+            bounds: layoutData.bounds || null,
+            unitScaleToM: layoutVersion.unit_scale_to_m || 0.001,
+          };
+          console.log(`🗺️ DWG layout: ${dwgLayout.fixtures.length} fixtures`);
+        }
+      } catch (e) {
+        console.warn('Failed to fetch layout data:', e.message);
+      }
+
+      // Fallback: Calculate ROI bounds from LiDAR positions (with margin)
+      if (!roiBounds && dwgPlacements.length > 0) {
         const xs = dwgPlacements.map(p => p.position.x);
         const zs = dwgPlacements.map(p => p.position.z);
         const margin = 10; // 10m margin around LiDAR positions
@@ -569,6 +606,7 @@ router.get('/placements', (req, res) => {
           minZ: Math.min(...zs) - margin,
           maxZ: Math.max(...zs) + margin,
         };
+        console.log(`📐 ROI from LiDAR positions (fallback): X[${roiBounds.minX.toFixed(1)}, ${roiBounds.maxX.toFixed(1)}] Z[${roiBounds.minZ.toFixed(1)}, ${roiBounds.maxZ.toFixed(1)}]`);
       }
     }
 
@@ -581,6 +619,7 @@ router.get('/placements', (req, res) => {
       placements: dwgPlacements,
       count: dwgPlacements.length,
       roiBounds,
+      dwgLayout: dwgLayout || null,
     });
   } catch (err) {
     console.error('❌ Failed to fetch placements:', err.message);
@@ -675,22 +714,47 @@ router.post('/pairings', (req, res) => {
   }
 });
 
-// DELETE /api/edge-commissioning/pairings/:id
-router.delete('/pairings/:id', (req, res) => {
+// DELETE /api/edge-commissioning/pairings/cleanup-orphaned - Remove pairings referencing non-existent placements
+// NOTE: This must be defined BEFORE /pairings/:id to avoid :id matching 'cleanup-orphaned'
+router.delete('/pairings/cleanup-orphaned', (req, res) => {
   try {
     const db = req.app.get('db');
-    const { id } = req.params;
+    const { venueId } = req.query;
 
-    const result = db.prepare('DELETE FROM edge_lidar_pairings WHERE id = ?').run(id);
-
-    if (result.changes === 0) {
-      return res.status(404).json({ error: 'Pairing not found' });
+    if (!venueId) {
+      return res.status(400).json({ error: 'venueId query parameter is required' });
     }
 
-    res.json({ success: true });
+    // Find orphaned pairings (placement_id not in lidar_instances or lidar_placements)
+    const orphanedPairings = db.prepare(`
+      SELECT p.id, p.placement_id, p.lidar_id 
+      FROM edge_lidar_pairings p
+      WHERE p.venue_id = ?
+        AND p.placement_id NOT IN (SELECT id FROM lidar_instances)
+        AND p.placement_id NOT IN (SELECT id FROM lidar_placements)
+    `).all(venueId);
+
+    if (orphanedPairings.length === 0) {
+      return res.json({ success: true, deleted: 0, message: 'No orphaned pairings found' });
+    }
+
+    // Delete orphaned pairings
+    const result = db.prepare(`
+      DELETE FROM edge_lidar_pairings 
+      WHERE venue_id = ?
+        AND placement_id NOT IN (SELECT id FROM lidar_instances)
+        AND placement_id NOT IN (SELECT id FROM lidar_placements)
+    `).run(venueId);
+
+    console.log(`🧹 Cleaned up ${result.changes} orphaned pairings for venue ${venueId}`);
+    res.json({ 
+      success: true, 
+      deleted: result.changes,
+      orphanedPairings: orphanedPairings.map(p => ({ id: p.id, placementId: p.placement_id, lidarId: p.lidar_id }))
+    });
   } catch (err) {
-    console.error('❌ Failed to delete pairing:', err.message);
-    res.status(500).json({ error: 'Failed to delete pairing', message: err.message });
+    console.error('❌ Failed to cleanup orphaned pairings:', err.message);
+    res.status(500).json({ error: 'Failed to cleanup orphaned pairings', message: err.message });
   }
 });
 
@@ -708,6 +772,25 @@ router.delete('/pairings/by-placement/:placementId', (req, res) => {
     const result = db.prepare('DELETE FROM edge_lidar_pairings WHERE venue_id = ? AND placement_id = ?').run(venueId, placementId);
 
     res.json({ success: true, deleted: result.changes });
+  } catch (err) {
+    console.error('❌ Failed to delete pairing:', err.message);
+    res.status(500).json({ error: 'Failed to delete pairing', message: err.message });
+  }
+});
+
+// DELETE /api/edge-commissioning/pairings/:id
+router.delete('/pairings/:id', (req, res) => {
+  try {
+    const db = req.app.get('db');
+    const { id } = req.params;
+
+    const result = db.prepare('DELETE FROM edge_lidar_pairings WHERE id = ?').run(id);
+
+    if (result.changes === 0) {
+      return res.status(404).json({ error: 'Pairing not found' });
+    }
+
+    res.json({ success: true });
   } catch (err) {
     console.error('❌ Failed to delete pairing:', err.message);
     res.status(500).json({ error: 'Failed to delete pairing', message: err.message });

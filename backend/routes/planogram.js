@@ -216,6 +216,11 @@ export default function createPlanogramRoutes(db) {
         return res.status(404).json({ error: 'Planogram not found' });
       }
       const shelfPlanograms = shelfPlanogramQueries.getByPlanogramId(db, req.params.id);
+      console.log('📦 Load planogram:', req.params.id, 'shelves:', shelfPlanograms.length);
+      shelfPlanograms.forEach(sp => {
+        const slotsCount = sp.slots?.levels?.reduce((acc, l) => acc + (l.slots?.filter(s => s.skuItemId)?.length || 0), 0) || 0;
+        console.log('  📦 Shelf:', sp.shelfId, 'slots with SKUs:', slotsCount);
+      });
       res.json({ ...planogram, shelves: shelfPlanograms });
     } catch (err) {
       res.status(500).json({ error: err.message });
@@ -341,7 +346,7 @@ export default function createPlanogramRoutes(db) {
   router.put('/planograms/:planogramId/shelves/:shelfId', (req, res) => {
     try {
       const { planogramId, shelfId } = req.params;
-      const { numLevels, slotWidthM, levelHeightM, slots } = req.body;
+      const { numLevels, slotWidthM, levelHeightM, slotFacings, slots } = req.body;
       const now = new Date().toISOString();
 
       shelfPlanogramQueries.upsert(db, {
@@ -351,6 +356,7 @@ export default function createPlanogramRoutes(db) {
         numLevels: numLevels || 4,
         slotWidthM: slotWidthM || 0.1,
         levelHeightM: levelHeightM || null,
+        slotFacings: slotFacings || [],
         slots: slots || { levels: [] },
         createdAt: now,
         updatedAt: now,
@@ -369,8 +375,12 @@ export default function createPlanogramRoutes(db) {
       const { planogramId, shelfId } = req.params;
       const { skuItemIds, dropTarget, shelfWidth, options } = req.body;
 
+      console.log('📦 Place SKUs request:', { planogramId, shelfId, skuItemIds, dropTarget, shelfWidth, options });
+
       // Get current shelf planogram or create default
       let shelfPlanogram = shelfPlanogramQueries.getByShelfId(db, planogramId, shelfId);
+      console.log('📦 Existing shelf planogram:', shelfPlanogram ? 'found' : 'not found');
+      
       if (!shelfPlanogram) {
         shelfPlanogram = {
           numLevels: 4,
@@ -390,22 +400,32 @@ export default function createPlanogramRoutes(db) {
         options: options || {},
       });
 
+      console.log('📦 Placement result:', { 
+        placedCount: result.placedSkuIds?.length, 
+        overflowCount: result.overflowSkuIds?.length,
+        levelsCount: result.updatedSlots?.levels?.length 
+      });
+
       // Save updated slots
       const now = new Date().toISOString();
-      shelfPlanogramQueries.upsert(db, {
+      const upsertResult = shelfPlanogramQueries.upsert(db, {
         id: uuidv4(),
         planogramId,
         shelfId,
         numLevels: shelfPlanogram.numLevels,
         slotWidthM: shelfPlanogram.slotWidthM,
         levelHeightM: shelfPlanogram.levelHeightM,
+        slotFacings: shelfPlanogram.slotFacings || [],
         slots: result.updatedSlots,
         createdAt: now,
         updatedAt: now,
       });
 
+      console.log('📦 Upsert result:', upsertResult);
+
       res.json(result);
     } catch (err) {
+      console.error('📦 Place SKUs error:', err);
       res.status(500).json({ error: err.message });
     }
   });
@@ -485,6 +505,7 @@ export default function createPlanogramRoutes(db) {
         numLevels: shelfPlanogram.numLevels,
         slotWidthM: shelfPlanogram.slotWidthM,
         levelHeightM: shelfPlanogram.levelHeightM,
+        slotFacings: shelfPlanogram.slotFacings || [],
         slots: result.updatedSlots,
         createdAt: now,
         updatedAt: now,

@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect, useRef } from 'react'
 import { useRoi } from '../../context/RoiContext'
 import { useVenue } from '../../context/VenueContext'
 import ZoneKPIIndicator from './ZoneKPIIndicator'
@@ -27,9 +27,73 @@ function getZoneCategory(name: string): ZoneCategory {
 }
 
 export default function ZoneKPIOverlayPanel({ onZoneClick }: ZoneKPIOverlayPanelProps) {
-  const { regions, showKPIOverlays, openKPIPopup } = useRoi()
+  const { regions, showKPIOverlays, openKPIPopup, hoveredRoiId } = useRoi()
   const { selectedObjectId } = useVenue()
   const [activeFilters, setActiveFilters] = useState<Set<ZoneCategory>>(new Set())
+  
+  // Track pinned ROI that stays highlighted for 10 seconds
+  const [pinnedRoiId, setPinnedRoiId] = useState<string | null>(null)
+  const pinnedTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+  const listContainerRef = useRef<HTMLDivElement>(null)
+  
+  // When hoveredRoiId changes, pin it and set 10-second timeout
+  useEffect(() => {
+    if (hoveredRoiId) {
+      // Clear any existing timeout
+      if (pinnedTimeoutRef.current) {
+        clearTimeout(pinnedTimeoutRef.current)
+      }
+      
+      // Pin the new ROI
+      setPinnedRoiId(hoveredRoiId)
+      
+      // Scroll to top when pinning
+      if (listContainerRef.current) {
+        listContainerRef.current.scrollTo({ top: 0, behavior: 'smooth' })
+      }
+      
+      // Set 10-second timeout to unpin
+      pinnedTimeoutRef.current = setTimeout(() => {
+        setPinnedRoiId(null)
+      }, 10000)
+    }
+    
+    return () => {
+      if (pinnedTimeoutRef.current) {
+        clearTimeout(pinnedTimeoutRef.current)
+      }
+    }
+  }, [hoveredRoiId])
+
+  // Compute display names for ROIs, adding @Z{value} suffix for duplicates
+  const roiDisplayNames = useMemo(() => {
+    const nameMap = new Map<string, string[]>() // name -> [id1, id2, ...]
+    const displayNames = new Map<string, string>() // id -> display name
+    
+    // First pass: group ROIs by name
+    regions.forEach(roi => {
+      const ids = nameMap.get(roi.name) || []
+      ids.push(roi.id)
+      nameMap.set(roi.name, ids)
+    })
+    
+    // Second pass: assign display names
+    regions.forEach(roi => {
+      const ids = nameMap.get(roi.name) || []
+      if (ids.length > 1) {
+        // Duplicate name - add @Z{value} suffix using centroid Z
+        const centroidZ = roi.vertices.length > 0
+          ? roi.vertices.reduce((sum, v) => sum + v.z, 0) / roi.vertices.length
+          : 0
+        displayNames.set(roi.id, `${roi.name} @Z${Math.round(centroidZ)}`)
+      } else {
+        // Unique name - use as-is
+        displayNames.set(roi.id, roi.name)
+      }
+    })
+    
+    return displayNames
+  }, [regions])
 
   // Get available categories from current regions
   const availableCategories = useMemo(() => {
@@ -40,9 +104,19 @@ export default function ZoneKPIOverlayPanel({ onZoneClick }: ZoneKPIOverlayPanel
 
   // Filter regions based on active filters (empty = show all)
   const filteredRegions = useMemo(() => {
-    if (activeFilters.size === 0) return regions
-    return regions.filter(roi => activeFilters.has(getZoneCategory(roi.name)))
-  }, [regions, activeFilters])
+    let result = activeFilters.size === 0 ? regions : regions.filter(roi => activeFilters.has(getZoneCategory(roi.name)))
+    
+    // If there's a pinned ROI, move it to the top of the list
+    if (pinnedRoiId) {
+      const pinnedIndex = result.findIndex(r => r.id === pinnedRoiId)
+      if (pinnedIndex > 0) {
+        const pinned = result[pinnedIndex]
+        result = [pinned, ...result.slice(0, pinnedIndex), ...result.slice(pinnedIndex + 1)]
+      }
+    }
+    
+    return result
+  }, [regions, activeFilters, pinnedRoiId])
 
   // Toggle filter
   const toggleFilter = (cat: ZoneCategory) => {
@@ -108,13 +182,17 @@ export default function ZoneKPIOverlayPanel({ onZoneClick }: ZoneKPIOverlayPanel
       )}
 
       {/* KPI Cards column - fixed width */}
-      <div className="flex flex-col gap-2 max-h-[calc(100vh-200px)] overflow-y-auto pr-1 w-[168px]">
+      <div 
+        ref={listContainerRef}
+        className="flex flex-col gap-2 max-h-[calc(100vh-200px)] overflow-y-auto pr-1 w-[168px]"
+      >
         {filteredRegions.map((roi) => (
           <ZoneKPIIndicator
             key={roi.id}
             roiId={roi.id}
-            roiName={roi.name}
+            roiName={roiDisplayNames.get(roi.id) || roi.name}
             roiColor={roi.color}
+            highlighted={roi.id === pinnedRoiId}
             onClick={() => handleZoneClick(roi.id)}
           />
         ))}

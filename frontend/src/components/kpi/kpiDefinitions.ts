@@ -1,68 +1,94 @@
 export const KPI_DEFINITIONS: Record<string, string> = {
-  // Basic Metrics
-  visits: "The count of people who had at least one measurement in the area during the defined time period. Visits are not a count of the total number of times a visitor is measured. It is only incremented once per location visit.",
-  totalEntries: "The total number of times people entered the zone, including repeat entries by the same person.",
-  timeSpent: "The total measured time of all people in the area during the defined time period (in minutes).",
-  avgTimeSpent: "The average amount of time people spend in the area. Calculated as Time Spent / Visits.",
-  avgTimeSpentCT: "Complete Track (CT) version of Avg Time Spent. Reflects the average time spent by tracks that did not start or end within the area. Designed to provide accurate reflection by omitting partial tracks.",
+  // Basic Metrics - Simple explanations
+  visits: "How many different people visited this zone. Each person is counted only once, even if they entered multiple times.",
+  totalEntries: "Total number of times people walked into this zone. If someone enters 3 times, it counts as 3 entries.",
+  timeSpent: "The total time all visitors spent in this zone combined. Useful to understand overall zone activity.",
+  avgTimeSpent: "On average, how long each visitor stays in this zone. Higher = more engaging zone.",
+  avgTimeSpentCT: "Average time for visitors who fully passed through (didn't start or end their journey here).",
 
-  // Dwell Metrics
-  dwellAvgTime: "The average time spent in an area by visits that meet the definition of a Dwell in that area.",
-  dwellAvgTimeCT: "Complete Track (CT) version of Dwell Average Time. Reflects average time by tracks that dwelled and did not start or end within the area.",
-  dwellsCumulative: "The number of times people spent consecutive time in an area exceeding the minimum threshold set for a Dwell (default 60 seconds). Multiple dwells are only counted when there is an intervening measurement outside the area.",
-  dwellsUnique: "A unique count of people who spent consecutive time exceeding the Dwell threshold. A person can have no more than one Dwell Unique per area per visit.",
-  dwellsPerVisit: "The average number of Dwells per visit to an area. Calculated as Dwells Cumulative / Visits.",
-  dwellRate: "The percentage of visits to an area that exceed the time threshold required for a Dwell. Calculated as Dwells Unique / Visits.",
-  dwellShare: "The percentage of all Dwells Cumulative measured in the specific area for the time period. Calculated as Dwells Cumulative / Sum (All Location Dwells).",
+  // Dwell Metrics - Simple explanations
+  dwellAvgTime: "Average time people who 'dwelled' (stayed 60+ seconds) spent here. Shows genuine interest.",
+  dwellAvgTimeCT: "Average dwell time for complete journeys only (excludes partial visits).",
+  dwellsCumulative: "Total count of dwell events (staying 60+ seconds). Same person can have multiple dwells.",
+  dwellsUnique: "Number of unique people who dwelled here. Each person counted once per visit.",
+  dwellsPerVisit: "Average number of dwell events per visitor. Higher = people return to this zone.",
+  dwellRate: "Percentage of visitors who dwelled (stayed 60+ seconds). Shows zone 'stickiness'.",
+  dwellShare: "This zone's share of all dwells in the store. Shows relative importance.",
 
-  // Engagement Metrics
-  engagementAvgTime: "The average time spent in an area by visits that meet the definition of an Engagement in that area.",
-  engagementAvgTimeCT: "Complete Track (CT) version of Engagement Average Time. Reflects average time by tracks that engaged and did not start or end within the area.",
-  engagementsCumulative: "The number of times people spent consecutive time exceeding the minimum threshold set for Engagements (default 120 seconds). Multiple Engagements are only counted when there is an intervening measurement outside the area.",
-  engagementsUnique: "A unique count of people who spent consecutive time exceeding the Engagement threshold. A person can have no more than one Engagement Unique per area per visit.",
-  engagementsPerVisit: "The average number of Engagements per visit to an area. Calculated as Engagements Cumulative / Visits.",
-  engagementRate: "The percentage of visits to an area that exceed the time threshold required for an Engagement. Calculated as Engagements Unique / Visits.",
-  engagementShare: "The percentage of all Engagements Cumulative measured in the specific area. Calculated as Engagements Cumulative / Sum (All Location Engagements).",
+  // Engagement Metrics - Simple explanations
+  engagementAvgTime: "Average time for highly engaged visitors (stayed 120+ seconds). Deep interest indicator.",
+  engagementAvgTimeCT: "Average engagement time for complete journeys only.",
+  engagementsCumulative: "Total engagement events (staying 120+ seconds). Shows strong interest.",
+  engagementsUnique: "Number of unique people who engaged deeply. Quality over quantity.",
+  engagementsPerVisit: "How often visitors become engaged per visit. Product interest indicator.",
+  engagementRate: "Percentage of visitors who stayed 120+ seconds. High = compelling zone.",
+  engagementShare: "This zone's share of all engagements in store. Competitive importance.",
 
-  // Flow Metrics
-  draws: "A person's first Dwell in the location. There can only be one Draw per visit across all areas of the location.",
-  drawRate: "The percentage of visits to the area that contained a Draw. Calculated as Draws / Visits.",
-  drawShare: "The percentage of all Draws measured in the specific area. Calculated as Draws / Sum (All Location Draws).",
-  exits: "The last place a person Dwelled before exiting the location without a Conversion.",
-  exitRate: "The percentage of visits to the area that resulted in an Exit. Calculated as Exits / Visits.",
-  exitShare: "The percentage of all Exits measured in the specific area. Calculated as Exits / Sum (All Location Exits).",
-  bounces: "The number of times people had a Dwell in an area without having a previous or subsequent Dwell in any other area. There can be at most one Bounce per visit across all areas.",
-  bounceRate: "The percentage of visits to the area that resulted in a Bounce. Calculated as Bounces / Visits.",
-  bounceShare: "The percentage of all Bounces measured in the specific area. Calculated as Bounces / Sum (All Location Bounces).",
+  // Flow Metrics - Simple explanations
+  draws: "People who made this their FIRST stop. Shows zone's ability to attract attention.",
+  drawRate: "Percentage of visitors who started their journey here. Entry point strength.",
+  drawShare: "This zone's share as a starting point vs. other zones.",
+  exits: "People who made this their LAST stop before leaving. Journey endpoint.",
+  exitRate: "Percentage of visitors who ended their journey here. Final destination strength.",
+  exitShare: "This zone's share as an exit point vs. other zones.",
+  bounces: "Visitors who ONLY visited this zone and left. Single-stop visits.",
+  bounceRate: "Percentage of visitors who only stopped here. High = possible dead-end.",
+  bounceShare: "This zone's share of all bounce events in store.",
 
-  // Occupancy Metrics
-  peakOccupancy: "The maximum count of concurrent people observed within the area for a specified period of time.",
-  avgOccupancy: "The average count of concurrent people observed within the area for a specified period of time.",
-  currentOccupancy: "The current number of people detected in the zone right now.",
+  // Occupancy Metrics - Simple explanations
+  peakOccupancy: "Maximum number of people in this zone at the same time. Capacity planning metric.",
+  avgOccupancy: "Average number of people in this zone at any given moment.",
+  currentOccupancy: "How many people are in this zone RIGHT NOW. Live count.",
 
-  // Velocity Metrics
-  avgVelocity: "The average velocity of people within a specified area.",
-  avgVelocityInMotion: "The average velocity of people who are moving, excluding time periods where a person is static.",
-  atRestTotalTime: "The amount of time in minutes that a person is standing/sitting still.",
-  inMotionTotalTime: "The amount of time in minutes that a person is in motion.",
-  percentAtRest: "The share of time in minutes that a person is standing/sitting still.",
-  percentInMotion: "The share of time in minutes that a person is in motion.",
+  // Velocity Metrics - Simple explanations
+  avgVelocity: "How fast people move through this zone on average (m/s).",
+  avgVelocityInMotion: "Walking speed when actually moving (excludes standing still).",
+  atRestTotalTime: "Total time people spent standing still in this zone.",
+  inMotionTotalTime: "Total time people spent walking/moving in this zone.",
+  percentAtRest: "Percentage of time visitors spend standing still. High = browsing zone.",
+  percentInMotion: "Percentage of time visitors spend moving. High = pass-through zone.",
 
-  // Conversion Metrics
-  conversions: "The number of times a person had a Dwell Unique in a Section defined as a Conversion area.",
-  conversionRate: "The percentage of visits that resulted in a Conversion. Calculated as Conversions / Visits.",
-  attributedConversions: "The number of times a shopper had a Dwell Unique in an area followed by a subsequent Conversion.",
-  attributedConversionRate: "The percentage of visits to the area that preceded a Conversion. Calculated as Attributed Conversions / Visits.",
-  conversionDrivers: "The number of times a shopper had a Dwell Cumulative in an area followed immediately by a Conversion.",
-  conversionDriverRate: "The percentage of Dwells Cumulative that immediately preceded a Conversion. Calculated as Conversion Drivers / Visits.",
+  // Conversion Metrics - Simple explanations
+  conversions: "Number of people who completed a goal action (e.g., checkout).",
+  conversionRate: "Percentage of visitors who converted. Core success metric.",
+  attributedConversions: "Conversions from people who visited this zone first.",
+  attributedConversionRate: "Percentage of zone visitors who later converted.",
+  conversionDrivers: "Conversions that happened immediately after visiting this zone.",
+  conversionDriverRate: "How often this zone directly leads to conversion.",
 
-  // Group Metrics
-  groupVisits: "The count of groups who had at least one measurement in the area during the defined time period.",
-  groupTimeSpent: "The total measured time Groups spend in the area during the defined time period (in minutes).",
-  groupAvgTimeSpent: "The average amount of time Groups spend in the area. Calculated as Group Time Spent / Group Visits.",
-  groupConversions: "The number of times a group had a Dwell Unique in a Section defined as a Conversion area.",
+  // Group Metrics - Simple explanations
+  groupVisits: "Number of groups (2+ people together) who visited this zone.",
+  groupTimeSpent: "Total time groups spent in this zone.",
+  groupAvgTimeSpent: "Average time groups spend here. Compare vs. individuals.",
+  groupConversions: "Groups who converted after visiting this zone.",
 
-  // Utilization Metrics
-  utilizationTime: "The minutes during open hours that an area has occupancy equal to or greater than a defined occupancy threshold.",
-  utilizationRate: "The percentage of time during open hours that an area is above a defined occupancy threshold.",
+  // Utilization Metrics - Simple explanations
+  utilizationTime: "Minutes this zone was actively used during open hours.",
+  utilizationRate: "Percentage of open hours this zone was in use. Efficiency metric.",
+
+  // DOOH (Digital Out-Of-Home) Metrics - Simple explanations
+  totalImpressions: "Total number of people who entered the screen's viewing zone. Each person = 1 impression.",
+  qualifiedImpressions: "People who stayed long enough and moved slowly enough to likely see the ad. Higher quality views.",
+  premiumImpressions: "Best quality views - people who stopped and paid attention. Most valuable for advertisers.",
+  avgAqs: "Attention Quality Score (0-100) measuring attention quality for screen exposures.\n\n**Formula:** AQS = 100 × (0.35×Dwell + 0.20×Proximity + 0.20×Orientation + 0.15×Slowdown + 0.10×Stability)\n\n**Components:**\n• Dwell (35%): How long did they stay?\n• Proximity (20%): How close were they?\n• Orientation (20%): Were they facing the screen?\n• Slowdown (15%): Did they slow down intentionally?\n• Stability (10%): Did they stop or stay steady?\n\n**Tiers:** 70+ = Premium, 40-69 = Qualified, <40 = Low",
+  totalAttention: "Total seconds all viewers spent looking at the screen. More = better engagement.",
+  avgAttentionTime: "Average time each viewer spent in the viewing zone. Longer = more engagement.",
+  uniqueVisitors: "Number of different people who saw the screen. Each person counted once.",
+  qualifiedRate: "Percentage of impressions that were qualified (good quality). Higher = better targeting.",
+  premiumRate: "Percentage of impressions that were premium (best quality). Higher = more valuable.",
+  aqsDistribution: "Breakdown of attention quality scores. Shows how attention is distributed across viewers.",
+
+  // Product Analytics Metrics - Simple explanations
+  browsingRate: "Percentage of visitors who stopped to browse this shelf. Shows shelf attractiveness.",
+  avgBrowseTime: "Average time shoppers spend looking at this shelf. Longer = more interest.",
+  passbyCount: "Number of people who walked past without stopping. Opportunity indicator.",
+  totalSlots: "Total number of product positions on the shelf.",
+  occupiedSlots: "How many shelf positions have products. Higher = better stocked.",
+  occupancyRate: "Percentage of shelf space being used. 100% = fully stocked.",
+  shareOfShelf: "This brand/category's portion of total shelf space. Market presence indicator.",
+  positionScore: "Quality of product placement (0-100). Eye-level center = highest score.",
+  efficiencyIndex: "Engagement vs shelf space ratio. >1 = outperforming, <1 = underperforming.",
+  avgShelfPrice: "Average price of products on this shelf.",
+  estimatedEngagementValue: "Estimated revenue potential based on shopper engagement.",
+  revenuePerVisit: "Average revenue generated per shopper visit to this shelf.",
 }

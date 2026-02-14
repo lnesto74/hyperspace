@@ -7,6 +7,7 @@ const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3001'
 interface RoiContextType {
   regions: RegionOfInterest[]
   selectedRoiId: string | null
+  hoveredRoiId: string | null
   isDrawing: boolean
   drawingVertices: Vector2[]
   kpiPopupRoiId: string | null
@@ -15,6 +16,7 @@ interface RoiContextType {
   currentDwgLayoutId: string | null
   
   loadRegions: (venueId: string, dwgLayoutId?: string | null) => Promise<void>
+  setHoveredRoiId: (roiId: string | null) => void
   toggleRoiVisibility: (roiId: string) => void
   isRoiVisible: (roiId: string) => boolean
   createRegion: (venueId: string, name: string, vertices: Vector2[], color?: string, dwgLayoutId?: string | null) => Promise<RegionOfInterest | null>
@@ -59,6 +61,7 @@ export function RoiProvider({ children }: { children: ReactNode }) {
   const [showKPIOverlays, setShowKPIOverlays] = useState(false)
   const [hiddenRoiIds, setHiddenRoiIds] = useState<Set<string>>(new Set())
   const [currentDwgLayoutId, setCurrentDwgLayoutId] = useState<string | null>(null)
+  const [hoveredRoiId, setHoveredRoiId] = useState<string | null>(null)
 
   const toggleRoiVisibility = useCallback((roiId: string) => {
     setHiddenRoiIds(prev => {
@@ -247,6 +250,7 @@ export function RoiProvider({ children }: { children: ReactNode }) {
     <RoiContext.Provider value={{
       regions,
       selectedRoiId,
+      hoveredRoiId,
       isDrawing,
       drawingVertices,
       kpiPopupRoiId,
@@ -254,6 +258,7 @@ export function RoiProvider({ children }: { children: ReactNode }) {
       hiddenRoiIds,
       currentDwgLayoutId,
       loadRegions,
+      setHoveredRoiId,
       toggleRoiVisibility,
       isRoiVisible,
       createRegion,

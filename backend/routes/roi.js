@@ -8,6 +8,23 @@ export default function createRoiRoutes(db) {
   // Get all ROIs for a venue (manual mode - dwg_layout_id IS NULL)
   router.get('/venues/:venueId/roi', (req, res) => {
     try {
+      // If ?all=true, return all ROIs regardless of dwgLayoutId
+      if (req.query.all === 'true') {
+        const rois = db.prepare(`
+          SELECT * FROM regions_of_interest WHERE venue_id = ?
+        `).all(req.params.venueId).map(row => ({
+          id: row.id,
+          venueId: row.venue_id,
+          dwgLayoutId: row.dwg_layout_id,
+          name: row.name,
+          vertices: JSON.parse(row.vertices),
+          color: row.color,
+          opacity: row.opacity,
+          createdAt: row.created_at,
+          updatedAt: row.updated_at,
+        }));
+        return res.json(rois);
+      }
       const rois = roiQueries.getByVenueId(db, req.params.venueId);
       res.json(rois);
     } catch (err) {

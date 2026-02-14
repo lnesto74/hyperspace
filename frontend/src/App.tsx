@@ -4,7 +4,7 @@ import { TrackingProvider } from './context/TrackingContext'
 import { ToastProvider } from './context/ToastContext'
 import { RoiProvider, useRoi } from './context/RoiContext'
 import { HeatmapProvider } from './context/HeatmapContext'
-import { PlanogramProvider } from './context/PlanogramContext'
+import { PlanogramProvider, usePlanogram } from './context/PlanogramContext'
 import { DwgProvider, useDwg } from './context/DwgContext'
 import AppShell from './components/layout/AppShell'
 import ZoneKPIPopup from './components/kpi/ZoneKPIPopup'
@@ -18,22 +18,31 @@ import { DwgImporterPage } from './components/dwgImporter'
 import LidarPlannerPage from './components/lidarPlanner/LidarPlannerPage'
 import { EdgeCommissioningPage } from './components/edgeCommissioning'
 import { EdgeCommissioningProvider } from './context/EdgeCommissioningContext'
-import { BarChart3, Bell, Thermometer, Zap, LayoutGrid, ShoppingCart } from 'lucide-react'
+import DoohAnalyticsPage from './components/dooh/DoohAnalyticsPage'
+import DoohEffectivenessPage from './components/dooh/DoohEffectivenessPage'
+import { BusinessReportingPage } from './features/businessReporting'
+import { BarChart3, Bell, Thermometer, Zap, LayoutGrid, ShoppingCart, Monitor, Activity, PieChart } from 'lucide-react'
 import { useState, useEffect, createContext, useContext } from 'react'
 import { useVenue } from './context/VenueContext'
 
 // App view mode context
-type ViewMode = 'main' | 'planogram' | 'dwgImporter' | 'lidarPlanner' | 'edgeCommissioning'
+type ViewMode = 'main' | 'planogram' | 'dwgImporter' | 'lidarPlanner' | 'edgeCommissioning' | 'doohAnalytics' | 'doohEffectiveness' | 'businessReporting'
 const ViewModeContext = createContext<{ mode: ViewMode; setMode: (m: ViewMode) => void }>({ mode: 'main', setMode: () => {} })
 export const useViewMode = () => useContext(ViewModeContext)
 
 function KPIPopupWrapper() {
   const { regions, kpiPopupRoiId, closeKPIPopup } = useRoi()
+  const { activePlanogram } = usePlanogram()
   
   if (!kpiPopupRoiId) return null
   
   const roi = regions.find(r => r.id === kpiPopupRoiId)
   if (!roi) return null
+  
+  // Extract shelf data from ROI metadata for product analytics
+  const isShelfEngagement = roi.metadata?.template === 'shelf-engagement'
+  const shelfId = isShelfEngagement ? roi.metadata?.shelfId : undefined
+  const planogramId = isShelfEngagement ? (roi.metadata?.planogramId || activePlanogram?.id) : undefined
   
   return (
     <ZoneKPIPopup
@@ -41,6 +50,8 @@ function KPIPopupWrapper() {
       roiName={roi.name}
       roiColor={roi.color}
       onClose={closeKPIPopup}
+      shelfId={shelfId}
+      planogramId={planogramId}
     />
   )
 }
@@ -154,6 +165,33 @@ function KPIOverlayToggle() {
           <ShoppingCart className="w-4 h-4" />
         </button>
         
+        {/* DOOH Analytics Button */}
+        <button
+          onClick={() => setMode('doohAnalytics')}
+          className="flex items-center justify-center w-10 h-10 rounded-lg shadow-lg transition-all bg-gray-800 hover:bg-purple-600 text-gray-300 hover:text-white border border-gray-600 hover:border-purple-500"
+          title="DOOH Analytics - Digital Display Metrics"
+        >
+          <Monitor className="w-4 h-4" />
+        </button>
+        
+        {/* PEBLE™ DOOH Attribution Button */}
+        <button
+          onClick={() => setMode('doohEffectiveness')}
+          className="flex items-center justify-center w-10 h-10 rounded-lg shadow-lg transition-all bg-gray-800 hover:bg-purple-600 text-gray-300 hover:text-white border border-gray-600 hover:border-purple-500"
+          title="PEBLE™ Attribution - DOOH Effectiveness"
+        >
+          <Activity className="w-4 h-4" />
+        </button>
+        
+        {/* Business Reporting Button (feature-flagged) */}
+        <button
+          onClick={() => setMode('businessReporting')}
+          className="flex items-center justify-center w-10 h-10 rounded-lg shadow-lg transition-all bg-gray-800 hover:bg-blue-600 text-gray-300 hover:text-white border border-gray-600 hover:border-blue-500"
+          title="Business Reporting - Executive Dashboards"
+        >
+          <PieChart className="w-4 h-4" />
+        </button>
+        
         {/* Activity Ledger Button */}
         <button
           onClick={() => setShowLedger(!showLedger)}
@@ -240,6 +278,18 @@ function MainApp() {
             <EdgeCommissioningPage onClose={() => setViewMode('main')} />
           </EdgeCommissioningProvider>
         )}
+        {/* DOOH Analytics View (feature-flagged: FEATURE_DOOH_KPIS) */}
+        {viewMode === 'doohAnalytics' && (
+          <DoohAnalyticsPage onClose={() => setViewMode('main')} />
+        )}
+        {/* DOOH Effectiveness / Attribution View (feature-flagged: FEATURE_DOOH_ATTRIBUTION) */}
+        {viewMode === 'doohEffectiveness' && (
+          <DoohEffectivenessPage onClose={() => setViewMode('main')} />
+        )}
+        {/* Business Reporting View (feature-flagged: FEATURE_BUSINESS_REPORTING) */}
+        {viewMode === 'businessReporting' && (
+          <BusinessReportingPage onClose={() => setViewMode('main')} />
+        )}
         {/* Planogram View */}
         <div style={{ display: viewMode === 'planogram' ? 'block' : 'none' }}>
           <PlanogramBuilder />
@@ -250,6 +300,7 @@ function MainApp() {
             onOpenDwgImporter={() => setViewMode('dwgImporter')}
             onOpenLidarPlanner={() => setViewMode('lidarPlanner')}
             onOpenEdgeCommissioning={() => setViewMode('edgeCommissioning')}
+            onOpenDoohAnalytics={() => setViewMode('doohAnalytics')}
           />
           <KPIPopupWrapper />
           <KPIOverlayToggle />

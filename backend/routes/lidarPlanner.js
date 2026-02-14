@@ -498,9 +498,32 @@ router.post('/autoplace', async (req, res) => {
         floor_cell_size_m,
         keepout_distance_m,
         max_sensors,
-        roi_vertices
+        roi_vertices,
+        effective_radius_m: effectiveRadius
       });
     }
+    
+    // Save ROI vertices to dwg_layout_versions for Edge Commissioning to use
+    if (roi_vertices && roi_vertices.length >= 3) {
+      try {
+        // Add lidar_roi_json column if it doesn't exist
+        try {
+          db.prepare('ALTER TABLE dwg_layout_versions ADD COLUMN lidar_roi_json TEXT').run();
+        } catch (e) {
+          // Column already exists, ignore
+        }
+        db.prepare('UPDATE dwg_layout_versions SET lidar_roi_json = ? WHERE id = ?').run(
+          JSON.stringify(roi_vertices),
+          layout_version_id
+        );
+        console.log('💾 Saved LiDAR ROI to dwg_layout_versions');
+      } catch (e) {
+        console.warn('Failed to save LiDAR ROI:', e.message);
+      }
+    }
+    
+    // Get old instances before deleting (to migrate pairings)
+    const oldInstances = db.prepare('SELECT id, x_m, z_m FROM lidar_instances WHERE layout_version_id = ? AND source = ?').all(layout_version_id, 'auto');
     
     // Delete existing auto-placed instances for this layout
     db.prepare('DELETE FROM lidar_instances WHERE layout_version_id = ? AND source = ?').run(layout_version_id, 'auto');
@@ -513,6 +536,8 @@ router.post('/autoplace', async (req, res) => {
     `);
     
     const positions = placement.selected_positions || [];
+    const idMigrationMap = new Map(); // old_id -> new_id
+    
     for (const pos of positions) {
       const id = uuidv4();
       insertStmt.run(id, project_id || null, layout_version_id, 'auto', model_id || null, pos.x, pos.z, mount_y_m, pos.yaw || 0);
@@ -523,6 +548,28 @@ router.post('/autoplace', async (req, res) => {
         mount_y_m,
         yaw_deg: pos.yaw || 0
       });
+      
+      // Try to find matching old instance by position (within 0.5m tolerance)
+      const matchingOld = oldInstances.find(old => 
+        Math.abs(old.x_m - pos.x) < 0.5 && Math.abs(old.z_m - pos.z) < 0.5
+      );
+      if (matchingOld) {
+        idMigrationMap.set(matchingOld.id, id);
+        // Remove from oldInstances to prevent duplicate matching
+        const idx = oldInstances.indexOf(matchingOld);
+        if (idx > -1) oldInstances.splice(idx, 1);
+      }
+    }
+    
+    // Migrate pairings from old placement IDs to new placement IDs
+    if (idMigrationMap.size > 0) {
+      const updatePairingStmt = db.prepare('UPDATE edge_lidar_pairings SET placement_id = ? WHERE placement_id = ?');
+      for (const [oldId, newId] of idMigrationMap) {
+        const result = updatePairingStmt.run(newId, oldId);
+        if (result.changes > 0) {
+          console.log(`🔗 Migrated pairing from ${oldId.substring(0, 8)} to ${newId.substring(0, 8)}`);
+        }
+      }
     }
     
     // Save plan run with extended settings
@@ -785,10 +832,13 @@ function runAutoPlacement(layoutData, options) {
     overlap_required_n = 2,
     candidate_grid_spacing_m,
     max_sensors = 50,
-    roi_vertices
+    roi_vertices,
+    effective_radius_m
   } = options;
   
   const range = modelParams.range_m;
+  // Use effective radius for dome LiDARs (matches debug panel calculation)
+  const effectiveRadius = effective_radius_m || (modelParams.dome_mode ? range * 0.9 : range);
   
   console.log('=== AUTO-PLACEMENT START ===');
   console.log('Model params:', modelParams);
@@ -834,10 +884,24 @@ function runAutoPlacement(layoutData, options) {
   
   console.log('Candidate spacing:', spacing.toFixed(2), 'meters');
   
-  // Generate candidate positions within ROI using grid
+  // Generate candidate positions within ROI using CENTERED grid
+  // This ensures grid points are inside the ROI, not on edges
   const candidates = [];
-  for (let x = roiMinX; x <= roiMaxX; x += spacing) {
-    for (let z = roiMinZ; z <= roiMaxZ; z += spacing) {
+  const cols = Math.ceil(roiWidth / spacing);
+  const rows = Math.ceil(roiHeight / spacing);
+  
+  // Calculate offsets to center the grid within the ROI
+  const actualGridWidth = (cols - 1) * spacing;
+  const actualGridHeight = (rows - 1) * spacing;
+  const offsetX = roiMinX + (roiWidth - actualGridWidth) / 2;
+  const offsetZ = roiMinZ + (roiHeight - actualGridHeight) / 2;
+  
+  console.log('Grid dimensions:', cols, 'x', rows, ', offset:', offsetX.toFixed(2), offsetZ.toFixed(2));
+  
+  for (let c = 0; c < cols; c++) {
+    for (let r = 0; r < rows; r++) {
+      const x = offsetX + c * spacing;
+      const z = offsetZ + r * spacing;
       if (isPointInROI(x, z)) {
         candidates.push({ x, z, selected: false });
       }
@@ -859,13 +923,22 @@ function runAutoPlacement(layoutData, options) {
   const selectedPositions = [];
   
   // Calculate how many LiDARs we need for the area
+  // Use grid-based estimate like debug panel: cols * rows
+  // cols and rows are already defined above
+  const gridBasedEstimate = cols * rows;
+  
+  // Also calculate area-based estimate for comparison
   const roiArea = roiWidth * roiHeight;
-  const coveragePerLidar = Math.PI * range * range; // Circular coverage
-  const estimatedNeeded = Math.ceil((roiArea * overlap_required_n) / coveragePerLidar);
-  const targetCount = Math.min(Math.max(estimatedNeeded, 1), max_sensors, candidates.length);
+  const coveragePerLidar = Math.PI * effectiveRadius * effectiveRadius; // Use effective radius
+  const areaBasedEstimate = Math.ceil((roiArea * overlap_required_n) / coveragePerLidar);
+  
+  // Use grid-based estimate (matches debug panel) but cap at candidates available
+  const targetCount = Math.min(gridBasedEstimate, max_sensors, candidates.length);
+  
+  console.log('Grid estimate:', gridBasedEstimate, '(', cols, 'x', rows, '), Area estimate:', areaBasedEstimate, ', using:', targetCount);
   
   console.log('ROI area:', roiArea.toFixed(2), 'sqm, coverage per LiDAR:', coveragePerLidar.toFixed(2), 'sqm');
-  console.log('Estimated LiDARs needed:', estimatedNeeded, ', target:', targetCount);
+  console.log('Area-based estimate:', areaBasedEstimate, ', target:', targetCount);
   
   // Select candidates evenly distributed
   if (candidates.length <= targetCount) {

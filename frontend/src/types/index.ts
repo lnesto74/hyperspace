@@ -129,6 +129,16 @@ export interface Vector2 {
   z: number;
 }
 
+export interface RoiMetadata {
+  type?: string;
+  template?: string;
+  zoneType?: string;
+  shelfId?: string;
+  shelfIndex?: number;
+  planogramId?: string;
+  [key: string]: any;
+}
+
 export interface RegionOfInterest {
   id: string;
   venueId: string;
@@ -138,4 +148,5 @@ export interface RegionOfInterest {
   opacity: number;
   createdAt: string;
   updatedAt: string;
+  metadata?: RoiMetadata;
 }

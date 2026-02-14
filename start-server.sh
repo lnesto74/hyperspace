@@ -4,6 +4,11 @@
 # This starts: Mosquitto MQTT, Backend, and Frontend
 
 PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+# Load NVM and use Node 18 (required for Vite/Rollup compatibility)
+export NVM_DIR="$HOME/.nvm"
+[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+nvm use 18 2>/dev/null || echo "⚠️  NVM not found or Node 18 not installed. Using system Node."
 MOSQUITTO_CONFIG="/tmp/mosquitto.conf"
 
 echo "🚀 Starting Hyperspace Server..."

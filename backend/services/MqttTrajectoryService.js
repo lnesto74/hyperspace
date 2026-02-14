@@ -18,6 +18,9 @@ class MqttTrajectoryService {
     this.colorIndex = 0
     this.brokerUrl = process.env.MQTT_BROKER_URL || 'mqtt://localhost:1883'
     this.topic = process.env.MQTT_TRAJECTORY_TOPIC || 'hyperspace/trajectories/#'
+    this.cleanupInterval = null
+    this.CLEANUP_INTERVAL_MS = 10000 // Clean stale tracks every 10 seconds
+    this.TRACK_TTL_MS = 30000 // Tracks older than 30 seconds are stale
   }
 
   getColorForTrack(trackKey) {
@@ -49,6 +52,14 @@ class MqttTrajectoryService {
           console.log(`[MQTT] Subscribed to: ${this.topic}`)
         }
       })
+      
+      // Start cleanup interval to prevent memory leaks
+      if (!this.cleanupInterval) {
+        this.cleanupInterval = setInterval(() => {
+          this.cleanupStaleTracks(this.TRACK_TTL_MS)
+        }, this.CLEANUP_INTERVAL_MS)
+        console.log('[MQTT] Started track cleanup interval')
+      }
     })
 
     this.client.on('message', (topic, message) => {
@@ -174,11 +185,18 @@ class MqttTrajectoryService {
   }
 
   disconnect() {
+    if (this.cleanupInterval) {
+      clearInterval(this.cleanupInterval)
+      this.cleanupInterval = null
+    }
     if (this.client) {
       this.client.end()
       this.client = null
       this.isConnected = false
     }
+    // Clear maps to free memory
+    this.tracks.clear()
+    this.trackColors.clear()
   }
 }
 

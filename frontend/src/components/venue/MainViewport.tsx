@@ -9,6 +9,7 @@ import { useVenue } from '../../context/VenueContext'
 import { useLidar } from '../../context/LidarContext'
 import { useTracking } from '../../context/TrackingContext'
 import { useRoi } from '../../context/RoiContext'
+import SkuDebugOverlay from './SkuDebugOverlay'
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3001'
 
@@ -30,6 +31,20 @@ const COLORS = {
   trackPerson: 0x3b82f6,
   trackCart: 0xf59e0b,
   trackUnknown: 0x8b5cf6,
+  sezInfluenced: 0xff3333, // Red for people influenced by digital displays
+}
+
+// Point-in-polygon test using ray casting algorithm
+const pointInPolygon = (point: { x: number; z: number }, polygon: { x: number; z: number }[]): boolean => {
+  let inside = false
+  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+    const xi = polygon[i].x, zi = polygon[i].z
+    const xj = polygon[j].x, zj = polygon[j].z
+    if (((zi > point.z) !== (zj > point.z)) && (point.x < (xj - xi) * (point.z - zi) / (zj - zi) + xi)) {
+      inside = !inside
+    }
+  }
+  return inside
 }
 
 interface CustomModel {
@@ -60,6 +75,8 @@ const defaultLighting: LightingSettings = {
 const defaultTracking: TrackingSettings = {
   trailSeconds: 10,
   cylinderOpacity: 0.5,
+  showSkuDebug: false,
+  autoShowSlotHighlight: false,
 }
 
 export default function MainViewport({ 
@@ -108,6 +125,70 @@ export default function MainViewport({
   const [showGridLayer, setShowGridLayer] = useState(true)
   const [showRoiLayer, setShowRoiLayer] = useState(true)
   const [showTracksLayer, setShowTracksLayer] = useState(true)
+  const [showDoohLayer, setShowDoohLayer] = useState(true)
+  const [showAxisHelper, setShowAxisHelper] = useState(false)
+  const axisHelperRef = useRef<THREE.AxesHelper | null>(null)
+  const [showSlotArrows, setShowSlotArrows] = useState(false)
+  const slotArrowsRef = useRef<THREE.Group | null>(null)
+  
+  // SKU Debug hover highlight
+  const [hoveredSkuShelf, setHoveredSkuShelf] = useState<{
+    shelfId: string
+    shelfName: string
+    position: { x: number; z: number }
+    slotPosition?: { x: number; z: number }
+    shelfRotation?: number
+    levelIndex: number
+    slotIndex: number
+  } | null>(null)
+  const skuHighlightMeshRef = useRef<THREE.Mesh | null>(null)
+  
+  // Auto slot highlight positions (for debug mode)
+  const [autoSlotPositions, setAutoSlotPositions] = useState<Array<{ x: number; z: number; rotation?: number }>>([])
+  const autoSlotMeshesRef = useRef<THREE.Mesh[]>([])
+  
+  // DOOH screens state
+  const [doohScreens, setDoohScreens] = useState<Array<{
+    id: string
+    name: string
+    position: { x: number; y: number; z: number }
+    yawDeg: number
+    mountHeightM: number
+    sezPolygon: { x: number; z: number }[]
+    azPolygon?: { x: number; z: number }[] | null
+    doubleSided?: boolean
+    enabled: boolean
+  }>>([])
+  const doohMeshesRef = useRef<Map<string, THREE.Group>>(new Map())
+  const doohVideoMeshesRef = useRef<Map<string, THREE.Mesh>>(new Map())
+  const doohVideoStatesRef = useRef<Map<string, {
+    video: HTMLVideoElement
+    texture: THREE.VideoTexture
+    playlist: Array<{ videoId: string; filePath: string; durationMs: number; name: string }>
+    currentIndex: number
+    loopCount: number
+    startTs: number
+  }>>(new Map())
+  const [videoPlaylistRefresh, setVideoPlaylistRefresh] = useState(0)
+  
+  // Listen for playlist updates from other components
+  useEffect(() => {
+    const handlePlaylistUpdate = () => {
+      // Clear existing video states to force re-initialization
+      doohVideoStatesRef.current.forEach((state) => {
+        state.video.pause()
+        state.video.src = ''
+        state.texture.dispose()
+      })
+      doohVideoStatesRef.current.clear()
+      setVideoPlaylistRefresh(prev => prev + 1)
+    }
+    window.addEventListener('dooh-playlist-updated', handlePlaylistUpdate)
+    return () => window.removeEventListener('dooh-playlist-updated', handlePlaylistUpdate)
+  }, [])
+  
+  // Track when each person entered an SEZ zone (for 1-minute label visibility)
+  const sezEntryTimesRef = useRef<Map<string, number>>(new Map())
   
   // Drag state
   const isDraggingRef = useRef(false)
@@ -115,6 +196,11 @@ export default function MainViewport({
   const draggedObjectRef = useRef<{ type: 'object' | 'lidar' | 'roi-vertex' | 'roi', id: string, vertexIndex?: number } | null>(null)
   const dragPlaneRef = useRef(new THREE.Plane(new THREE.Vector3(0, 1, 0), 0))
   const dragOffsetRef = useRef(new THREE.Vector3())
+  
+  // Drag threshold to prevent accidental selection when navigating
+  const DRAG_THRESHOLD_PX = 5 // Pixels of movement before drag starts
+  const mouseDownPosRef = useRef<{ x: number; y: number } | null>(null)
+  const pendingDragRef = useRef<{ type: 'object' | 'lidar' | 'roi-vertex' | 'roi', id: string, vertexIndex?: number, hit: any } | null>(null)
   
   // Magnetic snap threshold (meters)
   const SNAP_THRESHOLD = 0.2
@@ -135,6 +221,7 @@ export default function MainViewport({
     deleteRegion,
     updateVertexPosition,
     openKPIPopup,
+    setHoveredRoiId,
   } = useRoi()
   
   // Fetch custom models
@@ -150,6 +237,145 @@ export default function MainViewport({
     } catch (err) {
       console.error('Failed to fetch custom models:', err)
     }
+  }, [])
+  
+  // Fetch DOOH screens for venue
+  const fetchDoohScreens = useCallback(async (venueId: string) => {
+    try {
+      const res = await fetch(`${API_BASE}/api/dooh/screens?venueId=${venueId}`)
+      if (res.ok) {
+        const data = await res.json()
+        setDoohScreens(data.screens || [])
+      }
+    } catch (err) {
+      // DOOH feature may not be enabled, silently ignore
+      console.log('DOOH screens not available')
+    }
+  }, [])
+  
+  // Helper to create SEZ zone mesh from polygon
+  const createSezZoneMesh = (
+    polygon: { x: number; z: number }[],
+    height: number,
+    color: number,
+    opacity: number = 0.15
+  ): THREE.Group => {
+    const zoneGroup = new THREE.Group()
+    
+    // Calculate center of polygon
+    const centerX = polygon.reduce((sum, p) => sum + p.x, 0) / polygon.length
+    const centerZ = polygon.reduce((sum, p) => sum + p.z, 0) / polygon.length
+    
+    // Create shape relative to center
+    const shape = new THREE.Shape()
+    shape.moveTo(polygon[0].x - centerX, polygon[0].z - centerZ)
+    for (let i = 1; i < polygon.length; i++) {
+      shape.lineTo(polygon[i].x - centerX, polygon[i].z - centerZ)
+    }
+    shape.closePath()
+    
+    // Extruded volume
+    const extrudeGeometry = new THREE.ExtrudeGeometry(shape, {
+      depth: height,
+      bevelEnabled: false,
+    })
+    const zoneMesh = new THREE.Mesh(
+      extrudeGeometry,
+      new THREE.MeshBasicMaterial({
+        color,
+        transparent: true,
+        opacity,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+      })
+    )
+    zoneMesh.rotation.x = -Math.PI / 2
+    zoneMesh.rotation.z = Math.PI
+    zoneMesh.position.set(centerX, 0.02, centerZ)
+    zoneGroup.add(zoneMesh)
+    
+    // Edge lines
+    const edgePoints: THREE.Vector3[] = []
+    for (let i = 0; i < polygon.length; i++) {
+      const p1 = polygon[i]
+      const p2 = polygon[(i + 1) % polygon.length]
+      edgePoints.push(new THREE.Vector3(p1.x, 0.03, p1.z))
+      edgePoints.push(new THREE.Vector3(p2.x, 0.03, p2.z))
+      edgePoints.push(new THREE.Vector3(p1.x, height, p1.z))
+      edgePoints.push(new THREE.Vector3(p2.x, height, p2.z))
+      edgePoints.push(new THREE.Vector3(p1.x, 0.03, p1.z))
+      edgePoints.push(new THREE.Vector3(p1.x, height, p1.z))
+    }
+    const edgeGeometry = new THREE.BufferGeometry().setFromPoints(edgePoints)
+    const edgeLines = new THREE.LineSegments(
+      edgeGeometry,
+      new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.6 })
+    )
+    zoneGroup.add(edgeLines)
+    
+    return zoneGroup
+  }
+
+  // Generate back-facing SEZ polygon (rotated 180 degrees from screen position)
+  const generateBackSezPolygon = (
+    frontPolygon: { x: number; z: number }[],
+    screenPos: { x: number; z: number }
+  ): { x: number; z: number }[] => {
+    // Rotate each point 180 degrees around the screen position
+    // Also reverse the order to maintain correct polygon winding
+    return frontPolygon.map(p => ({
+      x: 2 * screenPos.x - p.x,
+      z: 2 * screenPos.z - p.z,
+    })).reverse()
+  }
+
+  // Create DOOH zone mesh for a screen
+  const createDoohZoneMesh = useCallback((screen: typeof doohScreens[0]): THREE.Group => {
+    const group = new THREE.Group()
+    group.name = `dooh-screen-${screen.id}`
+    
+    const sezColor = 0x9333ea // Purple
+    const sezColorBack = 0x7c3aed // Slightly different purple for back
+    const height = screen.mountHeightM + 0.5
+    
+    // Create front SEZ zone
+    if (screen.sezPolygon && screen.sezPolygon.length >= 3) {
+      const frontZone = createSezZoneMesh(screen.sezPolygon, height, sezColor)
+      group.add(frontZone)
+      
+      // Create back SEZ zone if double-sided
+      if (screen.doubleSided) {
+        const backPolygon = generateBackSezPolygon(screen.sezPolygon, screen.position)
+        const backZone = createSezZoneMesh(backPolygon, height, sezColorBack, 0.12)
+        group.add(backZone)
+      }
+    }
+    
+    // Direction arrow (screen marker removed - video screen replaces it)
+    const yawRad = (screen.yawDeg || 0) * Math.PI / 180
+    const arrowLength = 1.5
+    const dirX = Math.sin(yawRad)
+    const dirZ = Math.cos(yawRad)
+    const arrowPoints = [
+      new THREE.Vector3(screen.position.x, screen.mountHeightM, screen.position.z),
+      new THREE.Vector3(screen.position.x + dirX * arrowLength, screen.mountHeightM, screen.position.z + dirZ * arrowLength),
+    ]
+    const arrowGeometry = new THREE.BufferGeometry().setFromPoints(arrowPoints)
+    const arrowLine = new THREE.Line(
+      arrowGeometry,
+      new THREE.LineBasicMaterial({ color: sezColor, linewidth: 2 })
+    )
+    group.add(arrowLine)
+    
+    // Vertical pole
+    const pole = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.03, 0.03, screen.mountHeightM, 8),
+      new THREE.MeshStandardMaterial({ color: 0x666666 })
+    )
+    pole.position.set(screen.position.x, screen.mountHeightM / 2, screen.position.z)
+    group.add(pole)
+    
+    return group
   }, [])
   
   // Load 3D model (OBJ, GLB, or GLTF with textures)
@@ -263,6 +489,7 @@ export default function MainViewport({
   const deleteRegionRef = useRef(deleteRegion)
   const updateVertexPositionRef = useRef(updateVertexPosition)
   const openKPIPopupRef = useRef(openKPIPopup)
+  const setHoveredRoiIdRef = useRef(setHoveredRoiId)
   const selectedObjectIdRef = useRef(selectedObjectId)
   const selectedPlacementIdRef = useRef(selectedPlacementId)
   const selectedRoiIdRef = useRef(selectedRoiId)
@@ -287,10 +514,11 @@ export default function MainViewport({
     deleteRegionRef.current = deleteRegion
     updateVertexPositionRef.current = updateVertexPosition
     openKPIPopupRef.current = openKPIPopup
+    setHoveredRoiIdRef.current = setHoveredRoiId
     selectedObjectIdRef.current = selectedObjectId
     selectedPlacementIdRef.current = selectedPlacementId
     selectedRoiIdRef.current = selectedRoiId
-  }, [venue, objects, placements, regions, isDrawing, drawingVertices, updateObject, updatePlacement, removeObject, removePlacement, snapToGrid, selectObject, selectPlacement, selectRegion, addDrawingVertex, updateRegion, deleteRegion, updateVertexPosition, openKPIPopup, selectedObjectId, selectedPlacementId, selectedRoiId])
+  }, [venue, objects, placements, regions, isDrawing, drawingVertices, updateObject, updatePlacement, removeObject, removePlacement, snapToGrid, selectObject, selectPlacement, selectRegion, addDrawingVertex, updateRegion, deleteRegion, updateVertexPosition, openKPIPopup, setHoveredRoiId, selectedObjectId, selectedPlacementId, selectedRoiId])
   
   // Load ROIs when venue changes
   useEffect(() => {
@@ -374,13 +602,33 @@ export default function MainViewport({
     scene.add(directionalLight)
     directionalLightRef.current = directionalLight
 
-    // Animation loop
+    // Animation loop with visibility-based throttling to prevent memory leaks
+    let animationFrameId: number | null = null
+    let isTabVisible = true
+    
     const animate = () => {
-      requestAnimationFrame(animate)
+      if (!isTabVisible) {
+        // When tab is hidden, render at 1fps to save resources
+        animationFrameId = window.setTimeout(() => {
+          animationFrameId = requestAnimationFrame(animate)
+        }, 1000) as unknown as number
+        return
+      }
+      animationFrameId = requestAnimationFrame(animate)
       controls.update()
       renderer.render(scene, camera)
       labelRenderer.render(scene, camera)
     }
+    
+    // Visibility change handler - pause rendering when tab is hidden
+    const handleVisibilityChange = () => {
+      isTabVisible = !document.hidden
+      if (isTabVisible && animationFrameId === null) {
+        animate() // Resume animation when tab becomes visible
+      }
+    }
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    
     animate()
 
     // Resize handler - triggered by both window resize and container size changes
@@ -492,7 +740,8 @@ export default function MainViewport({
       return null
     }
 
-    // Mouse down - start drag or select
+    // Mouse down - record position for drag threshold
+    // SHIFT+Click required to select/drag objects (prevents accidental selection during navigation)
     const handleMouseDown = (event: MouseEvent) => {
       if (event.button !== 0) return // Only left click
       
@@ -507,87 +756,105 @@ export default function MainViewport({
         return // Don't process other click actions while drawing
       }
       
+      // Require Shift key for selection/dragging (prevents accidental selection during pan/rotate/zoom)
+      if (!event.shiftKey) {
+        mouseDownPosRef.current = null
+        pendingDragRef.current = null
+        return // Allow OrbitControls to handle navigation
+      }
+      
+      // Store mouse down position for drag threshold check
+      mouseDownPosRef.current = { x: event.clientX, y: event.clientY }
+      
       const hit = findHitObject(mouse)
 
       if (hit) {
-        // Handle ROI polygon - select and start dragging
-        if (hit.type === 'roi') {
-          selectRegionRef.current(hit.id)
-          selectObjectRef.current(null)
-          selectPlacementRef.current(null)
-          
-          // Start dragging the full polygon
-          isDraggingRef.current = true
-          hasDragMovedRef.current = false
-          draggedObjectRef.current = { type: 'roi', id: hit.id }
-          controls.enabled = false
-          
-          // Calculate drag offset from centroid
-          const floorPoint = getFloorIntersection(mouse)
-          if (floorPoint) {
-            const roi = regionsRef.current.find(r => r.id === hit.id)
-            if (roi) {
-              const cx = roi.vertices.reduce((s, v) => s + v.x, 0) / roi.vertices.length
-              const cz = roi.vertices.reduce((s, v) => s + v.z, 0) / roi.vertices.length
-              dragOffsetRef.current.set(cx - floorPoint.x, 0, cz - floorPoint.z)
-            }
-          }
-          return
-        }
-        
-        // Handle ROI vertex dragging
-        if (hit.type === 'roi-vertex') {
-          isDraggingRef.current = true
-          hasDragMovedRef.current = false
-          draggedObjectRef.current = { type: 'roi-vertex', id: hit.id, vertexIndex: hit.vertexIndex }
-          controls.enabled = false
-          return
-        }
-        
-        // Select the object
-        if (hit.type === 'object') {
-          selectObjectRef.current(hit.id)
-          selectPlacementRef.current(null)
-        } else if (hit.type === 'lidar') {
-          selectPlacementRef.current(hit.id)
-          selectObjectRef.current(null)
-        }
-        selectRegionRef.current(null)
-
-        // Start dragging
-        isDraggingRef.current = true
-        hasDragMovedRef.current = false
-        draggedObjectRef.current = { type: hit.type, id: hit.id }
-        controls.enabled = false // Disable orbit controls while dragging
-
-        // Calculate drag offset
-        const floorPoint = getFloorIntersection(mouse)
-        if (floorPoint) {
-          if (hit.type === 'object') {
-            const obj = objectsRef.current.find(o => o.id === hit.id)
-            if (obj) {
-              dragOffsetRef.current.set(
-                obj.position.x - floorPoint.x,
-                0,
-                obj.position.z - floorPoint.z
-              )
-            }
-          } else if (hit.type === 'lidar') {
-            const placement = placementsRef.current.find(p => p.id === hit.id)
-            if (placement) {
-              dragOffsetRef.current.set(
-                placement.position.x - floorPoint.x,
-                0,
-                placement.position.z - floorPoint.z
-              )
-            }
-          }
-        }
+        // Store pending drag info - actual drag starts after threshold
+        const vertexIndex = hit.type === 'roi-vertex' ? hit.vertexIndex : undefined
+        pendingDragRef.current = { type: hit.type, id: hit.id, vertexIndex, hit }
       } else {
-        // Clicked on nothing - deselect
+        pendingDragRef.current = null
+      }
+    }
+    
+    // Start actual drag after threshold is crossed
+    const startDrag = (mouse: THREE.Vector2) => {
+      const pending = pendingDragRef.current
+      if (!pending) return
+      
+      const hit = pending.hit
+      
+      // Handle ROI polygon - select and start dragging
+      if (hit.type === 'roi') {
+        selectRegionRef.current(hit.id)
         selectObjectRef.current(null)
         selectPlacementRef.current(null)
-        selectRegionRef.current(null)
+        
+        isDraggingRef.current = true
+        hasDragMovedRef.current = false
+        draggedObjectRef.current = { type: 'roi', id: hit.id }
+        controls.enabled = false
+        
+        // Calculate drag offset from centroid
+        const floorPoint = getFloorIntersection(mouse)
+        if (floorPoint) {
+          const roi = regionsRef.current.find(r => r.id === hit.id)
+          if (roi) {
+            const cx = roi.vertices.reduce((s, v) => s + v.x, 0) / roi.vertices.length
+            const cz = roi.vertices.reduce((s, v) => s + v.z, 0) / roi.vertices.length
+            dragOffsetRef.current.set(cx - floorPoint.x, 0, cz - floorPoint.z)
+          }
+        }
+        return
+      }
+      
+      // Handle ROI vertex dragging
+      if (hit.type === 'roi-vertex') {
+        isDraggingRef.current = true
+        hasDragMovedRef.current = false
+        draggedObjectRef.current = { type: 'roi-vertex', id: hit.id, vertexIndex: hit.vertexIndex }
+        controls.enabled = false
+        return
+      }
+      
+      // Select the object
+      if (hit.type === 'object') {
+        selectObjectRef.current(hit.id)
+        selectPlacementRef.current(null)
+      } else if (hit.type === 'lidar') {
+        selectPlacementRef.current(hit.id)
+        selectObjectRef.current(null)
+      }
+      selectRegionRef.current(null)
+
+      // Start dragging
+      isDraggingRef.current = true
+      hasDragMovedRef.current = false
+      draggedObjectRef.current = { type: hit.type, id: hit.id }
+      controls.enabled = false // Disable orbit controls while dragging
+
+      // Calculate drag offset
+      const floorPoint = getFloorIntersection(mouse)
+      if (floorPoint) {
+        if (hit.type === 'object') {
+          const obj = objectsRef.current.find(o => o.id === hit.id)
+          if (obj) {
+            dragOffsetRef.current.set(
+              obj.position.x - floorPoint.x,
+              0,
+              obj.position.z - floorPoint.z
+            )
+          }
+        } else if (hit.type === 'lidar') {
+          const placement = placementsRef.current.find(p => p.id === hit.id)
+          if (placement) {
+            dragOffsetRef.current.set(
+              placement.position.x - floorPoint.x,
+              0,
+              placement.position.z - floorPoint.z
+            )
+          }
+        }
       }
     }
 
@@ -597,6 +864,19 @@ export default function MainViewport({
     // Mouse move - drag object or show tooltip on hover
     const handleMouseMove = (event: MouseEvent) => {
       const mouse = getMouseNDC(event)
+
+      // Check if we should start dragging (threshold crossed)
+      if (mouseDownPosRef.current && pendingDragRef.current && !isDraggingRef.current) {
+        const dx = event.clientX - mouseDownPosRef.current.x
+        const dy = event.clientY - mouseDownPosRef.current.y
+        const distance = Math.sqrt(dx * dx + dy * dy)
+        
+        if (distance > DRAG_THRESHOLD_PX) {
+          // Threshold crossed - start the actual drag
+          startDrag(mouse)
+          pendingDragRef.current = null
+        }
+      }
 
       // Handle hover tooltip when not dragging
       if (!isDraggingRef.current) {
@@ -667,6 +947,8 @@ export default function MainViewport({
             }
           }
           hoveredRoiIdRef.current = newHoveredRoiId
+          // Notify context of hovered ROI change for KPI panel highlighting
+          setHoveredRoiIdRef.current(newHoveredRoiId)
         }
         return
       }
@@ -820,6 +1102,34 @@ export default function MainViewport({
 
     // Mouse up - end drag and snap to grid
     const handleMouseUp = (event: MouseEvent) => {
+      // Handle click selection (no drag occurred - threshold not crossed)
+      if (pendingDragRef.current && !isDraggingRef.current) {
+        const pending = pendingDragRef.current
+        // Select the object on click
+        if (pending.type === 'object') {
+          selectObjectRef.current(pending.id)
+          selectPlacementRef.current(null)
+          selectRegionRef.current(null)
+        } else if (pending.type === 'lidar') {
+          selectPlacementRef.current(pending.id)
+          selectObjectRef.current(null)
+          selectRegionRef.current(null)
+        } else if (pending.type === 'roi' || pending.type === 'roi-vertex') {
+          selectRegionRef.current(pending.id)
+          selectObjectRef.current(null)
+          selectPlacementRef.current(null)
+        }
+      } else if (!pendingDragRef.current && !isDraggingRef.current && mouseDownPosRef.current) {
+        // Clicked on empty space - deselect all
+        selectObjectRef.current(null)
+        selectPlacementRef.current(null)
+        selectRegionRef.current(null)
+      }
+      
+      // Clear pending drag state
+      mouseDownPosRef.current = null
+      pendingDragRef.current = null
+      
       if (!isDraggingRef.current || !draggedObjectRef.current) {
         isDraggingRef.current = false
         draggedObjectRef.current = null
@@ -1064,6 +1374,14 @@ export default function MainViewport({
     window.addEventListener('keydown', handleKeyDown)
 
     return () => {
+      // Cancel animation frame to stop rendering loop
+      if (animationFrameId !== null) {
+        cancelAnimationFrame(animationFrameId)
+        animationFrameId = null
+      }
+      
+      // Remove event listeners
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
       window.removeEventListener('resize', handleResize)
       window.removeEventListener('keydown', handleKeyDown)
       container.removeEventListener('mousedown', handleMouseDown)
@@ -1073,7 +1391,58 @@ export default function MainViewport({
       container.removeEventListener('mouseleave', handleMouseUp)
       container.removeEventListener('contextmenu', handleContextMenu)
       resizeObserver.disconnect()
+      
+      // Dispose all track meshes and their textures
+      trackMeshesRef.current.forEach((group, key) => {
+        scene.remove(group)
+        group.traverse(child => {
+          if (child instanceof THREE.Mesh || child instanceof THREE.Line) {
+            child.geometry.dispose()
+            if (Array.isArray(child.material)) {
+              child.material.forEach(m => {
+                if (m.map) m.map.dispose()
+                m.dispose()
+              })
+            } else {
+              if ((child.material as any).map) (child.material as any).map.dispose()
+              child.material.dispose()
+            }
+          }
+          if (child instanceof THREE.Sprite) {
+            const mat = child.material as THREE.SpriteMaterial
+            if (mat.map) mat.map.dispose()
+            mat.dispose()
+          }
+        })
+        // Remove trail
+        const trail = scene.getObjectByName(`trail-${key}`)
+        if (trail) {
+          scene.remove(trail)
+          ;(trail as THREE.Line).geometry.dispose()
+          ;((trail as THREE.Line).material as THREE.Material).dispose()
+        }
+      })
+      trackMeshesRef.current.clear()
+      sezEntryTimesRef.current.clear()
+      
+      // Dispose loaded models cache
+      loadedModelsRef.current.forEach(model => {
+        model.traverse(child => {
+          if (child instanceof THREE.Mesh) {
+            child.geometry.dispose()
+            if (Array.isArray(child.material)) {
+              child.material.forEach(m => m.dispose())
+            } else {
+              child.material.dispose()
+            }
+          }
+        })
+      })
+      loadedModelsRef.current.clear()
+      
+      // Dispose renderer and remove DOM elements
       renderer.dispose()
+      renderer.forceContextLoss()
       container.removeChild(renderer.domElement)
       container.removeChild(labelRenderer.domElement)
     }
@@ -1287,6 +1656,250 @@ export default function MainViewport({
     window.addEventListener('customModelsUpdated', handleModelsUpdated)
     return () => window.removeEventListener('customModelsUpdated', handleModelsUpdated)
   }, [fetchCustomModels])
+
+  // Fetch DOOH screens when venue changes
+  useEffect(() => {
+    if (venue?.id) {
+      fetchDoohScreens(venue.id)
+    }
+  }, [venue?.id, fetchDoohScreens])
+
+  // Render DOOH screen zones
+  useEffect(() => {
+    if (!sceneRef.current) return
+    const scene = sceneRef.current
+    const existingIds = new Set(doohScreens.filter(s => s.enabled).map(s => s.id))
+
+    // Remove deleted/disabled screens
+    doohMeshesRef.current.forEach((group, id) => {
+      if (!existingIds.has(id)) {
+        scene.remove(group)
+        group.traverse(child => {
+          if (child instanceof THREE.Mesh) {
+            child.geometry.dispose()
+            if (Array.isArray(child.material)) {
+              child.material.forEach(m => m.dispose())
+            } else {
+              child.material.dispose()
+            }
+          }
+          if (child instanceof THREE.Line || child instanceof THREE.LineSegments) {
+            child.geometry.dispose()
+            ;(child.material as THREE.Material).dispose()
+          }
+        })
+        doohMeshesRef.current.delete(id)
+      }
+    })
+
+    // Add/update DOOH screens
+    doohScreens.filter(s => s.enabled).forEach(screen => {
+      let group = doohMeshesRef.current.get(screen.id)
+      
+      if (!group) {
+        group = createDoohZoneMesh(screen)
+        scene.add(group)
+        doohMeshesRef.current.set(screen.id, group)
+      }
+      
+      // Update visibility based on layer toggle
+      group.visible = showDoohLayer
+    })
+  }, [doohScreens, showDoohLayer, createDoohZoneMesh])
+
+  // Update DOOH layer visibility
+  useEffect(() => {
+    doohMeshesRef.current.forEach(group => {
+      group.visible = showDoohLayer
+    })
+  }, [showDoohLayer])
+
+  // Initialize video playback for DOOH screens with playlists
+  useEffect(() => {
+    if (!sceneRef.current || !venue?.id) return
+    const scene = sceneRef.current
+
+    console.log('[DOOH Video] Initializing videos for screens:', doohScreens.length, 'enabled:', doohScreens.filter(s => s.enabled).length)
+
+    // Fetch and initialize video for each enabled screen
+    const initScreenVideos = async () => {
+      for (const screen of doohScreens.filter(s => s.enabled)) {
+        // Skip if already initialized
+        if (doohVideoStatesRef.current.has(screen.id)) {
+          console.log('[DOOH Video] Screen already initialized:', screen.id)
+          continue
+        }
+
+        try {
+          // Fetch playlist
+          console.log('[DOOH Video] Fetching playlist for screen:', screen.id)
+          const res = await fetch(`${API_BASE}/api/dooh/screens/${screen.id}/playlist`)
+          if (!res.ok) {
+            console.log('[DOOH Video] Playlist fetch failed:', res.status)
+            continue
+          }
+          const data = await res.json()
+          console.log('[DOOH Video] Playlist data:', data)
+          const playlist = (data.playlist || []).map((item: any) => ({
+            videoId: item.videoId,
+            filePath: item.video.filePath,
+            durationMs: item.video.durationMs,
+            name: item.video.name,
+          }))
+
+          if (playlist.length === 0) {
+            console.log('[DOOH Video] No videos in playlist for screen:', screen.id)
+            continue
+          }
+          console.log('[DOOH Video] Playlist has', playlist.length, 'videos')
+
+          // Create video element
+          const video = document.createElement('video')
+          video.crossOrigin = 'anonymous'
+          video.loop = false
+          video.muted = true
+          video.playsInline = true
+          video.preload = 'auto'
+
+          // Create video texture
+          const texture = new THREE.VideoTexture(video)
+          texture.minFilter = THREE.LinearFilter
+          texture.magFilter = THREE.LinearFilter
+          texture.colorSpace = THREE.SRGBColorSpace
+
+          const state = {
+            video,
+            texture,
+            playlist,
+            currentIndex: 0,
+            loopCount: 0,
+            startTs: 0,
+          }
+
+          // Log proof of play and advance to next video
+          const playNextVideo = () => {
+            const currentItem = state.playlist[state.currentIndex]
+            if (currentItem && state.startTs > 0) {
+              // Log proof of play
+              fetch(`${API_BASE}/api/dooh/proof-of-play`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  venueId: venue.id,
+                  screenId: screen.id,
+                  videoId: currentItem.videoId,
+                  startTs: state.startTs,
+                  endTs: Date.now(),
+                  loopIndex: state.loopCount,
+                  playbackStatus: 'completed',
+                }),
+              }).catch(console.error)
+            }
+
+            // Advance to next video
+            state.currentIndex = (state.currentIndex + 1) % state.playlist.length
+            if (state.currentIndex === 0) state.loopCount++
+
+            // Play next
+            const nextItem = state.playlist[state.currentIndex]
+            if (nextItem) {
+              state.video.src = `${API_BASE}${nextItem.filePath}`
+              state.startTs = Date.now()
+              state.video.play().catch(console.error)
+            }
+          }
+
+          video.onended = playNextVideo
+          video.onerror = () => {
+            console.error('Video error, skipping to next')
+            playNextVideo()
+          }
+
+          // Store state
+          doohVideoStatesRef.current.set(screen.id, state)
+
+          // Create video screen mesh (plane at mount height)
+          const screenWidth = 1.5 // 1.5m wide
+          const screenHeight = 0.85 // 16:9 aspect ratio
+          const yawRad = (screen.yawDeg || 0) * Math.PI / 180
+          
+          // Create a group to hold the screen(s)
+          const screenGroup = new THREE.Group()
+          screenGroup.position.set(screen.position.x, screen.mountHeightM, screen.position.z)
+          screenGroup.rotation.y = yawRad
+          screenGroup.userData.isVideoScreen = true
+          screenGroup.userData.screenId = screen.id
+          
+          // Front face
+          const frontGeometry = new THREE.PlaneGeometry(screenWidth, screenHeight)
+          const frontMaterial = new THREE.MeshBasicMaterial({
+            map: texture,
+            side: THREE.FrontSide,
+          })
+          const frontMesh = new THREE.Mesh(frontGeometry, frontMaterial)
+          screenGroup.add(frontMesh)
+          
+          // Back face (if double-sided) - rotated 180° so video displays correctly
+          if (screen.doubleSided) {
+            const backGeometry = new THREE.PlaneGeometry(screenWidth, screenHeight)
+            const backMaterial = new THREE.MeshBasicMaterial({
+              map: texture,
+              side: THREE.FrontSide,
+            })
+            const backMesh = new THREE.Mesh(backGeometry, backMaterial)
+            backMesh.rotation.y = Math.PI // Face opposite direction
+            screenGroup.add(backMesh)
+          }
+
+          scene.add(screenGroup)
+          doohVideoMeshesRef.current.set(screen.id, screenGroup as unknown as THREE.Mesh)
+
+          // Start playback
+          const firstItem = state.playlist[0]
+          if (firstItem) {
+            const videoUrl = `${API_BASE}${firstItem.filePath}`
+            console.log('[DOOH Video] Starting playback:', videoUrl)
+            state.video.src = videoUrl
+            state.startTs = Date.now()
+            state.video.play().then(() => {
+              console.log('[DOOH Video] Video playing successfully')
+            }).catch((err) => {
+              console.error('[DOOH Video] Play failed:', err)
+            })
+          }
+          console.log('[DOOH Video] Screen mesh created at:', screen.position.x, screen.mountHeightM, screen.position.z)
+        } catch (err) {
+          console.error('[DOOH Video] Failed to init screen video:', err)
+        }
+      }
+    }
+
+    initScreenVideos()
+
+    // Cleanup on unmount
+    return () => {
+      doohVideoStatesRef.current.forEach((state, screenId) => {
+        state.video.pause()
+        state.video.src = ''
+        state.video.load()
+        state.texture.dispose()
+        
+        const screenObj = doohVideoMeshesRef.current.get(screenId)
+        if (screenObj) {
+          scene.remove(screenObj)
+          // Dispose all children (front and back meshes)
+          screenObj.traverse((child) => {
+            if (child instanceof THREE.Mesh) {
+              child.geometry.dispose()
+              ;(child.material as THREE.Material).dispose()
+            }
+          })
+        }
+      })
+      doohVideoStatesRef.current.clear()
+      doohVideoMeshesRef.current.clear()
+    }
+  }, [doohScreens, venue?.id, videoPlaylistRefresh])
 
   // Update objects
   useEffect(() => {
@@ -1714,10 +2327,22 @@ export default function MainViewport({
           if (child instanceof THREE.Mesh || child instanceof THREE.Line) {
             child.geometry.dispose()
             if (Array.isArray(child.material)) {
-              child.material.forEach(m => m.dispose())
+              child.material.forEach(m => {
+                // Dispose textures (canvas textures for labels)
+                if (m.map) m.map.dispose()
+                m.dispose()
+              })
             } else {
+              // Dispose textures (canvas textures for labels)
+              if ((child.material as any).map) (child.material as any).map.dispose()
               child.material.dispose()
             }
+          }
+          // Dispose sprite textures (SEZ labels)
+          if (child instanceof THREE.Sprite) {
+            const mat = child.material as THREE.SpriteMaterial
+            if (mat.map) mat.map.dispose()
+            mat.dispose()
           }
         })
         // Also remove trail from scene
@@ -1727,19 +2352,58 @@ export default function MainViewport({
           ;(trail as THREE.Line).geometry.dispose()
           ;((trail as THREE.Line).material as THREE.Material).dispose()
         }
+        // Clean up SEZ entry time tracking to prevent memory leak
+        sezEntryTimesRef.current.delete(key)
         trackMeshesRef.current.delete(key)
       }
     })
+
+    const now = Date.now()
+    const SEZ_LABEL_DURATION_MS = 60 * 1000 // 1 minute label visibility
 
     // Add/update tracks
     tracks.forEach((track, key) => {
       let group = trackMeshesRef.current.get(key)
       
-      // Use track color if available, otherwise fall back to type-based color
-      let color: number | string = track.color || (
-        track.objectType === 'person' ? COLORS.trackPerson 
-        : track.objectType === 'cart' ? COLORS.trackCart 
-        : COLORS.trackUnknown
+      // Check if person is inside any DOOH SEZ zone
+      const personPos = { x: track.venuePosition.x, z: track.venuePosition.z }
+      let isInSez = false
+      for (const screen of doohScreens) {
+        if (screen.enabled && screen.sezPolygon && screen.sezPolygon.length >= 3) {
+          if (pointInPolygon(personPos, screen.sezPolygon)) {
+            isInSez = true
+            break
+          }
+          // Also check back-facing SEZ for double-sided screens
+          if (screen.doubleSided) {
+            const backPolygon = screen.sezPolygon.map(p => ({
+              x: 2 * screen.position.x - p.x,
+              z: 2 * screen.position.z - p.z,
+            }))
+            if (pointInPolygon(personPos, backPolygon)) {
+              isInSez = true
+              break
+            }
+          }
+        }
+      }
+      
+      // Track SEZ entry time for label visibility
+      if (isInSez && !sezEntryTimesRef.current.has(key)) {
+        sezEntryTimesRef.current.set(key, now)
+      }
+      
+      // Check if label should be visible (entered SEZ within last minute)
+      const entryTime = sezEntryTimesRef.current.get(key)
+      const showSezLabel = entryTime && (now - entryTime) < SEZ_LABEL_DURATION_MS
+      
+      // Use SEZ influence color (red) if in zone, otherwise normal color
+      let color: number | string = isInSez ? COLORS.sezInfluenced : (
+        track.color || (
+          track.objectType === 'person' ? COLORS.trackPerson 
+          : track.objectType === 'cart' ? COLORS.trackCart 
+          : COLORS.trackUnknown
+        )
       )
       
       // Get bounding box dimensions (default person size)
@@ -1791,6 +2455,43 @@ export default function MainViewport({
         bottomCap.rotation.x = Math.PI
         bottomCap.position.y = -cylinderHeight / 2
         group.add(bottomCap) // index 2
+        
+        // SEZ influence label - 3D sprite, large and readable
+        const labelCanvas = document.createElement('canvas')
+        const labelCtx = labelCanvas.getContext('2d')!
+        labelCanvas.width = 512
+        labelCanvas.height = 128
+        // Red pill-shaped background
+        labelCtx.fillStyle = 'rgba(220, 38, 38, 0.95)'
+        labelCtx.beginPath()
+        labelCtx.roundRect(8, 8, 496, 112, 56)
+        labelCtx.fill()
+        // Light border
+        labelCtx.strokeStyle = 'rgba(255, 150, 150, 0.9)'
+        labelCtx.lineWidth = 6
+        labelCtx.stroke()
+        // White text - person ID
+        labelCtx.fillStyle = 'white'
+        labelCtx.font = 'bold 64px system-ui, sans-serif'
+        labelCtx.textAlign = 'center'
+        labelCtx.textBaseline = 'middle'
+        const displayId = key.length > 8 ? key.slice(-6) : key
+        labelCtx.fillText(displayId, 256, 68)
+        
+        const labelTexture = new THREE.CanvasTexture(labelCanvas)
+        labelTexture.needsUpdate = true
+        const labelMaterial = new THREE.SpriteMaterial({ 
+          map: labelTexture, 
+          transparent: true,
+          depthTest: false,
+        })
+        const labelSprite = new THREE.Sprite(labelMaterial)
+        // Large readable size - 1.5m wide, positioned above head
+        labelSprite.scale.set(1.5, 0.375, 1)
+        labelSprite.position.y = cylinderHeight / 2 + 0.5
+        labelSprite.visible = false
+        labelSprite.userData.isSezLabel = true
+        group.add(labelSprite) // index 3
 
         scene.add(group)
         trackMeshesRef.current.set(key, group)
@@ -1803,6 +2504,15 @@ export default function MainViewport({
       const cylinder = group.children[0] as THREE.Mesh
       const topCap = group.children[1] as THREE.Mesh
       const bottomCap = group.children[2] as THREE.Mesh
+      
+      // Update SEZ label visibility (3D sprite)
+      const sezLabel = group.children[3] as THREE.Sprite | undefined
+      if (sezLabel && sezLabel.userData.isSezLabel) {
+        sezLabel.visible = !!showSezLabel
+        // Large readable size - 1.5m wide, positioned above head
+        sezLabel.scale.set(1.5, 0.375, 1)
+        sezLabel.position.y = cylinderHeight / 2 + 0.5
+      }
 
       // Update/create trail - use absolute world coordinates
       if (track.trail.length > 1) {
@@ -1811,6 +2521,7 @@ export default function MainViewport({
         const points = track.trail.map(p => new THREE.Vector3(p.x, 0.02, p.z)) // Just above floor
         trailGeometry.setFromPoints(points)
         
+        // Trail color matches person color (red if influenced)
         const trailMaterial = new THREE.LineBasicMaterial({ 
           color, 
           transparent: true, 
@@ -1833,10 +2544,16 @@ export default function MainViewport({
         scene.add(trail)
       }
 
-      // Update colors
+      // Update colors - red translucent if in SEZ, otherwise normal
       const cylinderMat = cylinder.material as THREE.MeshStandardMaterial
       const topCapMat = topCap.material as THREE.MeshStandardMaterial
       const bottomCapMat = bottomCap.material as THREE.MeshStandardMaterial
+      
+      // Adjust opacity - more translucent when influenced
+      const effectiveOpacity = isInSez ? Math.min(tracking.cylinderOpacity, 0.4) : tracking.cylinderOpacity
+      cylinderMat.opacity = effectiveOpacity
+      topCapMat.opacity = effectiveOpacity
+      bottomCapMat.opacity = effectiveOpacity
       
       if (typeof color === 'string') {
         cylinderMat.color.set(color)
@@ -1853,8 +2570,21 @@ export default function MainViewport({
         bottomCapMat.color.setHex(color)
         bottomCapMat.emissive.setHex(color)
       }
+      
+      // Increase emissive intensity when influenced for "shocked" effect
+      const emissiveIntensity = isInSez ? 0.8 : 0.5
+      cylinderMat.emissiveIntensity = emissiveIntensity
+      topCapMat.emissiveIntensity = emissiveIntensity
+      bottomCapMat.emissiveIntensity = emissiveIntensity
     })
-  }, [tracks])
+    
+    // Clean up stale SEZ entry times for tracks that no longer exist
+    sezEntryTimesRef.current.forEach((_, key) => {
+      if (!currentTrackKeys.has(key)) {
+        sezEntryTimesRef.current.delete(key)
+      }
+    })
+  }, [tracks, doohScreens])
 
   // Render ROIs (regions of interest) as polygons
   useEffect(() => {
@@ -2197,6 +2927,272 @@ export default function MainViewport({
     controlsRef.current.update()
   }, [venue])
 
+  // SKU Debug: Highlight exact slot position on hover (1m x 1m rectangle)
+  useEffect(() => {
+    if (!sceneRef.current) return
+    
+    // Remove existing highlight
+    if (skuHighlightMeshRef.current) {
+      sceneRef.current.remove(skuHighlightMeshRef.current)
+      skuHighlightMeshRef.current.geometry.dispose()
+      ;(skuHighlightMeshRef.current.material as THREE.Material).dispose()
+      skuHighlightMeshRef.current = null
+    }
+    
+    // Create new highlight at exact slot position
+    if (hoveredSkuShelf) {
+      // Use slot position if available, otherwise fall back to shelf position
+      const slotPos = hoveredSkuShelf.slotPosition || hoveredSkuShelf.position
+      const shelfRotation = hoveredSkuShelf.shelfRotation || 0
+      
+      // Create a 1m x 1m highlight box at the slot position
+      const SLOT_HIGHLIGHT_SIZE = 1.0 // 1 meter
+      const geometry = new THREE.BoxGeometry(SLOT_HIGHLIGHT_SIZE, 2.0, SLOT_HIGHLIGHT_SIZE)
+      const material = new THREE.MeshBasicMaterial({
+        color: 0x00ff88,
+        transparent: true,
+        opacity: 0.35,
+        side: THREE.DoubleSide,
+      })
+      
+      const highlightMesh = new THREE.Mesh(geometry, material)
+      highlightMesh.position.set(
+        slotPos.x,
+        1.0, // Center at 1m height (eye level)
+        slotPos.z
+      )
+      highlightMesh.rotation.y = shelfRotation
+      highlightMesh.name = 'sku-slot-highlight'
+      
+      // Add wireframe for better visibility
+      const wireframe = new THREE.LineSegments(
+        new THREE.EdgesGeometry(geometry),
+        new THREE.LineBasicMaterial({ color: 0x00ff88, linewidth: 2 })
+      )
+      highlightMesh.add(wireframe)
+      
+      // Add a vertical line/pole to make it more visible from above
+      const poleGeometry = new THREE.CylinderGeometry(0.05, 0.05, 3, 8)
+      const poleMaterial = new THREE.MeshBasicMaterial({ color: 0x00ff88 })
+      const pole = new THREE.Mesh(poleGeometry, poleMaterial)
+      pole.position.set(0, 0.5, 0)
+      highlightMesh.add(pole)
+      
+      sceneRef.current.add(highlightMesh)
+      skuHighlightMeshRef.current = highlightMesh
+    }
+  }, [hoveredSkuShelf])
+
+  // Auto slot highlights (multiple rectangles when autoShowSlotHighlight is enabled)
+  useEffect(() => {
+    if (!sceneRef.current) return
+    
+    // Remove existing auto highlights
+    autoSlotMeshesRef.current.forEach(mesh => {
+      sceneRef.current?.remove(mesh)
+      mesh.geometry.dispose()
+      ;(mesh.material as THREE.Material).dispose()
+    })
+    autoSlotMeshesRef.current = []
+    
+    // Create new highlights for each auto slot position
+    if (tracking.autoShowSlotHighlight && autoSlotPositions.length > 0) {
+      const SLOT_SIZE = 1.0
+      
+      autoSlotPositions.forEach((slotPos, index) => {
+        const geometry = new THREE.BoxGeometry(SLOT_SIZE, 2.0, SLOT_SIZE)
+        const material = new THREE.MeshBasicMaterial({
+          color: 0xff6600, // Orange for auto highlights
+          transparent: true,
+          opacity: 0.4,
+          side: THREE.DoubleSide,
+        })
+        
+        const mesh = new THREE.Mesh(geometry, material)
+        mesh.position.set(slotPos.x, 1.0, slotPos.z)
+        mesh.rotation.y = slotPos.rotation || 0
+        mesh.name = `auto-slot-highlight-${index}`
+        
+        // Add wireframe
+        const wireframe = new THREE.LineSegments(
+          new THREE.EdgesGeometry(geometry),
+          new THREE.LineBasicMaterial({ color: 0xff6600, linewidth: 2 })
+        )
+        mesh.add(wireframe)
+        
+        sceneRef.current?.add(mesh)
+        autoSlotMeshesRef.current.push(mesh)
+      })
+    }
+  }, [tracking.autoShowSlotHighlight, autoSlotPositions])
+
+  // XYZ Axis helper
+  useEffect(() => {
+    if (!sceneRef.current) return
+    
+    // Remove existing axis helper
+    if (axisHelperRef.current) {
+      sceneRef.current.remove(axisHelperRef.current)
+      axisHelperRef.current = null
+    }
+    
+    if (showAxisHelper) {
+      // Create axis helper at origin (0,0,0) with 10m length
+      const axesHelper = new THREE.AxesHelper(10)
+      axesHelper.position.set(0, 0.01, 0) // Slightly above floor
+      sceneRef.current.add(axesHelper)
+      axisHelperRef.current = axesHelper
+      
+      // Add axis labels using sprites
+      const createLabel = (text: string, color: number, position: THREE.Vector3) => {
+        const canvas = document.createElement('canvas')
+        canvas.width = 64
+        canvas.height = 64
+        const ctx = canvas.getContext('2d')!
+        ctx.fillStyle = `#${color.toString(16).padStart(6, '0')}`
+        ctx.font = 'bold 48px Arial'
+        ctx.textAlign = 'center'
+        ctx.textBaseline = 'middle'
+        ctx.fillText(text, 32, 32)
+        
+        const texture = new THREE.CanvasTexture(canvas)
+        const material = new THREE.SpriteMaterial({ map: texture })
+        const sprite = new THREE.Sprite(material)
+        sprite.position.copy(position)
+        sprite.scale.set(2, 2, 1)
+        axesHelper.add(sprite)
+      }
+      
+      createLabel('X', 0xff0000, new THREE.Vector3(11, 0, 0))
+      createLabel('Y', 0x00ff00, new THREE.Vector3(0, 11, 0))
+      createLabel('Z', 0x0000ff, new THREE.Vector3(0, 0, 11))
+    }
+  }, [showAxisHelper])
+
+  // Slot arrows visualization - shows arrows perpendicular to shelves at occupied slot positions
+  useEffect(() => {
+    if (!sceneRef.current || !venue) return
+    
+    // Remove existing arrows
+    if (slotArrowsRef.current) {
+      sceneRef.current.remove(slotArrowsRef.current)
+      slotArrowsRef.current = null
+    }
+    
+    if (!showSlotArrows) return
+    
+    // Fetch all shelf planograms and create arrows
+    const loadAndRenderArrows = async () => {
+      const arrowsGroup = new THREE.Group()
+      arrowsGroup.name = 'slotArrows'
+      
+      // Get all shelves/gondolas from venue objects
+      const shelves = venue.objects.filter((o: any) => 
+        o.type?.toLowerCase().includes('shelf') || 
+        o.type?.toLowerCase().includes('gondola')
+      )
+      
+      for (const shelf of shelves) {
+        try {
+          // Fetch planogram data for this shelf
+          const res = await fetch(`${API_BASE}/api/planogram/shelves/${shelf.id}`)
+          if (!res.ok) continue
+          const planogramData = await res.json()
+          
+          if (!planogramData?.slots?.levels) continue
+          
+          const shelfWidth = shelf.scale?.x || 2
+          const shelfDepth = shelf.scale?.z || 1
+          const slotWidthM = planogramData.slotWidthM || 0.1
+          
+          // Auto-detect facing (same as backend)
+          const storedFacings = planogramData.slotFacings || []
+          const autoFacing = shelfWidth >= shelfDepth ? 'front' : 'left'
+          const effectiveFacing = storedFacings.length > 0 ? storedFacings[0] : autoFacing
+          const slotsAlongZ = effectiveFacing === 'left' || effectiveFacing === 'right'
+          
+          // Calculate slot start position
+          let slotStartX: number, slotStartZ: number, arrowDirX: number, arrowDirZ: number
+          
+          if (slotsAlongZ) {
+            slotStartZ = shelf.position.z - shelfDepth / 2
+            slotStartX = shelf.position.x + (effectiveFacing === 'left' ? -shelfWidth / 2 : shelfWidth / 2)
+            arrowDirX = effectiveFacing === 'left' ? -1 : 1
+            arrowDirZ = 0
+          } else {
+            slotStartX = shelf.position.x - shelfWidth / 2
+            slotStartZ = shelf.position.z + (effectiveFacing === 'front' ? shelfDepth / 2 : -shelfDepth / 2)
+            arrowDirX = 0
+            arrowDirZ = effectiveFacing === 'front' ? 1 : -1
+          }
+          
+          // Collect occupied slot indices
+          const occupiedSlots = new Set<number>()
+          for (const level of planogramData.slots.levels) {
+            for (const slot of (level.slots || [])) {
+              if (slot.skuItemId) {
+                occupiedSlots.add(slot.slotIndex)
+              }
+            }
+          }
+          
+          // Create arrow for each occupied slot
+          for (const slotIndex of occupiedSlots) {
+            let slotX: number, slotZ: number
+            
+            if (slotsAlongZ) {
+              slotX = slotStartX
+              slotZ = slotStartZ + (slotIndex + 0.5) * slotWidthM
+            } else {
+              slotX = slotStartX + (slotIndex + 0.5) * slotWidthM
+              slotZ = slotStartZ
+            }
+            
+            // Create simple arrow (cone + line)
+            const arrowLength = 0.8
+            const arrowY = 0.5
+            
+            // Arrow shaft (line)
+            const shaftGeom = new THREE.BufferGeometry().setFromPoints([
+              new THREE.Vector3(0, 0, 0),
+              new THREE.Vector3(arrowDirX * arrowLength * 0.7, 0, arrowDirZ * arrowLength * 0.7)
+            ])
+            const shaftMat = new THREE.LineBasicMaterial({ color: 0xff6600, linewidth: 2 })
+            const shaft = new THREE.Line(shaftGeom, shaftMat)
+            shaft.position.set(slotX, arrowY, slotZ)
+            arrowsGroup.add(shaft)
+            
+            // Arrow head (cone)
+            const coneGeom = new THREE.ConeGeometry(0.1, 0.2, 8)
+            const coneMat = new THREE.MeshBasicMaterial({ color: 0xff6600 })
+            const cone = new THREE.Mesh(coneGeom, coneMat)
+            cone.position.set(
+              slotX + arrowDirX * arrowLength,
+              arrowY,
+              slotZ + arrowDirZ * arrowLength
+            )
+            // Rotate cone to point in arrow direction
+            if (arrowDirX !== 0) {
+              cone.rotation.z = arrowDirX > 0 ? -Math.PI / 2 : Math.PI / 2
+            } else {
+              cone.rotation.x = arrowDirZ > 0 ? Math.PI / 2 : -Math.PI / 2
+            }
+            arrowsGroup.add(cone)
+          }
+        } catch (err) {
+          // Shelf has no planogram data
+        }
+      }
+      
+      if (sceneRef.current && arrowsGroup.children.length > 0) {
+        sceneRef.current.add(arrowsGroup)
+        slotArrowsRef.current = arrowsGroup
+      }
+    }
+    
+    loadAndRenderArrows()
+  }, [showSlotArrows, venue])
+
   return (
     <div className="w-full h-full flex flex-col">
       {/* Camera Controls Toolbar */}
@@ -2283,6 +3279,16 @@ export default function MainViewport({
       
       {/* 3D Canvas */}
       <div ref={containerRef} className="flex-1 relative">
+        {/* SKU Detection Debug Overlay */}
+        <SkuDebugOverlay
+          enabled={tracking.showSkuDebug}
+          containerRef={containerRef}
+          cameraRef={cameraRef}
+          onHoverShelf={setHoveredSkuShelf}
+          autoShowSlotHighlight={tracking.autoShowSlotHighlight}
+          onAutoSlotPositions={setAutoSlotPositions}
+        />
+        
         {/* Floating Layers Panel - Top Left */}
         <div className="absolute top-14 left-3 z-10">
           <button
@@ -2357,6 +3363,43 @@ export default function MainViewport({
                 <span className="text-sm text-gray-300 flex items-center gap-1.5">
                   {showTracksLayer ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5 text-gray-500" />}
                   Tracks
+                </span>
+              </label>
+              <label className="flex items-center gap-2 py-1.5 px-2 rounded hover:bg-gray-700 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={showDoohLayer}
+                  onChange={(e) => setShowDoohLayer(e.target.checked)}
+                  className="rounded border-gray-600 bg-gray-700 text-purple-500"
+                />
+                <span className="text-sm text-gray-300 flex items-center gap-1.5">
+                  {showDoohLayer ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5 text-gray-500" />}
+                  DOOH Screens
+                </span>
+              </label>
+              <div className="border-t border-gray-700 my-1" />
+              <label className="flex items-center gap-2 py-1.5 px-2 rounded hover:bg-gray-700 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={showAxisHelper}
+                  onChange={(e) => setShowAxisHelper(e.target.checked)}
+                  className="rounded border-gray-600 bg-gray-700 text-red-500"
+                />
+                <span className="text-sm text-gray-300 flex items-center gap-1.5">
+                  {showAxisHelper ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5 text-gray-500" />}
+                  XYZ Axes
+                </span>
+              </label>
+              <label className="flex items-center gap-2 py-1.5 px-2 rounded hover:bg-gray-700 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={showSlotArrows}
+                  onChange={(e) => setShowSlotArrows(e.target.checked)}
+                  className="rounded border-gray-600 bg-gray-700 text-orange-500"
+                />
+                <span className="text-sm text-gray-300 flex items-center gap-1.5">
+                  {showSlotArrows ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5 text-gray-500" />}
+                  Slot Arrows
                 </span>
               </label>
             </div>

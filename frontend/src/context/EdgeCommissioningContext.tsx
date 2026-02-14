@@ -56,6 +56,33 @@ export interface RoiBounds {
   maxZ: number
 }
 
+export interface DwgFixture {
+  id: string
+  group_id: string
+  source: {
+    layer: string
+    block: string | null
+    entity_type: string
+  }
+  pose2d: {
+    x: number
+    y: number
+    rot_deg: number
+  }
+  footprint: {
+    kind: 'rect' | 'poly'
+    w: number
+    d: number
+    points: { x: number; y: number }[]
+  }
+}
+
+export interface DwgLayout {
+  fixtures: DwgFixture[]
+  bounds: { minX: number; minY: number; maxX: number; maxY: number } | null
+  unitScaleToM: number
+}
+
 export interface EdgePairing {
   id: string
   venueId: string
@@ -128,6 +155,7 @@ interface EdgeCommissioningContextType {
   edgeStatuses: Map<string, EdgeStatus>
   deployHistory: DeployHistoryItem[]
   roiBounds: RoiBounds | null
+  dwgLayout: DwgLayout | null
   
   // Loading states
   isScanning: boolean
@@ -182,6 +210,7 @@ export function EdgeCommissioningProvider({ children }: Props) {
   const [edgeInventory, setEdgeInventory] = useState<EdgeInventory | null>(null)
   const [placements, setPlacements] = useState<EdgePlacement[]>([])
   const [roiBounds, setRoiBounds] = useState<RoiBounds | null>(null)
+  const [dwgLayout, setDwgLayout] = useState<DwgLayout | null>(null)
   const [pairings, setPairings] = useState<EdgePairing[]>([])
   const [edgeStatuses, setEdgeStatuses] = useState<Map<string, EdgeStatus>>(new Map())
   const [deployHistory, setDeployHistory] = useState<DeployHistoryItem[]>([])
@@ -295,6 +324,9 @@ export function EdgeCommissioningProvider({ children }: Props) {
       setPlacements(data.placements || [])
       if (data.roiBounds) {
         setRoiBounds(data.roiBounds)
+      }
+      if (data.dwgLayout) {
+        setDwgLayout(data.dwgLayout)
       }
     } catch (err: any) {
       addToast('error', `Failed to load placements: ${err.message}`)
@@ -431,9 +463,9 @@ export function EdgeCommissioningProvider({ children }: Props) {
     const scannedIps = new Set(edgeInventory?.lidars.map(l => l.ip) || [])
     const result: EdgeLidar[] = []
 
-    // First add all scanned (online) LiDARs
+    // First add all LiDARs from edge inventory (preserving their actual reachable status)
     if (edgeInventory?.lidars) {
-      result.push(...edgeInventory.lidars.map(l => ({ ...l, reachable: true })))
+      result.push(...edgeInventory.lidars)
     }
 
     // Then add commissioned LiDARs that aren't currently online
@@ -491,6 +523,7 @@ export function EdgeCommissioningProvider({ children }: Props) {
     edgeStatuses,
     deployHistory,
     roiBounds,
+    dwgLayout,
     isScanning,
     isScanningLidars,
     isLoadingInventory,

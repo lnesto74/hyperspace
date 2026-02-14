@@ -109,6 +109,40 @@ function findNextAvailableSlot(slots, startLevel, startSlot, slotsPerLevel) {
 }
 
 /**
+ * Find all available slots in the shelf
+ * @param {Object} slots - Current slots structure
+ * @param {number} slotsPerLevel - Slots per level
+ * @returns {Array} Array of { levelIndex, slotIndex }
+ */
+function findAllAvailableSlots(slots, slotsPerLevel) {
+  const available = [];
+  
+  for (const level of slots.levels) {
+    for (let s = 0; s < slotsPerLevel; s++) {
+      const slot = level.slots[s];
+      if (!slot.skuItemId) {
+        available.push({ levelIndex: level.levelIndex, slotIndex: s });
+      }
+    }
+  }
+  
+  return available;
+}
+
+/**
+ * Shuffle array using Fisher-Yates algorithm
+ * @param {Array} array - Array to shuffle
+ * @returns {Array} Shuffled array (mutates original)
+ */
+function shuffleArray(array) {
+  for (let i = array.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [array[i], array[j]] = [array[j], array[i]];
+  }
+  return array;
+}
+
+/**
  * Place SKUs on shelf with snap-to-slot behavior
  * 
  * @param {Object} params
@@ -119,7 +153,7 @@ function findNextAvailableSlot(slots, startLevel, startSlot, slotsPerLevel) {
  * @param {Object} params.dropTarget - Where to place { type: 'slot'|'level'|'shelf', levelIndex?, slotIndex? }
  * @param {string[]} params.skuItemIds - Array of SKU item IDs to place
  * @param {Object} params.options - Placement options
- * @param {string} params.options.fillOrder - 'sequential' (default) or 'compact'
+ * @param {string} params.options.fillOrder - 'sequential' (default), 'random', or 'compact'
  * @param {boolean} params.options.compact - Compact after placement
  * @param {string} params.options.overflowPolicy - 'skip' (default), 'overwrite', or 'error'
  * @returns {Object} { updatedSlots, overflowSkuIds, warnings }
@@ -142,44 +176,70 @@ export function placeSkusOnShelf({
   const overflowSkuIds = [];
   const warnings = [];
   
-  // Determine starting position based on drop target
-  let startLevel = 0;
-  let startSlot = 0;
-  
-  if (dropTarget.type === 'slot') {
-    startLevel = dropTarget.levelIndex ?? 0;
-    startSlot = dropTarget.slotIndex ?? 0;
-  } else if (dropTarget.type === 'level') {
-    startLevel = dropTarget.levelIndex ?? 0;
-    startSlot = 0;
-  }
-  // type === 'shelf' uses default (0, 0)
-  
-  // Place each SKU
-  let currentLevel = startLevel;
-  let currentSlot = startSlot;
-  
-  for (const skuId of skuItemIds) {
-    // Find next available slot
-    const available = findNextAvailableSlot(slots, currentLevel, currentSlot, slotsPerLevel);
+  // Handle random fill order - distribute items randomly across free slots
+  if (fillOrder === 'random') {
+    // Find all available slots and shuffle them
+    const availableSlots = findAllAvailableSlots(slots, slotsPerLevel);
+    shuffleArray(availableSlots);
     
-    if (!available) {
-      // No more slots available
-      if (overflowPolicy === 'error') {
-        warnings.push(`No slot available for SKU ${skuId}`);
+    // Place each SKU in a random available slot
+    for (let i = 0; i < skuItemIds.length; i++) {
+      const skuId = skuItemIds[i];
+      
+      if (i >= availableSlots.length) {
+        // No more slots available
+        if (overflowPolicy === 'error') {
+          warnings.push(`No slot available for SKU ${skuId}`);
+        }
+        overflowSkuIds.push(skuId);
+        continue;
       }
-      overflowSkuIds.push(skuId);
-      continue;
+      
+      const targetSlot = availableSlots[i];
+      const level = slots.levels[targetSlot.levelIndex];
+      const slot = level.slots[targetSlot.slotIndex];
+      slot.skuItemId = skuId;
+      slot.facingSpan = 1;
     }
+  } else {
+    // Sequential fill order
+    // Determine starting position based on drop target
+    let startLevel = 0;
+    let startSlot = 0;
     
-    // Place the SKU
-    const level = slots.levels[available.levelIndex];
-    const slot = level.slots[available.slotIndex];
-    slot.skuItemId = skuId;
-    slot.facingSpan = 1;
+    if (dropTarget.type === 'slot') {
+      startLevel = dropTarget.levelIndex ?? 0;
+      startSlot = dropTarget.slotIndex ?? 0;
+    } else if (dropTarget.type === 'level') {
+      startLevel = dropTarget.levelIndex ?? 0;
+      startSlot = 0;
+    }
+    // type === 'shelf' uses default (0, 0)
     
-    // Move to next position for sequential fill
-    if (fillOrder === 'sequential') {
+    // Place each SKU
+    let currentLevel = startLevel;
+    let currentSlot = startSlot;
+    
+    for (const skuId of skuItemIds) {
+      // Find next available slot
+      const available = findNextAvailableSlot(slots, currentLevel, currentSlot, slotsPerLevel);
+      
+      if (!available) {
+        // No more slots available
+        if (overflowPolicy === 'error') {
+          warnings.push(`No slot available for SKU ${skuId}`);
+        }
+        overflowSkuIds.push(skuId);
+        continue;
+      }
+      
+      // Place the SKU
+      const level = slots.levels[available.levelIndex];
+      const slot = level.slots[available.slotIndex];
+      slot.skuItemId = skuId;
+      slot.facingSpan = 1;
+      
+      // Move to next position
       currentLevel = available.levelIndex;
       currentSlot = available.slotIndex + 1;
       

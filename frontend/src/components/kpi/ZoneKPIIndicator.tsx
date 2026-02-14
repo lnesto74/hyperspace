@@ -21,6 +21,7 @@ interface ZoneKPIIndicatorProps {
   roiId: string
   roiName: string
   roiColor: string
+  highlighted?: boolean
   onClick?: () => void
 }
 
@@ -129,7 +130,7 @@ function TrendArrow({ current, previous }: { current: number; previous: number }
   )
 }
 
-export default function ZoneKPIIndicator({ roiId, roiName, roiColor, onClick }: ZoneKPIIndicatorProps) {
+export default function ZoneKPIIndicator({ roiId, roiName, roiColor, highlighted = false, onClick }: ZoneKPIIndicatorProps) {
   const { tracks } = useTracking()
   const { regions } = useRoi()
   const [baseKpiData, setBaseKpiData] = useState<LiveKPIData | null>(null)
@@ -257,7 +258,11 @@ export default function ZoneKPIIndicator({ roiId, roiName, roiColor, onClick }: 
 
   return (
     <div 
-      className="bg-black/40 backdrop-blur-xl border border-white/10 rounded-xl p-2.5 cursor-pointer hover:bg-black/50 hover:border-white/20 transition-all shadow-xl min-w-[160px]"
+      className={`backdrop-blur-xl rounded-xl p-2.5 cursor-pointer transition-all shadow-xl min-w-[160px] ${
+        highlighted 
+          ? 'bg-white/15 border-2 border-white/40 ring-2 ring-white/20 scale-[1.02]' 
+          : 'bg-black/40 border border-white/10 hover:bg-black/50 hover:border-white/20'
+      }`}
       onClick={onClick}
     >
       {/* Zone Name Header with subtle color indicator */}

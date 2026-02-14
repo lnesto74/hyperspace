@@ -30,6 +30,10 @@ export default function SkuLibraryPanel() {
     searchQuery,
     setSearchQuery,
     loading,
+    placedSkuIds,
+    removeSkuFromSlot,
+    hoveredSkuId,
+    setHoveredSkuId,
   } = usePlanogram()
   
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -266,12 +270,32 @@ export default function SkuLibraryPanel() {
   }
   
   const handleDragStart = (e: React.DragEvent, skuId: string) => {
-    const ids = selectedSkuIds.includes(skuId) ? selectedSkuIds : [skuId]
+    // Get selected IDs but filter out already placed SKUs
+    let ids = selectedSkuIds.includes(skuId) ? selectedSkuIds : [skuId]
+    ids = ids.filter(id => !placedSkuIds.has(id))
+    
+    if (ids.length === 0) {
+      e.preventDefault()
+      return
+    }
+    
     e.dataTransfer.setData('application/json', JSON.stringify({
       type: 'sku-items',
       skuItemIds: ids,
     }))
     e.dataTransfer.effectAllowed = 'copy'
+    
+    // Create custom drag image showing count
+    if (ids.length > 1) {
+      const dragEl = document.createElement('div')
+      dragEl.className = 'bg-amber-600 text-white px-3 py-2 rounded-lg shadow-xl text-sm font-medium'
+      dragEl.textContent = `${ids.length} items`
+      dragEl.style.position = 'absolute'
+      dragEl.style.top = '-1000px'
+      document.body.appendChild(dragEl)
+      e.dataTransfer.setDragImage(dragEl, 40, 20)
+      setTimeout(() => document.body.removeChild(dragEl), 0)
+    }
   }
   
   const handleSelectAll = () => {
@@ -561,9 +585,20 @@ export default function SkuLibraryPanel() {
           >
             {selectedSkuIds.length === filteredSkuItems.length ? 'Deselect All' : 'Select All'}
           </button>
-          <span className="text-[10px] text-gray-500">
-            {selectedSkuIds.length > 0 && `${selectedSkuIds.length} selected`}
-          </span>
+          {selectedSkuIds.length > 0 ? (
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] text-amber-400 font-medium">
+                {selectedSkuIds.length} selected
+              </span>
+              <span className="text-[9px] text-gray-500 bg-gray-800 px-1.5 py-0.5 rounded">
+                Drag to place
+              </span>
+            </div>
+          ) : (
+            <span className="text-[10px] text-gray-500">
+              Click items to select
+            </span>
+          )}
         </div>
       )}
       
@@ -584,55 +619,100 @@ export default function SkuLibraryPanel() {
           </div>
         ) : (
           <div className="p-1">
-            {filteredSkuItems.map(item => (
-              <div
-                key={item.id}
-                draggable
-                onDragStart={(e) => handleDragStart(e, item.id)}
-                onClick={() => toggleSkuSelection(item.id)}
-                className={`
-                  flex items-center gap-2 p-2 rounded cursor-pointer mb-1 transition-colors
-                  ${selectedSkuIds.includes(item.id) 
-                    ? 'bg-amber-600/20 border border-amber-600/50' 
-                    : 'bg-gray-800/50 border border-transparent hover:bg-gray-700/50'
-                  }
-                `}
-              >
-                <GripVertical className="w-3 h-3 text-gray-500 flex-shrink-0" />
-                <div className="flex-1 min-w-0">
-                  <div className="text-[10px] text-amber-400 font-mono">{item.skuCode}</div>
-                  <div className="text-xs text-white truncate">{item.name}</div>
-                  <div className="flex items-center gap-2 text-[10px] text-gray-500">
-                    {item.brand && <span>{item.brand}</span>}
-                    {item.brand && item.size && <span>•</span>}
-                    {item.size && <span>{item.size}</span>}
+            {filteredSkuItems.map(item => {
+              const isPlaced = placedSkuIds.has(item.id)
+              const isSelected = selectedSkuIds.includes(item.id)
+              
+              return (
+                <div
+                  key={item.id}
+                  draggable={!isPlaced}
+                  onDragStart={(e) => !isPlaced && handleDragStart(e, item.id)}
+                  onClick={() => !isPlaced && toggleSkuSelection(item.id)}
+                  onMouseEnter={() => setHoveredSkuId(item.id)}
+                  onMouseLeave={() => setHoveredSkuId(null)}
+                  className={`
+                    flex items-center gap-2 p-2 rounded mb-1 transition-all relative
+                    ${hoveredSkuId === item.id 
+                      ? 'bg-orange-600/30 border-2 border-orange-500 ring-2 ring-orange-500/30 scale-[1.02]'
+                      : isPlaced 
+                        ? 'bg-green-900/20 border border-green-600/30 cursor-default opacity-70' 
+                        : isSelected 
+                          ? 'bg-amber-600/20 border border-amber-600/50 cursor-pointer' 
+                          : 'bg-gray-800/50 border border-transparent hover:bg-gray-700/50 cursor-pointer'
+                    }
+                  `}
+                >
+                  {isPlaced ? (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        removeSkuFromSlot(item.id)
+                      }}
+                      className="w-4 h-4 flex items-center justify-center text-red-400 hover:text-red-300 hover:bg-red-500/20 rounded flex-shrink-0"
+                      title="Remove from shelf"
+                    >
+                      <X className="w-3 h-3" />
+                    </button>
+                  ) : (
+                    <GripVertical className="w-3 h-3 text-gray-500 flex-shrink-0" />
+                  )}
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-1">
+                      <span className={`text-[10px] font-mono ${isPlaced ? 'text-green-400' : 'text-amber-400'}`}>
+                        {item.skuCode}
+                      </span>
+                      {isPlaced && (
+                        <span className="text-[8px] bg-green-600/30 text-green-300 px-1 rounded">
+                          PLACED
+                        </span>
+                      )}
+                    </div>
+                    <div className={`text-xs truncate ${isPlaced ? 'text-gray-400' : 'text-white'}`}>
+                      {item.name}
+                    </div>
+                    <div className="flex items-center gap-2 text-[10px] text-gray-500">
+                      {item.brand && <span>{item.brand}</span>}
+                      {item.brand && item.size && <span>•</span>}
+                      {item.size && <span>{item.size}</span>}
+                    </div>
+                    {item.category && (
+                      <div className="text-[10px] text-gray-400">{item.category} {item.subcategory && `› ${item.subcategory}`}</div>
+                    )}
                   </div>
-                  {item.category && (
-                    <div className="text-[10px] text-gray-400">{item.category} {item.subcategory && `› ${item.subcategory}`}</div>
+                  {item.price && (
+                    <div className="text-[10px] text-green-500 flex-shrink-0">
+                      ${item.price.toFixed(2)}
+                    </div>
                   )}
                 </div>
-                {item.price && (
-                  <div className="text-[10px] text-green-500 flex-shrink-0">
-                    ${item.price.toFixed(2)}
-                  </div>
-                )}
-              </div>
-            ))}
+              )
+            })}
           </div>
         )}
       </div>
       
       {/* Footer with catalog info */}
       {activeCatalog && (
-        <div className="p-2 border-t border-border-dark flex items-center justify-between text-[10px] text-gray-500">
-          <span>{filteredSkuItems.length} of {activeCatalog.items.length} items</span>
-          <button
-            onClick={() => deleteCatalog(activeCatalog.id)}
-            className="p-1 text-red-500 hover:text-red-400 hover:bg-red-500/10 rounded"
-            title="Delete catalog"
-          >
-            <Trash2 className="w-3 h-3" />
-          </button>
+        <div className="p-2 border-t border-border-dark flex flex-col gap-1">
+          <div className="flex items-center justify-between text-[10px]">
+            <span className="text-gray-500">{filteredSkuItems.length} of {activeCatalog.items.length} items</span>
+            {placedSkuIds.size > 0 && (
+              <span className="text-green-400">{placedSkuIds.size} placed</span>
+            )}
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="text-[9px] text-gray-600">
+              {filteredSkuItems.filter(i => !placedSkuIds.has(i.id)).length} available
+            </span>
+            <button
+              onClick={() => deleteCatalog(activeCatalog.id)}
+              className="p-1 text-red-500 hover:text-red-400 hover:bg-red-500/10 rounded"
+              title="Delete catalog"
+            >
+              <Trash2 className="w-3 h-3" />
+            </button>
+          </div>
         </div>
       )}
     </div>

@@ -2,7 +2,7 @@ import { useRef, useEffect, useCallback, useState } from 'react'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { useVenue } from '../../context/VenueContext'
-import { usePlanogram, ShelfPlanogram, SkuItem } from '../../context/PlanogramContext'
+import { usePlanogram, ShelfPlanogram, SkuItem, SlotFacing } from '../../context/PlanogramContext'
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3001'
 
@@ -66,6 +66,66 @@ const COLORS = {
   shelfHasItems: 0x22c55e, // Green for shelves with items
   slotGrid: 0xf59e0b,
   slotFilled: 0x22c55e, // Green for filled slots
+  faceHighlight: 0x3b82f6, // Blue for clickable faces
+  faceSelected: 0x22c55e, // Green for selected face
+}
+
+// Helper to determine which faces to use for slots
+function getSlotFacings(width: number, depth: number, storedFacings: SlotFacing[]): SlotFacing[] {
+  // If user has explicitly set facings, use them
+  if (storedFacings && storedFacings.length > 0) return storedFacings
+  
+  // Auto-detect: use the longer side
+  // front/back faces are along the X axis (width)
+  // left/right faces are along the Z axis (depth)
+  return width >= depth ? ['front'] : ['left']
+}
+
+// Get face parameters for slot positioning
+function getFaceParams(facing: SlotFacing, width: number, _height: number, depth: number) {
+  switch (facing) {
+    case 'front':
+      return {
+        slotSpan: width, // slots distributed along width
+        slotOffset: { x: -width / 2, y: 0, z: depth / 2 + 0.02 },
+        slotDirection: 'x' as const,
+        gridEndX: width / 2,
+        gridEndZ: depth / 2 + 0.02,
+      }
+    case 'back':
+      return {
+        slotSpan: width,
+        slotOffset: { x: -width / 2, y: 0, z: -depth / 2 - 0.02 },
+        slotDirection: 'x' as const,
+        gridEndX: width / 2,
+        gridEndZ: -depth / 2 - 0.02,
+      }
+    case 'left':
+      return {
+        slotSpan: depth, // slots distributed along depth
+        slotOffset: { x: -width / 2 - 0.02, y: 0, z: -depth / 2 },
+        slotDirection: 'z' as const,
+        gridEndX: -width / 2 - 0.02,
+        gridEndZ: depth / 2,
+      }
+    case 'right':
+      return {
+        slotSpan: depth,
+        slotOffset: { x: width / 2 + 0.02, y: 0, z: -depth / 2 },
+        slotDirection: 'z' as const,
+        gridEndX: width / 2 + 0.02,
+        gridEndZ: depth / 2,
+      }
+    default:
+      // Default to front
+      return {
+        slotSpan: width,
+        slotOffset: { x: -width / 2, y: 0, z: depth / 2 + 0.02 },
+        slotDirection: 'x' as const,
+        gridEndX: width / 2,
+        gridEndZ: depth / 2 + 0.02,
+      }
+  }
 }
 
 export default function PlanogramViewport() {
@@ -86,7 +146,14 @@ export default function PlanogramViewport() {
     activePlanogram,
     activeCatalog,
     placeSkusOnShelf,
+    saveShelfPlanogram,
+    hoveredSkuId,
   } = usePlanogram()
+  
+  // State for face selection mode
+  const [faceSelectMode, setFaceSelectMode] = useState(false)
+  const [hoveredFace, setHoveredFace] = useState<SlotFacing | null>(null)
+  const faceMeshesRef = useRef<Map<string, THREE.Mesh>>(new Map())
   
   // Track all shelf planograms to show filled slots
   const [allShelfPlanograms, setAllShelfPlanograms] = useState<Map<string, ShelfPlanogram>>(new Map())
@@ -189,81 +256,168 @@ export default function PlanogramViewport() {
     // Get planogram data (use active if selected, otherwise from cache)
     const planogramData = isActive ? activeShelfPlanogram : shelfPlanogram
     
-    // Show filled slots for ALL shelves with planogram data
+    // Determine slot facing directions (auto-detect longest side or use stored preference)
+    const storedFacings = planogramData?.slotFacings || []
+    const facings = getSlotFacings(width, depth, storedFacings)
+    
+    // Show filled slots for ALL shelves with planogram data - render for each facing
     if (planogramData) {
       const numLevels = planogramData.numLevels || 4
       const slotWidthM = planogramData.slotWidthM || 0.1
-      const slotsPerLevel = Math.floor(width / slotWidthM)
       const levelHeight = height / numLevels
       
-      // Draw slot grid only when active
-      if (isActive) {
-        const points: THREE.Vector3[] = []
+      // Render slots for each selected facing
+      facings.forEach(facing => {
+        const faceParams = getFaceParams(facing, width, height, depth)
+        const slotsPerLevel = Math.floor(faceParams.slotSpan / slotWidthM)
         
-        // Vertical lines (slot dividers)
-        for (let i = 0; i <= slotsPerLevel; i++) {
-          const x = -width / 2 + i * slotWidthM
-          points.push(new THREE.Vector3(x, 0, depth / 2 + 0.02))
-          points.push(new THREE.Vector3(x, height, depth / 2 + 0.02))
-        }
-        
-        // Horizontal lines (level dividers)
-        for (let i = 0; i <= numLevels; i++) {
-          const y = i * levelHeight
-          points.push(new THREE.Vector3(-width / 2, y, depth / 2 + 0.02))
-          points.push(new THREE.Vector3(width / 2, y, depth / 2 + 0.02))
-        }
-        
-        const gridGeometry = new THREE.BufferGeometry().setFromPoints(points)
-        const gridMaterial = new THREE.LineBasicMaterial({ color: COLORS.slotGrid, transparent: true, opacity: 0.8 })
-        const gridLines = new THREE.LineSegments(gridGeometry, gridMaterial)
-        group.add(gridLines)
-      }
-      
-      // Draw filled slot indicators (for all shelves)
-      if (planogramData.slots?.levels) {
-        planogramData.slots.levels.forEach((level, levelIdx) => {
-          const y = levelIdx * levelHeight + levelHeight / 2
+        // Draw slot grid only when active
+        if (isActive) {
+          const points: THREE.Vector3[] = []
           
-          level.slots?.forEach(slot => {
-            if (slot.skuItemId) {
-              const x = -width / 2 + slot.slotIndex * slotWidthM + (slotWidthM * (slot.facingSpan || 1)) / 2
-              const slotWidth = slotWidthM * (slot.facingSpan || 1) * 0.9
-              const slotHeight = levelHeight * 0.8
-              
-              // Filled slot box
-              const slotGeometry = new THREE.BoxGeometry(slotWidth, slotHeight, 0.05)
-              const slotMaterial = new THREE.MeshStandardMaterial({
-                color: isActive ? COLORS.slotFilled : COLORS.shelfHasItems,
-                transparent: true,
-                opacity: isActive ? 0.7 : 0.6,
-              })
-              const slotMesh = new THREE.Mesh(slotGeometry, slotMaterial)
-              slotMesh.position.set(x, y, depth / 2 + 0.03)
-              slotMesh.userData.isSlot = true
-              slotMesh.userData.skuItemId = slot.skuItemId
-              group.add(slotMesh)
-              
-              // Store slot mesh reference for hover detection
-              slotMeshesRef.current.set(`${shelf.id}-${levelIdx}-${slot.slotIndex}`, { 
-                mesh: slotMesh, 
-                skuItemId: slot.skuItemId 
-              })
-              
-              // Border for filled slot
-              const edgesGeometry = new THREE.EdgesGeometry(slotGeometry)
-              const edgesMaterial = new THREE.LineBasicMaterial({ 
-                color: isActive ? 0xffffff : 0x16a34a, 
-                transparent: true, 
-                opacity: 0.8 
-              })
-              const edges = new THREE.LineSegments(edgesGeometry, edgesMaterial)
-              edges.position.copy(slotMesh.position)
-              group.add(edges)
+          if (faceParams.slotDirection === 'x') {
+            // Front/back face - slots along X axis
+            const zPos = faceParams.slotOffset.z
+            // Vertical lines (slot dividers)
+            for (let i = 0; i <= slotsPerLevel; i++) {
+              const x = faceParams.slotOffset.x + i * slotWidthM
+              points.push(new THREE.Vector3(x, 0, zPos))
+              points.push(new THREE.Vector3(x, height, zPos))
             }
+            // Horizontal lines (level dividers)
+            for (let i = 0; i <= numLevels; i++) {
+              const y = i * levelHeight
+              points.push(new THREE.Vector3(faceParams.slotOffset.x, y, zPos))
+              points.push(new THREE.Vector3(faceParams.gridEndX, y, zPos))
+            }
+          } else {
+            // Left/right face - slots along Z axis
+            const xPos = faceParams.slotOffset.x
+            // Vertical lines (slot dividers)
+            for (let i = 0; i <= slotsPerLevel; i++) {
+              const z = faceParams.slotOffset.z + i * slotWidthM
+              points.push(new THREE.Vector3(xPos, 0, z))
+              points.push(new THREE.Vector3(xPos, height, z))
+            }
+            // Horizontal lines (level dividers)
+            for (let i = 0; i <= numLevels; i++) {
+              const y = i * levelHeight
+              points.push(new THREE.Vector3(xPos, y, faceParams.slotOffset.z))
+              points.push(new THREE.Vector3(xPos, y, faceParams.gridEndZ))
+            }
+          }
+          
+          const gridGeometry = new THREE.BufferGeometry().setFromPoints(points)
+          const gridMaterial = new THREE.LineBasicMaterial({ color: COLORS.slotGrid, transparent: true, opacity: 0.8 })
+          const gridLines = new THREE.LineSegments(gridGeometry, gridMaterial)
+          group.add(gridLines)
+        }
+        
+        // Draw filled slot indicators (for all shelves)
+        if (planogramData.slots?.levels) {
+          planogramData.slots.levels.forEach((level, levelIdx) => {
+            const y = levelIdx * levelHeight + levelHeight / 2
+            
+            level.slots?.forEach(slot => {
+              if (slot.skuItemId) {
+                const slotWidth = slotWidthM * (slot.facingSpan || 1) * 0.9
+                const slotHeight = levelHeight * 0.8
+                
+                let slotX: number, slotZ: number
+                if (faceParams.slotDirection === 'x') {
+                  slotX = faceParams.slotOffset.x + slot.slotIndex * slotWidthM + (slotWidthM * (slot.facingSpan || 1)) / 2
+                  slotZ = faceParams.slotOffset.z + 0.01
+                } else {
+                  slotX = faceParams.slotOffset.x + (facing === 'left' ? -0.01 : 0.01)
+                  slotZ = faceParams.slotOffset.z + slot.slotIndex * slotWidthM + (slotWidthM * (slot.facingSpan || 1)) / 2
+                }
+                
+                // Filled slot box - rotate for left/right faces
+                const slotGeometry = faceParams.slotDirection === 'x' 
+                  ? new THREE.BoxGeometry(slotWidth, slotHeight, 0.05)
+                  : new THREE.BoxGeometry(0.05, slotHeight, slotWidth)
+                // Check if this slot's SKU is being hovered in the library
+                const isHoveredSku = slot.skuItemId === hoveredSkuId
+                const slotMaterial = new THREE.MeshStandardMaterial({
+                  color: isHoveredSku ? 0xff6600 : (isActive ? COLORS.slotFilled : COLORS.shelfHasItems),
+                  transparent: true,
+                  opacity: isHoveredSku ? 0.95 : (isActive ? 0.7 : 0.6),
+                  emissive: isHoveredSku ? 0xff6600 : 0x000000,
+                  emissiveIntensity: isHoveredSku ? 0.5 : 0,
+                })
+                const slotMesh = new THREE.Mesh(slotGeometry, slotMaterial)
+                slotMesh.position.set(slotX, y, slotZ)
+                slotMesh.userData.isSlot = true
+                slotMesh.userData.skuItemId = slot.skuItemId
+                group.add(slotMesh)
+                
+                // Store slot mesh reference for hover detection
+                slotMeshesRef.current.set(`${shelf.id}-${facing}-${levelIdx}-${slot.slotIndex}`, { 
+                  mesh: slotMesh, 
+                  skuItemId: slot.skuItemId 
+                })
+                
+                // Border for filled slot - orange for hovered, white for active, green otherwise
+                const edgesGeometry = new THREE.EdgesGeometry(slotGeometry)
+                const edgesMaterial = new THREE.LineBasicMaterial({ 
+                  color: isHoveredSku ? 0xff6600 : (isActive ? 0xffffff : 0x16a34a), 
+                  transparent: true, 
+                  opacity: isHoveredSku ? 1.0 : 0.8 
+                })
+                const edges = new THREE.LineSegments(edgesGeometry, edgesMaterial)
+                edges.position.copy(slotMesh.position)
+                group.add(edges)
+                
+                // Add extra highlight ring for hovered SKU
+                if (isHoveredSku) {
+                  const ringGeometry = faceParams.slotDirection === 'x' 
+                    ? new THREE.BoxGeometry(slotWidth * 1.15, slotHeight * 1.1, 0.08)
+                    : new THREE.BoxGeometry(0.08, slotHeight * 1.1, slotWidth * 1.15)
+                  const ringMaterial = new THREE.MeshBasicMaterial({
+                    color: 0xff6600,
+                    transparent: true,
+                    opacity: 0.4,
+                    side: THREE.DoubleSide,
+                  })
+                  const ringMesh = new THREE.Mesh(ringGeometry, ringMaterial)
+                  ringMesh.position.copy(slotMesh.position)
+                  group.add(ringMesh)
+                }
+              }
+            })
           })
+        }
+      })
+    }
+    
+    // Add clickable face indicators when active (for changing slot facing direction)
+    if (isActive && faceSelectMode) {
+      const faceConfigs: { face: SlotFacing, pos: [number, number, number], size: [number, number], rot?: number }[] = [
+        { face: 'front', pos: [0, height/2, depth/2 + 0.03], size: [width * 0.8, height * 0.8] },
+        { face: 'back', pos: [0, height/2, -depth/2 - 0.03], size: [width * 0.8, height * 0.8] },
+        { face: 'left', pos: [-width/2 - 0.03, height/2, 0], size: [depth * 0.8, height * 0.8], rot: Math.PI/2 },
+        { face: 'right', pos: [width/2 + 0.03, height/2, 0], size: [depth * 0.8, height * 0.8], rot: Math.PI/2 },
+      ]
+      
+      faceConfigs.forEach(({ face, pos, size, rot }) => {
+        const isCurrentFace = facings.includes(face)
+        const isHovered = face === hoveredFace
+        const faceGeom = new THREE.PlaneGeometry(size[0], size[1])
+        const faceMat = new THREE.MeshBasicMaterial({
+          color: isCurrentFace ? COLORS.faceSelected : (isHovered ? COLORS.faceHighlight : 0x666666),
+          transparent: true,
+          opacity: isCurrentFace ? 0.4 : (isHovered ? 0.3 : 0.15),
+          side: THREE.DoubleSide,
         })
-      }
+        const faceMesh = new THREE.Mesh(faceGeom, faceMat)
+        faceMesh.position.set(...pos)
+        if (rot) faceMesh.rotation.y = rot
+        faceMesh.userData.isFaceSelector = true
+        faceMesh.userData.faceDirection = face
+        faceMesh.userData.shelfId = shelf.id
+        group.add(faceMesh)
+        faceMeshesRef.current.set(`${shelf.id}-${face}`, faceMesh)
+      })
     }
     
     // Position and rotation
@@ -271,7 +425,7 @@ export default function PlanogramViewport() {
     group.rotation.set(shelf.rotation?.x || 0, shelf.rotation?.y || 0, shelf.rotation?.z || 0)
     
     return group
-  }, [activeShelfPlanogram, allShelfPlanograms, shelfHasFilledSlots])
+  }, [activeShelfPlanogram, allShelfPlanograms, shelfHasFilledSlots, faceSelectMode, hoveredFace, hoveredSkuId])
   
   // Initialize scene
   useEffect(() => {
@@ -333,6 +487,33 @@ export default function PlanogramViewport() {
     gridHelper.position.set(venue.width / 2, 0.01, venue.depth / 2)
     scene.add(gridHelper)
     
+    // XYZ Axis helper at origin for debugging
+    const axesHelper = new THREE.AxesHelper(10)
+    axesHelper.position.set(0, 0.02, 0)
+    scene.add(axesHelper)
+    
+    // Add axis labels
+    const createAxisLabel = (text: string, color: number, pos: THREE.Vector3) => {
+      const canvas = document.createElement('canvas')
+      canvas.width = 64
+      canvas.height = 64
+      const ctx = canvas.getContext('2d')!
+      ctx.fillStyle = `#${color.toString(16).padStart(6, '0')}`
+      ctx.font = 'bold 48px Arial'
+      ctx.textAlign = 'center'
+      ctx.textBaseline = 'middle'
+      ctx.fillText(text, 32, 32)
+      const texture = new THREE.CanvasTexture(canvas)
+      const material = new THREE.SpriteMaterial({ map: texture })
+      const sprite = new THREE.Sprite(material)
+      sprite.position.copy(pos)
+      sprite.scale.set(2, 2, 1)
+      scene.add(sprite)
+    }
+    createAxisLabel('X', 0xff0000, new THREE.Vector3(11, 0, 0))
+    createAxisLabel('Y', 0x00ff00, new THREE.Vector3(0, 11, 0))
+    createAxisLabel('Z', 0x0000ff, new THREE.Vector3(0, 0, 11))
+    
     // Animation loop
     const animate = () => {
       requestAnimationFrame(animate)
@@ -377,10 +558,10 @@ export default function PlanogramViewport() {
       sceneRef.current?.add(mesh)
       shelfMeshesRef.current.set(shelf.id, mesh)
     })
-  }, [shelves, activeShelfId, createShelfMesh, allShelfPlanograms])
+  }, [shelves, activeShelfId, createShelfMesh, allShelfPlanograms, hoveredSkuId])
   
-  // Click handler for shelf selection
-  const handleClick = useCallback((event: React.MouseEvent) => {
+  // Click handler for shelf selection and face selection
+  const handleClick = useCallback(async (event: React.MouseEvent) => {
     if (!containerRef.current || !cameraRef.current || !sceneRef.current) return
     
     const rect = containerRef.current.getBoundingClientRect()
@@ -389,6 +570,43 @@ export default function PlanogramViewport() {
     
     raycasterRef.current.setFromCamera(mouseRef.current, cameraRef.current)
     
+    // First check for face selector clicks (if in face select mode)
+    if (faceSelectMode && activeShelfId) {
+      const faceMeshes: THREE.Mesh[] = []
+      sceneRef.current.traverse(obj => {
+        if (obj instanceof THREE.Mesh && obj.userData.isFaceSelector) {
+          faceMeshes.push(obj)
+        }
+      })
+      
+      const faceIntersects = raycasterRef.current.intersectObjects(faceMeshes)
+      if (faceIntersects.length > 0) {
+        const faceDirection = faceIntersects[0].object.userData.faceDirection as SlotFacing
+        if (faceDirection && activeShelfPlanogram) {
+          // Toggle face in the array
+          const currentFacings = activeShelfPlanogram.slotFacings || []
+          let newFacings: SlotFacing[]
+          if (currentFacings.includes(faceDirection)) {
+            // Remove face (but keep at least one)
+            newFacings = currentFacings.filter(f => f !== faceDirection)
+            if (newFacings.length === 0) {
+              // Can't remove the last one - keep it
+              return
+            }
+          } else {
+            // Add face
+            newFacings = [...currentFacings, faceDirection]
+          }
+          await saveShelfPlanogram(activeShelfId, {
+            ...activeShelfPlanogram,
+            slotFacings: newFacings,
+          })
+          return
+        }
+      }
+    }
+    
+    // Then check for shelf clicks
     const meshes: THREE.Mesh[] = []
     shelfMeshesRef.current.forEach(group => {
       group.traverse(obj => {
@@ -402,11 +620,17 @@ export default function PlanogramViewport() {
     
     if (intersects.length > 0) {
       const shelfId = intersects[0].object.userData.shelfId
-      setActiveShelfId(shelfId === activeShelfId ? null : shelfId)
+      if (shelfId === activeShelfId) {
+        // Clicking same shelf - don't deselect, maybe toggle face mode
+      } else {
+        setActiveShelfId(shelfId)
+        setFaceSelectMode(false)
+      }
     } else {
       setActiveShelfId(null)
+      setFaceSelectMode(false)
     }
-  }, [activeShelfId, setActiveShelfId])
+  }, [activeShelfId, setActiveShelfId, faceSelectMode, activeShelfPlanogram, saveShelfPlanogram])
   
   // Handle drag over
   const handleDragOver = (e: React.DragEvent) => {
@@ -424,12 +648,28 @@ export default function PlanogramViewport() {
       if (data.type === 'sku-items' && activeShelfId) {
         const shelf = objects.find(o => o.id === activeShelfId)
         if (shelf) {
+          // Use random distribution when dropping multiple items
+          const fillOrder = data.skuItemIds.length > 1 ? 'random' : 'sequential'
           await placeSkusOnShelf(
             activeShelfId,
             data.skuItemIds,
             { type: 'shelf' },
-            shelf.scale?.x || 2.0
+            shelf.scale?.x || 2.0,
+            { fillOrder }
           )
+          
+          // Force reload shelf planograms after placement
+          if (activePlanogram?.id) {
+            const res = await fetch(`${API_BASE}/api/planogram/planograms/${activePlanogram.id}/shelves/${activeShelfId}`)
+            const updatedData = await res.json()
+            if (updatedData) {
+              setAllShelfPlanograms(prev => {
+                const next = new Map(prev)
+                next.set(activeShelfId, updatedData)
+                return next
+              })
+            }
+          }
         }
       }
     } catch (err) {
@@ -437,10 +677,11 @@ export default function PlanogramViewport() {
     }
   }
   
-  // Handle mouse move for slot hover tooltip
+  // Handle mouse move for slot hover tooltip and face hover
   const handleMouseMove = useCallback((e: React.MouseEvent) => {
-    if (!containerRef.current || !cameraRef.current || !sceneRef.current || !activeCatalog) {
+    if (!containerRef.current || !cameraRef.current || !sceneRef.current) {
       setTooltipSku(null)
+      setHoveredFace(null)
       return
     }
     
@@ -449,6 +690,32 @@ export default function PlanogramViewport() {
     mouseRef.current.y = -((e.clientY - rect.top) / rect.height) * 2 + 1
     
     raycasterRef.current.setFromCamera(mouseRef.current, cameraRef.current)
+    
+    // Check for face selector hover (if in face select mode)
+    if (faceSelectMode) {
+      const faceMeshes: THREE.Mesh[] = []
+      sceneRef.current.traverse(obj => {
+        if (obj instanceof THREE.Mesh && obj.userData.isFaceSelector) {
+          faceMeshes.push(obj)
+        }
+      })
+      
+      const faceIntersects = raycasterRef.current.intersectObjects(faceMeshes)
+      if (faceIntersects.length > 0) {
+        const faceDirection = faceIntersects[0].object.userData.faceDirection as SlotFacing
+        setHoveredFace(faceDirection)
+      } else {
+        setHoveredFace(null)
+      }
+    } else {
+      setHoveredFace(null)
+    }
+    
+    // Check for slot hover (for tooltip)
+    if (!activeCatalog) {
+      setTooltipSku(null)
+      return
+    }
     
     // Get all slot meshes
     const slotMeshes: THREE.Mesh[] = []
@@ -473,7 +740,7 @@ export default function PlanogramViewport() {
     }
     
     setTooltipSku(null)
-  }, [activeCatalog])
+  }, [activeCatalog, faceSelectMode])
   
   return (
     <div 
@@ -492,10 +759,33 @@ export default function PlanogramViewport() {
         </div>
       )}
       
-      {/* Active shelf indicator */}
+      {/* Active shelf controls */}
       {activeShelfId && (
-        <div className="absolute bottom-4 left-1/2 -translate-x-1/2 px-4 py-2 bg-amber-600/90 rounded-lg text-white text-sm pointer-events-none">
-          Drag SKUs from the library onto the shelf grid
+        <div className="absolute bottom-4 left-1/2 -translate-x-1/2 flex items-center gap-3">
+          <div className="px-4 py-2 bg-amber-600/90 rounded-lg text-white text-sm pointer-events-none">
+            Drag SKUs from the library onto the shelf grid
+          </div>
+          <button
+            onClick={(e) => {
+              e.stopPropagation()
+              setFaceSelectMode(!faceSelectMode)
+            }}
+            className={`px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
+              faceSelectMode 
+                ? 'bg-blue-600 text-white' 
+                : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+            }`}
+            title="Click a shelf face to set slot direction"
+          >
+            {faceSelectMode ? 'Click a face...' : 'Change Slot Side'}
+          </button>
+        </div>
+      )}
+      
+      {/* Face select mode instructions */}
+      {faceSelectMode && activeShelfId && (
+        <div className="absolute top-4 left-1/2 -translate-x-1/2 px-4 py-2 bg-blue-600/90 rounded-lg text-white text-sm pointer-events-none">
+          Click a shelf face to set the slot direction (green = current)
         </div>
       )}
       

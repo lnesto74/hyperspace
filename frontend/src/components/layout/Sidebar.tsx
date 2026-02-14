@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Box, Package, Radar, Settings, Hexagon, FileUp, Target, Map, Play, X, Server } from 'lucide-react'
+import { Box, Package, Radar, Settings, Hexagon, FileUp, Target, Map, Play, X, Server, Monitor } from 'lucide-react'
 import { SidebarTab } from './AppShell'
 import VenuePanel from '../venue/VenuePanel'
 import VenueDwgPanel from '../venue/VenueDwgPanel'
@@ -16,6 +16,7 @@ interface SidebarProps {
   onOpenDwgImporter?: () => void
   onOpenLidarPlanner?: () => void
   onOpenEdgeCommissioning?: () => void
+  onOpenDoohAnalytics?: () => void
 }
 
 const tabs: { id: SidebarTab; icon: typeof Box; label: string }[] = [
@@ -26,7 +27,7 @@ const tabs: { id: SidebarTab; icon: typeof Box; label: string }[] = [
   { id: 'regions', icon: Hexagon, label: 'Regions' },
 ]
 
-export default function Sidebar({ activeTab, onTabChange, onOpenDwgImporter, onOpenLidarPlanner, onOpenEdgeCommissioning }: SidebarProps) {
+export default function Sidebar({ activeTab, onTabChange, onOpenDwgImporter, onOpenLidarPlanner, onOpenEdgeCommissioning, onOpenDoohAnalytics }: SidebarProps) {
   const { venue } = useVenue()
   const [showWhiteLabel, setShowWhiteLabel] = useState(false)
   const [showSimulator, setShowSimulator] = useState(false)
@@ -108,6 +109,15 @@ export default function Sidebar({ activeTab, onTabChange, onOpenDwgImporter, onO
               title="Edge Commissioning Portal"
             >
               <Server className="w-4 h-4" />
+            </button>
+          )}
+          {onOpenDoohAnalytics && (
+            <button 
+              onClick={onOpenDoohAnalytics}
+              className="text-gray-400 hover:text-purple-400 transition-colors"
+              title="DOOH Analytics"
+            >
+              <Monitor className="w-4 h-4" />
             </button>
           )}
           <button 

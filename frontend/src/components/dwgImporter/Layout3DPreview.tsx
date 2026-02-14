@@ -148,7 +148,10 @@ export default function Layout3DPreview({ layoutVersionId, lidarInstances = [], 
 
   // Save current camera view
   const saveCameraView = useCallback(() => {
-    if (!cameraRef.current || !controlsRef.current) return
+    if (!cameraRef.current || !controlsRef.current) {
+      console.error('Cannot save view: camera or controls not initialized')
+      return
+    }
     
     const viewData = {
       position: {
@@ -162,19 +165,34 @@ export default function Layout3DPreview({ layoutVersionId, lidarInstances = [], 
         z: controlsRef.current.target.z
       }
     }
-    localStorage.setItem(`dwg-camera-view-${layoutVersionId}`, JSON.stringify(viewData))
+    
+    const storageKey = `dwg-camera-view-${layoutVersionId}`
+    console.log('Saving camera view to:', storageKey)
+    console.log('Position:', viewData.position)
+    console.log('Target:', viewData.target)
+    
+    localStorage.setItem(storageKey, JSON.stringify(viewData))
+    
+    // Verify it was saved
+    const verification = localStorage.getItem(storageKey)
+    console.log('Verification - saved data:', verification ? 'OK' : 'FAILED')
+    
     setHasSavedView(true)
     setJustSaved(true)
-    console.log('Camera view saved')
     // Reset justSaved after 1.5 seconds
     setTimeout(() => setJustSaved(false), 1500)
   }, [layoutVersionId])
 
   // Load saved camera view
   const loadSavedCameraView = useCallback(() => {
-    if (!cameraRef.current || !controlsRef.current) return false
+    if (!cameraRef.current || !controlsRef.current) {
+      console.log('Cannot load view: camera or controls not initialized')
+      return false
+    }
     
-    const saved = localStorage.getItem(`dwg-camera-view-${layoutVersionId}`)
+    const storageKey = `dwg-camera-view-${layoutVersionId}`
+    const saved = localStorage.getItem(storageKey)
+    console.log('Loading camera view from:', storageKey, 'found:', !!saved)
     if (!saved) return false
     
     try {
@@ -817,7 +835,7 @@ export default function Layout3DPreview({ layoutVersionId, lidarInstances = [], 
     console.log('layoutData:', !!layoutData)
     console.log('lidarInstances:', lidarInstances.length)
     
-    if (!lidarGroupRef.current || !layoutData) return
+    if (!lidarGroupRef.current) return
     
     const group = lidarGroupRef.current
     
@@ -845,14 +863,22 @@ export default function Layout3DPreview({ layoutVersionId, lidarInstances = [], 
       return
     }
     
-    const { bounds, unit_scale_to_m } = layoutData
-    // Apply scaleCorrection to match LiDAR coordinate system
-    const effectiveScale = unit_scale_to_m * scaleCorrection
-    const centerX = (bounds.minX + bounds.maxX) / 2 * effectiveScale
-    const centerZ = (bounds.minY + bounds.maxY) / 2 * effectiveScale
+    // Calculate center from layout data OR from LiDAR instances themselves
+    let centerX = 0, centerZ = 0
+    if (layoutData) {
+      const { bounds, unit_scale_to_m } = layoutData
+      const effectiveScale = unit_scale_to_m * scaleCorrection
+      centerX = (bounds.minX + bounds.maxX) / 2 * effectiveScale
+      centerZ = (bounds.minY + bounds.maxY) / 2 * effectiveScale
+    } else {
+      // Fallback: calculate center from LiDAR positions
+      const lidarXs = lidarInstances.map(i => i.x_m)
+      const lidarZs = lidarInstances.map(i => i.z_m)
+      centerX = (Math.min(...lidarXs) + Math.max(...lidarXs)) / 2
+      centerZ = (Math.min(...lidarZs) + Math.max(...lidarZs)) / 2
+      console.log('Using LiDAR-based center:', centerX.toFixed(2), centerZ.toFixed(2))
+    }
     
-    console.log('Layout bounds:', bounds)
-    console.log('unit_scale_to_m:', unit_scale_to_m, 'scaleCorrection:', scaleCorrection, 'effectiveScale:', effectiveScale)
     console.log('Center offset:', centerX, centerZ)
     
     // Create reusable geometries for performance
@@ -1001,6 +1027,24 @@ export default function Layout3DPreview({ layoutVersionId, lidarInstances = [], 
     }
     
     console.log('Added', group.children.length, 'objects to LiDAR group')
+    
+    // Auto-position camera to view LiDARs if no layoutData
+    if (!layoutData && cameraRef.current && controlsRef.current && lidarInstances.length > 0) {
+      const lidarXs = lidarInstances.map(i => i.x_m - centerX)
+      const lidarZs = lidarInstances.map(i => i.z_m - centerZ)
+      const minX = Math.min(...lidarXs)
+      const maxX = Math.max(...lidarXs)
+      const minZ = Math.min(...lidarZs)
+      const maxZ = Math.max(...lidarZs)
+      const contentWidth = maxX - minX
+      const contentDepth = maxZ - minZ
+      const maxSize = Math.max(contentWidth, contentDepth, 20)
+      
+      cameraRef.current.position.set(maxSize * 0.8, maxSize * 0.6, maxSize * 0.8)
+      controlsRef.current.target.set(0, 0, 0)
+      controlsRef.current.update()
+      console.log('Repositioned camera for LiDAR view, content size:', maxSize.toFixed(1), 'm')
+    }
     
   }, [lidarInstances, lidarModels, layoutData, scaleCorrection, simulationResult])
 

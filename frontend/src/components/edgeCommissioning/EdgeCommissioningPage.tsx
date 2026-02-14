@@ -3,7 +3,7 @@ import {
   Server, Radio, Wifi, WifiOff, RefreshCw, Search, Upload, 
   Check, X, AlertCircle, Clock, Link2, Unlink, Download, Wand2, Camera, Pencil
 } from 'lucide-react'
-import { useEdgeCommissioning, EdgeDevice, EdgeLidar, EdgePlacement, EdgePairing, RoiBounds } from '../../context/EdgeCommissioningContext'
+import { useEdgeCommissioning, EdgeDevice, EdgeLidar, EdgePlacement, EdgePairing, RoiBounds, DwgLayout, DwgFixture } from '../../context/EdgeCommissioningContext'
 import { useVenue } from '../../context/VenueContext'
 import LidarCommissioningWizard from './LidarCommissioningWizard'
 import PointCloudViewer from './PointCloudViewer'
@@ -18,6 +18,7 @@ export default function EdgeCommissioningPage({ onClose }: { onClose: () => void
     edgeStatuses,
     deployHistory,
     roiBounds,
+    dwgLayout,
     isScanning,
     isScanningLidars,
     isLoadingInventory,
@@ -46,6 +47,7 @@ export default function EdgeCommissioningPage({ onClose }: { onClose: () => void
   const [pointCloudLidar, setPointCloudLidar] = useState<{ ip: string; tailscaleIp: string } | null>(null)
   const [editingEdge, setEditingEdge] = useState<EdgeDevice | null>(null)
   const [editName, setEditName] = useState('')
+  const [hoveredPlacementIndex, setHoveredPlacementIndex] = useState<number | null>(null)
 
   // Load data when venue changes
   useEffect(() => {
@@ -66,11 +68,19 @@ export default function EdgeCommissioningPage({ onClose }: { onClose: () => void
   // Get merged LiDAR list (commissioned + scanned)
   const mergedLidars = getMergedLidars()
 
-  // Fetch inventory when edge is selected
+  // Fetch inventory when edge is selected + auto-refresh every 30 seconds
   useEffect(() => {
     if (selectedEdgeId) {
       fetchEdgeInventory(selectedEdgeId)
       fetchEdgeStatus(selectedEdgeId)
+      
+      // Auto-refresh inventory every 30 seconds to keep LiDAR status current
+      const pollInterval = setInterval(() => {
+        fetchEdgeInventory(selectedEdgeId)
+        fetchEdgeStatus(selectedEdgeId)
+      }, 30000)
+      
+      return () => clearInterval(pollInterval)
     }
   }, [selectedEdgeId, fetchEdgeInventory, fetchEdgeStatus])
 
@@ -369,31 +379,39 @@ export default function EdgeCommissioningPage({ onClose }: { onClose: () => void
                   <p className="text-xs mt-1">Add placements in LiDAR Planner first</p>
                 </div>
               ) : (
-                <div className="space-y-4">
-                  {/* ROI Wireframe Visualization */}
+                <div className="flex flex-col h-full">
+                  {/* ROI Wireframe Visualization - Sticky */}
                   {roiBounds && (
-                    <RoiWireframe 
-                      placements={placements} 
-                      roiBounds={roiBounds}
-                      pairings={pairings}
-                      mergedLidars={mergedLidars}
-                    />
+                    <div className="sticky top-0 z-10 bg-gray-900 pb-3">
+                      <RoiWireframe 
+                        placements={placements} 
+                        roiBounds={roiBounds}
+                        pairings={pairings}
+                        mergedLidars={mergedLidars}
+                        hoveredIndex={hoveredPlacementIndex}
+                        dwgLayout={dwgLayout}
+                      />
+                    </div>
                   )}
                   
-                  {/* Placement Cards */}
-                  <div className="grid grid-cols-2 gap-3">
-                    {placements.map(placement => (
-                      <PlacementCard
-                        key={placement.id}
-                        placement={placement}
-                        pairing={getPairingForPlacement(placement.id)}
-                        isDragOver={draggedLidar !== null}
-                        onDrop={() => handleDrop(placement)}
-                        onUnpair={() => venue?.id && unpairPlacement(venue.id, placement.id)}
-                        roiBounds={roiBounds}
-                        mergedLidars={mergedLidars}
-                      />
-                    ))}
+                  {/* Placement Cards - Scrollable */}
+                  <div className="flex-1 overflow-y-auto max-h-[400px] pr-1">
+                    <div className="grid grid-cols-2 gap-3">
+                      {placements.map((placement, index) => (
+                        <PlacementCard
+                          key={placement.id}
+                          placement={placement}
+                          pairing={getPairingForPlacement(placement.id)}
+                          isDragOver={draggedLidar !== null}
+                          onDrop={() => handleDrop(placement)}
+                          onUnpair={() => venue?.id && unpairPlacement(venue.id, placement.id)}
+                          roiBounds={roiBounds}
+                          mergedLidars={mergedLidars}
+                          index={index + 1}
+                          onHover={(hovering) => setHoveredPlacementIndex(hovering ? index + 1 : null)}
+                        />
+                      ))}
+                    </div>
                   </div>
                 </div>
               )}
@@ -580,6 +598,8 @@ function PlacementCard({
   onUnpair,
   roiBounds,
   mergedLidars,
+  index,
+  onHover,
 }: {
   placement: EdgePlacement
   pairing?: EdgePairing
@@ -588,6 +608,8 @@ function PlacementCard({
   onUnpair: () => void
   roiBounds: RoiBounds | null
   mergedLidars: EdgeLidar[]
+  index: number
+  onHover: (hovering: boolean) => void
 }) {
   const [isOver, setIsOver] = useState(false)
 
@@ -637,8 +659,15 @@ function PlacementCard({
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
-      className={cardClasses}
+      onMouseEnter={() => onHover(true)}
+      onMouseLeave={() => onHover(false)}
+      className={`${cardClasses} relative`}
     >
+      {/* Index number in bottom right */}
+      <span className="absolute bottom-2 right-2 text-2xl font-bold text-gray-600/50">
+        {index}
+      </span>
+      
       <div className="flex items-center justify-between mb-2">
         <span className="text-xs font-mono text-gray-400">
           {placement.id.substring(0, 8)}
@@ -704,20 +733,29 @@ function RoiWireframe({
   roiBounds,
   pairings,
   mergedLidars,
+  hoveredIndex,
+  dwgLayout,
 }: {
   placements: EdgePlacement[]
   roiBounds: RoiBounds
   pairings: EdgePairing[]
   mergedLidars: EdgeLidar[]
+  hoveredIndex: number | null
+  dwgLayout: DwgLayout | null
 }) {
   const width = roiBounds.maxX - roiBounds.minX
   const height = roiBounds.maxZ - roiBounds.minZ
   
-  // SVG dimensions and scaling
-  const svgWidth = 280
-  const svgHeight = (height / width) * svgWidth
-  const padding = 20
-  const scale = (svgWidth - padding * 2) / width
+  // Calculate max lidar range to determine extra padding needed for circles
+  const maxRange = placements.length > 0 ? Math.max(...placements.map(p => p.range)) : 0
+  
+  // SVG dimensions and scaling - add extra padding for lidar coverage circles
+  const baseWidth = 330
+  const scale = baseWidth / width
+  const circleOverhang = maxRange * scale * 0.9 // How much circles extend beyond ROI
+  const padding = Math.max(60, circleOverhang + 10) // Ensure padding covers full circles
+  const svgWidth = baseWidth + padding * 2
+  const svgHeight = (height * scale) + padding * 2
 
   // Transform DWG coordinates to SVG coordinates
   const toSvgX = (x: number) => padding + (x - roiBounds.minX) * scale
@@ -735,6 +773,20 @@ function RoiWireframe({
         height={svgHeight} 
         className="bg-gray-900 rounded"
       >
+        {/* Animation keyframes */}
+        <defs>
+          <style>{`
+            @keyframes pulse {
+              0%, 100% { opacity: 1; }
+              50% { opacity: 0.6; }
+            }
+            @keyframes ping {
+              0% { transform: scale(1); opacity: 0.8; }
+              75%, 100% { transform: scale(1.3); opacity: 0; }
+            }
+          `}</style>
+        </defs>
+        
         {/* ROI boundary */}
         <rect
           x={padding}
@@ -775,6 +827,62 @@ function RoiWireframe({
           />
         ))}
         
+        {/* DWG Floor Plan Fixtures */}
+        {dwgLayout && dwgLayout.fixtures.map((fixture) => {
+          // Convert DWG coordinates to SVG coordinates
+          // DWG uses Y-up, we need to flip and scale
+          const unitScale = dwgLayout.unitScaleToM || 0.001
+          
+          if (fixture.footprint.kind === 'poly' && fixture.footprint.points.length > 2) {
+            // Render polygon fixtures
+            const points = fixture.footprint.points.map(pt => {
+              const xM = pt.x * unitScale
+              const yM = pt.y * unitScale // DWG Y maps to our Z
+              const svgX = toSvgX(xM)
+              const svgY = toSvgY(yM)
+              return `${svgX},${svgY}`
+            }).join(' ')
+            
+            return (
+              <polygon
+                key={fixture.id}
+                points={points}
+                fill="#1e293b"
+                stroke="#475569"
+                strokeWidth="0.5"
+                opacity="0.8"
+              />
+            )
+          } else {
+            // Render rectangular fixtures
+            const xM = fixture.pose2d.x * unitScale
+            const yM = fixture.pose2d.y * unitScale
+            const wM = fixture.footprint.w * unitScale
+            const dM = fixture.footprint.d * unitScale
+            
+            const cx = toSvgX(xM)
+            const cy = toSvgY(yM)
+            const w = wM * scale
+            const h = dM * scale
+            const rotation = -fixture.pose2d.rot_deg
+            
+            return (
+              <g key={fixture.id} transform={`translate(${cx}, ${cy}) rotate(${rotation})`}>
+                <rect
+                  x={-w / 2}
+                  y={-h / 2}
+                  width={w}
+                  height={h}
+                  fill="#1e293b"
+                  stroke="#475569"
+                  strokeWidth="0.5"
+                  opacity="0.8"
+                />
+              </g>
+            )
+          }
+        })}
+        
         {/* LiDAR positions */}
         {placements.map((p, idx) => {
           const pairing = pairings.find(pair => pair.placementId === p.id)
@@ -784,6 +892,7 @@ function RoiWireframe({
             ? mergedLidars.find(l => l.lidarId === pairing.lidarId || l.ip === pairing.lidarIp)
             : null
           const isOnline = pairedLidar?.reachable ?? false
+          const isHovered = hoveredIndex === idx + 1
           
           const cx = toSvgX(p.position.x)
           const cy = toSvgY(p.position.z)
@@ -823,22 +932,44 @@ function RoiWireframe({
                 r={p.range * scale * 0.9}
                 fill={fillColor}
                 stroke={strokeColor}
-                strokeWidth="1"
-                strokeOpacity="0.5"
+                strokeWidth={isHovered ? "3" : "1"}
+                strokeOpacity={isHovered ? "1" : "0.5"}
+                style={isHovered ? {
+                  animation: 'pulse 1s ease-in-out infinite',
+                } : undefined}
               />
+              {/* Pulse ring when hovered */}
+              {isHovered && (
+                <circle
+                  cx={cx}
+                  cy={cy}
+                  r={p.range * scale * 0.9}
+                  fill="none"
+                  stroke={strokeColor}
+                  strokeWidth="2"
+                  style={{
+                    animation: 'ping 1s cubic-bezier(0, 0, 0.2, 1) infinite',
+                    transformOrigin: `${cx}px ${cy}px`,
+                  }}
+                />
+              )}
               {/* LiDAR marker */}
               <circle
                 cx={cx}
                 cy={cy}
-                r="5"
+                r={isHovered ? "7" : "5"}
                 fill={markerFill}
+                style={isHovered ? {
+                  filter: 'drop-shadow(0 0 4px ' + markerFill + ')',
+                } : undefined}
               />
               {/* Index label */}
               <text
                 x={cx}
                 y={cy + 3}
                 fill="white"
-                fontSize="7"
+                fontSize={isHovered ? "9" : "7"}
+                fontWeight={isHovered ? "bold" : "normal"}
                 textAnchor="middle"
               >
                 {idx + 1}

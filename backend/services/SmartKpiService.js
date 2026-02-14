@@ -557,14 +557,15 @@ export class SmartKpiService {
         vertices: roi.vertices,
         color: roi.color,
         opacity: roi.opacity,
+        metadata: roi.metadata || null,
         createdAt: now,
         updatedAt: now,
       };
 
       try {
         const stmt = this.db.prepare(`
-          INSERT INTO regions_of_interest (id, venue_id, dwg_layout_id, name, vertices, color, opacity, created_at, updated_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+          INSERT INTO regions_of_interest (id, venue_id, dwg_layout_id, name, vertices, color, opacity, metadata_json, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `);
         stmt.run(
           roiData.id,
@@ -574,6 +575,7 @@ export class SmartKpiService {
           JSON.stringify(roiData.vertices),
           roiData.color,
           roiData.opacity,
+          roiData.metadata ? JSON.stringify(roiData.metadata) : null,
           roiData.createdAt,
           roiData.updatedAt
         );

@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { Layers, Settings, Wand2, Trash2, Minus, Plus, Maximize2, GripVertical } from 'lucide-react'
-import { usePlanogram, SkuItem, SlotData, LevelData } from '../../context/PlanogramContext'
+import { usePlanogram, SkuItem, SlotData, LevelData, SlotFacing } from '../../context/PlanogramContext'
 import { useVenue } from '../../context/VenueContext'
 
 // Detailed tooltip component
@@ -62,6 +62,7 @@ export default function ShelfInspectorPanel() {
     saveShelfPlanogram,
     autoFillShelf,
     activeCatalog,
+    hoveredSkuId,
   } = usePlanogram()
   
   const { objects } = useVenue()
@@ -79,7 +80,16 @@ export default function ShelfInspectorPanel() {
   // Get selected shelf object
   const selectedShelf = objects.find(o => o.id === activeShelfId)
   const shelfWidth = selectedShelf?.scale?.x || 2.0
-  const slotsPerLevel = Math.floor(shelfWidth / slotWidthM)
+  const shelfDepth = selectedShelf?.scale?.z || 0.5
+  
+  // Determine effective slot facings (supports multiple)
+  const currentFacings = activeShelfPlanogram?.slotFacings || []
+  const autoFacing: SlotFacing = shelfWidth >= shelfDepth ? 'front' : 'left'
+  const effectiveFacings = currentFacings.length > 0 ? currentFacings : [autoFacing]
+  // For slot count display, use the first facing's span
+  const firstFacing = effectiveFacings[0]
+  const effectiveSpan = (firstFacing === 'front' || firstFacing === 'back') ? shelfWidth : shelfDepth
+  const slotsPerLevel = Math.floor(effectiveSpan / slotWidthM)
   
   // Update local state when shelf planogram changes
   useEffect(() => {
@@ -317,8 +327,57 @@ export default function ShelfInspectorPanel() {
           </div>
         </div>
         
+        <div>
+          <label className="text-[10px] text-gray-500 block mb-1">Slot Sides (click to toggle)</label>
+          <div className="flex gap-1">
+            {(['front', 'back', 'left', 'right'] as const).map(face => {
+              const isSelected = effectiveFacings.includes(face)
+              const isAuto = face === autoFacing && currentFacings.length === 0
+              return (
+                <button
+                  key={face}
+                  onClick={async () => {
+                    if (activeShelfId) {
+                      let newFacings: SlotFacing[]
+                      if (currentFacings.includes(face)) {
+                        // Remove face (but keep at least one)
+                        newFacings = currentFacings.filter(f => f !== face)
+                        if (newFacings.length === 0) return // Can't remove last one
+                      } else {
+                        // Add face
+                        newFacings = currentFacings.length > 0 
+                          ? [...currentFacings, face]
+                          : [face] // First explicit selection
+                      }
+                      await saveShelfPlanogram(activeShelfId, {
+                        ...activeShelfPlanogram,
+                        slotFacings: newFacings,
+                      })
+                    }
+                  }}
+                  className={`flex-1 px-1.5 py-1 text-[10px] rounded transition-colors ${
+                    isSelected
+                      ? 'bg-green-600 text-white'
+                      : isAuto
+                        ? 'bg-blue-600/30 text-blue-300 border border-blue-500/50'
+                        : 'bg-gray-700 text-gray-400 hover:bg-gray-600'
+                  }`}
+                  title={isAuto ? `${face} (auto-detected)` : isSelected ? `${face} (selected)` : `Click to add ${face}`}
+                >
+                  {face.charAt(0).toUpperCase() + face.slice(1)}
+                </button>
+              )
+            })}
+          </div>
+          <div className="text-[9px] text-gray-600 mt-1">
+            {currentFacings.length > 0 
+              ? `Selected: ${effectiveFacings.join(', ')}` 
+              : `Auto: ${autoFacing} (longest side)`}
+          </div>
+        </div>
+        
         <div className="flex items-center justify-between text-[10px] text-gray-500">
-          <span>Shelf: {shelfWidth.toFixed(2)}m × {slotsPerLevel} slots/level</span>
+          <span>Span: {effectiveSpan.toFixed(2)}m × {slotsPerLevel} slots/level</span>
           <button
             onClick={handleSaveSettings}
             className="px-2 py-1 bg-blue-600 hover:bg-blue-700 rounded text-white"
@@ -417,6 +476,7 @@ export default function ShelfInspectorPanel() {
                     const sku = getSkuForSlot(slot?.skuItemId || null)
                     const isDragSource = dragSource?.levelIndex === levelIndex && dragSource?.slotIndex === slotIndex
                     const isDragOver = dragOver?.levelIndex === levelIndex && dragOver?.slotIndex === slotIndex
+                    const isHoveredSku = slot?.skuItemId === hoveredSkuId && hoveredSkuId !== null
                     
                     return (
                       <div
@@ -442,13 +502,15 @@ export default function ShelfInspectorPanel() {
                         className={`
                           flex-1 min-w-[20px] h-10 rounded text-[8px] flex items-center justify-center
                           transition-all cursor-pointer relative
-                          ${isDragSource 
-                            ? 'opacity-50 border-2 border-dashed border-amber-400' 
-                            : isDragOver 
-                              ? 'bg-blue-600/40 border-2 border-blue-400 scale-105' 
-                              : sku 
-                                ? 'bg-amber-600/30 border border-amber-600/50 text-amber-200 hover:bg-amber-600/40' 
-                                : 'bg-gray-700/30 border border-gray-700 text-gray-600 hover:bg-gray-600/30'
+                          ${isHoveredSku
+                            ? 'bg-orange-500/50 border-2 border-orange-400 ring-2 ring-orange-400/40 scale-105 z-10'
+                            : isDragSource 
+                              ? 'opacity-50 border-2 border-dashed border-amber-400' 
+                              : isDragOver 
+                                ? 'bg-blue-600/40 border-2 border-blue-400 scale-105' 
+                                : sku 
+                                  ? 'bg-amber-600/30 border border-amber-600/50 text-amber-200 hover:bg-amber-600/40' 
+                                  : 'bg-gray-700/30 border border-gray-700 text-gray-600 hover:bg-gray-600/30'
                           }
                           ${sku ? 'cursor-grab active:cursor-grabbing' : ''}
                         `}

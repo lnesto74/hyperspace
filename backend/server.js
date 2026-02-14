@@ -3,6 +3,9 @@ import express from 'express';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
 import cors from 'cors';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import fs from 'fs';
 
 import { initDatabase } from './database/schema.js';
 import { TailscaleService } from './services/TailscaleService.js';
@@ -26,6 +29,9 @@ import createPlanogramRoutes from './routes/planogram.js';
 import createDwgImportRoutes from './routes/dwgImport.js';
 import lidarPlannerRoutes from './routes/lidarPlanner.js';
 import edgeCommissioningRoutes, { setupPointCloudWebSocket } from './routes/edgeCommissioning.js';
+import doohRoutes from './routes/dooh.js';
+import doohAttributionRoutes from './routes/doohAttribution.js';
+import createBusinessReportingRoutes from './routes/businessReporting.js';
 
 const PORT = process.env.PORT || 3001;
 const MOCK_LIDAR = process.env.MOCK_LIDAR === 'true';
@@ -35,6 +41,11 @@ const MQTT_ENABLED = process.env.MQTT_ENABLED === 'true'; // Disabled by default
 const app = express();
 app.use(cors());
 app.use(express.json());
+
+// Serve static files from uploads directory (for DOOH videos)
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
 
 // Initialize HTTP server and Socket.IO
 const httpServer = createServer(app);
@@ -154,12 +165,6 @@ trackingNamespace.on('connection', (socket) => {
 });
 
 // Serve static model files (for GLTF textures)
-import path from 'path';
-import fs from 'fs';
-import { fileURLToPath } from 'url';
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
 // Custom middleware to handle texture paths - fallback if textures/ subfolder doesn't exist
 app.use('/api/models-static', (req, res, next) => {
   const requestedPath = path.join(__dirname, 'models', req.path);
@@ -199,6 +204,15 @@ app.use('/api/lidar', lidarPlannerRoutes);
 
 // Edge Commissioning Portal routes (NEW - separate from legacy LiDAR routes)
 app.use('/api/edge-commissioning', edgeCommissioningRoutes);
+
+// DOOH Analytics routes (feature-flagged: FEATURE_DOOH_KPIS=true)
+app.use('/api/dooh', doohRoutes);
+
+// PEBLE™ DOOH Attribution routes (feature-flagged: FEATURE_DOOH_ATTRIBUTION=true)
+app.use('/api/dooh-attribution', doohAttributionRoutes);
+
+// Business Reporting routes (feature-flagged: FEATURE_BUSINESS_REPORTING=true)
+app.use('/api/reporting', createBusinessReportingRoutes(db, trajectoryStorage, trackAggregator));
 
 // Serve uploaded logos
 app.use('/api/uploads/logos', express.static(path.join(__dirname, 'uploads', 'logos')));

@@ -13,8 +13,10 @@ export function initDatabase() {
 
   const db = new Database(DB_PATH);
   
-  // Enable foreign keys
-  db.pragma('foreign_keys = ON');
+  // Disable foreign keys temporarily to debug persistence issue
+  db.pragma('foreign_keys = OFF');
+  db.pragma('journal_mode = DELETE');
+  db.pragma('synchronous = FULL');
 
   // Create tables
   db.exec(`
@@ -92,6 +94,7 @@ export function initDatabase() {
       vertices TEXT NOT NULL,
       color TEXT NOT NULL DEFAULT '#f59e0b',
       opacity REAL NOT NULL DEFAULT 0.5,
+      metadata_json TEXT DEFAULT NULL,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now')),
       FOREIGN KEY (venue_id) REFERENCES venues(id) ON DELETE CASCADE,
@@ -155,6 +158,7 @@ export function initDatabase() {
       num_levels INTEGER NOT NULL DEFAULT 4,
       slot_width_m REAL NOT NULL DEFAULT 0.1,
       level_height_m REAL,
+      slot_facings TEXT DEFAULT NULL,
       slots_json TEXT NOT NULL DEFAULT '{"levels":[]}',
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -340,6 +344,292 @@ export function initDatabase() {
       ('ouster-os1-32', 'Ouster OS1-32', 360, 45, 120, 1, '{"manufacturer":"Ouster","type":"spinning","channels":32}'),
       ('velodyne-vlp16', 'Velodyne VLP-16', 360, 30, 100, 1, '{"manufacturer":"Velodyne","type":"spinning","channels":16}'),
       ('hesai-xt32', 'Hesai XT32', 360, 31, 120, 1, '{"manufacturer":"Hesai","type":"spinning","channels":32}');
+
+    -- ============================================
+    -- DOOH (Digital Out-Of-Home) Analytics Tables
+    -- Feature flag: FEATURE_DOOH_KPIS
+    -- ============================================
+
+    -- DOOH Screens - Digital display screens with exposure zones
+    CREATE TABLE IF NOT EXISTS dooh_screens (
+      id TEXT PRIMARY KEY,
+      venue_id TEXT NOT NULL,
+      object_id TEXT,
+      name TEXT NOT NULL,
+      position_json TEXT NOT NULL,
+      yaw_deg REAL NOT NULL DEFAULT 0,
+      mount_height_m REAL NOT NULL DEFAULT 2.5,
+      sez_polygon_json TEXT NOT NULL,
+      az_polygon_json TEXT,
+      params_json TEXT NOT NULL,
+      double_sided INTEGER NOT NULL DEFAULT 0,
+      enabled INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (venue_id) REFERENCES venues(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_dooh_screens_venue_id ON dooh_screens(venue_id);
+
+    -- DOOH Exposure Events - Individual exposure events per track
+    CREATE TABLE IF NOT EXISTS dooh_exposure_events (
+      id TEXT PRIMARY KEY,
+      venue_id TEXT NOT NULL,
+      screen_id TEXT NOT NULL,
+      track_key TEXT NOT NULL,
+      start_ts INTEGER NOT NULL,
+      end_ts INTEGER NOT NULL,
+      duration_s REAL NOT NULL,
+      effective_dwell_s REAL NOT NULL,
+      min_distance_m REAL NOT NULL,
+      p10_distance_m REAL,
+      mean_speed_mps REAL NOT NULL,
+      min_speed_mps REAL NOT NULL,
+      entry_speed_mps REAL,
+      orientation_score REAL NOT NULL,
+      proximity_score REAL NOT NULL,
+      dwell_score REAL NOT NULL,
+      slowdown_score REAL NOT NULL,
+      stability_score REAL NOT NULL,
+      aqs REAL NOT NULL,
+      tier TEXT NOT NULL,
+      context_json TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (venue_id) REFERENCES venues(id) ON DELETE CASCADE,
+      FOREIGN KEY (screen_id) REFERENCES dooh_screens(id) ON DELETE CASCADE,
+      UNIQUE(screen_id, track_key, start_ts)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_dooh_exposure_events_venue_id ON dooh_exposure_events(venue_id);
+    CREATE INDEX IF NOT EXISTS idx_dooh_exposure_events_screen_id ON dooh_exposure_events(screen_id);
+    CREATE INDEX IF NOT EXISTS idx_dooh_exposure_events_start_ts ON dooh_exposure_events(start_ts);
+    CREATE INDEX IF NOT EXISTS idx_dooh_exposure_events_tier ON dooh_exposure_events(tier);
+
+    -- DOOH KPI Buckets - Aggregated metrics per screen per time bucket
+    CREATE TABLE IF NOT EXISTS dooh_kpi_buckets (
+      id TEXT PRIMARY KEY,
+      venue_id TEXT NOT NULL,
+      screen_id TEXT NOT NULL,
+      bucket_start_ts INTEGER NOT NULL,
+      bucket_minutes INTEGER NOT NULL,
+      impressions INTEGER NOT NULL DEFAULT 0,
+      qualified_impressions INTEGER NOT NULL DEFAULT 0,
+      premium_impressions INTEGER NOT NULL DEFAULT 0,
+      unique_visitors INTEGER NOT NULL DEFAULT 0,
+      avg_aqs REAL,
+      p75_aqs REAL,
+      total_attention_s REAL NOT NULL DEFAULT 0,
+      avg_attention_s REAL,
+      freq_avg REAL,
+      context_breakdown_json TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (venue_id) REFERENCES venues(id) ON DELETE CASCADE,
+      FOREIGN KEY (screen_id) REFERENCES dooh_screens(id) ON DELETE CASCADE,
+      UNIQUE(screen_id, bucket_start_ts, bucket_minutes)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_dooh_kpi_buckets_venue_id ON dooh_kpi_buckets(venue_id);
+    CREATE INDEX IF NOT EXISTS idx_dooh_kpi_buckets_screen_id ON dooh_kpi_buckets(screen_id);
+    CREATE INDEX IF NOT EXISTS idx_dooh_kpi_buckets_bucket_start_ts ON dooh_kpi_buckets(bucket_start_ts);
+
+    -- ============================================
+    -- PEBLE™ DOOH Attribution Engine Tables
+    -- Feature flag: FEATURE_DOOH_ATTRIBUTION
+    -- Post-Exposure Behavioral Lift Engine
+    -- ============================================
+
+    -- DOOH Campaigns - Attribution campaign definitions
+    CREATE TABLE IF NOT EXISTS dooh_campaigns (
+      id TEXT PRIMARY KEY,
+      venue_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      screen_ids_json TEXT NOT NULL,
+      target_json TEXT NOT NULL,
+      params_json TEXT NOT NULL,
+      enabled INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (venue_id) REFERENCES venues(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_dooh_campaigns_venue_id ON dooh_campaigns(venue_id);
+    CREATE INDEX IF NOT EXISTS idx_dooh_campaigns_enabled ON dooh_campaigns(enabled);
+
+    -- DOOH Attribution Events - Per exposure event attribution analysis
+    CREATE TABLE IF NOT EXISTS dooh_attribution_events (
+      id TEXT PRIMARY KEY,
+      venue_id TEXT NOT NULL,
+      campaign_id TEXT NOT NULL,
+      screen_id TEXT NOT NULL,
+      exposure_event_id TEXT,
+      track_key TEXT NOT NULL,
+      exposure_start_ts INTEGER NOT NULL,
+      exposure_end_ts INTEGER NOT NULL,
+      aqs REAL NOT NULL,
+      tier TEXT NOT NULL,
+      context_json TEXT,
+      outcome_json TEXT,
+      converted INTEGER NOT NULL DEFAULT 0,
+      tta_s REAL,
+      dci_value REAL,
+      confidence REAL NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (venue_id) REFERENCES venues(id) ON DELETE CASCADE,
+      FOREIGN KEY (campaign_id) REFERENCES dooh_campaigns(id) ON DELETE CASCADE,
+      FOREIGN KEY (screen_id) REFERENCES dooh_screens(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_dooh_attribution_events_venue_id ON dooh_attribution_events(venue_id);
+    CREATE INDEX IF NOT EXISTS idx_dooh_attribution_events_campaign_id ON dooh_attribution_events(campaign_id);
+    CREATE INDEX IF NOT EXISTS idx_dooh_attribution_events_screen_id ON dooh_attribution_events(screen_id);
+    CREATE INDEX IF NOT EXISTS idx_dooh_attribution_events_exposure_ts ON dooh_attribution_events(exposure_end_ts);
+    CREATE INDEX IF NOT EXISTS idx_dooh_attribution_events_track ON dooh_attribution_events(track_key);
+
+    -- DOOH Control Matches - Matched control trajectories for attribution
+    CREATE TABLE IF NOT EXISTS dooh_control_matches (
+      id TEXT PRIMARY KEY,
+      attribution_event_id TEXT NOT NULL,
+      control_track_key TEXT NOT NULL,
+      pseudo_exposure_ts INTEGER NOT NULL,
+      match_distance REAL NOT NULL,
+      control_outcome_json TEXT,
+      control_converted INTEGER NOT NULL DEFAULT 0,
+      control_tta_s REAL,
+      control_dci_value REAL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (attribution_event_id) REFERENCES dooh_attribution_events(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_dooh_control_matches_event_id ON dooh_control_matches(attribution_event_id);
+    CREATE INDEX IF NOT EXISTS idx_dooh_control_matches_track ON dooh_control_matches(control_track_key);
+
+    -- DOOH Campaign KPIs - Aggregated attribution metrics per time bucket
+    CREATE TABLE IF NOT EXISTS dooh_campaign_kpis (
+      id TEXT PRIMARY KEY,
+      venue_id TEXT NOT NULL,
+      campaign_id TEXT NOT NULL,
+      bucket_start_ts INTEGER NOT NULL,
+      bucket_minutes INTEGER NOT NULL,
+      exposed_count INTEGER NOT NULL DEFAULT 0,
+      controls_count INTEGER NOT NULL DEFAULT 0,
+      p_exposed REAL,
+      p_control REAL,
+      lift_abs REAL,
+      lift_rel REAL,
+      median_tta_exposed REAL,
+      median_tta_control REAL,
+      tta_accel REAL,
+      mean_engagement_dwell_exposed REAL,
+      mean_engagement_dwell_control REAL,
+      engagement_lift_s REAL,
+      mean_aqs_exposed REAL,
+      mean_dci_exposed REAL,
+      mean_dci_control REAL,
+      confidence_mean REAL,
+      ces_score REAL,
+      aar_score REAL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (venue_id) REFERENCES venues(id) ON DELETE CASCADE,
+      FOREIGN KEY (campaign_id) REFERENCES dooh_campaigns(id) ON DELETE CASCADE,
+      UNIQUE(campaign_id, bucket_start_ts, bucket_minutes)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_dooh_campaign_kpis_venue_id ON dooh_campaign_kpis(venue_id);
+    CREATE INDEX IF NOT EXISTS idx_dooh_campaign_kpis_campaign_id ON dooh_campaign_kpis(campaign_id);
+    CREATE INDEX IF NOT EXISTS idx_dooh_campaign_kpis_bucket_ts ON dooh_campaign_kpis(bucket_start_ts);
+
+    -- ============================================
+    -- DOOH Playlist & Proof of Play Tables
+    -- Feature: Video playlist management with proof-of-play tracking
+    -- ============================================
+
+    -- DOOH Playlist Videos - Individual video assets for screens
+    CREATE TABLE IF NOT EXISTS dooh_playlist_videos (
+      id TEXT PRIMARY KEY,
+      venue_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      filename TEXT NOT NULL,
+      file_path TEXT NOT NULL,
+      duration_ms INTEGER NOT NULL,
+      file_size_bytes INTEGER,
+      mime_type TEXT,
+      thumbnail_path TEXT,
+      width INTEGER,
+      height INTEGER,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (venue_id) REFERENCES venues(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_dooh_playlist_videos_venue_id ON dooh_playlist_videos(venue_id);
+
+    -- DOOH Screen Playlist - Links videos to screens with ordering
+    CREATE TABLE IF NOT EXISTS dooh_screen_playlist (
+      id TEXT PRIMARY KEY,
+      screen_id TEXT NOT NULL,
+      video_id TEXT NOT NULL,
+      order_index INTEGER NOT NULL DEFAULT 0,
+      enabled INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (screen_id) REFERENCES dooh_screens(id) ON DELETE CASCADE,
+      FOREIGN KEY (video_id) REFERENCES dooh_playlist_videos(id) ON DELETE CASCADE,
+      UNIQUE(screen_id, video_id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_dooh_screen_playlist_screen_id ON dooh_screen_playlist(screen_id);
+    CREATE INDEX IF NOT EXISTS idx_dooh_screen_playlist_video_id ON dooh_screen_playlist(video_id);
+
+    -- DOOH Proof of Play - Records each video play event with timestamps
+    CREATE TABLE IF NOT EXISTS dooh_proof_of_play (
+      id TEXT PRIMARY KEY,
+      venue_id TEXT NOT NULL,
+      screen_id TEXT NOT NULL,
+      video_id TEXT NOT NULL,
+      start_ts INTEGER NOT NULL,
+      end_ts INTEGER NOT NULL,
+      duration_ms INTEGER NOT NULL,
+      loop_index INTEGER NOT NULL DEFAULT 0,
+      playback_status TEXT NOT NULL DEFAULT 'completed',
+      client_id TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (venue_id) REFERENCES venues(id) ON DELETE CASCADE,
+      FOREIGN KEY (screen_id) REFERENCES dooh_screens(id) ON DELETE CASCADE,
+      FOREIGN KEY (video_id) REFERENCES dooh_playlist_videos(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_dooh_proof_of_play_venue_id ON dooh_proof_of_play(venue_id);
+    CREATE INDEX IF NOT EXISTS idx_dooh_proof_of_play_screen_id ON dooh_proof_of_play(screen_id);
+    CREATE INDEX IF NOT EXISTS idx_dooh_proof_of_play_video_id ON dooh_proof_of_play(video_id);
+    CREATE INDEX IF NOT EXISTS idx_dooh_proof_of_play_start_ts ON dooh_proof_of_play(start_ts);
+    CREATE INDEX IF NOT EXISTS idx_dooh_proof_of_play_end_ts ON dooh_proof_of_play(end_ts);
+    CREATE INDEX IF NOT EXISTS idx_dooh_proof_of_play_screen_time ON dooh_proof_of_play(screen_id, start_ts, end_ts);
+    CREATE INDEX IF NOT EXISTS idx_dooh_exposure_events_screen_time ON dooh_exposure_events(screen_id, start_ts);
+
+    -- DOOH Video KPI Buckets - Aggregated metrics per video per time bucket
+    CREATE TABLE IF NOT EXISTS dooh_video_kpi_buckets (
+      id TEXT PRIMARY KEY,
+      venue_id TEXT NOT NULL,
+      screen_id TEXT NOT NULL,
+      video_id TEXT NOT NULL,
+      bucket_start_ts INTEGER NOT NULL,
+      bucket_minutes INTEGER NOT NULL,
+      play_count INTEGER NOT NULL DEFAULT 0,
+      total_play_duration_ms INTEGER NOT NULL DEFAULT 0,
+      impressions INTEGER NOT NULL DEFAULT 0,
+      qualified_impressions INTEGER NOT NULL DEFAULT 0,
+      unique_viewers INTEGER NOT NULL DEFAULT 0,
+      avg_dwell_s REAL,
+      completion_rate REAL,
+      avg_aqs REAL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (venue_id) REFERENCES venues(id) ON DELETE CASCADE,
+      FOREIGN KEY (screen_id) REFERENCES dooh_screens(id) ON DELETE CASCADE,
+      FOREIGN KEY (video_id) REFERENCES dooh_playlist_videos(id) ON DELETE CASCADE,
+      UNIQUE(screen_id, video_id, bucket_start_ts, bucket_minutes)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_dooh_video_kpi_buckets_screen_id ON dooh_video_kpi_buckets(screen_id);
+    CREATE INDEX IF NOT EXISTS idx_dooh_video_kpi_buckets_video_id ON dooh_video_kpi_buckets(video_id);
+    CREATE INDEX IF NOT EXISTS idx_dooh_video_kpi_buckets_bucket_ts ON dooh_video_kpi_buckets(bucket_start_ts);
   `);
 
   // Migration: Add DWG-related columns to venues table if they don't exist
@@ -361,6 +651,52 @@ export function initDatabase() {
     }
   } catch (migrationErr) {
     console.log('📦 Migration check completed (columns may already exist)');
+  }
+
+  // Migration for dooh_screens double_sided column
+  try {
+    const doohColumns = db.prepare("PRAGMA table_info(dooh_screens)").all();
+    const doohColumnNames = doohColumns.map(c => c.name);
+    if (doohColumnNames.length > 0 && !doohColumnNames.includes('double_sided')) {
+      db.exec("ALTER TABLE dooh_screens ADD COLUMN double_sided INTEGER NOT NULL DEFAULT 0");
+      console.log('📦 Migration: Added double_sided column to dooh_screens');
+    }
+  } catch (migrationErr) {
+    // Table may not exist yet, that's fine
+  }
+
+  // Migration for shelf_planograms slot_facings column
+  try {
+    const shelfPlanogramColumns = db.prepare("PRAGMA table_info(shelf_planograms)").all();
+    const shelfPlanogramColumnNames = shelfPlanogramColumns.map(c => c.name);
+    
+    // Check if we need to add slot_facings column
+    if (shelfPlanogramColumnNames.length > 0 && !shelfPlanogramColumnNames.includes('slot_facings')) {
+      db.exec("ALTER TABLE shelf_planograms ADD COLUMN slot_facings TEXT DEFAULT NULL");
+      console.log('📦 Migration: Added slot_facings column to shelf_planograms');
+      
+      // Migrate old slot_facing data to slot_facings if it exists
+      if (shelfPlanogramColumnNames.includes('slot_facing')) {
+        db.exec("UPDATE shelf_planograms SET slot_facings = '[\"' || slot_facing || '\"]' WHERE slot_facing IS NOT NULL AND slot_facing != ''");
+        console.log('📦 Migration: Migrated slot_facing to slot_facings');
+      }
+    }
+  } catch (migrationErr) {
+    console.error('Migration error:', migrationErr);
+    // Table may not exist yet, that's fine
+  }
+
+  // Migration for regions_of_interest metadata_json column
+  try {
+    const roiColumns = db.prepare("PRAGMA table_info(regions_of_interest)").all();
+    const roiColumnNames = roiColumns.map(c => c.name);
+    
+    if (roiColumnNames.length > 0 && !roiColumnNames.includes('metadata_json')) {
+      db.exec("ALTER TABLE regions_of_interest ADD COLUMN metadata_json TEXT DEFAULT NULL");
+      console.log('📦 Migration: Added metadata_json column to regions_of_interest');
+    }
+  } catch (migrationErr) {
+    // Table may not exist yet, that's fine
   }
 
   console.log('📦 Database initialized');
@@ -499,6 +835,7 @@ export const roiQueries = {
       vertices: JSON.parse(row.vertices),
       color: row.color,
       opacity: row.opacity,
+      metadata: row.metadata_json ? JSON.parse(row.metadata_json) : null,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     }));
@@ -515,6 +852,7 @@ export const roiQueries = {
       vertices: JSON.parse(row.vertices),
       color: row.color,
       opacity: row.opacity,
+      metadata: row.metadata_json ? JSON.parse(row.metadata_json) : null,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     }));
@@ -531,6 +869,7 @@ export const roiQueries = {
       vertices: JSON.parse(row.vertices),
       color: row.color,
       opacity: row.opacity,
+      metadata: row.metadata_json ? JSON.parse(row.metadata_json) : null,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     };
@@ -538,8 +877,8 @@ export const roiQueries = {
   
   create: (db, roi) => {
     const stmt = db.prepare(`
-      INSERT INTO regions_of_interest (id, venue_id, dwg_layout_id, name, vertices, color, opacity, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO regions_of_interest (id, venue_id, dwg_layout_id, name, vertices, color, opacity, metadata_json, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     return stmt.run(
       roi.id,
@@ -549,6 +888,7 @@ export const roiQueries = {
       JSON.stringify(roi.vertices),
       roi.color,
       roi.opacity,
+      roi.metadata ? JSON.stringify(roi.metadata) : null,
       roi.createdAt,
       roi.updatedAt
     );
@@ -557,7 +897,7 @@ export const roiQueries = {
   update: (db, id, roi) => {
     const stmt = db.prepare(`
       UPDATE regions_of_interest 
-      SET name = ?, vertices = ?, color = ?, opacity = ?, updated_at = ?
+      SET name = ?, vertices = ?, color = ?, opacity = ?, metadata_json = ?, updated_at = ?
       WHERE id = ?
     `);
     return stmt.run(
@@ -565,6 +905,7 @@ export const roiQueries = {
       JSON.stringify(roi.vertices),
       roi.color,
       roi.opacity,
+      roi.metadata ? JSON.stringify(roi.metadata) : null,
       new Date().toISOString(),
       id
     );
@@ -752,6 +1093,7 @@ export const shelfPlanogramQueries = {
       numLevels: row.num_levels,
       slotWidthM: row.slot_width_m,
       levelHeightM: row.level_height_m,
+      slotFacings: row.slot_facings ? JSON.parse(row.slot_facings) : [],
       slots: JSON.parse(row.slots_json),
       createdAt: row.created_at,
       updatedAt: row.updated_at,
@@ -768,6 +1110,7 @@ export const shelfPlanogramQueries = {
       numLevels: row.num_levels,
       slotWidthM: row.slot_width_m,
       levelHeightM: row.level_height_m,
+      slotFacings: row.slot_facings ? JSON.parse(row.slot_facings) : [],
       slots: JSON.parse(row.slots_json),
       createdAt: row.created_at,
       updatedAt: row.updated_at,
@@ -775,30 +1118,25 @@ export const shelfPlanogramQueries = {
   },
   
   upsert: (db, shelfPlanogram) => {
-    const existing = db.prepare('SELECT id FROM shelf_planograms WHERE planogram_id = ? AND shelf_id = ?')
-      .get(shelfPlanogram.planogramId, shelfPlanogram.shelfId);
+    // Use INSERT OR REPLACE for simpler atomic upsert
+    const stmt = db.prepare(`
+      INSERT OR REPLACE INTO shelf_planograms (id, planogram_id, shelf_id, num_levels, slot_width_m, level_height_m, slot_facings, slots_json, created_at, updated_at)
+      VALUES (
+        COALESCE((SELECT id FROM shelf_planograms WHERE planogram_id = ? AND shelf_id = ?), ?),
+        ?, ?, ?, ?, ?, ?, ?, ?, ?
+      )
+    `);
     
-    if (existing) {
-      const stmt = db.prepare(`
-        UPDATE shelf_planograms SET num_levels = ?, slot_width_m = ?, level_height_m = ?, slots_json = ?, updated_at = ?
-        WHERE planogram_id = ? AND shelf_id = ?
-      `);
-      return stmt.run(
-        shelfPlanogram.numLevels, shelfPlanogram.slotWidthM, shelfPlanogram.levelHeightM,
-        JSON.stringify(shelfPlanogram.slots), new Date().toISOString(),
-        shelfPlanogram.planogramId, shelfPlanogram.shelfId
-      );
-    } else {
-      const stmt = db.prepare(`
-        INSERT INTO shelf_planograms (id, planogram_id, shelf_id, num_levels, slot_width_m, level_height_m, slots_json, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `);
-      return stmt.run(
-        shelfPlanogram.id, shelfPlanogram.planogramId, shelfPlanogram.shelfId,
-        shelfPlanogram.numLevels, shelfPlanogram.slotWidthM, shelfPlanogram.levelHeightM,
-        JSON.stringify(shelfPlanogram.slots), shelfPlanogram.createdAt, shelfPlanogram.updatedAt
-      );
-    }
+    const now = new Date().toISOString();
+    const result = stmt.run(
+      shelfPlanogram.planogramId, shelfPlanogram.shelfId, shelfPlanogram.id,
+      shelfPlanogram.planogramId, shelfPlanogram.shelfId,
+      shelfPlanogram.numLevels, shelfPlanogram.slotWidthM, shelfPlanogram.levelHeightM,
+      shelfPlanogram.slotFacings ? JSON.stringify(shelfPlanogram.slotFacings) : null, 
+      JSON.stringify(shelfPlanogram.slots), now, now
+    );
+    
+    return result;
   },
   
   delete: (db, id) => db.prepare('DELETE FROM shelf_planograms WHERE id = ?').run(id),
