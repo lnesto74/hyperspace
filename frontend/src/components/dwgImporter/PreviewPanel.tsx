@@ -77,8 +77,29 @@ export default function PreviewPanel({
 }: PreviewPanelProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const [dimensions, setDimensions] = useState({ width: 800, height: 600 })
-  const [zoom, setZoom] = useState(1)
-  const [panOffset, setPanOffset] = useState({ x: 0, y: 0 })
+  
+  // Generate storage key from import data filename
+  const storageKey = `dwg-2d-view-${importData.filename || 'default'}`
+  
+  // Initialize zoom and panOffset from localStorage to preserve view on remount
+  const [zoom, setZoom] = useState(() => {
+    const saved = localStorage.getItem(storageKey)
+    if (saved) {
+      try {
+        return JSON.parse(saved).zoom || 1
+      } catch { return 1 }
+    }
+    return 1
+  })
+  const [panOffset, setPanOffset] = useState(() => {
+    const saved = localStorage.getItem(storageKey)
+    if (saved) {
+      try {
+        return JSON.parse(saved).panOffset || { x: 0, y: 0 }
+      } catch { return { x: 0, y: 0 } }
+    }
+    return { x: 0, y: 0 }
+  })
   const [isDragging, setIsDragging] = useState(false)
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 })
   const [dragStartOffset, setDragStartOffset] = useState({ x: 0, y: 0 })
@@ -208,9 +229,6 @@ export default function PreviewPanel({
     roi: true,            // ROI polygon
     grid: false           // Grid overlay (debug)
   })
-
-  // Generate storage key from import data filename
-  const storageKey = `dwg-2d-view-${importData.filename || 'default'}`
 
   // Save autoplace settings whenever they change
   useEffect(() => {

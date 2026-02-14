@@ -40,10 +40,10 @@ else
     exit 1
 fi
 
-# Start Backend
+# Start Backend with increased heap size to prevent OOM crashes
 echo "🔧 Starting Backend on port 3001..."
 cd "$PROJECT_DIR/backend"
-MOCK_LIDAR=false MQTT_ENABLED=true MQTT_BROKER_URL=mqtt://127.0.0.1:1883 npm run dev > /tmp/hyperspace-backend.log 2>&1 &
+NODE_OPTIONS="--max-old-space-size=4096" MOCK_LIDAR=false MQTT_ENABLED=true MQTT_BROKER_URL=mqtt://127.0.0.1:1883 npm run dev > /tmp/hyperspace-backend.log 2>&1 &
 BACKEND_PID=$!
 sleep 3
 

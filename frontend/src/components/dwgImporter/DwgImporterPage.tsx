@@ -168,27 +168,33 @@ export default function DwgImporterPage({ onClose, onLayoutGenerated }: DwgImpor
     }
   }, [show3DPreview, autoplaceStorageKey, scaleCorrection])
   
-  // LiDAR mode state - selectedLidarModelId persisted to localStorage
-  const lidarModelStorageKey = `dwg-selected-lidar-model-${importData?.filename || 'default'}`
+  // LiDAR mode state - selectedLidarModelId persisted to localStorage using generatedLayoutId
   const [lidarMode, setLidarMode] = useState(false)
   const [lidarModels, setLidarModels] = useState<LidarModel[]>([])
   const [lidarInstances, setLidarInstances] = useState<LidarInstance[]>([])
-  const [selectedLidarModelId, setSelectedLidarModelId] = useState<string | null>(() => {
-    const saved = localStorage.getItem(lidarModelStorageKey)
-    return saved || null
-  })
+  const [selectedLidarModelId, setSelectedLidarModelId] = useState<string | null>(null)
   const [selectedLidarInstanceId, setSelectedLidarInstanceId] = useState<string | null>(null)
   const [simulationResult, setSimulationResult] = useState<SimulationResult | null>(null)
   const [isSimulating, setIsSimulating] = useState(false)
   
-  // Persist selected LiDAR model whenever it changes
+  // Persist selected LiDAR model whenever it changes (using generatedLayoutId as key)
   useEffect(() => {
+    if (!generatedLayoutId) return
+    const storageKey = `dwg-selected-lidar-model-${generatedLayoutId}`
     if (selectedLidarModelId) {
-      localStorage.setItem(lidarModelStorageKey, selectedLidarModelId)
-    } else {
-      localStorage.removeItem(lidarModelStorageKey)
+      localStorage.setItem(storageKey, selectedLidarModelId)
     }
-  }, [lidarModelStorageKey, selectedLidarModelId])
+  }, [generatedLayoutId, selectedLidarModelId])
+  
+  // Load saved LiDAR model when generatedLayoutId becomes available
+  useEffect(() => {
+    if (!generatedLayoutId) return
+    const storageKey = `dwg-selected-lidar-model-${generatedLayoutId}`
+    const saved = localStorage.getItem(storageKey)
+    if (saved && !selectedLidarModelId) {
+      setSelectedLidarModelId(saved)
+    }
+  }, [generatedLayoutId])
   
   const handleUpdateGroupName = useCallback((groupId: string, name: string) => {
     setCustomNames(prev => ({ ...prev, [groupId]: name }))

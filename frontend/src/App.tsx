@@ -6,6 +6,8 @@ import { RoiProvider, useRoi } from './context/RoiContext'
 import { HeatmapProvider } from './context/HeatmapContext'
 import { PlanogramProvider, usePlanogram } from './context/PlanogramContext'
 import { DwgProvider, useDwg } from './context/DwgContext'
+import { NarratorProvider } from './context/NarratorContext'
+import { NarratorDrawer, NarratorToggle } from './components/narrator'
 import AppShell from './components/layout/AppShell'
 import ZoneKPIPopup from './components/kpi/ZoneKPIPopup'
 import ZoneKPIOverlayPanel from './components/kpi/ZoneKPIOverlayPanel'
@@ -192,6 +194,9 @@ function KPIOverlayToggle() {
           <PieChart className="w-4 h-4" />
         </button>
         
+        {/* AI Narrator Button */}
+        <NarratorToggle />
+        
         {/* Activity Ledger Button */}
         <button
           onClick={() => setShowLedger(!showLedger)}
@@ -239,6 +244,56 @@ function KPIOverlayToggle() {
       
       {/* KPI Overlay Panel */}
       <ZoneKPIOverlayPanel />
+      
+      {/* AI Narrator Drawer */}
+      <NarratorDrawer 
+        onExecuteIntent={(intent, entityId) => {
+          // Handle narrator UI intents
+          switch (intent) {
+            case 'OPEN_MAIN_VIEW':
+              setMode('main')
+              break
+            case 'OPEN_DWG_IMPORTER':
+              setMode('dwgImporter')
+              break
+            case 'OPEN_LIDAR_PLANNER':
+              setMode('lidarPlanner')
+              break
+            case 'OPEN_PLANOGRAM_BUILDER':
+              setMode('planogram')
+              break
+            case 'OPEN_EDGE_COMMISSIONING':
+              setMode('edgeCommissioning')
+              break
+            case 'OPEN_DOOH_ANALYTICS':
+              setMode('doohAnalytics')
+              break
+            case 'OPEN_DOOH_EFFECTIVENESS':
+              setMode('doohEffectiveness')
+              break
+            case 'OPEN_BUSINESS_REPORTING':
+              setMode('businessReporting')
+              break
+            case 'OPEN_HEATMAP_MODAL':
+              setShowHeatmapModal(true)
+              break
+            case 'OPEN_CHECKOUT_MANAGER':
+              setShowCheckoutManager(true)
+              break
+            case 'OPEN_SMART_KPI_MODAL':
+              setShowSmartKpiModal(true)
+              break
+            case 'OPEN_ACTIVITY_LEDGER':
+              setShowLedger(true)
+              break
+            case 'TOGGLE_KPI_OVERLAYS':
+              toggleKPIOverlays()
+              break
+            default:
+              console.log('[Narrator] Unhandled intent:', intent, entityId)
+          }
+        }}
+      />
     </>
   )
 }
@@ -319,7 +374,9 @@ function App() {
             <RoiProvider>
               <HeatmapProvider>
                 <DwgProvider>
-                  <MainApp />
+                  <NarratorProvider>
+                    <MainApp />
+                  </NarratorProvider>
                 </DwgProvider>
               </HeatmapProvider>
             </RoiProvider>

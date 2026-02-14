@@ -32,6 +32,7 @@ import edgeCommissioningRoutes, { setupPointCloudWebSocket } from './routes/edge
 import doohRoutes from './routes/dooh.js';
 import doohAttributionRoutes from './routes/doohAttribution.js';
 import createBusinessReportingRoutes from './routes/businessReporting.js';
+import narratorRoutes from './routes/narrator.js';
 
 const PORT = process.env.PORT || 3001;
 const MOCK_LIDAR = process.env.MOCK_LIDAR === 'true';
@@ -213,6 +214,9 @@ app.use('/api/dooh-attribution', doohAttributionRoutes);
 
 // Business Reporting routes (feature-flagged: FEATURE_BUSINESS_REPORTING=true)
 app.use('/api/reporting', createBusinessReportingRoutes(db, trajectoryStorage, trackAggregator));
+
+// AI Narrator routes (additive layer - does not modify existing functionality)
+app.use('/api/narrator', narratorRoutes);
 
 // Serve uploaded logos
 app.use('/api/uploads/logos', express.static(path.join(__dirname, 'uploads', 'logos')));

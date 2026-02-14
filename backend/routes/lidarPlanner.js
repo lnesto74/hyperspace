@@ -884,24 +884,25 @@ function runAutoPlacement(layoutData, options) {
   
   console.log('Candidate spacing:', spacing.toFixed(2), 'meters');
   
-  // Generate candidate positions within ROI using CENTERED grid
-  // This ensures grid points are inside the ROI, not on edges
+  // Generate candidate positions within ROI using same logic as debug panel
+  // Start at spacing/2 from edge and iterate until hitting boundary
   const candidates = [];
-  const cols = Math.ceil(roiWidth / spacing);
-  const rows = Math.ceil(roiHeight / spacing);
+  const startX = roiMinX + spacing / 2;
+  const startZ = roiMinZ + spacing / 2;
   
-  // Calculate offsets to center the grid within the ROI
-  const actualGridWidth = (cols - 1) * spacing;
-  const actualGridHeight = (rows - 1) * spacing;
-  const offsetX = roiMinX + (roiWidth - actualGridWidth) / 2;
-  const offsetZ = roiMinZ + (roiHeight - actualGridHeight) / 2;
+  // Count grid dimensions for logging
+  let cols = 0, rows = 0;
+  for (let x = startX; x < roiMaxX; x += spacing) {
+    if (cols === 0) {
+      for (let z = startZ; z < roiMaxZ; z += spacing) rows++;
+    }
+    cols++;
+  }
   
-  console.log('Grid dimensions:', cols, 'x', rows, ', offset:', offsetX.toFixed(2), offsetZ.toFixed(2));
+  console.log('Grid dimensions:', cols, 'x', rows, ', start:', startX.toFixed(2), startZ.toFixed(2));
   
-  for (let c = 0; c < cols; c++) {
-    for (let r = 0; r < rows; r++) {
-      const x = offsetX + c * spacing;
-      const z = offsetZ + r * spacing;
+  for (let x = startX; x < roiMaxX; x += spacing) {
+    for (let z = startZ; z < roiMaxZ; z += spacing) {
       if (isPointInROI(x, z)) {
         candidates.push({ x, z, selected: false });
       }
