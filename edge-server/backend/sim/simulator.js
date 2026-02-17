@@ -88,17 +88,46 @@ export class SimulatorV2 {
           queuePressureThreshold: this.config.queuePressureThreshold || 5,
           inflowRateThreshold: this.config.inflowRateThreshold || 10,
         });
-        // Initialize lanes from navGrid cashiers (all start closed)
-        const checkoutObjects = (this.navGrid.cashiers || []).map((pos, i) => ({
-          laneId: i,
-          serviceArea: pos,
-          queueArea: pos,
-          standPoint: pos,
-        }));
+        
+        // Build checkout objects with queueZoneId (UUID) from config.checkoutZones or navGrid
+        let checkoutObjects = [];
+        
+        if (this.config.checkoutZones && this.config.checkoutZones.length > 0) {
+          // Use pre-parsed checkout zones with UUIDs (from edge-server parseCashierZones)
+          checkoutObjects = this.config.checkoutZones.map((zone, i) => ({
+            queueZoneId: zone.queueZoneId,     // UUID - single source of truth
+            serviceZoneId: zone.serviceZoneId, // UUID
+            displayIndex: zone.displayIndex || (i + 1),
+            displayName: zone.displayName || `Lane ${i + 1}`,
+            name: zone.name,
+            serviceArea: zone.serviceCenter || zone.queueCenter,
+            queueArea: zone.queueCenter,
+            queueCenter: zone.queueCenter,
+            serviceCenter: zone.serviceCenter,
+            standPoint: zone.serviceCenter || zone.queueCenter,
+          }));
+          console.log(`[SimV2] Using ${checkoutObjects.length} checkout zones with UUIDs`);
+        } else {
+          // Fallback: use navGrid cashiers (legacy numeric IDs)
+          checkoutObjects = (this.navGrid.cashiers || []).map((pos, i) => ({
+            queueZoneId: `lane-${i}`,  // Generate fallback ID
+            displayIndex: i + 1,
+            displayName: `Lane ${i + 1}`,
+            serviceArea: pos,
+            queueArea: pos,
+            queueCenter: pos,
+            serviceCenter: pos,
+            standPoint: pos,
+          }));
+          console.log(`[SimV2] Using ${checkoutObjects.length} navGrid cashiers (fallback)`);
+        }
+        
         this.laneStateController.initializeLanes(checkoutObjects);
+        
         // Initialize empty lane states (no cashiers spawned yet in manual mode)
-        this.laneStates = checkoutObjects.map((_, i) => ({
+        this.laneStates = checkoutObjects.map((obj, i) => ({
           laneId: i,
+          queueZoneId: obj.queueZoneId,
           isOpen: false,
           openSince: null,
           closedSince: null,

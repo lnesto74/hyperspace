@@ -18,6 +18,7 @@ interface QueuedPerson {
 interface LaneStatus {
   laneId: number
   name?: string
+  queueZoneId?: string
   desiredState: 'open' | 'closed'
   status: 'OPEN' | 'CLOSED' | 'OPENING' | 'CLOSING'
   queueCount: number
@@ -81,6 +82,44 @@ interface ThresholdSettings {
   occupancyCritical: number
 }
 
+interface KpiSnapshot {
+  timestamp: string
+  period: string
+  kpis: {
+    totalSessions: number
+    completedSessions: number
+    abandonedSessions: number
+    abandonmentRate: number
+    avgWaitSec: number
+    maxWaitSec: number
+    throughputPerHour: number
+    lanesUsed: number
+  }
+  perLane: { laneId: string; sessions: number; completed: number; avgWaitSec: number }[]
+  recentSessions: { personId: string; entryTime: string; exitTime: string; dwellSec: number; abandoned: number; laneId: string }[]
+}
+
+interface ActiveSession {
+  personId: string
+  queueZoneId: string
+  queueZoneShort: string
+  entryTime: number
+  entryTimeStr: string
+  currentDwellMs: number
+  currentDwellSec: number
+  inService: boolean
+  serviceEntryTime: number | null
+  laneNumber: number | null
+  laneName: string
+}
+
+interface ActiveSessionsResponse {
+  timestamp: number
+  timestampStr: string
+  activeCount: number
+  sessions: ActiveSession[]
+}
+
 interface CheckoutManagerModalProps {
   isOpen: boolean
   onClose: () => void
@@ -111,8 +150,17 @@ export default function CheckoutManagerModal({ isOpen, onClose }: CheckoutManage
   const [error, setError] = useState<string | null>(null)
   const [dataSource, setDataSource] = useState<'auto' | 'simulation' | 'live'>('auto')
   
+  // KPI Snapshot State (auto-refresh every 15 sec)
+  const [kpiSnapshot, setKpiSnapshot] = useState<KpiSnapshot | null>(null)
+  const [kpiPeriod, setKpiPeriod] = useState<'hour' | 'day' | 'week'>('hour')
+  const [kpiLastUpdate, setKpiLastUpdate] = useState<Date | null>(null)
+  
+  // Active Sessions State (live debug - refresh every 1 sec)
+  const [activeSessions, setActiveSessions] = useState<ActiveSessionsResponse | null>(null)
+  const [localTimers, setLocalTimers] = useState<Map<string, number>>(new Map())
+  
   // UI State
-  const [activeTab, setActiveTab] = useState<'lanes' | 'rules' | 'settings'>('lanes')
+  const [activeTab, setActiveTab] = useState<'lanes' | 'rules' | 'settings' | 'kpi'>('lanes')
   const [showLedger, setShowLedger] = useState(true)
   const [ledgerFilter, setLedgerFilter] = useState<'active' | 'dismissed'>('active')
   
@@ -218,6 +266,57 @@ export default function CheckoutManagerModal({ isOpen, onClose }: CheckoutManage
     return () => clearInterval(interval)
   }, [isOpen, fetchStatus])
 
+  // Fetch KPI snapshot (auto-refresh every 15 sec)
+  const fetchKpiSnapshot = useCallback(async () => {
+    if (!venue?.id) return
+    try {
+      const res = await fetch(`${API_BASE}/api/venues/${venue.id}/checkout/kpi-snapshot?period=${kpiPeriod}`)
+      if (res.ok) {
+        const data = await res.json()
+        setKpiSnapshot(data)
+        setKpiLastUpdate(new Date())
+      }
+    } catch (err) {
+      console.error('Failed to fetch KPI snapshot:', err)
+    }
+  }, [venue?.id, kpiPeriod])
+
+  useEffect(() => {
+    if (!isOpen || activeTab !== 'kpi') return
+    
+    fetchKpiSnapshot()
+    const interval = setInterval(fetchKpiSnapshot, 15000) // 15 sec refresh
+    return () => clearInterval(interval)
+  }, [isOpen, activeTab, fetchKpiSnapshot])
+
+  // Fetch active sessions (live debug - 1 sec refresh)
+  const fetchActiveSessions = useCallback(async () => {
+    if (!venue?.id) return
+    try {
+      const res = await fetch(`${API_BASE}/api/venues/${venue.id}/checkout/active-sessions`)
+      if (res.ok) {
+        const data = await res.json()
+        setActiveSessions(data)
+        // Update local timers based on server data
+        const newTimers = new Map<string, number>()
+        data.sessions.forEach((s: ActiveSession) => {
+          newTimers.set(s.personId + ':' + s.queueZoneId, s.currentDwellSec)
+        })
+        setLocalTimers(newTimers)
+      }
+    } catch (err) {
+      console.error('Failed to fetch active sessions:', err)
+    }
+  }, [venue?.id])
+
+  useEffect(() => {
+    if (!isOpen || activeTab !== 'kpi') return
+    
+    fetchActiveSessions()
+    const interval = setInterval(fetchActiveSessions, 1000) // 1 sec refresh for live timers
+    return () => clearInterval(interval)
+  }, [isOpen, activeTab, fetchActiveSessions])
+
   // Auto-dismiss acknowledged alerts after 10 seconds
   useEffect(() => {
     const timer = setInterval(() => {
@@ -240,10 +339,14 @@ export default function CheckoutManagerModal({ isOpen, onClose }: CheckoutManage
         ? `${API_BASE}/api/edge-simulator/checkout/set_lane_state`
         : `${API_BASE}/api/venues/${venue?.id}/checkout/set_lane_state`
       
+      // Get queueZoneId for this lane to sync with queue tracking
+      const lane = status?.lanes?.find(l => l.laneId === laneId)
+      const queueZoneId = lane?.queueZoneId
+      
       await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ laneId, state })
+        body: JSON.stringify({ laneId, state, queueZoneId })
       })
       fetchStatus()
     } catch (err) {
@@ -349,7 +452,7 @@ export default function CheckoutManagerModal({ isOpen, onClose }: CheckoutManage
 
         {/* Tabs */}
         <div className="flex items-center gap-1 px-4 py-2 border-b border-gray-700/50 bg-gray-800/30">
-          {(['lanes', 'rules', 'settings'] as const).map(tab => (
+          {(['lanes', 'kpi', 'rules', 'settings'] as const).map(tab => (
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}
@@ -360,6 +463,7 @@ export default function CheckoutManagerModal({ isOpen, onClose }: CheckoutManage
               }`}
             >
               {tab === 'lanes' && 'Lane Overview'}
+              {tab === 'kpi' && '📊 Live KPIs'}
               {tab === 'rules' && 'Alert Rules'}
               {tab === 'settings' && 'Thresholds'}
             </button>
@@ -370,18 +474,212 @@ export default function CheckoutManagerModal({ isOpen, onClose }: CheckoutManage
         <div className="flex flex-1 overflow-hidden">
           {/* Left Panel - Main Content */}
           <div className={`flex-1 overflow-y-auto p-4 ${showLedger ? 'border-r border-gray-700' : ''}`}>
-            {error ? (
+            {/* KPI Tab - Works independently of live status, shown first */}
+            {activeTab === 'kpi' && (
+              <div className="space-y-4">
+                {/* Period Selector + Last Update */}
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    {(['hour', 'day', 'week'] as const).map(p => (
+                      <button
+                        key={p}
+                        onClick={() => setKpiPeriod(p)}
+                        className={`px-3 py-1.5 text-sm rounded-lg transition-colors ${
+                          kpiPeriod === p 
+                            ? 'bg-blue-600/20 text-blue-400' 
+                            : 'text-gray-400 hover:text-white hover:bg-gray-700'
+                        }`}
+                      >
+                        {p === 'hour' ? 'Last Hour' : p === 'day' ? 'Last 24h' : 'Last Week'}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="flex items-center gap-2 text-xs text-gray-500">
+                    <RefreshCw className="w-3 h-3" />
+                    {kpiLastUpdate ? `Updated ${kpiLastUpdate.toLocaleTimeString()}` : 'Loading...'}
+                    <span className="text-gray-600">• 15s refresh</span>
+                  </div>
+                </div>
+
+                {kpiSnapshot ? (
+                  <>
+                    {/* KPI Summary Cards */}
+                    <div className="grid grid-cols-4 gap-3">
+                      <div className="bg-gray-800 rounded-lg p-3 text-center">
+                        <div className="text-2xl font-bold text-blue-400">{kpiSnapshot.kpis.totalSessions}</div>
+                        <div className="text-xs text-gray-500">Total Sessions</div>
+                      </div>
+                      <div className="bg-gray-800 rounded-lg p-3 text-center">
+                        <div className="text-2xl font-bold text-green-400">{kpiSnapshot.kpis.completedSessions}</div>
+                        <div className="text-xs text-gray-500">Completed</div>
+                      </div>
+                      <div className="bg-gray-800 rounded-lg p-3 text-center">
+                        <div className="text-2xl font-bold text-amber-400">{kpiSnapshot.kpis.avgWaitSec}s</div>
+                        <div className="text-xs text-gray-500">Avg Wait</div>
+                      </div>
+                      <div className="bg-gray-800 rounded-lg p-3 text-center">
+                        <div className={`text-2xl font-bold ${kpiSnapshot.kpis.abandonmentRate > 50 ? 'text-red-400' : 'text-gray-400'}`}>
+                          {kpiSnapshot.kpis.abandonmentRate}%
+                        </div>
+                        <div className="text-xs text-gray-500">Abandon Rate</div>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-4 gap-3">
+                      <div className="bg-gray-800 rounded-lg p-3 text-center">
+                        <div className="text-2xl font-bold text-purple-400">{kpiSnapshot.kpis.throughputPerHour}/hr</div>
+                        <div className="text-xs text-gray-500">Throughput</div>
+                      </div>
+                      <div className="bg-gray-800 rounded-lg p-3 text-center">
+                        <div className="text-2xl font-bold text-cyan-400">{kpiSnapshot.kpis.lanesUsed}</div>
+                        <div className="text-xs text-gray-500">Lanes Used</div>
+                      </div>
+                      <div className="bg-gray-800 rounded-lg p-3 text-center">
+                        <div className="text-2xl font-bold text-orange-400">{kpiSnapshot.kpis.maxWaitSec}s</div>
+                        <div className="text-xs text-gray-500">Max Wait</div>
+                      </div>
+                      <div className="bg-gray-800 rounded-lg p-3 text-center">
+                        <div className="text-2xl font-bold text-red-400">{kpiSnapshot.kpis.abandonedSessions}</div>
+                        <div className="text-xs text-gray-500">Abandoned</div>
+                      </div>
+                    </div>
+
+                    {/* Recent Sessions */}
+                    <div className="bg-gray-800 rounded-lg p-3">
+                      <h4 className="text-sm font-medium text-white mb-2">Recent Sessions (last 2 min)</h4>
+                      <div className="max-h-48 overflow-y-auto space-y-1">
+                        {kpiSnapshot.recentSessions.length === 0 ? (
+                          <div className="text-xs text-gray-500 text-center py-4">No recent sessions</div>
+                        ) : (
+                          kpiSnapshot.recentSessions.map((s, i) => (
+                            <div key={i} className="flex items-center justify-between text-xs py-1 border-b border-gray-700/50">
+                              <span className="text-gray-400 font-mono">{s.personId.split(':')[1]}</span>
+                              <span className="text-gray-500">{s.entryTime.split(' ')[1]}</span>
+                              <span className={`font-medium ${s.abandoned ? 'text-red-400' : 'text-green-400'}`}>
+                                {s.dwellSec}s {s.abandoned ? '✗' : '✓'}
+                              </span>
+                              <span className="text-gray-500 font-mono">{s.laneId}</span>
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Per-Lane Breakdown */}
+                    <div className="bg-gray-800 rounded-lg p-3">
+                      <h4 className="text-sm font-medium text-white mb-2">Per-Lane Stats</h4>
+                      <div className="grid grid-cols-3 gap-2 max-h-32 overflow-y-auto">
+                        {kpiSnapshot.perLane.slice(0, 12).map((lane, i) => (
+                          <div key={i} className="bg-gray-700/50 rounded px-2 py-1 text-xs">
+                            <div className="flex justify-between">
+                              <span className="text-gray-400 font-mono">{lane.laneId}</span>
+                              <span className="text-white">{lane.sessions} sess</span>
+                            </div>
+                            <div className="flex justify-between text-gray-500">
+                              <span>{lane.completed} done</span>
+                              <span>{lane.avgWaitSec}s avg</span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </>
+                ) : (
+                  <div className="text-center py-8 text-gray-400">
+                    <RefreshCw className="w-8 h-8 mx-auto mb-2 animate-spin opacity-50" />
+                    <p>Loading KPI data...</p>
+                  </div>
+                )}
+
+                {/* LIVE DEBUG: Active Queue Sessions */}
+                <div className="bg-gray-800 rounded-lg p-3 border-2 border-cyan-500/30 mt-4">
+                  <div className="flex items-center justify-between mb-2">
+                    <h4 className="text-sm font-medium text-cyan-400 flex items-center gap-2">
+                      <span className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse" />
+                      LIVE DEBUG: People in Queue Zones
+                    </h4>
+                    <span className="text-xs text-gray-500">
+                      {activeSessions?.activeCount || 0} active • refreshing 1s
+                    </span>
+                  </div>
+                  
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-xs">
+                      <thead>
+                        <tr className="text-gray-500 border-b border-gray-700">
+                          <th className="text-left py-1 px-1">Person ID</th>
+                          <th className="text-left py-1 px-1">Lane</th>
+                          <th className="text-left py-1 px-1">Entry Time</th>
+                          <th className="text-right py-1 px-1">Dwell (sec)</th>
+                          <th className="text-center py-1 px-1">Status</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {!activeSessions || activeSessions.sessions.length === 0 ? (
+                          <tr>
+                            <td colSpan={5} className="text-center py-4 text-gray-500">
+                              No one currently in queue zones
+                            </td>
+                          </tr>
+                        ) : (
+                          activeSessions.sessions.map((s, i) => (
+                            <tr key={i} className="border-b border-gray-700/50 hover:bg-gray-700/30">
+                              <td className="py-1.5 px-1 text-white font-mono">
+                                {s.personId.split(':')[1] || s.personId}
+                              </td>
+                              <td className="py-1.5 px-1 text-cyan-400 font-medium">
+                                {s.laneName}
+                              </td>
+                              <td className="py-1.5 px-1 text-gray-400">
+                                {s.entryTimeStr}
+                              </td>
+                              <td className="py-1.5 px-1 text-right">
+                                <span className={`font-bold font-mono ${
+                                  s.currentDwellSec >= 5 ? 'text-green-400' : 'text-amber-400'
+                                }`}>
+                                  {s.currentDwellSec}s
+                                </span>
+                              </td>
+                              <td className="py-1.5 px-1 text-center">
+                                {s.inService ? (
+                                  <span className="text-purple-400">🛒 Service</span>
+                                ) : s.currentDwellSec >= 5 ? (
+                                  <span className="text-green-400">✓ Queuing</span>
+                                ) : (
+                                  <span className="text-amber-400">⏳ {5 - s.currentDwellSec}s to valid</span>
+                                )}
+                              </td>
+                            </tr>
+                          ))
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                  
+                  <div className="mt-2 text-xs text-gray-500 flex items-center gap-4">
+                    <span>🟢 ≥5s = Valid queue session</span>
+                    <span>🟡 &lt;5s = Walk-through (will be abandoned)</span>
+                    <span>🟣 In service zone</span>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Other tabs depend on live status */}
+            {activeTab !== 'kpi' && error && (
               <div className="text-center py-8 text-gray-400">
                 <WifiOff className="w-8 h-8 mx-auto mb-2 opacity-50" />
                 <p>{error}</p>
                 <p className="text-xs mt-2">Start the simulator or configure live data source</p>
               </div>
-            ) : !status ? (
+            )}
+            {activeTab !== 'kpi' && !error && !status && (
               <div className="text-center py-8 text-gray-400">
                 <RefreshCw className="w-8 h-8 mx-auto mb-2 animate-spin opacity-50" />
                 <p>Loading...</p>
               </div>
-            ) : (
+            )}
+            {activeTab !== 'kpi' && !error && status && (
               <>
                 {/* Lanes Tab */}
                 {activeTab === 'lanes' && (

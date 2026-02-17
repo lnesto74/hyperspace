@@ -1,0 +1,170 @@
+{
+  "version": "1.0.0",
+  "description": "Persona-based KPI storytelling registry for Hyperspace Narrator2",
+  "personas": {
+    "store_manager": {
+      "label": "Store Manager",
+      "goal": "Ensure smooth daily operations and avoid bottlenecks",
+      "steps": [
+        {
+          "id": "operations_pulse",
+          "title": "Store Operations Pulse",
+          "description": "Overall health of the store right now",
+          "kpis": [
+            "occupancyRate",
+            "avgDwellTime",
+            "queueWaitTime",
+            "cashierOpenCount",
+            "passByTraffic",
+            "conversionRate",
+            "alertIndex"
+          ],
+          "deepLink": {
+            "label": "Open Live Store View",
+            "route": "/dashboard/live"
+          }
+        },
+        {
+          "id": "checkout_pressure",
+          "title": "Queue Lane Performance",
+          "description": "Were enough checkout lanes open? Did customers wait too long?",
+          "kpis": [
+            "avgConcurrentOpenLanes",
+            "peakConcurrentOpenLanes",
+            "avgQueueWaitTime",
+            "p95QueueWaitTime",
+            "queueThroughput",
+            "avgServiceTime",
+            "queueAbandonmentRate"
+          ],
+          "deepLink": {
+            "label": "Open Checkout Manager",
+            "route": "/operations/checkout"
+          }
+        }
+      ]
+    },
+
+    "category_manager": {
+      "label": "Category Manager",
+      "goal": "Maximize category performance and shelf efficiency",
+      "steps": [
+        {
+          "id": "category_engagement",
+          "title": "Category Engagement Overview",
+          "description": "How shoppers interact with categories",
+          "kpis": [
+            "categoryEngagementRate",
+            "categoryDwellTime",
+            "categoryConversionRate",
+            "categoryRevenuePerVisit",
+            "categoryComparisonIndex",
+            "passByTraffic"
+          ],
+          "deepLink": {
+            "label": "Open Category Analytics",
+            "route": "/analytics/categories"
+          }
+        },
+        {
+          "id": "shelf_quality",
+          "title": "Shelf Quality & Placement",
+          "description": "Effectiveness of shelf positioning",
+          "kpis": [
+            "browsingRate",
+            "avgBrowseTime",
+            "avgPositionScore",
+            "slotUtilizationRate",
+            "deadZoneCount",
+            "brandEfficiencyIndex"
+          ],
+          "deepLink": {
+            "label": "Open Shelf Heatmap",
+            "route": "/analytics/shelves"
+          }
+        }
+      ]
+    },
+
+    "retail_media_manager": {
+      "label": "Retail Media / DOOH Manager",
+      "goal": "Prove advertising effectiveness and sell media inventory",
+      "steps": [
+        {
+          "id": "dooh_effectiveness",
+          "title": "DOOH Effectiveness (PEBLE™)",
+          "description": "Did the campaign change shopper behavior?",
+          "kpis": [
+            "PEBLE",
+            "EAL",
+            "AQS",
+            "TTA",
+            "DCI",
+            "CES"
+          ],
+          "deepLink": {
+            "label": "Open DOOH Analytics",
+            "route": "/analytics/dooh"
+          }
+        },
+        {
+          "id": "attention_to_action",
+          "title": "Attention → Action Funnel",
+          "description": "How attention converts into engagement",
+          "kpis": [
+            "AQS",
+            "AAR",
+            "SEQ",
+            "pExposed",
+            "pControl",
+            "confidenceScore"
+          ],
+          "deepLink": {
+            "label": "View Campaign Funnel",
+            "route": "/analytics/dooh/funnel"
+          }
+        }
+      ]
+    },
+
+    "executive": {
+      "label": "Executive / C-Level",
+      "goal": "Understand business impact at a glance",
+      "steps": [
+        {
+          "id": "business_overview",
+          "title": "Business Performance Overview",
+          "description": "High-level performance snapshot",
+          "kpis": [
+            "totalVisitors",
+            "conversionRate",
+            "avgBasketValue",
+            "revenuePerSqm",
+            "operationalEfficiencyIndex",
+            "CES"
+          ],
+          "deepLink": {
+            "label": "Open Executive Dashboard",
+            "route": "/dashboard/executive"
+          }
+        },
+        {
+          "id": "growth_opportunities",
+          "title": "Growth Opportunities",
+          "description": "Where performance can be improved",
+          "kpis": [
+            "passByTraffic",
+            "underperformingZones",
+            "brandEfficiencyIndex",
+            "categoryComparisonIndex",
+            "PEBLE"
+          ],
+          "deepLink": {
+            "label": "Open Opportunity Map",
+            "route": "/analytics/opportunities"
+          }
+        }
+      ]
+    }
+  }
+}

@@ -297,12 +297,13 @@ const findValidPosition = (x, z, venueWidth, venueDepth) => {
 };
 
 // Parse cashier zones from ROIs
+// Returns array sorted by X position with queueZoneId (UUID) as primary identifier
 const parseCashierZones = (geometry) => {
   const zones = [];
   const rois = geometry.rois || [];
   
-  const queueZones = rois.filter(r => r.name.endsWith('- Queue'));
-  const serviceZones = rois.filter(r => r.name.endsWith('- Service'));
+  const queueZones = rois.filter(r => r.name && r.name.endsWith('- Queue'));
+  const serviceZones = rois.filter(r => r.name && r.name.endsWith('- Service'));
   
   console.log(`Found ${queueZones.length} queue zones, ${serviceZones.length} service zones`);
   
@@ -311,14 +312,31 @@ const parseCashierZones = (geometry) => {
     const serviceZone = serviceZones.find(s => s.name.replace('- Service', '').trim() === cashierName);
     
     if (serviceZone) {
+      const queueCenter = calculateZoneCenter(queueZone.vertices);
+      const serviceCenter = calculateZoneCenter(serviceZone.vertices);
+      
       zones.push({
         name: cashierName,
-        queueZone: { ...queueZone, center: calculateZoneCenter(queueZone.vertices) },
-        serviceZone: { ...serviceZone, center: calculateZoneCenter(serviceZone.vertices) },
+        queueZoneId: queueZone.id,       // UUID - the single source of truth
+        serviceZoneId: serviceZone.id,   // UUID
+        queueZone: { ...queueZone, center: queueCenter },
+        serviceZone: { ...serviceZone, center: serviceCenter },
+        queueCenter,
+        serviceCenter,
       });
-      console.log(`Paired: ${cashierName}`);
+      console.log(`Paired: ${cashierName} (queue: ${queueZone.id})`);
     }
   }
+  
+  // Sort by X position for consistent Lane 1, 2, 3 numbering
+  zones.sort((a, b) => (a.queueCenter?.x || 0) - (b.queueCenter?.x || 0));
+  
+  // Assign display index (1-indexed)
+  zones.forEach((z, i) => {
+    z.displayIndex = i + 1;
+    z.displayName = `Lane ${i + 1}`;
+  });
+  
   return zones;
 };
 
@@ -898,6 +916,8 @@ const startSimulation = async () => {
           // Checkout Manager settings
           enableCheckoutManager: config.enableCheckoutManager,
           queuePressureThreshold: config.queuePressureThreshold || 5,
+          // Pass checkout zones with queueZoneId (UUID) for unified lane identification
+          checkoutZones: cashierZones,
         };
         
         // Override cashier behavior settings if provided

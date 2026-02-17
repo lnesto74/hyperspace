@@ -134,4 +134,66 @@ export class TrackAggregator extends EventEmitter {
   getActiveTrackCount() {
     return this.tracks.size;
   }
+
+  /**
+   * Set ROIs for zone occupancy tracking
+   * @param {Array} rois - Array of ROI objects with id and vertices
+   */
+  setRois(rois) {
+    this.rois = rois || [];
+  }
+
+  /**
+   * Check if a point is inside a polygon (ray casting algorithm)
+   */
+  pointInPolygon(point, vertices) {
+    if (!vertices || vertices.length < 3) return false;
+    
+    let inside = false;
+    const x = point.x, z = point.z;
+    
+    for (let i = 0, j = vertices.length - 1; i < vertices.length; j = i++) {
+      const xi = vertices[i].x, zi = vertices[i].z;
+      const xj = vertices[j].x, zj = vertices[j].z;
+      
+      if (((zi > z) !== (zj > z)) && (x < (xj - xi) * (z - zi) / (zj - zi) + xi)) {
+        inside = !inside;
+      }
+    }
+    
+    return inside;
+  }
+
+  /**
+   * Get the number of tracks currently inside a zone (ROI)
+   * @param {string} roiId - The UUID of the ROI
+   * @returns {number} Number of tracks inside the zone
+   */
+  getZoneOccupancy(roiId) {
+    if (!this.rois || this.rois.length === 0) return 0;
+    
+    const roi = this.rois.find(r => r.id === roiId);
+    if (!roi) return 0;
+    
+    let vertices = roi.vertices;
+    if (typeof vertices === 'string') {
+      try {
+        vertices = JSON.parse(vertices);
+      } catch (e) {
+        return 0;
+      }
+    }
+    
+    if (!vertices || vertices.length < 3) return 0;
+    
+    let count = 0;
+    for (const [, entry] of this.tracks) {
+      const pos = entry.track.venuePosition;
+      if (pos && this.pointInPolygon(pos, vertices)) {
+        count++;
+      }
+    }
+    
+    return count;
+  }
 }

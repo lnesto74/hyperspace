@@ -8,6 +8,9 @@ import { PlanogramProvider, usePlanogram } from './context/PlanogramContext'
 import { DwgProvider, useDwg } from './context/DwgContext'
 import { NarratorProvider } from './context/NarratorContext'
 import { NarratorDrawer, NarratorToggle } from './components/narrator'
+import { Narrator2Provider } from './context/Narrator2Context'
+import Narrator2Drawer from './components/narrator/Narrator2Drawer'
+import Narrator2Toggle from './components/narrator/Narrator2Toggle'
 import AppShell from './components/layout/AppShell'
 import ZoneKPIPopup from './components/kpi/ZoneKPIPopup'
 import ZoneKPIOverlayPanel from './components/kpi/ZoneKPIOverlayPanel'
@@ -95,6 +98,51 @@ function KPIOverlayToggle() {
     const interval = setInterval(fetchUnreadCount, 10000)
     return () => clearInterval(interval)
   }, [venue?.id])
+  
+  // Handle Narrator2 intent events
+  useEffect(() => {
+    const handleNarrator2Intent = (e: CustomEvent<{ intent: string; venueId?: string }>) => {
+      const { intent } = e.detail
+      console.log('[App] Handling Narrator2 intent:', intent)
+      
+      switch (intent) {
+        case 'open_heatmap':
+          setShowHeatmapModal(true)
+          break
+        case 'open_zone_analytics':
+        case 'open_analytics':
+          setShowSmartKpiModal(true)
+          break
+        case 'open_checkout':
+        case 'open_checkout_manager':
+          setShowCheckoutManager(true)
+          break
+        case 'open_planogram':
+        case 'open_planogram_builder':
+          setMode('planogram')
+          break
+        case 'open_ledger':
+        case 'open_activity_ledger':
+          setShowLedger(true)
+          break
+        case 'open_dooh':
+        case 'open_dooh_effectiveness':
+          setMode('doohEffectiveness')
+          break
+        case 'open_business_reporting':
+          setMode('businessReporting')
+          break
+        case 'open_lidar_planner':
+          setMode('lidarPlanner')
+          break
+        default:
+          console.warn('[App] Unknown Narrator2 intent:', intent)
+      }
+    }
+    
+    window.addEventListener('narrator2-intent', handleNarrator2Intent as EventListener)
+    return () => window.removeEventListener('narrator2-intent', handleNarrator2Intent as EventListener)
+  }, [setMode])
   
   return (
     <>
@@ -194,8 +242,11 @@ function KPIOverlayToggle() {
           <PieChart className="w-4 h-4" />
         </button>
         
-        {/* AI Narrator Button */}
+        {/* AI Narrator Button (v1 - legacy) */}
         <NarratorToggle />
+        
+        {/* AI Narrator2 Button (v2 - new) */}
+        <Narrator2Toggle />
         
         {/* Activity Ledger Button */}
         <button
@@ -245,7 +296,7 @@ function KPIOverlayToggle() {
       {/* KPI Overlay Panel */}
       <ZoneKPIOverlayPanel />
       
-      {/* AI Narrator Drawer */}
+      {/* AI Narrator Drawer (v1 - legacy) */}
       <NarratorDrawer 
         onExecuteIntent={(intent, entityId) => {
           // Handle narrator UI intents
@@ -291,6 +342,38 @@ function KPIOverlayToggle() {
               break
             default:
               console.log('[Narrator] Unhandled intent:', intent, entityId)
+          }
+        }}
+      />
+      
+      {/* AI Narrator2 Drawer (v2 - new ViewPack-based) */}
+      <Narrator2Drawer 
+        onExecuteIntent={(intent) => {
+          // Handle narrator2 deep link intents
+          const route = intent.replace('NAVIGATE:', '')
+          switch (route) {
+            case '/dashboard/live':
+              setMode('main')
+              break
+            case '/operations/checkout':
+              setShowCheckoutManager(true)
+              break
+            case '/analytics/categories':
+            case '/analytics/shelves':
+              setMode('planogram')
+              break
+            case '/analytics/dooh':
+              setMode('doohAnalytics')
+              break
+            case '/analytics/dooh/funnel':
+              setMode('doohEffectiveness')
+              break
+            case '/dashboard/executive':
+            case '/analytics/opportunities':
+              setMode('businessReporting')
+              break
+            default:
+              console.log('[Narrator2] Unhandled intent:', intent)
           }
         }}
       />
@@ -375,7 +458,9 @@ function App() {
               <HeatmapProvider>
                 <DwgProvider>
                   <NarratorProvider>
-                    <MainApp />
+                    <Narrator2Provider>
+                      <MainApp />
+                    </Narrator2Provider>
                   </NarratorProvider>
                 </DwgProvider>
               </HeatmapProvider>

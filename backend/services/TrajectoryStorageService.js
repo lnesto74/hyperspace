@@ -291,6 +291,16 @@ export class TrajectoryStorageService extends EventEmitter {
       if (!colNames.includes('queue_critical_color')) {
         this.db.exec(`ALTER TABLE zone_settings ADD COLUMN queue_critical_color TEXT DEFAULT '#ef4444'`);
       }
+      // Add lane_number for consistent Lane 1, 2, 3 display ordering (sorted by X position)
+      if (!colNames.includes('lane_number')) {
+        this.db.exec(`ALTER TABLE zone_settings ADD COLUMN lane_number INTEGER`);
+        console.log('📊 Added lane_number column to zone_settings');
+      }
+      // Add is_open to track if lane is accepting queue sessions
+      if (!colNames.includes('is_open')) {
+        this.db.exec(`ALTER TABLE zone_settings ADD COLUMN is_open INTEGER DEFAULT 1`);
+        console.log('📊 Added is_open column to zone_settings');
+      }
     } catch (err) {
       console.log('Queue threshold columns migration:', err.message);
     }
@@ -331,6 +341,8 @@ export class TrajectoryStorageService extends EventEmitter {
   /**
    * Auto-detect queue→service zone pairs based on naming convention
    * Pattern: "Checkout X - Queue" paired with "Checkout X - Service"
+   * Also handles: "checkout-xxxx - Queue" paired with "checkout-xxxx - Service"
+   * IMPORTANT: Persists links to zone_settings table for durability
    */
   autoDetectZoneLinks(venueId) {
     try {
@@ -338,35 +350,59 @@ export class TrajectoryStorageService extends EventEmitter {
         SELECT id, name, color, vertices FROM regions_of_interest WHERE venue_id = ?
       `).all(venueId);
       
-      const queueZones = new Map(); // key: checkout number, value: zone
-      const serviceZones = new Map(); // key: checkout number, value: zone
+      const queueZones = new Map(); // key: checkout identifier, value: zone
+      const serviceZones = new Map(); // key: checkout identifier, value: zone
       
       for (const zone of zones) {
         const name = zone.name || '';
         const nameLower = name.toLowerCase();
         
-        // Pattern: "Checkout X - Queue" or "Checkout X - Service"
-        const checkoutMatch = name.match(/checkout\s*(\d+)/i);
-        if (checkoutMatch) {
-          const checkoutNum = checkoutMatch[1];
+        // Pattern 1: "Checkout X - Queue" or "Checkout X - Service" (numeric)
+        const numericMatch = name.match(/checkout\s*(\d+)/i);
+        // Pattern 2: "checkout-xxxx - Queue" or "checkout-xxxx - Service" (alphanumeric)
+        const alphaMatch = name.match(/checkout[_-]([a-f0-9]+)/i);
+        
+        const checkoutId = numericMatch ? numericMatch[1] : (alphaMatch ? alphaMatch[1] : null);
+        
+        if (checkoutId) {
           if (nameLower.includes('queue')) {
-            queueZones.set(checkoutNum, { ...zone, vertices: JSON.parse(zone.vertices || '[]') });
+            queueZones.set(checkoutId, { ...zone, vertices: JSON.parse(zone.vertices || '[]') });
           } else if (nameLower.includes('service')) {
-            serviceZones.set(checkoutNum, { ...zone, vertices: JSON.parse(zone.vertices || '[]') });
+            serviceZones.set(checkoutId, { ...zone, vertices: JSON.parse(zone.vertices || '[]') });
           }
         }
       }
       
-      // Link queue zones to their matching service zones by checkout number
-      for (const [checkoutNum, queueZone] of queueZones) {
-        const serviceZone = serviceZones.get(checkoutNum);
+      // Prepare statement for upserting zone_settings
+      const upsertStmt = this.db.prepare(`
+        INSERT INTO zone_settings (roi_id, venue_id, linked_service_zone_id)
+        VALUES (?, ?, ?)
+        ON CONFLICT(roi_id) DO UPDATE SET 
+          linked_service_zone_id = excluded.linked_service_zone_id,
+          updated_at = datetime('now')
+      `);
+      
+      let persistedCount = 0;
+      
+      // Link queue zones to their matching service zones
+      for (const [checkoutId, queueZone] of queueZones) {
+        const serviceZone = serviceZones.get(checkoutId);
         if (serviceZone) {
+          // Store in memory for immediate use
           this.zoneLinks.set(queueZone.id, serviceZone.id);
-          console.log(`📊 Linked: "${queueZone.name}" → "${serviceZone.name}"`);
+          
+          // Persist to database for durability
+          try {
+            upsertStmt.run(queueZone.id, venueId, serviceZone.id);
+            persistedCount++;
+            console.log(`📊 Linked & persisted: "${queueZone.name}" → "${serviceZone.name}"`);
+          } catch (dbErr) {
+            console.warn(`📊 Failed to persist link for ${queueZone.name}:`, dbErr.message);
+          }
         }
       }
       
-      console.log(`📊 Auto-linked ${this.zoneLinks.size} queue→service zone pairs`);
+      console.log(`📊 Auto-linked ${this.zoneLinks.size} queue→service zone pairs (${persistedCount} persisted to DB)`);
     } catch (err) {
       console.error('Failed to auto-detect zone links:', err);
     }
@@ -383,12 +419,60 @@ export class TrajectoryStorageService extends EventEmitter {
   }
 
   /**
+   * Load open lanes from database for a venue
+   * Only open lanes will create queue sessions
+   */
+  loadOpenLanes(venueId) {
+    try {
+      const rows = this.db.prepare(`
+        SELECT roi_id FROM zone_settings WHERE venue_id = ? AND is_open = 1
+      `).all(venueId);
+      this.openLanes = new Set(rows.map(r => r.roi_id));
+      console.log(`📊 Loaded ${this.openLanes.size} open lanes for queue tracking`);
+    } catch (err) {
+      console.error('Failed to load open lanes:', err);
+      this.openLanes = new Set();
+    }
+  }
+
+  /**
+   * Set a lane as open or closed
+   */
+  setLaneOpen(venueId, queueZoneId, isOpen) {
+    try {
+      this.db.prepare(`
+        UPDATE zone_settings SET is_open = ? WHERE venue_id = ? AND roi_id = ?
+      `).run(isOpen ? 1 : 0, venueId, queueZoneId);
+      // Reload open lanes
+      this.loadOpenLanes(venueId);
+      console.log(`📊 Lane ${queueZoneId.substring(0, 8)} set to ${isOpen ? 'OPEN' : 'CLOSED'}`);
+    } catch (err) {
+      console.error('Failed to set lane state:', err);
+    }
+  }
+
+  /**
+   * Check if a queue zone is open (accepting queue sessions)
+   */
+  isLaneOpen(queueZoneId) {
+    // If openLanes not loaded yet (undefined), assume all open (backward compat)
+    // But if loaded and empty, that means all lanes are explicitly closed
+    if (this.openLanes === undefined) return true;
+    if (this.openLanes.size === 0) return false; // All lanes closed
+    return this.openLanes.has(queueZoneId);
+  }
+
+  /**
    * Track queue session for a person (queue theory)
    * Called when a person enters or is in a queue zone
+   * Only tracks sessions for OPEN lanes
    */
   updateQueueSession(venueId, trackKey, queueZoneId, currentRoiIds, timestamp) {
     const serviceZoneId = this.zoneLinks.get(queueZoneId);
     if (!serviceZoneId) return; // No linked service zone
+    
+    // Only track queue sessions for OPEN lanes
+    if (!this.isLaneOpen(queueZoneId)) return;
     
     const sessionKey = `${trackKey}:${queueZoneId}`;
     const inServiceZone = currentRoiIds.includes(serviceZoneId);
@@ -441,10 +525,41 @@ export class TrajectoryStorageService extends EventEmitter {
   }
 
   /**
+   * Get all active queue sessions for debugging
+   * Returns array of { personId, queueZoneId, entryTime, currentDwellMs }
+   */
+  getActiveQueueSessions() {
+    const now = Date.now();
+    const sessions = [];
+    
+    for (const [sessionKey, session] of this.queueSessions.entries()) {
+      sessions.push({
+        personId: session.trackKey,
+        queueZoneId: session.queueZoneId,
+        queueZoneShort: session.queueZoneId.substring(0, 8),
+        entryTime: session.queueEntryTime,
+        entryTimeStr: new Date(session.queueEntryTime).toLocaleTimeString(),
+        currentDwellMs: now - session.queueEntryTime,
+        currentDwellSec: Math.round((now - session.queueEntryTime) / 1000),
+        inService: !!session.serviceEntryTime,
+        serviceEntryTime: session.serviceEntryTime,
+      });
+    }
+    
+    // Sort by entry time (newest first)
+    sessions.sort((a, b) => b.entryTime - a.entryTime);
+    
+    return sessions;
+  }
+
+  /**
    * Check if any queue sessions should be finalized
+   * Logic: Exiting the queue zone = session complete (served)
+   * Only mark as abandoned if dwell time < MIN_QUEUE_DWELL_MS (walk-through/bounce)
    */
   checkQueueSessionEnds(trackKey, currentRoiIds, timestamp) {
-    const GRACE_MS = 1000; // 1 second grace period
+    const GRACE_MS = 1000; // 1 second grace period before finalizing
+    const MIN_QUEUE_DWELL_MS = 5000; // 5 seconds minimum to count as real queue (not walk-through)
     
     for (const [sessionKey, session] of this.queueSessions.entries()) {
       if (!sessionKey.startsWith(trackKey + ':')) continue;
@@ -452,7 +567,7 @@ export class TrajectoryStorageService extends EventEmitter {
       const inQueueZone = currentRoiIds.includes(session.queueZoneId);
       const inServiceZone = currentRoiIds.includes(session.serviceZoneId);
       
-      // Person left service zone after being served - complete session
+      // Person left service zone after being served - complete session (precise tracking)
       if (session.serviceEntryTime && !inServiceZone) {
         const timeSinceService = timestamp - session.lastSeenInService;
         if (timeSinceService > GRACE_MS) {
@@ -461,12 +576,16 @@ export class TrajectoryStorageService extends EventEmitter {
           this.queueSessions.delete(sessionKey);
         }
       }
-      // Person left queue without entering service - abandoned
-      else if (!session.serviceEntryTime && !inQueueZone && !inServiceZone) {
+      // Person left queue zone (no service zone tracking needed)
+      else if (!inQueueZone && !inServiceZone) {
         const timeSinceQueue = timestamp - session.lastSeenInQueue;
         if (timeSinceQueue > GRACE_MS) {
           session.queueExitTime = session.lastSeenInQueue;
-          session.isAbandoned = true;
+          const dwellTime = session.queueExitTime - session.queueEntryTime;
+          
+          // Short dwell = walk-through/bounce (abandoned)
+          // Longer dwell = completed queue session (served)
+          session.isAbandoned = dwellTime < MIN_QUEUE_DWELL_MS;
           this.finalizeQueueSession(session);
           this.queueSessions.delete(sessionKey);
         }
@@ -822,6 +941,11 @@ export class TrajectoryStorageService extends EventEmitter {
       // Track queue sessions for queue zones (per queue theory)
       // Only call if this ROI is a linked queue zone
       if (this.zoneLinks.has(roi.id)) {
+        // Debug: log when someone enters a queue zone
+        if (!this.queueSessions.has(`${track.trackKey}:${roi.id}`)) {
+          const isOpen = this.isLaneOpen(roi.id);
+          console.log(`📊 DEBUG: ${track.trackKey} in queue zone ${roi.id.substring(0,8)}, isOpen=${isOpen}, openLanes=${this.openLanes?.size || 'undefined'}`);
+        }
         this.updateQueueSession(venueId, track.trackKey, roi.id, currentRoiIds, now);
       }
     }
