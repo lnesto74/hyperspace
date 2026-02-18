@@ -271,6 +271,12 @@ export class LaneStateController {
         }
         lane.queueCount = queueInfo ? queueInfo.length : 0
       }
+      
+      // CRITICAL: Sync isOpen to simulator.laneStates so queueManager sees correct open lanes
+      const laneIdx = lane.displayIndex - 1
+      if (this.simulator.laneStates && laneIdx < this.simulator.laneStates.length) {
+        this.simulator.laneStates[laneIdx].isOpen = (lane.status === 'OPEN')
+      }
     }
   }
 

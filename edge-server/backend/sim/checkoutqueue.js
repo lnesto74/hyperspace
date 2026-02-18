@@ -89,9 +89,33 @@ export class CheckoutQueueSubsystem {
       .map(ls => ls.laneId);
   }
 
-  init() {
-    const cashiers = this.navGrid.cashiers || [];
+  init(checkoutZones = null) {
     this.queues = [];
+    
+    // Use checkoutZones (ROI-based, sorted by X position) if available
+    // Otherwise fall back to navGrid.cashiers
+    let cashierPositions = [];
+    
+    if (checkoutZones && checkoutZones.length > 0) {
+      // Use ROI-based checkout zones (already sorted by X position)
+      console.log(`[Queue] Using ${checkoutZones.length} ROI-based checkout zones`);
+      cashierPositions = checkoutZones.map(zone => ({
+        x: zone.queueCenter?.x || zone.serviceCenter?.x || 0,
+        z: zone.queueCenter?.z || zone.serviceCenter?.z || 0,
+        queueZoneId: zone.queueZoneId,
+        displayIndex: zone.displayIndex,
+      }));
+    } else {
+      // Fall back to navGrid.cashiers
+      const navCashiers = this.navGrid.cashiers || [];
+      console.log(`[Queue] Using ${navCashiers.length} navGrid cashiers (fallback)`);
+      cashierPositions = navCashiers.map((pos, i) => ({
+        x: pos.x,
+        z: pos.z,
+        queueZoneId: `lane-${i}`,
+        displayIndex: i + 1,
+      }));
+    }
     
     // DEBUG: Log zone bounds
     console.log(`[Queue DEBUG] Zone bounds:`);
@@ -101,14 +125,17 @@ export class CheckoutQueueSubsystem {
     console.log(`  checkoutMinX = ${this.navGrid.zoneBounds.checkoutMinX}`);
     console.log(`  checkoutMaxX = ${this.navGrid.zoneBounds.checkoutMaxX}`);
     
-    for (let i = 0; i < cashiers.length; i++) {
+    for (let i = 0; i < cashierPositions.length; i++) {
+      const pos = cashierPositions[i];
       this.queues.push({
-        cashierX: cashiers[i].x,
-        cashierZ: cashiers[i].z,
+        cashierX: pos.x,
+        cashierZ: pos.z,
+        queueZoneId: pos.queueZoneId,
+        displayIndex: pos.displayIndex,
         serviceAgent: null,
         queueAgents: [],
       });
-      console.log(`[Queue DEBUG] Cashier ${i}: X=${cashiers[i].x.toFixed(1)}, Z=${cashiers[i].z.toFixed(1)}`);
+      console.log(`[Queue DEBUG] Lane ${pos.displayIndex}: X=${pos.x.toFixed(1)}, Z=${pos.z.toFixed(1)} (${pos.queueZoneId.substring(0,8)})`);
     }
     
     // Calculate service and queue zones
@@ -117,7 +144,7 @@ export class CheckoutQueueSubsystem {
     console.log(`  Service zone Z = ${cashierZ + 1.5} (cashierZ + 1.5)`);
     console.log(`  Queue start Z = ${cashierZ + 3} (cashierZ + 3)`);
     
-    console.log(`[Queue] Initialized ${cashiers.length} checkout queues`);
+    console.log(`[Queue] Initialized ${cashierPositions.length} checkout queues`);
   }
 
   /**

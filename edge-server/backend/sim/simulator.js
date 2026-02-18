@@ -76,8 +76,8 @@ export class SimulatorV2 {
     // Build directional gates
     this.gateManager.buildFromScene(objects);
     
-    // Initialize queue manager
-    this.queueManager.init();
+    // Initialize queue manager with checkoutZones (ROI-based, sorted by X position)
+    this.queueManager.init(this.config.checkoutZones);
     
     // Spawn cashiers if enabled
     if (this.config.ENABLE_CASHIER_AGENTS) {
@@ -190,10 +190,21 @@ export class SimulatorV2 {
   spawnCashierForLane(laneId, laneConfig = {}) {
     if (!this.initialized) return null;
     
-    const cashiers = this.navGrid.cashiers || [];
-    if (laneId < 0 || laneId >= cashiers.length) {
-      console.error(`[SimV2] Cannot spawn cashier for invalid lane ${laneId}`);
-      return null;
+    // Use ROI-based position from laneConfig if available, otherwise fall back to navGrid
+    let cashierPos;
+    if (laneConfig.serviceArea || laneConfig.standPoint) {
+      // Use ROI-based position (already in correct order)
+      cashierPos = laneConfig.standPoint || laneConfig.serviceArea;
+      console.log(`[SimV2] Using ROI-based position for lane ${laneId}: X=${cashierPos.x.toFixed(1)}, Z=${cashierPos.z.toFixed(1)}`);
+    } else {
+      // Fall back to navGrid.cashiers
+      const cashiers = this.navGrid.cashiers || [];
+      if (laneId < 0 || laneId >= cashiers.length) {
+        console.error(`[SimV2] Cannot spawn cashier for invalid lane ${laneId}`);
+        return null;
+      }
+      cashierPos = cashiers[laneId];
+      console.log(`[SimV2] Using navGrid position for lane ${laneId}: X=${cashierPos.x.toFixed(1)}, Z=${cashierPos.z.toFixed(1)}`);
     }
     
     // Check if there's already a cashier for this lane
@@ -205,7 +216,6 @@ export class SimulatorV2 {
     }
     
     // Create new cashier agent
-    const cashierPos = cashiers[laneId];
     const cashierAgent = new CashierAgent(
       this.nextCashierId++,
       laneId,

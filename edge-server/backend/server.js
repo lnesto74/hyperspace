@@ -15,6 +15,9 @@ import { capturePointCloudSnapshot, pointsToBuffer, pointsToPly, startPointCloud
 // V2 Simulation modules
 import { SimulatorV2, SIM_CONFIG, STATE } from './sim/index.js';
 
+// HER (Hyperspace Edge Runtime) Manager
+import { initHerManager, deployHer, stopHer, getHerStatus, getMode, isHerActive } from './her-manager.js';
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
@@ -118,7 +121,18 @@ const fetchVenueGeometry = async () => {
     }
     const venueData = await venueRes.json();
     
-    const roiRes = await fetch(`${config.backendUrl}/api/venues/${config.venueId}/roi`);
+    // Check if venue has a DWG layout - if so, fetch DWG ROIs instead of manual ROIs
+    const dwgLayoutId = venueData.venue?.dwg_layout_version_id;
+    let roiUrl;
+    if (dwgLayoutId) {
+      roiUrl = `${config.backendUrl}/api/venues/${config.venueId}/dwg/${dwgLayoutId}/roi`;
+      console.log(`Venue has DWG layout: ${dwgLayoutId}, fetching DWG ROIs`);
+    } else {
+      roiUrl = `${config.backendUrl}/api/venues/${config.venueId}/roi`;
+      console.log(`Venue has no DWG layout, fetching manual ROIs`);
+    }
+    
+    const roiRes = await fetch(roiUrl);
     if (!roiRes.ok) {
       console.error('Failed to fetch ROIs:', roiRes.status);
       return null;
@@ -298,6 +312,7 @@ const findValidPosition = (x, z, venueWidth, venueDepth) => {
 
 // Parse cashier zones from ROIs
 // Returns array sorted by X position with queueZoneId (UUID) as primary identifier
+// Pairs Queue/Service zones by matching name prefix (e.g., "Checkout 1 - Queue" <-> "Checkout 1 - Service")
 const parseCashierZones = (geometry) => {
   const zones = [];
   const rois = geometry.rois || [];
@@ -308,11 +323,13 @@ const parseCashierZones = (geometry) => {
   console.log(`Found ${queueZones.length} queue zones, ${serviceZones.length} service zones`);
   
   for (const queueZone of queueZones) {
+    // Extract prefix: "Checkout 1 - Queue" -> "Checkout 1"
     const cashierName = queueZone.name.replace('- Queue', '').trim();
     const serviceZone = serviceZones.find(s => s.name.replace('- Service', '').trim() === cashierName);
     
+    const queueCenter = calculateZoneCenter(queueZone.vertices);
+    
     if (serviceZone) {
-      const queueCenter = calculateZoneCenter(queueZone.vertices);
       const serviceCenter = calculateZoneCenter(serviceZone.vertices);
       
       zones.push({
@@ -324,7 +341,19 @@ const parseCashierZones = (geometry) => {
         queueCenter,
         serviceCenter,
       });
-      console.log(`Paired: ${cashierName} (queue: ${queueZone.id})`);
+      console.log(`Paired: ${cashierName} (queue: ${queueZone.id.substring(0,8)})`);
+    } else {
+      // No matching service zone - still create lane with just queue zone
+      zones.push({
+        name: cashierName,
+        queueZoneId: queueZone.id,
+        serviceZoneId: null,
+        queueZone: { ...queueZone, center: queueCenter },
+        serviceZone: null,
+        queueCenter,
+        serviceCenter: queueCenter,  // Use queue center as fallback
+      });
+      console.log(`Queue zone only (no matching service): ${cashierName} (${queueZone.id.substring(0,8)})`);
     }
   }
   
@@ -2027,13 +2056,23 @@ app.post('/api/edge/config/apply', (req, res) => {
 });
 
 // GET /api/edge/status - Get edge status for commissioning portal
-app.get('/api/edge/status', (req, res) => {
+app.get('/api/edge/status', async (req, res) => {
   const uptime = stats.startTime ? Math.floor((Date.now() - stats.startTime) / 1000) : 0;
   
   // Build lidar connection statuses
   const lidarConnectionStatuses = {};
   for (const lidar of lidarInventory) {
     lidarConnectionStatuses[lidar.lidarId] = lidar.reachable;
+  }
+  
+  // Get HER status if in HER mode
+  let herStatus = null;
+  if (isHerActive()) {
+    try {
+      herStatus = await getHerStatus();
+    } catch (err) {
+      console.error('[Status] Error getting HER status:', err.message);
+    }
   }
   
   res.json({
@@ -2049,10 +2088,105 @@ app.get('/api/edge/status', (req, res) => {
     mqttBroker: config.mqttBroker,
     tracksSent: stats.tracksSent,
     lastError: stats.lastError,
+    // HER mode info
+    operationalMode: getMode(),
+    herStatus,
   });
 });
 
 // ========== END EDGE COMMISSIONING API ==========
+
+// ========== HER (HYPERSPACE EDGE RUNTIME) API ==========
+
+// Initialize HER Manager
+initHerManager();
+
+// POST /api/edge/her/deploy - Deploy HER with provider module
+app.post('/api/edge/her/deploy', async (req, res) => {
+  console.log('[HER API] Deploy request received');
+  
+  const payload = req.body;
+  
+  if (!payload || !payload.deployment || !payload.providerModule) {
+    return res.status(400).json({
+      ok: false,
+      error: 'Invalid payload: requires deployment and providerModule',
+    });
+  }
+  
+  // Callback to stop simulator when HER starts
+  const onSimulatorStop = () => {
+    if (isRunning) {
+      console.log('[HER API] Stopping simulator for HER deploy...');
+      stopSimulation();
+    }
+  };
+  
+  try {
+    const result = await deployHer(payload, onSimulatorStop);
+    
+    if (result.ok) {
+      res.json(result);
+    } else {
+      res.status(500).json(result);
+    }
+  } catch (err) {
+    console.error('[HER API] Deploy error:', err.message);
+    res.status(500).json({
+      ok: false,
+      error: 'HER deploy failed',
+      message: err.message,
+    });
+  }
+});
+
+// GET /api/edge/her/status - Get HER status
+app.get('/api/edge/her/status', async (req, res) => {
+  try {
+    const status = await getHerStatus();
+    res.json(status);
+  } catch (err) {
+    console.error('[HER API] Status error:', err.message);
+    res.status(500).json({
+      ok: false,
+      error: 'Failed to get HER status',
+      message: err.message,
+    });
+  }
+});
+
+// POST /api/edge/her/stop - Stop HER and resume simulator
+app.post('/api/edge/her/stop', async (req, res) => {
+  console.log('[HER API] Stop request received');
+  
+  // Callback to resume simulator when HER stops
+  const onSimulatorResume = async () => {
+    console.log('[HER API] Resuming simulator after HER stop...');
+    await startSimulation();
+  };
+  
+  try {
+    const result = await stopHer(onSimulatorResume);
+    res.json(result);
+  } catch (err) {
+    console.error('[HER API] Stop error:', err.message);
+    res.status(500).json({
+      ok: false,
+      error: 'Failed to stop HER',
+      message: err.message,
+    });
+  }
+});
+
+// GET /api/edge/mode - Get current operational mode
+app.get('/api/edge/mode', (req, res) => {
+  res.json({
+    mode: getMode(),
+    isHerActive: isHerActive(),
+  });
+});
+
+// ========== END HER API ==========
 
 app.post('/api/start', async (req, res) => {
   const result = await startSimulation();
