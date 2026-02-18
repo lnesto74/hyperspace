@@ -18,7 +18,7 @@ import {
 import { cacheGet, cacheSet, generateViewpackKey } from './CacheLayer.js';
 import { evaluateStatus } from './Thresholds.js';
 import { hashViewPack } from './Hashing.js';
-import KpiSourceAdapter from './KpiSourceAdapter.js';
+import KpiSourceAdapter, { resolveVenueId } from './KpiSourceAdapter.js';
 
 /**
  * @typedef {import('./types.js').ViewPack} ViewPack
@@ -33,7 +33,10 @@ import KpiSourceAdapter from './KpiSourceAdapter.js';
  */
 export async function buildViewPack(params) {
   const startTime = Date.now();
-  const { venueId, personaId, stepId, period, startTs, endTs, context } = params;
+  const { personaId, stepId, period, startTs, endTs, context } = params;
+  
+  // Resolve venue ID to UUID format (handles both numeric and UUID inputs)
+  const venueId = resolveVenueId(params.venueId);
 
   // Resolve time range
   let timeRange;
@@ -87,8 +90,11 @@ export async function buildViewPack(params) {
     return { viewPack: null, cache: { hit: false, layer: 'none' }, error: 'No KPI data available' };
   }
 
-  // Build KPIs from raw data
-  const kpis = buildKpisFromData(rawData, stepDef);
+  // Fetch venue-specific thresholds (if configured)
+  const venueThresholds = await getVenueThresholds(venueId);
+
+  // Build KPIs from raw data using venue-specific thresholds
+  const kpis = buildKpisFromData(rawData, stepDef, venueThresholds);
 
   // Build supporting data (small snippets only)
   const supporting = buildSupportingData(rawData, stepDef);
@@ -171,19 +177,59 @@ async function fetchKpiData(venueId, personaId, stepId, stepDef, timeRange, used
 
     case '/api/dooh/kpis':
       usedEndpoints.push('/api/dooh/kpis');
-      const doohData = await KpiSourceAdapter.getDoohKpis(venueId, startTs, endTs);
-      if (doohData && doohData.buckets) {
+      // For DOOH, first try selected period, then expand to 30 days if no data
+      let doohData = await KpiSourceAdapter.getDoohKpis(venueId, startTs, endTs);
+      if (!doohData || !doohData.buckets || doohData.buckets.length === 0) {
+        console.log('[ViewPackService] No DOOH data in period, expanding to 30 days');
+        const expandedStart = endTs - (30 * 24 * 60 * 60 * 1000);
+        doohData = await KpiSourceAdapter.getDoohKpis(venueId, expandedStart, endTs);
+      }
+      if (doohData && doohData.buckets && doohData.buckets.length > 0) {
         return aggregateDoohBuckets(doohData.buckets);
       }
-      return doohData;
+      // Fallback to reporting summary if no DOOH screen data
+      console.log('[ViewPackService] No DOOH screen data, falling back to reporting summary');
+      usedEndpoints.push('/api/reporting/summary');
+      const doohFallback = await KpiSourceAdapter.getReportingSummary(venueId, 'retail-media', startTs, endTs);
+      return doohFallback?.kpis || null;
 
     case '/api/dooh-attribution/kpis':
       usedEndpoints.push('/api/dooh-attribution/kpis');
-      const attrData = await KpiSourceAdapter.getDoohAttributionKpis(venueId, startTs, endTs);
-      if (attrData && attrData.buckets) {
+      // For attribution, first try selected period, then expand to all-time if no data
+      let attrData = await KpiSourceAdapter.getDoohAttributionKpis(venueId, startTs, endTs);
+      if (!attrData || !attrData.buckets || attrData.buckets.length === 0) {
+        // Expand to last 30 days to capture campaign data
+        console.log('[ViewPackService] No attribution data in period, expanding to 30 days');
+        const expandedStart = endTs - (30 * 24 * 60 * 60 * 1000);
+        attrData = await KpiSourceAdapter.getDoohAttributionKpis(venueId, expandedStart, endTs);
+      }
+      if (attrData && attrData.buckets && attrData.buckets.length > 0) {
         return aggregateAttributionBuckets(attrData.buckets);
       }
-      return attrData;
+      // Fallback to basic DOOH KPIs if no attribution data
+      console.log('[ViewPackService] No attribution data, falling back to DOOH KPIs');
+      usedEndpoints.push('/api/dooh/kpis');
+      let fallbackDooh = await KpiSourceAdapter.getDoohKpis(venueId, startTs, endTs);
+      if (!fallbackDooh || !fallbackDooh.buckets || fallbackDooh.buckets.length === 0) {
+        const expandedStart = endTs - (30 * 24 * 60 * 60 * 1000);
+        fallbackDooh = await KpiSourceAdapter.getDoohKpis(venueId, expandedStart, endTs);
+      }
+      if (fallbackDooh && fallbackDooh.buckets && fallbackDooh.buckets.length > 0) {
+        return aggregateDoohBuckets(fallbackDooh.buckets);
+      }
+      // Final fallback to reporting summary
+      console.log('[ViewPackService] No DOOH data, falling back to reporting summary');
+      usedEndpoints.push('/api/reporting/summary');
+      const fallbackReport = await KpiSourceAdapter.getReportingSummary(venueId, 'retail-media', startTs, endTs);
+      return fallbackReport?.kpis || null;
+
+    case '/api/queue/kpis':
+      usedEndpoints.push('/api/queue/kpis');
+      const queueKpis = await KpiSourceAdapter.getQueueLaneKpis(venueId, startTs, endTs);
+      return {
+        ...queueKpis,
+        sampleN: queueKpis.completedSessions || 0,
+      };
 
     default:
       usedEndpoints.push('/api/venues/:venueId/kpis');
@@ -263,42 +309,129 @@ function aggregateAttributionBuckets(buckets) {
     pExposedSum: 0,
     pControlSum: 0,
     cesSum: 0,
+    cesCount: 0,  // Only count non-zero CES for proper average
     aarSum: 0,
+    aqsSum: 0,
+    ttaAccelSum: 0,
+    dciSum: 0,
+    confidenceSum: 0,
+    confidenceCount: 0,  // Only count buckets with control group
+    liftRelSum: 0,
+    liftAbsSum: 0,
     count: 0,
   };
 
   for (const bucket of buckets) {
-    totals.exposedCount += bucket.exposed_count || bucket.exposedCount || 0;
-    totals.controlsCount += bucket.controls_count || bucket.controlsCount || 0;
-    totals.pExposedSum += bucket.p_exposed || bucket.pExposed || 0;
-    totals.pControlSum += bucket.p_control || bucket.pControl || 0;
-    totals.cesSum += bucket.ces_score || bucket.cesScore || 0;
-    totals.aarSum += bucket.aar_score || bucket.aarScore || 0;
+    totals.exposedCount += bucket.exposed_count || 0;
+    totals.controlsCount += bucket.controls_count || 0;
+    totals.pExposedSum += bucket.p_exposed || 0;
+    totals.pControlSum += bucket.p_control || 0;
+    totals.aarSum += bucket.aar_score || 0;
+    totals.aqsSum += bucket.mean_aqs_exposed || 0;
+    totals.ttaAccelSum += bucket.tta_accel || 0;
+    totals.dciSum += bucket.engagement_lift_s || 0;
+    totals.liftRelSum += bucket.lift_rel || 0;
+    totals.liftAbsSum += bucket.lift_abs || 0;
     totals.count++;
+    
+    // Only include CES and confidence when we have a control group
+    if (bucket.controls_count > 0) {
+      totals.cesSum += bucket.ces_score || 0;
+      totals.cesCount++;
+      totals.confidenceSum += bucket.confidence_mean || 0;
+      totals.confidenceCount++;
+    }
   }
 
-  const avgPExposed = totals.count > 0 ? totals.pExposedSum / totals.count : 0;
-  const avgPControl = totals.count > 0 ? totals.pControlSum / totals.count : 0;
+  const n = totals.count;
+  const avgPExposed = n > 0 ? totals.pExposedSum / n : 0;
+  const avgPControl = n > 0 ? totals.pControlSum / n : 0;
+  const avgCes = totals.cesCount > 0 ? totals.cesSum / totals.cesCount : 0;
+  const avgAqs = n > 0 ? totals.aqsSum / n : 0;
+  const avgTtaAccel = n > 0 ? totals.ttaAccelSum / n : 0;
+  const avgDci = n > 0 ? totals.dciSum / n : 0;
+  const avgConfidence = totals.confidenceCount > 0 ? totals.confidenceSum / totals.confidenceCount : 0;
+  const avgLiftRel = n > 0 ? totals.liftRelSum / n : 0;
+  const avgAar = n > 0 ? totals.aarSum / n : 0;
+
+  // PEBLE score = CES if available, otherwise weighted combination
+  // Scale components appropriately: AQS is 0-100, others need scaling
+  const pebleScore = avgCes > 0 
+    ? avgCes 
+    : (avgLiftRel * 40 + (avgAqs / 100) * 30 + avgTtaAccel * 30);
 
   return {
+    // Core PEBLE KPIs (values formatted for display)
+    peble: pebleScore,
+    ces: avgCes,
+    eal: avgLiftRel * 100,        // Convert ratio to percentage
+    aqs: avgAqs,                   // Already 0-100 scale
+    tta: avgTtaAccel * 100,        // Convert ratio to percentage
+    ttaAccel: avgTtaAccel * 100,
+    dci: avgDci,                   // Seconds
+    engagementLiftS: avgDci,
+    aar: avgAar,
+    seq: avgAqs * (avgTtaAccel > 0 ? avgTtaAccel : 1),  // Screen Engagement Quality
+    // Attribution metrics
+    pExposed: avgPExposed * 100,
+    pControl: avgPControl * 100,
+    liftRel: avgLiftRel * 100,
+    liftAbs: n > 0 ? (totals.liftAbsSum / n) * 100 : 0,
+    confidenceMean: avgConfidence * 100,
+    // Counts
     exposedCount: totals.exposedCount,
     controlsCount: totals.controlsCount,
-    ces: totals.count > 0 ? totals.cesSum / totals.count : 0,
-    aar: totals.count > 0 ? totals.aarSum / totals.count : 0,
-    liftRel: avgPControl > 0 ? ((avgPExposed - avgPControl) / avgPControl) * 100 : 0,
-    ttaAccel: 0, // Requires more data
-    confidenceMean: 0.7, // Default
-    sampleN: totals.exposedCount,
+    sampleN: totals.exposedCount + totals.controlsCount,
   };
+}
+
+/**
+ * Fetch venue-specific KPI thresholds from database
+ * @param {string} venueId
+ * @returns {Promise<Record<string, {green: number, amber: number, direction: string}>>}
+ */
+async function getVenueThresholds(venueId) {
+  try {
+    // Import db connection from KpiSourceAdapter's internal db
+    const { default: Database } = await import('better-sqlite3');
+    const path = await import('path');
+    const { fileURLToPath } = await import('url');
+    const __filename = fileURLToPath(import.meta.url);
+    const __dirname = path.dirname(__filename);
+    const dbPath = path.join(__dirname, '../../database/hyperspace.db');
+    const db = new Database(dbPath, { readonly: true });
+    
+    const rows = db.prepare(`
+      SELECT kpi_id, green_threshold, amber_threshold, direction
+      FROM venue_kpi_thresholds
+      WHERE venue_id = ?
+    `).all(venueId);
+    
+    db.close();
+    
+    const thresholdMap = {};
+    for (const row of rows) {
+      thresholdMap[row.kpi_id] = {
+        green: row.green_threshold,
+        amber: row.amber_threshold,
+        direction: row.direction,
+      };
+    }
+    return thresholdMap;
+  } catch (err) {
+    console.warn('[ViewPackService] Failed to fetch venue thresholds:', err.message);
+    return {};
+  }
 }
 
 /**
  * Build ViewPackKpi array from raw data using registry KPI IDs
  * @param {Object} rawData
  * @param {Object} stepDef
+ * @param {Record<string, {green: number, amber: number, direction: string}>} venueThresholds
  * @returns {ViewPackKpi[]}
  */
-function buildKpisFromData(rawData, stepDef) {
+function buildKpisFromData(rawData, stepDef, venueThresholds = {}) {
   const kpis = [];
 
   // Get KPI IDs from step definition (JSON registry)
@@ -311,11 +444,16 @@ function buildKpisFromData(rawData, stepDef) {
     // Get metadata (label, format, thresholds, etc.)
     const metadata = getKpiMetadata(kpiId);
     
+    // Use venue-specific thresholds if available, otherwise use defaults
+    const thresholds = venueThresholds[kpiId] 
+      ? { ...metadata.thresholds, ...venueThresholds[kpiId] }
+      : metadata.thresholds;
+    
     // Extract value using mapped field name
     const value = extractKpiValue(rawData, apiField);
     
-    // Evaluate status against thresholds
-    const status = evaluateStatus(value, metadata.thresholds);
+    // Evaluate status against thresholds (venue-specific or default)
+    const status = evaluateStatus(value, thresholds);
 
     kpis.push({
       id: kpiId,

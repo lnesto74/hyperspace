@@ -49,10 +49,12 @@ export const KPI_ID_MAP = {
   // DB: zone_kpi_daily, zone_kpi_hourly, zone_visits, zone_occupancy
   // ═══════════════════════════════════════════════════════════════
   'totalVisitors': 'totalVisitors',  // SUM(visits)
-  'occupancyRate': 'avgOccupancy',   // computed from sum_occupancy/total_occupancy_samples
+  'totalInStore': 'totalInStore',    // count of active trajectories (people currently in store)
+  'occupancyRate': 'occupancyRate',  // computed as (avgOccupancy / totalCapacity) * 100
   'avgOccupancy': 'avgOccupancy',
   'peakOccupancy': 'peakOccupancy',  // MAX(peak_occupancy)
   'avgDwellTime': 'avgDwellTime',    // time_spent_ms / visits / 60000
+  'avgStoreVisit': 'avgStoreVisit',  // total time per unique visitor
   'avgDwellTimeMs': 'avgDwellTime',  // same field, minutes
   'engagementRate': 'engagementRate', // engagements_cumulative / visits * 100
   'bounceRate': 'bounceRate',        // bounces / visits * 100
@@ -140,10 +142,12 @@ export const KPI_METADATA = {
   // DB: zone_kpi_daily, zone_kpi_hourly, zone_visits, zone_occupancy
   // ═══════════════════════════════════════════════════════════════
   'totalVisitors': { label: 'Total Visitors', format: 'count', thresholds: { green: 500, amber: 200, direction: 'higher' }, hint: 'Zone/store visitors' },
+  'totalInStore': { label: 'In Store Now', format: 'count', unit: 'people', thresholds: { green: 50, amber: 20, direction: 'higher' }, hint: 'People currently in store (active trajectories)' },
   'avgOccupancy': { label: 'Avg Occupancy', format: 'count', unit: 'pax', thresholds: { green: 80, amber: 100, direction: 'lower' }, hint: 'Average people in zone' },
   'occupancyRate': { label: 'Occupancy Rate', format: 'pct', unit: '%', thresholds: { green: 70, amber: 90, direction: 'lower' }, hint: 'Current zone occupancy' },
   'peakOccupancy': { label: 'Peak Occupancy', format: 'count', unit: 'pax', thresholds: { green: 100, amber: 150, direction: 'lower' }, hint: 'Maximum simultaneous visitors' },
-  'avgDwellTime': { label: 'Avg Dwell Time', format: 'min', unit: 'min', thresholds: { green: 5, amber: 2, direction: 'higher' }, hint: 'Average time spent (from zone_visits.duration_ms)' },
+  'avgDwellTime': { label: 'Avg Dwell Time', format: 'min', unit: 'min', thresholds: { green: 2, amber: 0.5, direction: 'higher' }, hint: 'Average time per zone visit' },
+  'avgStoreVisit': { label: 'Avg Store Visit', format: 'min', unit: 'min', thresholds: { green: 30, amber: 10, direction: 'higher' }, hint: 'Average total time per customer in store' },
   'avgDwellTimeMs': { label: 'Avg Dwell Time', format: 'sec', unit: 'ms', thresholds: { green: 300000, amber: 120000, direction: 'higher' }, hint: 'Average time spent in ms' },
   'engagementRate': { label: 'Engagement Rate', format: 'pct', unit: '%', thresholds: { green: 60, amber: 30, direction: 'higher' }, hint: 'Meaningful interactions (zone_visits.is_engagement)' },
   'bounceRate': { label: 'Bounce Rate', format: 'pct', unit: '%', thresholds: { green: 20, amber: 50, direction: 'lower' }, hint: 'Left quickly without engagement' },
@@ -172,22 +176,22 @@ export const KPI_METADATA = {
   // Shelf / Planogram KPIs (canonical IDs from wiki)
   // DB: zone_kpi_* + planograms, shelf_planograms, sku_items
   // ═══════════════════════════════════════════════════════════════
-  'browsingRate': { label: 'Browsing Rate', format: 'pct', unit: '%', thresholds: { green: 60, amber: 30, direction: 'higher' }, hint: 'Visitors who browsed (based on zone visits)' },
-  'avgBrowseTime': { label: 'Avg Browse Time', format: 'min', unit: 'min', thresholds: { green: 3, amber: 1, direction: 'higher' }, hint: 'Time at shelves (zone_visits.duration_ms)' },
+  'browsingRate': { label: 'Browsing Rate', format: 'pct', unit: '%', thresholds: { green: 60, amber: 30, direction: 'higher' }, hint: 'Share of visitors who stopped to browse. Low rate = shelves not capturing attention. Improve signage, end-caps, or product visibility.' },
+  'avgBrowseTime': { label: 'Avg Browse Time', format: 'sec', unit: 'sec', thresholds: { green: 60, amber: 30, direction: 'higher' }, hint: 'Total time each shopper spent browsing ALL shelf zones combined (excludes queue/checkout). Under 30s = low engagement. Over 60s = strong product interest.' },
   'passbyCount': { label: 'Pass-By Count', format: 'count', thresholds: { green: 200, amber: 50, direction: 'higher' }, hint: 'Visits - Dwells' },
   'shareOfShelf': { label: 'Share of Shelf', format: 'pct', unit: '%', thresholds: { green: 20, amber: 10, direction: 'higher' }, hint: 'From planogram slot counts' },
-  'avgPositionScore': { label: 'Position Score', format: 'score', thresholds: { green: 80, amber: 60, direction: 'higher' }, hint: 'Shelf placement quality (planogram + scoring)' },
+  'avgPositionScore': { label: 'Position Score', format: 'score', thresholds: { green: 70, amber: 50, direction: 'higher' }, hint: 'Weighted average of product placement quality (0-100). Eye-level & center slots score higher. Low score = move key products to premium positions.' },
   'efficiencyIndex': { label: 'Efficiency Index', format: 'index', thresholds: { green: 1.2, amber: 0.8, direction: 'higher' }, hint: 'Performance vs shelf share' },
-  'slotUtilizationRate': { label: 'Slot Utilization', format: 'pct', unit: '%', thresholds: { green: 90, amber: 70, direction: 'higher' }, hint: 'Shelf slots filled' },
-  'deadZoneCount': { label: 'Dead Zones', format: 'count', thresholds: { green: 0, amber: 3, direction: 'lower' }, hint: 'Low-traffic areas' },
-  'brandEfficiencyIndex': { label: 'Brand Efficiency', format: 'index', thresholds: { green: 1.2, amber: 0.8, direction: 'higher' }, hint: 'Brand performance index' },
+  'slotUtilizationRate': { label: 'Slot Utilization', format: 'pct', unit: '%', thresholds: { green: 80, amber: 60, direction: 'higher' }, hint: 'Percentage of shelf slots with products assigned. Low utilization = lost revenue opportunity. Review planogram for gaps.' },
+  'deadZoneCount': { label: 'Dead Zones', format: 'count', thresholds: { green: 0, amber: 5, direction: 'lower' }, hint: 'Shelf areas with very low shopper activity (<5% utilization). Each dead zone = wasted real estate. Relocate high-demand products or improve wayfinding.' },
+  'brandEfficiencyIndex': { label: 'Brand Efficiency', format: 'index', thresholds: { green: 1.1, amber: 0.9, direction: 'higher' }, hint: 'Position quality vs shelf share. Above 1.0 = brands in premium spots. Below 1.0 = underperforming placement. Use for space allocation decisions.' },
   
-  // Category KPIs (derived)
-  'categoryEngagementRate': { label: 'Category Engagement', format: 'pct', unit: '%', thresholds: { green: 50, amber: 25, direction: 'higher' }, hint: 'Category interaction rate' },
-  'categoryDwellTime': { label: 'Category Dwell', format: 'min', unit: 'min', thresholds: { green: 3, amber: 1, direction: 'higher' }, hint: 'Time in category' },
-  'categoryConversionRate': { label: 'Category Conversion', format: 'pct', unit: '%', thresholds: { green: 20, amber: 10, direction: 'higher' }, hint: 'Category purchase rate' },
-  'categoryRevenuePerVisit': { label: 'Revenue/Visit', format: 'currency', unit: '$', thresholds: { green: 15, amber: 8, direction: 'higher' }, hint: 'Category revenue per visit' },
-  'categoryComparisonIndex': { label: 'Category Index', format: 'index', thresholds: { green: 1.2, amber: 0.8, direction: 'higher' }, hint: 'vs category benchmark' },
+  // Category KPIs (derived from zone_visits for category zones, excluding checkout/queue/service)
+  'categoryEngagementRate': { label: 'Category Engagement', format: 'pct', unit: '%', thresholds: { green: 50, amber: 25, direction: 'higher' }, hint: '% of category visitors who engaged deeply (stayed >engagement threshold). Low = review assortment, pricing, or placement' },
+  'categoryDwellTime': { label: 'Category Dwell', format: 'min', unit: 'min', thresholds: { green: 3, amber: 1, direction: 'higher' }, hint: 'Avg time browsing category. Longer dwell = higher purchase intent. Below 1 min = products not capturing attention' },
+  'categoryConversionRate': { label: 'Category Conversion', format: 'pct', unit: '%', thresholds: { green: 20, amber: 10, direction: 'higher' }, hint: 'Category browsers who purchased. Requires POS. Low with high engagement = pricing/availability issue' },
+  'categoryRevenuePerVisit': { label: 'Revenue/Visit', format: 'currency', unit: '$', thresholds: { green: 15, amber: 8, direction: 'higher' }, hint: 'Revenue per category visitor. Requires POS. Use to prioritize high-value categories for premium shelf space' },
+  'categoryComparisonIndex': { label: 'Category Index', format: 'index', thresholds: { green: 1.2, amber: 0.8, direction: 'higher' }, hint: 'Performance vs benchmark (1.0 = avg). Above 1.0 = outperforming. Below 0.8 = investigate merchandising' },
   
   // ═══════════════════════════════════════════════════════════════
   // Business Reporting / Executive KPIs
@@ -369,7 +373,7 @@ export function getPrimarySourceForStep(personaId, stepId) {
   // Map persona-step to appropriate API endpoint
   const sourceMap = {
     'store_manager:operations_pulse': '/api/reporting/summary',
-    'store_manager:checkout_pressure': '/api/reporting/summary',
+    'store_manager:checkout_pressure': '/api/queue/kpis',
     'category_manager:category_engagement': '/api/reporting/summary',
     'category_manager:shelf_quality': '/api/reporting/summary',
     'retail_media_manager:dooh_effectiveness': '/api/dooh-attribution/kpis',

@@ -45,6 +45,28 @@ function safeQueryAll(sql, params = []) {
 }
 
 /**
+ * Resolve venue ID to UUID format
+ * Handles both numeric IDs (legacy) and UUID strings
+ * @param {string|number} venueId
+ * @returns {string} UUID format venue ID
+ */
+export function resolveVenueId(venueId) {
+  // Already a UUID
+  if (typeof venueId === 'string' && venueId.includes('-')) {
+    return venueId;
+  }
+  
+  // Numeric or short ID - lookup in venues table
+  const venue = safeQuery('SELECT id FROM venues LIMIT 1');
+  if (venue) {
+    return venue.id;
+  }
+  
+  // Fallback to hardcoded default (single-venue setup)
+  return '1f6c779c-5f09-445f-ae4b-1ce6abc20e9f';
+}
+
+/**
  * Get current feature flags state
  * @returns {Record<string, boolean>}
  */
@@ -117,9 +139,25 @@ export async function getReportingSummary(venueId, personaId, startTs, endTs) {
 
     if (zoneStats) {
       kpis.totalVisitors = zoneStats.totalVisitors || 0;
-      kpis.avgOccupancy = zoneStats.avgOccupancy || 0;
-      kpis.peakOccupancy = zoneStats.peakOccupancy || 0;
       kpis.avgDwellTime = zoneStats.avgDwellTime || 0;
+      
+      // Get STORE-WIDE occupancy from zone_occupancy (not per-zone from zone_kpi_daily)
+      // Peak = MAX of SUM(occupancy_count) at each timestamp
+      // Avg = AVG of SUM(occupancy_count) at each timestamp
+      const storeOccupancy = safeQuery(`
+        SELECT 
+          MAX(store_total) as peakOccupancy,
+          AVG(store_total) as avgOccupancy
+        FROM (
+          SELECT timestamp, SUM(occupancy_count) as store_total
+          FROM zone_occupancy
+          WHERE venue_id = ? AND timestamp >= ? AND timestamp < ?
+          GROUP BY timestamp
+        )
+      `, [venueId, startTs, endTs]);
+      
+      kpis.peakOccupancy = storeOccupancy?.peakOccupancy || 0;
+      kpis.avgOccupancy = Math.round((storeOccupancy?.avgOccupancy || 0) * 100) / 100;
       kpis.engagementRate = zoneStats.engagementRate || 0;
       kpis.bounceRate = zoneStats.bounceRate || 0;
       kpis.totalDwells = zoneStats.totalDwells || 0;
@@ -128,6 +166,79 @@ export async function getReportingSummary(venueId, personaId, startTs, endTs) {
       kpis.browsingRate = zoneStats.totalVisitors > 0 
         ? (zoneStats.totalDwells * 100.0 / zoneStats.totalVisitors) 
         : 0;
+      
+      // Compute occupancy rate using CURRENT store occupancy (last 60 seconds)
+      // This gives a real-time view instead of averaging in "closed" periods
+      const currentOccupancy = safeQuery(`
+        SELECT SUM(occupancy_count) as currentPeople
+        FROM zone_occupancy
+        WHERE venue_id = ?
+          AND timestamp >= ?
+        GROUP BY timestamp
+        ORDER BY timestamp DESC
+        LIMIT 1
+      `, [venueId, Date.now() - 60000]);
+      
+      // Use venue-level max_capacity (preferred) or fall back to zone_settings sum
+      const venueCapacity = safeQuery(`
+        SELECT max_capacity FROM venues WHERE id = ?
+      `, [venueId]);
+      
+      let totalCapacity = venueCapacity?.max_capacity || 0;
+      if (!totalCapacity) {
+        // Fallback to zone_settings sum if venue capacity not set
+        const zoneCapacity = safeQuery(`
+          SELECT SUM(max_occupancy) as totalCapacity
+          FROM zone_settings
+          WHERE venue_id = ?
+        `, [venueId]);
+        totalCapacity = zoneCapacity?.totalCapacity || 300;  // Default 300 if nothing set
+      }
+      const currentPeople = currentOccupancy?.currentPeople || 0;
+      
+      // Use current occupancy for real-time rate, fall back to peak if no recent data
+      const effectiveOccupancy = currentPeople > 0 
+        ? currentPeople 
+        : (zoneStats.peakOccupancy || zoneStats.avgOccupancy || 0);
+      
+      const rawRate = (effectiveOccupancy / totalCapacity) * 100;
+      kpis.occupancyRate = Math.round(rawRate * 10) / 10;
+      kpis.currentOccupancy = currentPeople;  // Also expose raw count
+    }
+
+    // Compute Total In Store - count unique active trajectories (recent activity, not exited)
+    // Uses zone_visits where there's recent activity (last 5 minutes) to identify active shoppers
+    const totalInStoreResult = safeQuery(`
+      SELECT COUNT(DISTINCT track_key) as totalInStore
+      FROM zone_visits
+      WHERE venue_id = ?
+        AND start_time >= ?
+        AND track_key NOT LIKE '%cashier%'
+    `, [venueId, Date.now() - 300000]);  // Last 5 minutes of activity
+    
+    kpis.totalInStore = totalInStoreResult?.totalInStore || 0;
+
+    // Compute Avg Store Visit Duration (total time per unique visitor)
+    const storeVisitStats = safeQuery(`
+      SELECT 
+        COUNT(DISTINCT track_key) as uniqueVisitors,
+        SUM(duration_ms) as totalDurationMs
+      FROM zone_visits
+      WHERE venue_id = ?
+        AND start_time >= ?
+        AND start_time <= ?
+        AND track_key NOT LIKE '%cashier%'
+    `, [venueId, startTs, endTs]);
+    
+    if (storeVisitStats && storeVisitStats.uniqueVisitors > 0) {
+      // Average store visit duration in minutes
+      kpis.avgStoreVisit = Math.round(
+        (storeVisitStats.totalDurationMs / storeVisitStats.uniqueVisitors) / 60000 * 10
+      ) / 10;
+      kpis.uniqueVisitors = storeVisitStats.uniqueVisitors;
+    } else {
+      kpis.avgStoreVisit = 0;
+      kpis.uniqueVisitors = 0;
     }
     
     // Get shelf/planogram KPIs - planograms.venue_id is direct FK
@@ -142,9 +253,16 @@ export async function getReportingSummary(venueId, personaId, startTs, endTs) {
     
     if (shelfStats && shelfStats.totalShelves > 0) {
       kpis.totalShelves = shelfStats.totalShelves;
-      // Estimate slots: ~11 slots per level (from sample data), levels per shelf
-      const avgSlotsPerLevel = 11;
-      const estTotalSlots = (shelfStats.totalLevels || 0) * avgSlotsPerLevel;
+      
+      // Count ACTUAL total slots from slots_json (not estimated)
+      const totalSlotsResult = safeQuery(`
+        SELECT COUNT(*) as total
+        FROM shelf_planograms sp
+        JOIN planograms p ON p.id = sp.planogram_id,
+        json_each(json_extract(sp.slots_json, '$.levels')) as level,
+        json_each(json_extract(level.value, '$.slots')) as slot
+        WHERE p.venue_id = ?
+      `, [venueId]);
       
       // Count filled slots by parsing slots_json
       const filledSlots = safeQuery(`
@@ -158,13 +276,14 @@ export async function getReportingSummary(venueId, personaId, startTs, endTs) {
           AND json_extract(slot.value, '$.skuItemId') != 'null'
       `, [venueId]);
       
+      const actualTotalSlots = totalSlotsResult?.total || 0;
       const filled = filledSlots?.filled || 0;
-      kpis.slotUtilizationRate = estTotalSlots > 0 ? (filled * 100.0 / estTotalSlots) : 0;
+      kpis.slotUtilizationRate = actualTotalSlots > 0 ? Math.round((filled * 100.0 / actualTotalSlots) * 10) / 10 : 0;
       kpis.totalFilledSlots = filled;
-      kpis.totalSlots = estTotalSlots;
+      kpis.totalSlots = actualTotalSlots;
     }
 
-    // Get brand count for merchandising
+    // Get brand count and shelf quality KPIs for merchandising
     if (personaId === 'merchandising' || personaId === 'category_manager') {
       const brandStats = safeQuery(`
         SELECT COUNT(DISTINCT si.brand) as totalBrands
@@ -174,12 +293,153 @@ export async function getReportingSummary(venueId, personaId, startTs, endTs) {
       if (brandStats) {
         kpis.totalBrands = brandStats.totalBrands || 0;
       }
+
+      // Merchandising-specific KPIs from zone_visits (excludes checkout/queue/service)
+      const merchStats = safeQuery(`
+        SELECT 
+          COUNT(*) as total_visits,
+          COUNT(CASE WHEN is_dwell = 1 THEN 1 END) as dwell_count,
+          COUNT(CASE WHEN is_engagement = 1 THEN 1 END) as engagement_count,
+          SUM(duration_ms) as total_duration_ms,
+          COUNT(DISTINCT track_key) as unique_visitors
+        FROM zone_visits zv
+        JOIN regions_of_interest r ON zv.roi_id = r.id
+        WHERE r.venue_id = ? 
+          AND zv.start_time >= ? AND zv.start_time < ?
+          AND r.name NOT LIKE '%Checkout%' 
+          AND r.name NOT LIKE '%Queue%' 
+          AND r.name NOT LIKE '%Service%'
+      `, [venueId, startTs, endTs]);
+
+      if (merchStats && merchStats.total_visits > 0) {
+        // Override browsingRate with merchandising-specific calculation
+        kpis.browsingRate = Math.round((merchStats.dwell_count * 100.0 / merchStats.total_visits) * 10) / 10;
+        kpis.passbyCount = Math.max(0, merchStats.total_visits - merchStats.dwell_count);
+        kpis.categoryEngagementRate = Math.round((merchStats.engagement_count * 100.0 / merchStats.total_visits) * 10) / 10;
+        // Avg browse time: total time / unique visitors (in SECONDS - frontend expects 'sec')
+        kpis.avgBrowseTime = merchStats.unique_visitors > 0
+          ? Math.round((merchStats.total_duration_ms / merchStats.unique_visitors) / 1000 * 10) / 10
+          : 0;
+      }
+
+      // Position Score: Calculate dynamically from slot positions
+      const positionStats = safeQuery(`
+        WITH slot_positions AS (
+          SELECT 
+            sp.num_levels,
+            json_extract(level.value, '$.levelIndex') as level_idx,
+            json_extract(slot.value, '$.slotIndex') as slot_idx,
+            (SELECT COUNT(*) FROM json_each(json_extract(level.value, '$.slots'))) as slots_per_level
+          FROM shelf_planograms sp
+          JOIN planograms p ON p.id = sp.planogram_id,
+          json_each(json_extract(sp.slots_json, '$.levels')) as level,
+          json_each(json_extract(level.value, '$.slots')) as slot
+          WHERE p.venue_id = ?
+            AND json_extract(slot.value, '$.skuItemId') IS NOT NULL
+            AND json_extract(slot.value, '$.skuItemId') != 'null'
+        )
+        SELECT 
+          COUNT(*) as filled_count,
+          AVG(
+            CASE 
+              WHEN num_levels <= 2 AND level_idx = 1 THEN 50 * 1.5
+              WHEN num_levels <= 2 THEN 50 * 1.0
+              WHEN level_idx = 0 THEN 50 * 0.6
+              WHEN level_idx = num_levels - 1 THEN 50 * 0.7
+              WHEN level_idx = num_levels / 2 OR level_idx = num_levels / 2 + 1 THEN 50 * 1.5
+              ELSE 50 * 1.0
+            END *
+            CASE
+              WHEN slots_per_level <= 2 THEN 1.2
+              WHEN slot_idx = 0 OR slot_idx = slots_per_level - 1 THEN 1.4
+              WHEN slot_idx >= slots_per_level * 0.3 AND slot_idx < slots_per_level * 0.7 THEN 1.2
+              ELSE 1.0
+            END
+          ) as avg_position_score
+        FROM slot_positions
+      `, [venueId]);
+
+      if (positionStats?.avg_position_score) {
+        kpis.avgPositionScore = Math.round(Math.min(100, positionStats.avg_position_score) * 10) / 10;
+        kpis.brandEfficiency = Math.round((positionStats.avg_position_score / 50) * 100) / 100;
+      }
+
+      // Dead zones: shelf zones with <5% utilization
+      const totalTimeRange = endTs - startTs;
+      const DEAD_ZONE_THRESHOLD = 5;
+      const shelfZoneUtils = safeQueryAll(`
+        SELECT 
+          r.id, r.name,
+          COALESCE(SUM(zv.duration_ms), 0) as total_ms
+        FROM regions_of_interest r
+        LEFT JOIN zone_visits zv ON zv.roi_id = r.id AND zv.start_time >= ? AND zv.start_time < ?
+        WHERE r.venue_id = ?
+          AND (r.name LIKE '%Shelf%' OR r.name LIKE '%Category%' OR r.name LIKE '%Aisle%')
+          AND r.name NOT LIKE '%Queue%'
+          AND r.name NOT LIKE '%Service%'
+          AND r.name NOT LIKE '%Checkout%'
+        GROUP BY r.id, r.name
+      `, [startTs, endTs, venueId]);
+
+      let deadZoneCount = 0;
+      const deadZonesList = [];
+      for (const z of shelfZoneUtils) {
+        const zoneUtilRate = (z.total_ms / totalTimeRange) * 100;
+        if (zoneUtilRate < DEAD_ZONE_THRESHOLD) {
+          deadZoneCount++;
+          deadZonesList.push({ id: z.id, name: z.name, utilization: Math.round(zoneUtilRate * 10) / 10 });
+        }
+      }
+      kpis.deadZones = deadZoneCount;
+      supporting.deadZones = deadZonesList.slice(0, 10); // Top 10 for supporting data
     }
 
     // Get comprehensive Queue Lane KPIs for store_manager (Operations Grade)
     if (personaId === 'store-manager' || personaId === 'store_manager') {
       const queueKpis = await getQueueLaneKpis(venueId, startTs, endTs);
       Object.assign(kpis, queueKpis);
+
+      // Space Utilization: total occupied time / (time range * zone count)
+      const totalTimeRange = endTs - startTs;
+      const utilStats = safeQuery(`
+        SELECT SUM(duration_ms) as total_occupied_ms
+        FROM zone_visits
+        WHERE venue_id = ? AND start_time >= ? AND start_time < ?
+      `, [venueId, startTs, endTs]);
+
+      const zoneCountResult = safeQuery(`
+        SELECT COUNT(*) as cnt FROM regions_of_interest WHERE venue_id = ?
+      `, [venueId]);
+      const zoneCount = zoneCountResult?.cnt || 1;
+
+      const utilizationMs = utilStats?.total_occupied_ms || 0;
+      kpis.utilizationRate = Math.min(100, Math.round((utilizationMs / (totalTimeRange * zoneCount)) * 100 * 10) / 10);
+
+      // Dead zones for store-manager: zones with <1% utilization
+      const DEAD_ZONE_THRESHOLD = 1;
+      const zoneUtils = safeQueryAll(`
+        SELECT 
+          r.id, r.name,
+          COALESCE(SUM(zv.duration_ms), 0) as total_ms
+        FROM regions_of_interest r
+        LEFT JOIN zone_visits zv ON zv.roi_id = r.id AND zv.start_time >= ? AND zv.start_time < ?
+        WHERE r.venue_id = ?
+          AND r.name NOT LIKE '%Queue%'
+          AND r.name NOT LIKE '%Service%'
+        GROUP BY r.id, r.name
+      `, [startTs, endTs, venueId]);
+
+      let storeDeadZoneCount = 0;
+      const storeDeadZonesList = [];
+      for (const z of zoneUtils) {
+        const zoneUtilRate = (z.total_ms / totalTimeRange) * 100;
+        if (zoneUtilRate < DEAD_ZONE_THRESHOLD) {
+          storeDeadZoneCount++;
+          storeDeadZonesList.push({ id: z.id, name: z.name, utilization: Math.round(zoneUtilRate * 10) / 10 });
+        }
+      }
+      kpis.deadZonesCount = storeDeadZoneCount;
+      supporting.storeDeadZones = storeDeadZonesList.slice(0, 10);
     }
 
     console.log(`[KpiSourceAdapter] Summary computed in ${Date.now() - start}ms`);
@@ -228,6 +488,45 @@ export async function getVenueKpis(venueId, startTs, endTs) {
         AND date >= date(?, 'unixepoch')
         AND date <= date(?, 'unixepoch')
     `, [venueId, startTs / 1000, endTs / 1000]);
+
+    // Add occupancyRate using CURRENT store occupancy (real-time)
+    if (stats) {
+      const currentOccupancy = safeQuery(`
+        SELECT SUM(occupancy_count) as currentPeople
+        FROM zone_occupancy
+        WHERE venue_id = ?
+          AND timestamp >= ?
+        GROUP BY timestamp
+        ORDER BY timestamp DESC
+        LIMIT 1
+      `, [venueId, Date.now() - 60000]);
+      
+      // Use venue-level max_capacity (preferred) or fall back to zone_settings sum
+      const venueCapacity = safeQuery(`
+        SELECT max_capacity FROM venues WHERE id = ?
+      `, [venueId]);
+      
+      let totalCapacity = venueCapacity?.max_capacity || 0;
+      if (!totalCapacity) {
+        const zoneCapacity = safeQuery(`
+          SELECT SUM(max_occupancy) as totalCapacity
+          FROM zone_settings
+          WHERE venue_id = ?
+        `, [venueId]);
+        totalCapacity = zoneCapacity?.totalCapacity || 300;
+      }
+      
+      const currentPeople = currentOccupancy?.currentPeople || 0;
+      
+      // Use current occupancy for real-time rate, fall back to peak if no recent data
+      const effectiveOccupancy = currentPeople > 0 
+        ? currentPeople 
+        : (stats.peakOccupancy || stats.avgOccupancy || 0);
+      
+      const rawRate = (effectiveOccupancy / totalCapacity) * 100;
+      stats.occupancyRate = Math.round(rawRate * 10) / 10;
+      stats.currentOccupancy = currentPeople;
+    }
 
     console.log(`[KpiSourceAdapter] Venue KPIs fetched in ${Date.now() - start}ms`);
     return stats || {};
@@ -383,20 +682,28 @@ export async function getDoohAttributionKpis(venueId, startTs, endTs, campaignId
     let sql = `
       SELECT 
         campaign_id,
-        bucket_start,
-        exposed_conversions,
-        control_conversions,
-        exposed_sample_n,
-        control_sample_n,
+        bucket_start_ts,
+        bucket_minutes,
+        exposed_count,
+        controls_count,
+        p_exposed,
+        p_control,
         lift_rel,
         lift_abs,
-        confidence_score,
-        eal,
-        aqs,
-        aar,
-        tta_accel
+        median_tta_exposed,
+        median_tta_control,
+        tta_accel,
+        mean_engagement_dwell_exposed,
+        mean_engagement_dwell_control,
+        engagement_lift_s,
+        mean_aqs_exposed,
+        mean_dci_exposed,
+        mean_dci_control,
+        confidence_mean,
+        ces_score,
+        aar_score
       FROM dooh_campaign_kpis
-      WHERE venue_id = ? AND bucket_start >= ? AND bucket_start < ?
+      WHERE venue_id = ? AND bucket_start_ts >= ? AND bucket_start_ts < ?
     `;
     const params = [venueId, startTs, endTs];
     
@@ -494,6 +801,7 @@ export default {
   getZoneEngagementRanking,
   getHourlyTrafficBreakdown,
   getPeriodComparison,
+  getQueueLaneKpis,
 };
 
 /**
@@ -511,96 +819,74 @@ export async function getQueueLaneKpis(venueId, startTs, endTs) {
   const kpis = {};
   
   try {
-    // Basic queue stats - ONLY from OPEN lanes, EXCLUDE walk-throughs (< 5 sec)
-    // Walk-throughs are people who pass through queue zone without stopping
+    // Basic queue stats - EXCLUDE walk-throughs (< 5 sec)
+    // Sessions exist only if lane was open when recorded - no need to filter by current is_open state
     let basicStats = safeQuery(`
       SELECT 
         COUNT(*) as totalSessions,
-        COUNT(DISTINCT qs.queue_zone_id) as lanesUsedCoverage,
-        AVG(CASE WHEN qs.is_abandoned = 0 THEN qs.waiting_time_ms END) / 60000.0 as avgQueueWaitTime,
-        AVG(CASE WHEN qs.is_abandoned = 0 THEN qs.waiting_time_ms END) / 60000.0 as avgServiceTime,
-        SUM(CASE WHEN qs.is_abandoned = 1 THEN 1 ELSE 0 END) as abandonedSessions,
-        SUM(CASE WHEN qs.is_abandoned = 0 THEN 1 ELSE 0 END) as completedSessions,
-        MIN(qs.queue_entry_time) as firstEntry,
-        MAX(COALESCE(qs.queue_exit_time, qs.queue_entry_time)) as lastExit
-      FROM queue_sessions qs
-      INNER JOIN zone_settings zs ON qs.queue_zone_id = zs.roi_id AND qs.venue_id = zs.venue_id
-      WHERE qs.venue_id = ?
-        AND qs.queue_entry_time >= ?
-        AND qs.queue_entry_time <= ?
-        AND zs.is_open = 1
-        AND qs.waiting_time_ms >= 5000
+        COUNT(DISTINCT queue_zone_id) as lanesUsedCoverage,
+        AVG(CASE WHEN is_abandoned = 0 THEN waiting_time_ms END) / 60000.0 as avgQueueWaitTime,
+        AVG(CASE WHEN is_abandoned = 0 THEN waiting_time_ms END) / 60000.0 as avgServiceTime,
+        SUM(CASE WHEN is_abandoned = 1 THEN 1 ELSE 0 END) as abandonedSessions,
+        SUM(CASE WHEN is_abandoned = 0 THEN 1 ELSE 0 END) as completedSessions,
+        MIN(queue_entry_time) as firstEntry,
+        MAX(COALESCE(queue_exit_time, queue_entry_time)) as lastExit
+      FROM queue_sessions
+      WHERE venue_id = ?
+        AND queue_entry_time >= ?
+        AND queue_entry_time <= ?
+        AND waiting_time_ms >= 5000
     `, [venueId, startTs, endTs]);
 
-    // Fallback: if no sessions in requested range, use ALL available queue data for venue (still filtered by open lanes)
-    let usingAllData = false;
+    // NO FALLBACK: Return actual data for the requested period
+    // If no sessions in range, return zeros (not stale data from other periods)
     if (!basicStats || basicStats.totalSessions === 0) {
-      console.log(`[KpiSourceAdapter] No queue data in range for venue ${venueId}, trying all data from OPEN lanes`);
-      basicStats = safeQuery(`
-        SELECT 
-          COUNT(*) as totalSessions,
-          COUNT(DISTINCT qs.queue_zone_id) as lanesUsedCoverage,
-          AVG(CASE WHEN qs.is_abandoned = 0 THEN qs.waiting_time_ms END) / 60000.0 as avgQueueWaitTime,
-          AVG(CASE WHEN qs.is_abandoned = 0 THEN qs.waiting_time_ms END) / 60000.0 as avgServiceTime,
-          SUM(CASE WHEN qs.is_abandoned = 1 THEN 1 ELSE 0 END) as abandonedSessions,
-          SUM(CASE WHEN qs.is_abandoned = 0 THEN 1 ELSE 0 END) as completedSessions,
-          MIN(qs.queue_entry_time) as firstEntry,
-          MAX(COALESCE(qs.queue_exit_time, qs.queue_entry_time)) as lastExit
-        FROM queue_sessions qs
-        INNER JOIN zone_settings zs ON qs.queue_zone_id = zs.roi_id AND qs.venue_id = zs.venue_id
-        WHERE qs.venue_id = ?
-          AND zs.is_open = 1
-          AND qs.waiting_time_ms >= 5000
-      `, [venueId]);
-      usingAllData = true;
-      
-      // Update time range for concurrency calculation
-      if (basicStats && basicStats.totalSessions > 0) {
-        startTs = basicStats.firstEntry;
-        endTs = basicStats.lastExit;
-      }
-    }
-
-    if (!basicStats || basicStats.totalSessions === 0) {
-      console.log(`[KpiSourceAdapter] No queue data from OPEN lanes for venue ${venueId}`);
-      return kpis; // Return empty - KPIs will show N/A
+      console.log(`[KpiSourceAdapter] No queue data in range ${new Date(startTs).toISOString()} - ${new Date(endTs).toISOString()} for venue ${venueId}`);
+      // Return empty stats instead of falling back to all-time data
+      basicStats = {
+        totalSessions: 0,
+        lanesUsedCoverage: 0,
+        avgQueueWaitTime: null,
+        avgServiceTime: null,
+        abandonedSessions: 0,
+        completedSessions: 0,
+        firstEntry: startTs,
+        lastExit: endTs
+      };
     }
     
-    if (usingAllData) {
-      console.log(`[KpiSourceAdapter] Using all queue data from OPEN lanes: ${basicStats.totalSessions} sessions`);
+    // Log actual data range for debugging
+    if (basicStats.totalSessions > 0) {
+      console.log(`[KpiSourceAdapter] Found ${basicStats.totalSessions} queue sessions in range for venue ${venueId.substring(0,8)}`);
     }
 
     // A. Capacity & Staffing KPIs
-    // lanesUsedCoverage - distinct OPEN queue zones used
+    // lanesUsedCoverage - distinct queue zones used
     kpis.lanesUsedCoverage = basicStats.lanesUsedCoverage || 0;
 
     // B. Customer Experience KPIs
-    // avgQueueWaitTime - average waiting time in minutes (OPEN lanes only)
+    // avgQueueWaitTime - average waiting time in minutes
     kpis.avgQueueWaitTime = basicStats.avgQueueWaitTime || 0;
 
-    // p95QueueWaitTime - 95th percentile wait time (OPEN lanes, completed sessions only)
+    // p95QueueWaitTime - 95th percentile wait time (completed sessions only, ≥5s dwell)
     const p95Result = safeQuery(`
-      SELECT qs.waiting_time_ms / 60000.0 as p95WaitTime
-      FROM queue_sessions qs
-      INNER JOIN zone_settings zs ON qs.queue_zone_id = zs.roi_id AND qs.venue_id = zs.venue_id
-      WHERE qs.venue_id = ?
-        AND qs.queue_entry_time >= ?
-        AND qs.queue_entry_time <= ?
-        AND qs.waiting_time_ms IS NOT NULL
-        AND qs.is_abandoned = 0
-        AND zs.is_open = 1
-      ORDER BY qs.waiting_time_ms ASC
+      SELECT waiting_time_ms / 60000.0 as p95WaitTime
+      FROM queue_sessions
+      WHERE venue_id = ?
+        AND queue_entry_time >= ?
+        AND queue_entry_time <= ?
+        AND waiting_time_ms >= 5000
+        AND is_abandoned = 0
+      ORDER BY waiting_time_ms ASC
       LIMIT 1
       OFFSET (
         SELECT CAST(COUNT(*) * 0.95 AS INTEGER)
-        FROM queue_sessions qs2
-        INNER JOIN zone_settings zs2 ON qs2.queue_zone_id = zs2.roi_id AND qs2.venue_id = zs2.venue_id
-        WHERE qs2.venue_id = ?
-          AND qs2.queue_entry_time >= ?
-          AND qs2.queue_entry_time <= ?
-          AND qs2.waiting_time_ms IS NOT NULL
-          AND qs2.is_abandoned = 0
-          AND zs2.is_open = 1
+        FROM queue_sessions
+        WHERE venue_id = ?
+          AND queue_entry_time >= ?
+          AND queue_entry_time <= ?
+          AND waiting_time_ms >= 5000
+          AND is_abandoned = 0
       )
     `, [venueId, startTs, endTs, venueId, startTs, endTs]);
     kpis.p95QueueWaitTime = p95Result?.p95WaitTime || kpis.avgQueueWaitTime;
@@ -609,12 +895,12 @@ export async function getQueueLaneKpis(venueId, startTs, endTs) {
     // avgServiceTime - average waiting time (since we don't track service zones separately)
     kpis.avgServiceTime = basicStats.avgServiceTime || 0;
 
-    // queueThroughput - completed sessions per hour (OPEN lanes only)
+    // queueThroughput - completed sessions per hour
     const periodHours = Math.max(1, (basicStats.lastExit - basicStats.firstEntry) / 3600000);
     kpis.queueThroughput = Math.round((basicStats.completedSessions || 0) / periodHours * 10) / 10;
 
     // D. Failure Signal
-    // queueAbandonmentRate - percentage of abandoned sessions (OPEN lanes only)
+    // queueAbandonmentRate - percentage of abandoned sessions
     if (basicStats.totalSessions > 0) {
       kpis.queueAbandonmentRate = Math.round((basicStats.abandonedSessions * 100.0 / basicStats.totalSessions) * 10) / 10;
     } else {
@@ -785,6 +1071,7 @@ export async function getPeriodComparison(venueId, compareType = 'day') {
 /**
  * Get zone engagement ranking for a venue
  * Returns top zones by engagement rate
+ * IMPORTANT: Excludes checkout/queue/service zones (only category/shelf zones)
  * 
  * @param {string} venueId
  * @param {number} startTs
@@ -798,6 +1085,7 @@ export async function getZoneEngagementRanking(venueId, startTs, endTs, limit = 
   
   try {
     // Use recent data - aggregate by zone name to avoid duplicates
+    // EXCLUDE checkout/queue/service zones - only show category/shelf zones
     const zones = safeQueryAll(`
       SELECT 
         r.name as zoneName,
@@ -811,16 +1099,89 @@ export async function getZoneEngagementRanking(venueId, startTs, endTs, limit = 
       FROM zone_kpi_daily z
       LEFT JOIN regions_of_interest r ON r.id = z.roi_id
       WHERE z.venue_id = ?
+        AND r.name NOT LIKE '%Checkout%'
+        AND r.name NOT LIKE '%Queue%'
+        AND r.name NOT LIKE '%Service%'
       GROUP BY r.name
       HAVING SUM(z.visits) > 10
       ORDER BY engagementRate DESC
       LIMIT ?
     `, [venueId, limit]);
 
-    console.log(`[KpiSourceAdapter] Zone ranking fetched in ${Date.now() - start}ms: ${zones?.length || 0} zones`);
-    return zones || [];
+    // Enrich zone names with category info from linked shelves
+    const enrichedZones = zones?.map(zone => {
+      const enrichedName = enrichZoneNameWithCategory(venueId, zone.zoneName);
+      return {
+        ...zone,
+        zoneName: enrichedName || zone.zoneName,
+        originalName: zone.zoneName,
+      };
+    }) || [];
+
+    console.log(`[KpiSourceAdapter] Zone ranking fetched in ${Date.now() - start}ms: ${enrichedZones.length} zones`);
+    return enrichedZones;
   } catch (err) {
     console.error(`[KpiSourceAdapter] getZoneEngagementRanking failed:`, err.message);
     return [];
   }
+}
+
+/**
+ * Enrich zone name with category info from linked shelf → planogram → SKUs
+ * Uses ROI metadata.shelfId to find the linked shelf and its planogram categories
+ * Pattern: "Shelf N - Engagement (Left/Right)" → "Shelf N (Category) - Left"
+ */
+function enrichZoneNameWithCategory(venueId, zoneName) {
+  if (!zoneName) return zoneName;
+  
+  // Parse zone name pattern: "ShelfName - Engagement (Left/Right)"
+  const match = zoneName.match(/^(.+?)\s*-\s*Engagement\s*\((Left|Right)\)$/i);
+  if (!match) return zoneName;
+  
+  const shelfName = match[1].trim();
+  const side = match[2];
+  
+  try {
+    // First, find the ROI and get its shelfId from metadata
+    const roi = safeQuery(`
+      SELECT metadata_json FROM regions_of_interest 
+      WHERE venue_id = ? AND name = ?
+    `, [venueId, zoneName]);
+    
+    let shelfId = null;
+    if (roi?.metadata_json) {
+      try {
+        const metadata = JSON.parse(roi.metadata_json);
+        shelfId = metadata.shelfId;
+      } catch {}
+    }
+    
+    if (!shelfId) return zoneName;
+    
+    // Get top category from shelf's planogram using shelfId
+    const categoryResult = safeQuery(`
+      SELECT s.category, COUNT(*) as cnt
+      FROM shelf_planograms sp
+      JOIN json_each(sp.slots_json, '$.levels') as levels
+      JOIN json_each(levels.value, '$.slots') as slots
+      JOIN sku_items s ON s.id = json_extract(slots.value, '$.skuItemId')
+      WHERE sp.shelf_id = ?
+      GROUP BY s.category
+      ORDER BY cnt DESC
+      LIMIT 1
+    `, [shelfId]);
+    
+    if (categoryResult?.category) {
+      // Shorten long category names
+      let shortCategory = categoryResult.category;
+      if (shortCategory.length > 15) {
+        shortCategory = shortCategory.split(/[&,]/)[0].trim();
+      }
+      return `${shelfName} (${shortCategory}) - ${side}`;
+    }
+  } catch (err) {
+    console.error('[KpiSourceAdapter] enrichZoneNameWithCategory error:', err.message);
+  }
+  
+  return zoneName;
 }
