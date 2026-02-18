@@ -36,6 +36,8 @@ import narratorRoutes from './routes/narrator.js';
 import narrator2Routes from './routes/narrator2Routes.js';
 import algorithmProvidersRoutes from './routes/algorithmProviders.js';
 import { seedProviders } from './data/algorithmProviders.js';
+import createReplayInsightRoutes from './routes/replayInsight.js';
+import { EpisodeDetectorOrchestrator } from './services/replay-insight/index.js';
 
 const PORT = process.env.PORT || 3001;
 const MOCK_LIDAR = process.env.MOCK_LIDAR === 'true';
@@ -271,6 +273,11 @@ app.use('/api/narrator2', narrator2Routes);
 
 // Algorithm Providers routes (HER Provider Registry + DEB→Docker Conversion Service)
 app.use('/api/algorithm-providers', algorithmProvidersRoutes);
+
+// Replay Insight routes (parallel, read-only behavior episode system)
+const replayInsightOrchestrator = new EpisodeDetectorOrchestrator();
+replayInsightOrchestrator.start();
+app.use('/api/replay-insights', createReplayInsightRoutes(replayInsightOrchestrator));
 
 // Serve uploaded logos
 app.use('/api/uploads/logos', express.static(path.join(__dirname, 'uploads', 'logos')));

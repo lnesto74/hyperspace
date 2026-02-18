@@ -12,6 +12,10 @@ import { DwgProvider, useDwg } from './context/DwgContext'
 import { Narrator2Provider } from './context/Narrator2Context'
 import Narrator2Drawer from './components/narrator/Narrator2Drawer'
 import Narrator2Toggle from './components/narrator/Narrator2Toggle'
+import { ReplayInsightProvider, useReplayInsight } from './context/ReplayInsightContext'
+import ReplayInsightPanel from './components/replay-insight/ReplayInsightPanel'
+import InsightModeOverlay from './components/replay-insight/InsightModeOverlay'
+import StoryGridModal from './components/replay-insight/StoryGridModal'
 import AppShell from './components/layout/AppShell'
 import ZoneKPIPopup from './components/kpi/ZoneKPIPopup'
 import ZoneKPIOverlayPanel from './components/kpi/ZoneKPIOverlayPanel'
@@ -27,7 +31,7 @@ import { EdgeCommissioningProvider } from './context/EdgeCommissioningContext'
 import DoohAnalyticsPage from './components/dooh/DoohAnalyticsPage'
 import DoohEffectivenessPage from './components/dooh/DoohEffectivenessPage'
 import { BusinessReportingPage } from './features/businessReporting'
-import { BarChart3, Bell, Thermometer, Zap, LayoutGrid, ShoppingCart, Monitor, Activity, PieChart } from 'lucide-react'
+import { BarChart3, Bell, Thermometer, Zap, LayoutGrid, ShoppingCart, Monitor, Activity, PieChart, Sparkles } from 'lucide-react'
 import { useState, useEffect, createContext, useContext } from 'react'
 import { useVenue } from './context/VenueContext'
 
@@ -67,6 +71,7 @@ function KPIOverlayToggle() {
   const { venue } = useVenue()
   const { setMode } = useViewMode()
   const { dwgLayoutId } = useDwg()
+  const { openStoryGrid, explainKpi, selectEpisode } = useReplayInsight()
   const [showLedger, setShowLedger] = useState(false)
   const [showHeatmapModal, setShowHeatmapModal] = useState(false)
   const [showSmartKpiModal, setShowSmartKpiModal] = useState(false)
@@ -137,13 +142,32 @@ function KPIOverlayToggle() {
           setMode('lidarPlanner')
           break
         default:
-          console.warn('[App] Unknown Narrator2 intent:', intent)
+          // Handle replay insight intents
+          if (intent.startsWith('show_replay_episodes:')) {
+            const episodeType = intent.replace('show_replay_episodes:', '')
+            console.log('[App] Show replay episodes:', episodeType)
+            openStoryGrid()
+          } else if (intent.startsWith('explain_episode:')) {
+            const episodeId = intent.replace('explain_episode:', '')
+            selectEpisode(episodeId)
+          } else {
+            console.warn('[App] Unknown Narrator2 intent:', intent)
+          }
       }
     }
     
+    // Handle replay-insight-explain events (from KPI tiles "Explain Why" button)
+    const handleExplainKpi = (e: CustomEvent<{ kpiId: string }>) => {
+      explainKpi(e.detail.kpiId)
+    }
+    
     window.addEventListener('narrator2-intent', handleNarrator2Intent as EventListener)
-    return () => window.removeEventListener('narrator2-intent', handleNarrator2Intent as EventListener)
-  }, [setMode])
+    window.addEventListener('replay-insight-explain', handleExplainKpi as EventListener)
+    return () => {
+      window.removeEventListener('narrator2-intent', handleNarrator2Intent as EventListener)
+      window.removeEventListener('replay-insight-explain', handleExplainKpi as EventListener)
+    }
+  }, [setMode, openStoryGrid, explainKpi, selectEpisode])
   
   return (
     <>
@@ -243,6 +267,15 @@ function KPIOverlayToggle() {
           <PieChart className="w-4 h-4" />
         </button>
         
+        {/* Replay Insights Button */}
+        <button
+          onClick={openStoryGrid}
+          className="flex items-center justify-center w-10 h-10 rounded-lg shadow-lg transition-all bg-gray-800 hover:bg-indigo-600 text-gray-300 hover:text-white border border-gray-600 hover:border-indigo-500"
+          title="Replay Insights - Behavior Episodes"
+        >
+          <Sparkles className="w-4 h-4" />
+        </button>
+        
         {/* AI Narrator2 Button (Copilot) */}
         <Narrator2Toggle />
         
@@ -293,6 +326,11 @@ function KPIOverlayToggle() {
       
       {/* KPI Overlay Panel */}
       <ZoneKPIOverlayPanel />
+      
+      {/* Replay Insight Panel (parallel system — does not modify existing) */}
+      <ReplayInsightPanel />
+      <InsightModeOverlay />
+      <StoryGridModal />
       
       {/* AI Narrator2 Drawer (Copilot) */}
       <Narrator2Drawer 
@@ -404,7 +442,9 @@ function App() {
               <HeatmapProvider>
                 <DwgProvider>
                   <Narrator2Provider>
-                    <MainApp />
+                    <ReplayInsightProvider>
+                      <MainApp />
+                    </ReplayInsightProvider>
                   </Narrator2Provider>
                 </DwgProvider>
               </HeatmapProvider>

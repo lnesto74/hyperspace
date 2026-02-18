@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { Play, Pause, SkipBack, SkipForward, Clock, ChevronDown, MapPin, RefreshCw } from 'lucide-react'
 import { useTracking } from '../../context/TrackingContext'
 import { TrackWithTrail } from '../../types'
+import TimelineInsightMarkers from '../replay-insight/TimelineInsightMarkers'
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3001'
 
@@ -505,6 +506,14 @@ export default function TimelineReplay({ venueId, isOpen, onTimeChange }: Timeli
                 )
               })}
             </div>
+            
+            {/* Insight Markers Overlay (parallel system — does not modify timeline) */}
+            <TimelineInsightMarkers
+              timelineStartTs={timelineData[0]?.timestamp || 0}
+              timelineEndTs={timelineData[timelineData.length - 1]?.timestamp || 0}
+              containerWidth={timelineRef.current?.clientWidth || 0}
+              isVisible={timelineData.length > 0}
+            />
             
             {/* Playhead / Scrubber Line */}
             <div 
