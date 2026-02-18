@@ -194,8 +194,9 @@ export class BrowseNoConvertDetector {
   }
 
   _getShelfZones(venueId) {
+    const excludePatterns = /checkout|service|queue|lane|register|cash/i;
     try {
-      return this.mainDb.prepare(`
+      const allZones = this.mainDb.prepare(`
         SELECT r.id, r.name, r.color
         FROM regions_of_interest r
         LEFT JOIN zone_settings zs ON r.id = zs.roi_id
@@ -203,11 +204,13 @@ export class BrowseNoConvertDetector {
           AND (zs.linked_service_zone_id IS NULL OR zs.linked_service_zone_id = '')
           AND (zs.zone_type IS NULL OR zs.zone_type NOT IN ('queue', 'service'))
       `).all(venueId);
+      return allZones.filter(z => !excludePatterns.test(z.name || ''));
     } catch {
       try {
-        return this.mainDb.prepare(`
+        const zones = this.mainDb.prepare(`
           SELECT id, name, color FROM regions_of_interest WHERE venue_id = ?
         `).all(venueId);
+        return zones.filter(z => !excludePatterns.test(z.name || ''));
       } catch {
         return [];
       }

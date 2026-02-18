@@ -153,9 +153,9 @@ export class PassbyBrowseDetector {
 
   _getShelfZones(venueId) {
     try {
-      // Get zones that are NOT queue zones (no linked_service_zone_id)
-      // and have meaningful traffic
-      return this.mainDb.prepare(`
+      // Get zones that are NOT queue/service zones
+      // Exclude by zone_type, linked_service_zone_id, AND name patterns
+      const allZones = this.mainDb.prepare(`
         SELECT r.id, r.name, r.color
         FROM regions_of_interest r
         LEFT JOIN zone_settings zs ON r.id = zs.roi_id
@@ -163,12 +163,17 @@ export class PassbyBrowseDetector {
           AND (zs.linked_service_zone_id IS NULL OR zs.linked_service_zone_id = '')
           AND (zs.zone_type IS NULL OR zs.zone_type NOT IN ('queue', 'service'))
       `).all(venueId);
+
+      // Also filter out zones with queue/service/checkout in the name
+      const excludePatterns = /checkout|service|queue|lane|register|cash/i;
+      return allZones.filter(z => !excludePatterns.test(z.name || ''));
     } catch {
-      // Fallback: get all ROIs
       try {
-        return this.mainDb.prepare(`
+        const zones = this.mainDb.prepare(`
           SELECT id, name, color FROM regions_of_interest WHERE venue_id = ?
         `).all(venueId);
+        const excludePatterns = /checkout|service|queue|lane|register|cash/i;
+        return zones.filter(z => !excludePatterns.test(z.name || ''));
       } catch {
         return [];
       }

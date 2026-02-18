@@ -69,7 +69,8 @@ export class EpisodeRanker {
   }
 
   /**
-   * Score and rank a list of episodes, return top N
+   * Score and rank a list of episodes, return top N with type diversity.
+   * Ensures each episode type gets representation, not just the most numerous.
    * @param {Array} episodes
    * @param {number} topN
    * @returns {Array} Scored and sorted episodes
@@ -81,13 +82,39 @@ export class EpisodeRanker {
       score: this.scoreEpisode(ep),
     }));
 
-    // Sort by score descending
-    scored.sort((a, b) => b.score - a.score);
-
     // Deduplicate overlapping episodes of the same type
-    const selected = this._deduplicateOverlapping(scored);
+    const deduped = this._deduplicateOverlapping(scored);
 
-    return selected.slice(0, topN);
+    // Group by episode type
+    const byType = new Map();
+    for (const ep of deduped) {
+      if (!byType.has(ep.episode_type)) byType.set(ep.episode_type, []);
+      byType.get(ep.episode_type).push(ep);
+    }
+
+    // Sort each group by score
+    for (const [, group] of byType) {
+      group.sort((a, b) => b.score - a.score);
+    }
+
+    // Round-robin selection: pick top episode from each type, then second, etc.
+    const selected = [];
+    const maxPerType = Math.max(2, Math.ceil(topN / Math.max(1, byType.size)));
+    let round = 0;
+
+    while (selected.length < topN && round < maxPerType) {
+      for (const [, group] of byType) {
+        if (round < group.length && selected.length < topN) {
+          selected.push(group[round]);
+        }
+      }
+      round++;
+    }
+
+    // Final sort by score for display order
+    selected.sort((a, b) => b.score - a.score);
+
+    return selected;
   }
 
   /**
