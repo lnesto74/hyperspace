@@ -1,8 +1,9 @@
 import { useState } from 'react'
-import { Box, Package, Radar, Settings, Hexagon, FileUp, Target, Map, Play, X, Server, Monitor } from 'lucide-react'
+import { Box, Package, Radar, Settings, Hexagon, Map, Play, X, LayoutGrid } from 'lucide-react'
 import { SidebarTab } from './AppShell'
 import VenuePanel from '../venue/VenuePanel'
 import VenueDwgPanel from '../venue/VenueDwgPanel'
+import FloorplanPanel from '../venue/FloorplanPanel'
 import ObjectLibrary from '../objects/ObjectLibrary'
 import LidarNetworkPanel from '../lidar/LidarNetworkPanel'
 import RoiPanel from '../roi/RoiPanel'
@@ -14,20 +15,19 @@ interface SidebarProps {
   activeTab: SidebarTab
   onTabChange: (tab: SidebarTab) => void
   onOpenDwgImporter?: () => void
-  onOpenLidarPlanner?: () => void
   onOpenEdgeCommissioning?: () => void
-  onOpenDoohAnalytics?: () => void
 }
 
 const tabs: { id: SidebarTab; icon: typeof Box; label: string }[] = [
-  { id: 'venueDwg', icon: Map, label: 'DWG' },
-  { id: 'venue', icon: Box, label: 'Venue' },
+  { id: 'floorplan', icon: LayoutGrid, label: 'Floorplan' },
+  // { id: 'venueDwg', icon: Map, label: 'DWG' },  // Hidden - replaced by Floorplan
+  // { id: 'venue', icon: Box, label: 'Venue' },    // Hidden - replaced by Floorplan
   { id: 'objects', icon: Package, label: 'Objects' },
   { id: 'lidars', icon: Radar, label: 'LiDARs' },
   { id: 'regions', icon: Hexagon, label: 'Regions' },
 ]
 
-export default function Sidebar({ activeTab, onTabChange, onOpenDwgImporter, onOpenLidarPlanner, onOpenEdgeCommissioning, onOpenDoohAnalytics }: SidebarProps) {
+export default function Sidebar({ activeTab, onTabChange, onOpenDwgImporter, onOpenEdgeCommissioning }: SidebarProps) {
   const { venue } = useVenue()
   const [showWhiteLabel, setShowWhiteLabel] = useState(false)
   const [showSimulator, setShowSimulator] = useState(false)
@@ -67,10 +67,11 @@ export default function Sidebar({ activeTab, onTabChange, onOpenDwgImporter, onO
 
       {/* Tab Content */}
       <div className="flex-1 overflow-y-auto">
-        {activeTab === 'venueDwg' && <VenueDwgPanel />}
+        {activeTab === 'floorplan' && <FloorplanPanel onOpenDwgImporter={onOpenDwgImporter} />}
+        {activeTab === 'venueDwg' && <VenueDwgPanel onOpenDwgImporter={onOpenDwgImporter} />}
         {activeTab === 'venue' && <VenuePanel />}
         {activeTab === 'objects' && <ObjectLibrary />}
-        {activeTab === 'lidars' && <LidarNetworkPanel />}
+        {activeTab === 'lidars' && <LidarNetworkPanel onOpenEdgeCommissioning={onOpenEdgeCommissioning} />}
         {activeTab === 'regions' && <RoiPanel />}
       </div>
 
@@ -84,42 +85,6 @@ export default function Sidebar({ activeTab, onTabChange, onOpenDwgImporter, onO
           >
             <Settings className="w-4 h-4" />
           </button>
-          {onOpenDwgImporter && (
-            <button 
-              onClick={onOpenDwgImporter}
-              className="text-gray-400 hover:text-highlight transition-colors"
-              title="Import DWG/DXF Floorplan"
-            >
-              <FileUp className="w-4 h-4" />
-            </button>
-          )}
-          {onOpenLidarPlanner && (
-            <button 
-              onClick={onOpenLidarPlanner}
-              className="text-gray-400 hover:text-green-400 transition-colors"
-              title="LiDAR Coverage Planner"
-            >
-              <Target className="w-4 h-4" />
-            </button>
-          )}
-          {onOpenEdgeCommissioning && (
-            <button 
-              onClick={onOpenEdgeCommissioning}
-              className="text-gray-400 hover:text-cyan-400 transition-colors"
-              title="Edge Commissioning Portal"
-            >
-              <Server className="w-4 h-4" />
-            </button>
-          )}
-          {onOpenDoohAnalytics && (
-            <button 
-              onClick={onOpenDoohAnalytics}
-              className="text-gray-400 hover:text-purple-400 transition-colors"
-              title="DOOH Analytics"
-            >
-              <Monitor className="w-4 h-4" />
-            </button>
-          )}
           <button 
             onClick={() => setShowSimulator(true)}
             className="text-gray-400 hover:text-orange-400 transition-colors"

@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Hyperspace - Option C: Classic Menu Bar + Docked Panels</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    * { font-family: 'Inter', sans-serif; }
+    body { background: #1a1a1a; }
+    .menu-item:hover { background: rgba(255,255,255,0.1); }
+    .dropdown { animation: dropIn 0.15s ease-out; box-shadow: 0 10px 40px -10px rgba(0,0,0,0.5); }
+    @keyframes dropIn { from { opacity: 0; transform: translateY(-5px); } to { opacity: 1; transform: translateY(0); } }
+    .dropdown-item:hover { background: rgba(59, 130, 246, 0.2); }
+    .toolbar-btn:hover { background: rgba(255,255,255,0.1); }
+    .toolbar-btn.active { background: rgba(59, 130, 246, 0.3); color: #60a5fa; }
+    .panel-tab:hover { background: rgba(255,255,255,0.05); }
+    .panel-tab.active { background: #1a1a1a; border-bottom: 2px solid #3b82f6; }
+    .docked-panel { transition: height 0.3s ease-out; }
+    .docked-panel.collapsed { height: 32px !important; }
+    .mock-3d { background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%); }
+    .grid-pattern { background-image: linear-gradient(rgba(255,255,255,0.03) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.03) 1px, transparent 1px); background-size: 40px 40px; }
+  </style>
+</head>
+<body class="h-screen overflow-hidden text-white flex flex-col">
+  
+  <!-- MENU BAR -->
+  <header class="h-8 bg-[#0f0f0f] border-b border-[#333] flex items-center px-2 text-sm">
+    <div class="flex items-center gap-1.5 px-2 mr-2">
+      <div class="w-5 h-5 rounded bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center">
+        <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>
+      </div>
+      <span class="font-semibold text-xs">HYPERSPACE</span>
+    </div>
+    
+    <nav class="flex h-full">
+      <div class="relative">
+        <button onclick="toggleMenu('file')" class="menu-item h-full px-3 text-xs transition-colors">File</button>
+        <div id="menu-file" class="dropdown hidden absolute top-full left-0 mt-px w-56 bg-[#1a1a1a] border border-[#333] rounded-b-lg py-1 z-50">
+          <button class="dropdown-item w-full px-4 py-2 text-left text-xs flex justify-between"><span>New Venue</span><kbd class="text-gray-500">⌘N</kbd></button>
+          <button class="dropdown-item w-full px-4 py-2 text-left text-xs flex justify-between"><span>Open Venue...</span><kbd class="text-gray-500">⌘O</kbd></button>
+          <button class="dropdown-item w-full px-4 py-2 text-left text-xs flex justify-between"><span>Save</span><kbd class="text-gray-500">⌘S</kbd></button>
+          <div class="h-px bg-[#333] my-1"></div>
+          <button class="dropdown-item w-full px-4 py-2 text-left text-xs">Import DWG...</button>
+          <button class="dropdown-item w-full px-4 py-2 text-left text-xs">Export...</button>
+          <div class="h-px bg-[#333] my-1"></div>
+          <button class="dropdown-item w-full px-4 py-2 text-left text-xs">Settings</button>
+        </div>
+      </div>
+      <div class="relative">
+        <button onclick="toggleMenu('edit')" class="menu-item h-full px-3 text-xs transition-colors">Edit</button>
+        <div id="menu-edit" class="dropdown hidden absolute top-full left-0 mt-px w-48 bg-[#1a1a1a] border border-[#333] rounded-b-lg py-1 z-50">
+          <button class="dropdown-item w-full px-4 py-2 text-left text-xs flex justify-between"><span>Undo</span><kbd class="text-gray-500">⌘Z</kbd></button>
+          <button class="dropdown-item w-full px-4 py-2 text-left text-xs flex justify-between"><span>Redo</span><kbd class="text-gray-500">⇧⌘Z</kbd></button>
+          <div class="h-px bg-[#333] my-1"></div>
+          <button class="dropdown-item w-full px-4 py-2 text-left text-xs">Delete</button>
+          <button class="dropdown-item w-full px-4 py-2 text-left text-xs">Select All</button>
+        </div>
+      </div>
+      <div class="relative">
+        <button onclick="toggleMenu('view')" class="menu-item h-full px-3 text-xs transition-colors">View</button>
+        <div id="menu-view" class="dropdown hidden absolute top-full left-0 mt-px w-48 bg-[#1a1a1a] border border-[#333] rounded-b-lg py-1 z-50">
+          <button class="dropdown-item w-full px-4 py-2 text-left text-xs">Top View</button>
+          <button class="dropdown-item w-full px-4 py-2 text-left text-xs">Front View</button>
+          <button class="dropdown-item w-full px-4 py-2 text-left text-xs">Side View</button>
+          <button class="dropdown-item w-full px-4 py-2 text-left text-xs">Reset View</button>
+          <div class="h-px bg-[#333] my-1"></div>
+          <label class="dropdown-item flex items-center gap-2 px-4 py-2 text-xs cursor-pointer"><input type="checkbox" checked class="rounded w-3 h-3">Show Grid</label>
+          <label class="dropdown-item flex items-center gap-2 px-4 py-2 text-xs cursor-pointer"><input type="checkbox" checked class="rounded w-3 h-3">Show Regions</label>
+        </div>
+      </div>
+      <div class="relative">
+        <button onclick="toggleMenu('tools')" class="menu-item h-full px-3 text-xs transition-colors">Tools</button>
+        <div id="menu-tools" class="dropdown hidden absolute top-full left-0 mt-px w-52 bg-[#1a1a1a] border border-[#333] rounded-b-lg py-1 z-50">
+          <button class="dropdown-item w-full px-4 py-2 text-left text-xs">Add Object</button>
+          <button class="dropdown-item w-full px-4 py-2 text-left text-xs">Add LiDAR</button>
+          <button class="dropdown-item w-full px-4 py-2 text-left text-xs">Add Region</button>
+          <div class="h-px bg-[#333] my-1"></div>
+          <button class="dropdown-item w-full px-4 py-2 text-left text-xs">Planogram Builder</button>
+          <button class="dropdown-item w-full px-4 py-2 text-left text-xs">Edge Commissioning</button>
+          <button class="dropdown-item w-full px-4 py-2 text-left text-xs">Simulator Control</button>
+        </div>
+      </div>
+      <div class="relative">
+        <button onclick="toggleMenu('analytics')" class="menu-item h-full px-3 text-xs transition-colors">Analytics</button>
+        <div id="menu-analytics" class="dropdown hidden absolute top-full left-0 mt-px w-52 bg-[#1a1a1a] border border-[#333] rounded-b-lg py-1 z-50">
+          <button class="dropdown-item w-full px-4 py-2 text-left text-xs text-purple-400">⚡ Smart KPI Mode</button>
+          <button class="dropdown-item w-full px-4 py-2 text-left text-xs text-orange-400">🔥 Heatmap Viewer</button>
+          <div class="h-px bg-[#333] my-1"></div>
+          <button class="dropdown-item w-full px-4 py-2 text-left text-xs">🛒 Checkout Manager</button>
+          <button class="dropdown-item w-full px-4 py-2 text-left text-xs">📺 DOOH Analytics</button>
+          <button class="dropdown-item w-full px-4 py-2 text-left text-xs">📈 PEBLE™ Attribution</button>
+          <button class="dropdown-item w-full px-4 py-2 text-left text-xs">📊 Business Reports</button>
+          <div class="h-px bg-[#333] my-1"></div>
+          <button class="dropdown-item w-full px-4 py-2 text-left text-xs text-cyan-400">🤖 AI Copilot</button>
+          <button class="dropdown-item w-full px-4 py-2 text-left text-xs">🔔 Activity Ledger</button>
+        </div>
+      </div>
+      <div class="relative">
+        <button onclick="toggleMenu('help')" class="menu-item h-full px-3 text-xs transition-colors">Help</button>
+        <div id="menu-help" class="dropdown hidden absolute top-full left-0 mt-px w-40 bg-[#1a1a1a] border border-[#333] rounded-b-lg py-1 z-50">
+          <button class="dropdown-item w-full px-4 py-2 text-left text-xs">Documentation</button>
+          <button class="dropdown-item w-full px-4 py-2 text-left text-xs">Keyboard Shortcuts</button>
+          <button class="dropdown-item w-full px-4 py-2 text-left text-xs">About</button>
+        </div>
+      </div>
+    </nav>
+    <div class="flex-1"></div>
+    <button class="flex items-center gap-1.5 px-2 py-1 text-xs text-gray-400 hover:text-white rounded hover:bg-[#2a2a2a]">🔍 Search</button>
+  </header>
+  
+  <!-- TOOLBAR -->
+  <div class="h-9 bg-[#141414] border-b border-[#333] flex items-center px-2 gap-1">
+    <div class="flex gap-0.5 pr-2 border-r border-[#333]">
+      <button class="toolbar-btn active p-1.5 rounded" title="Live View">🏠</button>
+      <button class="toolbar-btn p-1.5 rounded text-gray-400" title="Planogram">📐</button>
+      <button class="toolbar-btn p-1.5 rounded text-gray-400" title="Analytics">📊</button>
+    </div>
+    <div class="flex gap-0.5 px-2 border-r border-[#333]">
+      <button class="toolbar-btn active p-1.5 rounded" title="Select">↖</button>
+      <button class="toolbar-btn p-1.5 rounded text-gray-400" title="Pan">✋</button>
+      <button class="toolbar-btn p-1.5 rounded text-gray-400" title="Rotate">🔄</button>
+    </div>
+    <div class="flex gap-0.5 px-2">
+      <button class="toolbar-btn px-2 py-1 rounded text-xs text-gray-400">Top</button>
+      <button class="toolbar-btn px-2 py-1 rounded text-xs text-gray-400">Front</button>
+      <button class="toolbar-btn px-2 py-1 rounded text-xs text-gray-400">Side</button>
+      <button class="toolbar-btn active px-2 py-1 rounded text-xs">3D</button>
+    </div>
+    <div class="flex-1"></div>
+    <button class="toolbar-btn p-1.5 rounded text-gray-400" title="Lighting">☀️</button>
+    <button class="toolbar-btn p-1.5 rounded text-gray-400" title="Settings">⚙️</button>
+  </div>
+  
+  <!-- MAIN CONTENT -->
+  <div class="flex-1 flex overflow-hidden">
+    <!-- LEFT TOOL PALETTE -->
+    <aside class="w-10 bg-[#0f0f0f] border-r border-[#333] flex flex-col items-center py-2 gap-1">
+      <button class="w-8 h-8 rounded flex items-center justify-center text-green-400 hover:bg-white/10" title="Add Object">📦</button>
+      <button class="w-8 h-8 rounded flex items-center justify-center text-red-400 hover:bg-white/10" title="Add LiDAR">📡</button>
+      <button class="w-8 h-8 rounded flex items-center justify-center text-purple-400 hover:bg-white/10" title="Add Region">🎯</button>
+      <div class="w-6 h-px bg-[#333] my-1"></div>
+      <button class="w-8 h-8 rounded flex items-center justify-center text-cyan-400 hover:bg-white/10" title="Measure">📏</button>
+    </aside>
+    
+    <!-- VIEWPORT -->
+    <main class="flex-1 flex flex-col">
+      <div class="flex-1 mock-3d grid-pattern relative">
+        <div class="absolute inset-0 flex items-center justify-center">
+          <div class="text-center">
+            <div class="w-32 h-32 mx-auto mb-4 border-2 border-dashed border-gray-600 rounded-lg flex items-center justify-center text-6xl text-gray-600">🎲</div>
+            <p class="text-gray-500 text-sm">3D Viewport</p>
+            <p class="text-gray-600 text-xs mt-1">Click objects to select • Drag to move</p>
+          </div>
+        </div>
+        <div class="absolute top-4 right-4 flex items-center gap-2 bg-black/60 backdrop-blur px-3 py-2 rounded-lg">
+          <span class="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
+          <span class="text-xs text-green-400">47 tracked</span>
+        </div>
+      </div>
+      
+      <!-- DOCKED PANELS -->
+      <div id="docked-panels" class="docked-panel h-44 bg-[#141414] border-t border-[#333] flex flex-col">
+        <div class="h-8 flex items-center bg-[#0f0f0f] border-b border-[#333]">
+          <button onclick="switchPanel('venue')" id="tab-venue" class="panel-tab active h-full px-4 text-xs font-medium">Venue</button>
+          <button onclick="switchPanel('objects')" id="tab-objects" class="panel-tab h-full px-4 text-xs text-gray-400">Objects</button>
+          <button onclick="switchPanel('lidars')" id="tab-lidars" class="panel-tab h-full px-4 text-xs text-gray-400">LiDARs</button>
+          <button onclick="switchPanel('regions')" id="tab-regions" class="panel-tab h-full px-4 text-xs text-gray-400">Regions</button>
+          <button onclick="switchPanel('layers')" id="tab-layers" class="panel-tab h-full px-4 text-xs text-gray-400">Layers</button>
+          <div class="flex-1"></div>
+          <button onclick="toggleCollapse()" class="px-3 text-gray-400 hover:text-white">▼</button>
+        </div>
+        <div class="flex-1 overflow-y-auto p-3">
+          <div id="panel-venue" class="grid grid-cols-4 gap-3">
+            <div><label class="text-[10px] text-gray-500">Name</label><input type="text" value="Demo Store" class="w-full bg-[#1a1a1a] border border-[#333] rounded px-2 py-1 text-xs mt-1"></div>
+            <div><label class="text-[10px] text-gray-500">Width (m)</label><input type="number" value="15" class="w-full bg-[#1a1a1a] border border-[#333] rounded px-2 py-1 text-xs mt-1"></div>
+            <div><label class="text-[10px] text-gray-500">Depth (m)</label><input type="number" value="10" class="w-full bg-[#1a1a1a] border border-[#333] rounded px-2 py-1 text-xs mt-1"></div>
+            <div><label class="text-[10px] text-gray-500">Grid (m)</label><input type="number" value="0.5" class="w-full bg-[#1a1a1a] border border-[#333] rounded px-2 py-1 text-xs mt-1"></div>
+          </div>
+          <div id="panel-objects" class="hidden grid grid-cols-4 gap-2">
+            <div class="p-2 bg-[#1a1a1a] rounded border border-[#333] text-xs">Shelf_01<br><span class="text-gray-500">2.5, 0, 3.0</span></div>
+            <div class="p-2 bg-[#1a1a1a] rounded border border-[#333] text-xs">Shelf_02<br><span class="text-gray-500">5.0, 0, 3.0</span></div>
+            <div class="p-2 bg-[#1a1a1a] rounded border border-[#333] text-xs">Counter<br><span class="text-gray-500">7.5, 0, 8.0</span></div>
+            <div class="p-2 bg-[#1a1a1a] rounded border border-[#333] text-xs">Display<br><span class="text-gray-500">2.0, 0, 7.0</span></div>
+          </div>
+          <div id="panel-lidars" class="hidden grid grid-cols-3 gap-2">
+            <div class="p-2 bg-[#1a1a1a] rounded border border-green-600/50 text-xs"><span class="text-green-400">●</span> LiDAR_01<br><span class="text-gray-500">Online</span></div>
+            <div class="p-2 bg-[#1a1a1a] rounded border border-green-600/50 text-xs"><span class="text-green-400">●</span> LiDAR_02<br><span class="text-gray-500">Online</span></div>
+            <div class="p-2 bg-[#1a1a1a] rounded border border-green-600/50 text-xs"><span class="text-green-400">●</span> LiDAR_03<br><span class="text-gray-500">Online</span></div>
+          </div>
+          <div id="panel-regions" class="hidden grid grid-cols-4 gap-2">
+            <div class="p-2 bg-[#1a1a1a] rounded border border-purple-600/50 text-xs">Entrance<br><span class="text-purple-400">3×2m</span></div>
+            <div class="p-2 bg-[#1a1a1a] rounded border border-amber-600/50 text-xs">Shelf A<br><span class="text-amber-400">4×3m</span></div>
+            <div class="p-2 bg-[#1a1a1a] rounded border border-cyan-600/50 text-xs">Checkout<br><span class="text-cyan-400">2×2m</span></div>
+            <div class="p-2 bg-[#1a1a1a] rounded border border-green-600/50 text-xs">Exit<br><span class="text-green-400">3×2m</span></div>
+          </div>
+          <div id="panel-layers" class="hidden grid grid-cols-4 gap-3">
+            <label class="flex items-center gap-2 text-xs"><input type="checkbox" checked class="rounded w-3 h-3">Objects</label>
+            <label class="flex items-center gap-2 text-xs"><input type="checkbox" checked class="rounded w-3 h-3">LiDARs</label>
+            <label class="flex items-center gap-2 text-xs"><input type="checkbox" checked class="rounded w-3 h-3">Regions</label>
+            <label class="flex items-center gap-2 text-xs"><input type="checkbox" checked class="rounded w-3 h-3">Grid</label>
+            <label class="flex items-center gap-2 text-xs"><input type="checkbox" class="rounded w-3 h-3">Heatmap</label>
+            <label class="flex items-center gap-2 text-xs"><input type="checkbox" checked class="rounded w-3 h-3">DWG</label>
+            <label class="flex items-center gap-2 text-xs"><input type="checkbox" checked class="rounded w-3 h-3">Tracking</label>
+            <label class="flex items-center gap-2 text-xs"><input type="checkbox" class="rounded w-3 h-3">Labels</label>
+          </div>
+        </div>
+      </div>
+    </main>
+    
+    <!-- RIGHT INSPECTOR -->
+    <aside class="w-52 bg-[#0f0f0f] border-l border-[#333] flex flex-col">
+      <div class="h-8 border-b border-[#333] flex items-center px-3"><span class="text-xs font-medium">Inspector</span></div>
+      <div class="flex-1 p-3 text-center text-gray-500 text-xs pt-16">↖ Select an object<br>to view properties</div>
+    </aside>
+  </div>
+  
+  <!-- STATUS BAR -->
+  <footer class="h-6 bg-[#0f0f0f] border-t border-[#333] flex items-center px-3 text-[10px] text-gray-500">
+    <span class="pr-3 border-r border-[#333]">Demo Store</span>
+    <span class="px-3 border-r border-[#333]">15m × 10m</span>
+    <span class="px-3 border-r border-[#333]"><span class="text-green-400">●</span> 3 LiDARs</span>
+    <span class="px-3">12 Zones</span>
+    <div class="flex-1"></div>
+    <span>Click objects to select • Drag to move</span>
+  </footer>
+
+  <script>
+    let openMenu = null;
+    function toggleMenu(menu) {
+      const menus = ['file','edit','view','tools','analytics','help'];
+      if (openMenu === menu) { document.getElementById('menu-'+menu).classList.add('hidden'); openMenu = null; }
+      else { menus.forEach(m => document.getElementById('menu-'+m).classList.add('hidden')); document.getElementById('menu-'+menu).classList.remove('hidden'); openMenu = menu; }
+    }
+    document.addEventListener('click', e => { if (!e.target.closest('.relative')) { ['file','edit','view','tools','analytics','help'].forEach(m => document.getElementById('menu-'+m).classList.add('hidden')); openMenu = null; }});
+    function switchPanel(p) {
+      ['venue','objects','lidars','regions','layers'].forEach(x => { document.getElementById('panel-'+x).classList.add('hidden'); document.getElementById('tab-'+x).classList.remove('active'); document.getElementById('tab-'+x).classList.add('text-gray-400'); });
+      document.getElementById('panel-'+p).classList.remove('hidden'); document.getElementById('tab-'+p).classList.add('active'); document.getElementById('tab-'+p).classList.remove('text-gray-400');
+    }
+    function toggleCollapse() { document.getElementById('docked-panels').classList.toggle('collapsed'); }
+  </script>
+</body>
+</html>

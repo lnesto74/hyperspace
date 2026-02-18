@@ -1,6 +1,7 @@
 import { useRef, useEffect, useCallback, useState } from 'react'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
+import { Layers, Eye, EyeOff } from 'lucide-react'
 import { useVenue } from '../../context/VenueContext'
 import { usePlanogram, ShelfPlanogram, SkuItem, SlotFacing } from '../../context/PlanogramContext'
 
@@ -60,6 +61,7 @@ function Slot3DTooltip({ sku, position }: { sku: SkuItem; position: { x: number;
 const COLORS = {
   floor: 0x1a1a24,
   grid: 0x333344,
+  gridCenter: 0x444466,
   shelfDefault: 0x4b5563,
   shelfActive: 0xf59e0b,
   shelfHover: 0x3b82f6,
@@ -163,6 +165,14 @@ export default function PlanogramViewport() {
   const [tooltipPos, setTooltipPos] = useState<{x: number, y: number}>({ x: 0, y: 0 })
   const slotMeshesRef = useRef<Map<string, { mesh: THREE.Mesh, skuItemId: string }>>(new Map())
   
+  // Layer visibility state
+  const [showLayersPanel, setShowLayersPanel] = useState(false)
+  const [showRois, setShowRois] = useState(false)
+  const [rois, setRois] = useState<any[]>([])
+  const [shelfCategories, setShelfCategories] = useState<Map<string, { categories: string[], shelfId: string }>>(new Map())
+  const [hoveredRoi, setHoveredRoi] = useState<any | null>(null)
+  const roiMeshesRef = useRef<Map<string, THREE.Mesh>>(new Map())
+  
   // Get shelf objects
   const shelves = objects.filter(o => 
     o.type.toLowerCase().includes('shelf') || 
@@ -218,6 +228,56 @@ export default function PlanogramViewport() {
       level.slots?.some(slot => slot.skuItemId)
     )
   }, [allShelfPlanograms])
+  
+  // Load ROIs and their shelf categories when venue changes
+  useEffect(() => {
+    if (!venue?.id) {
+      setRois([])
+      setShelfCategories(new Map())
+      return
+    }
+    
+    const loadRoisAndCategories = async () => {
+      try {
+        // Fetch ROIs for this venue
+        const roisRes = await fetch(`${API_BASE}/api/venues/${venue.id}/rois`)
+        if (!roisRes.ok) {
+          console.error('[ROI] Failed to fetch ROIs:', roisRes.status)
+          return
+        }
+        const roisData = await roisRes.json()
+        setRois(roisData || [])
+        
+        // Fetch categories for each shelf-engagement ROI
+        const categoriesMap = new Map<string, { categories: string[], shelfId: string }>()
+        
+        for (const roi of roisData || []) {
+          const metadata = roi.metadata || {}
+          if (metadata.template === 'shelf-engagement' && metadata.shelfId) {
+            try {
+              // Fetch category info for this shelf
+              const catRes = await fetch(`${API_BASE}/api/planogram/shelves/${metadata.shelfId}/categories`)
+              const catData = await catRes.json()
+              if (catData?.categories) {
+                categoriesMap.set(roi.id, {
+                  categories: catData.categories,
+                  shelfId: metadata.shelfId
+                })
+              }
+            } catch {
+              // Shelf may not have categories
+            }
+          }
+        }
+        
+        setShelfCategories(categoriesMap)
+      } catch (err) {
+        console.error('Failed to load ROIs:', err)
+      }
+    }
+    
+    loadRoisAndCategories()
+  }, [venue?.id])
   
   // Create shelf mesh with slot grid
   const createShelfMesh = useCallback((shelf: any, isActive: boolean) => {
@@ -482,8 +542,10 @@ export default function PlanogramViewport() {
     floor.receiveShadow = true
     scene.add(floor)
     
-    // Grid
-    const gridHelper = new THREE.GridHelper(Math.max(venue.width, venue.depth), Math.max(venue.width, venue.depth))
+    // Grid - match MainViewport style
+    const gridSize = Math.max(venue.width, venue.depth)
+    const divisions = Math.ceil(gridSize / (venue.tileSize || 1))
+    const gridHelper = new THREE.GridHelper(gridSize, divisions, COLORS.gridCenter, COLORS.grid)
     gridHelper.position.set(venue.width / 2, 0.01, venue.depth / 2)
     scene.add(gridHelper)
     
@@ -559,6 +621,61 @@ export default function PlanogramViewport() {
       shelfMeshesRef.current.set(shelf.id, mesh)
     })
   }, [shelves, activeShelfId, createShelfMesh, allShelfPlanograms, hoveredSkuId])
+  
+  // Render ROIs on the floor
+  useEffect(() => {
+    if (!sceneRef.current) return
+    
+    // Remove old ROI meshes
+    roiMeshesRef.current.forEach(mesh => {
+      sceneRef.current?.remove(mesh)
+    })
+    roiMeshesRef.current.clear()
+    
+    if (!showRois) return
+    
+    // Add ROI polygons - only shelf-engagement ROIs
+    rois.forEach(roi => {
+      if (!roi.vertices || roi.vertices.length < 3) return
+      
+      // Only show shelf-engagement ROIs (skip checkout, queue, and other zones)
+      const metadata = roi.metadata || {}
+      if (metadata.template !== 'shelf-engagement') return
+      
+      // Create polygon shape from vertices
+      // Note: Shape is in XY plane, rotated -PI/2 around X to lay flat
+      // This rotation negates Y->Z, so we use negative Z in shape Y coordinate
+      const shape = new THREE.Shape()
+      roi.vertices.forEach((v: {x: number, z: number}, i: number) => {
+        if (i === 0) {
+          shape.moveTo(v.x, -v.z)
+        } else {
+          shape.lineTo(v.x, -v.z)
+        }
+      })
+      shape.closePath()
+      
+      // Create mesh
+      const geometry = new THREE.ShapeGeometry(shape)
+      
+      const material = new THREE.MeshBasicMaterial({
+        color: 0xf59e0b, // Amber for shelf engagement zones
+        transparent: true,
+        opacity: 0.25,
+        side: THREE.DoubleSide,
+      })
+      
+      const mesh = new THREE.Mesh(geometry, material)
+      mesh.rotation.x = -Math.PI / 2 // Lay flat on XZ plane
+      mesh.position.y = 0.02 // Slightly above floor
+      mesh.userData.isRoi = true
+      mesh.userData.roiId = roi.id
+      mesh.userData.roiData = roi
+      
+      sceneRef.current?.add(mesh)
+      roiMeshesRef.current.set(roi.id, mesh)
+    })
+  }, [rois, showRois, venue?.depth])
   
   // Click handler for shelf selection and face selection
   const handleClick = useCallback(async (event: React.MouseEvent) => {
@@ -734,13 +851,36 @@ export default function PlanogramViewport() {
         if (sku) {
           setTooltipSku(sku)
           setTooltipPos({ x: e.clientX - rect.left, y: e.clientY - rect.top })
+          setHoveredRoi(null)
           return
         }
       }
     }
     
     setTooltipSku(null)
-  }, [activeCatalog, faceSelectMode])
+    
+    // Check for ROI hover
+    if (showRois) {
+      const roiMeshes: THREE.Mesh[] = []
+      sceneRef.current.traverse(obj => {
+        if (obj instanceof THREE.Mesh && obj.userData.isRoi) {
+          roiMeshes.push(obj)
+        }
+      })
+      
+      const roiIntersects = raycasterRef.current.intersectObjects(roiMeshes)
+      if (roiIntersects.length > 0) {
+        const roiData = roiIntersects[0].object.userData.roiData
+        if (roiData) {
+          setHoveredRoi(roiData)
+          setTooltipPos({ x: e.clientX - rect.left, y: e.clientY - rect.top })
+          return
+        }
+      }
+    }
+    
+    setHoveredRoi(null)
+  }, [activeCatalog, faceSelectMode, showRois])
   
   return (
     <div 
@@ -748,7 +888,7 @@ export default function PlanogramViewport() {
       className="w-full h-full bg-gray-900 relative"
       onClick={handleClick}
       onMouseMove={handleMouseMove}
-      onMouseLeave={() => setTooltipSku(null)}
+      onMouseLeave={() => { setTooltipSku(null); setHoveredRoi(null); }}
       onDragOver={handleDragOver}
       onDrop={handleDrop}
     >
@@ -791,6 +931,87 @@ export default function PlanogramViewport() {
       
       {/* Slot tooltip */}
       {tooltipSku && <Slot3DTooltip sku={tooltipSku} position={tooltipPos} />}
+      
+      {/* ROI tooltip */}
+      {hoveredRoi && !tooltipSku && (
+        <div 
+          className="absolute z-50 bg-gray-900/95 border border-amber-500/50 rounded-lg shadow-xl p-3 pointer-events-none"
+          style={{ left: tooltipPos.x + 15, top: tooltipPos.y - 10, maxWidth: 320 }}
+        >
+          <div className="text-amber-400 font-medium text-sm mb-2">{hoveredRoi.name}</div>
+          <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
+            <span className="text-gray-500">ROI ID:</span>
+            <span className="text-gray-400 font-mono text-[10px]">{hoveredRoi.id?.substring(0, 8)}...</span>
+            
+            {hoveredRoi.metadata?.shelfId && (
+              <>
+                <span className="text-gray-500">Shelf ID:</span>
+                <span className="text-gray-400 font-mono text-[10px]">{hoveredRoi.metadata.shelfId.substring(0, 8)}...</span>
+              </>
+            )}
+            
+            {hoveredRoi.metadata?.template && (
+              <>
+                <span className="text-gray-500">Type:</span>
+                <span className="text-blue-400">{hoveredRoi.metadata.template}</span>
+              </>
+            )}
+            
+            {hoveredRoi.metadata?.zoneType && (
+              <>
+                <span className="text-gray-500">Side:</span>
+                <span className="text-gray-300 capitalize">{hoveredRoi.metadata.zoneType}</span>
+              </>
+            )}
+          </div>
+          
+          {/* Show categories if available */}
+          {shelfCategories.get(hoveredRoi.id)?.categories?.length > 0 && (
+            <div className="mt-2 pt-2 border-t border-gray-700">
+              <div className="text-gray-500 text-xs mb-1">Product Categories:</div>
+              <div className="flex flex-wrap gap-1">
+                {shelfCategories.get(hoveredRoi.id)?.categories.slice(0, 3).map((cat, i) => (
+                  <span key={i} className="px-2 py-0.5 bg-green-600/30 text-green-400 rounded text-xs">
+                    {cat}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+      
+      {/* Floating Layers Panel - Top Left */}
+      <div className="absolute top-4 left-4 z-10">
+        <button
+          onClick={() => setShowLayersPanel(!showLayersPanel)}
+          className={`p-2 rounded-lg shadow-lg transition-colors ${
+            showLayersPanel
+              ? 'bg-blue-600 text-white'
+              : 'bg-gray-800/90 text-gray-300 hover:text-white hover:bg-gray-700'
+          }`}
+          title="Toggle Layers Panel"
+        >
+          <Layers className="w-5 h-5" />
+        </button>
+        {showLayersPanel && (
+          <div className="absolute top-full left-0 mt-2 bg-gray-800/95 backdrop-blur border border-gray-700 rounded-lg shadow-xl p-3 min-w-[180px]">
+            <div className="text-xs font-medium text-gray-300 mb-2">Layers</div>
+            <label className="flex items-center gap-2 py-1.5 px-2 rounded hover:bg-gray-700 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={showRois}
+                onChange={(e) => setShowRois(e.target.checked)}
+                className="rounded border-gray-600 bg-gray-700 text-amber-500"
+              />
+              <span className="text-sm text-gray-300 flex items-center gap-1.5">
+                {showRois ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5 text-gray-500" />}
+                Shelf Zones
+              </span>
+            </label>
+          </div>
+        )}
+      </div>
     </div>
   )
 }

@@ -141,7 +141,7 @@ export default function HeatmapPanel({ isOpen }: { isOpen: boolean }) {
       {/* Color Legend */}
       <div className="mt-3 flex items-center gap-2 text-xs">
         <span className="text-gray-400">Low</span>
-        <div className="flex-1 h-2 rounded-full bg-gradient-to-r from-purple-900 via-blue-600 via-fuchsia-600 to-red-600" />
+        <div className="flex-1 h-2 rounded-full" style={{ background: 'linear-gradient(to right, #1e3a5f, #00bcd4, #4caf50, #ffeb3b, #ff9800, #f44336)' }} />
         <span className="text-gray-400">High</span>
       </div>
     </div>

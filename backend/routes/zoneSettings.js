@@ -113,12 +113,149 @@ export default function createZoneSettingsRoutes(db, trajectoryStorage) {
         queueCriticalColor ?? '#ef4444'
       );
       
+      // Clear threshold cache so new settings take effect immediately
+      if (trajectoryStorage?.clearThresholdCache) {
+        trajectoryStorage.clearThresholdCache(roiId);
+      }
+      
       console.log(`📊 Zone settings updated for ROI ${roiId}`);
       
       res.json({ success: true, roiId });
     } catch (err) {
       console.error('Failed to update zone settings:', err);
       res.status(500).json({ error: 'Failed to update zone settings' });
+    }
+  });
+
+  /**
+   * Recalculate is_dwell and is_engagement flags for existing zone_visits
+   * based on current zone/venue threshold settings
+   */
+  router.post('/roi/:roiId/recalculate-flags', (req, res) => {
+    try {
+      const { roiId } = req.params;
+      
+      // Get ROI info
+      const roi = db.prepare(`SELECT venue_id FROM regions_of_interest WHERE id = ?`).get(roiId);
+      if (!roi) {
+        return res.status(404).json({ error: 'ROI not found' });
+      }
+      
+      // Get thresholds (zone settings > venue defaults > system defaults)
+      let dwellThresholdMs = 60 * 1000;
+      let engagementThresholdMs = 120 * 1000;
+      
+      const zoneSettings = db.prepare(`
+        SELECT dwell_threshold_sec, engagement_threshold_sec FROM zone_settings WHERE roi_id = ?
+      `).get(roiId);
+      
+      if (zoneSettings?.dwell_threshold_sec) {
+        dwellThresholdMs = zoneSettings.dwell_threshold_sec * 1000;
+        engagementThresholdMs = zoneSettings.engagement_threshold_sec * 1000;
+      } else {
+        const venueSettings = db.prepare(`
+          SELECT default_dwell_threshold_sec, default_engagement_threshold_sec FROM venues WHERE id = ?
+        `).get(roi.venue_id);
+        
+        if (venueSettings?.default_dwell_threshold_sec) {
+          dwellThresholdMs = venueSettings.default_dwell_threshold_sec * 1000;
+          engagementThresholdMs = venueSettings.default_engagement_threshold_sec * 1000;
+        }
+      }
+      
+      // Update all zone_visits for this ROI
+      const result = db.prepare(`
+        UPDATE zone_visits SET
+          is_dwell = CASE WHEN duration_ms >= ? THEN 1 ELSE 0 END,
+          is_engagement = CASE WHEN duration_ms >= ? THEN 1 ELSE 0 END
+        WHERE roi_id = ?
+      `).run(dwellThresholdMs, engagementThresholdMs, roiId);
+      
+      console.log(`📊 Recalculated flags for ROI ${roiId}: ${result.changes} visits updated (dwell>=${dwellThresholdMs/1000}s, engage>=${engagementThresholdMs/1000}s)`);
+      
+      res.json({
+        success: true,
+        roiId,
+        updatedVisits: result.changes,
+        thresholds: {
+          dwellSec: dwellThresholdMs / 1000,
+          engagementSec: engagementThresholdMs / 1000,
+        },
+      });
+    } catch (err) {
+      console.error('Failed to recalculate flags:', err);
+      res.status(500).json({ error: 'Failed to recalculate flags' });
+    }
+  });
+
+  /**
+   * Recalculate flags for ALL zones in a venue
+   */
+  router.post('/venues/:venueId/recalculate-all-flags', (req, res) => {
+    try {
+      const { venueId } = req.params;
+      
+      // Get venue defaults
+      const venue = db.prepare(`
+        SELECT default_dwell_threshold_sec, default_engagement_threshold_sec FROM venues WHERE id = ?
+      `).get(venueId);
+      
+      if (!venue) {
+        return res.status(404).json({ error: 'Venue not found' });
+      }
+      
+      const defaultDwellMs = (venue.default_dwell_threshold_sec || 60) * 1000;
+      const defaultEngagementMs = (venue.default_engagement_threshold_sec || 120) * 1000;
+      
+      // Get all ROIs for this venue
+      const rois = db.prepare(`SELECT id FROM regions_of_interest WHERE venue_id = ?`).all(venueId);
+      
+      let totalUpdated = 0;
+      
+      for (const roi of rois) {
+        // Get zone-specific thresholds if any
+        let dwellMs = defaultDwellMs;
+        let engagementMs = defaultEngagementMs;
+        
+        const zoneSettings = db.prepare(`
+          SELECT dwell_threshold_sec, engagement_threshold_sec FROM zone_settings WHERE roi_id = ?
+        `).get(roi.id);
+        
+        if (zoneSettings?.dwell_threshold_sec) {
+          dwellMs = zoneSettings.dwell_threshold_sec * 1000;
+          engagementMs = zoneSettings.engagement_threshold_sec * 1000;
+        }
+        
+        const result = db.prepare(`
+          UPDATE zone_visits SET
+            is_dwell = CASE WHEN duration_ms >= ? THEN 1 ELSE 0 END,
+            is_engagement = CASE WHEN duration_ms >= ? THEN 1 ELSE 0 END
+          WHERE roi_id = ?
+        `).run(dwellMs, engagementMs, roi.id);
+        
+        totalUpdated += result.changes;
+      }
+      
+      // Clear all threshold caches
+      if (trajectoryStorage?.clearThresholdCache) {
+        trajectoryStorage.clearThresholdCache();
+      }
+      
+      console.log(`📊 Recalculated flags for venue ${venueId}: ${totalUpdated} visits updated across ${rois.length} zones`);
+      
+      res.json({
+        success: true,
+        venueId,
+        zonesProcessed: rois.length,
+        totalVisitsUpdated: totalUpdated,
+        venueDefaults: {
+          dwellSec: defaultDwellMs / 1000,
+          engagementSec: defaultEngagementMs / 1000,
+        },
+      });
+    } catch (err) {
+      console.error('Failed to recalculate all flags:', err);
+      res.status(500).json({ error: 'Failed to recalculate all flags' });
     }
   });
 

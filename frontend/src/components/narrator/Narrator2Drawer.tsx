@@ -22,12 +22,110 @@ import {
   CheckCircle2,
   AlertCircle,
   XCircle,
+  Settings,
 } from 'lucide-react';
 import { useNarrator2 } from '../../context/Narrator2Context';
+import { useVenue } from '../../context/VenueContext';
 import type { ViewPackKpi, Narrator2Action, KpiStatus } from '../../types/narrator2';
+import VenueKPIThresholdsPanel from '../kpi/VenueKPIThresholdsPanel';
 
 interface Narrator2DrawerProps {
   onExecuteIntent?: (intent: string) => void;
+}
+
+// Business-focused KPI explanations for tooltips
+const KPI_BUSINESS_TOOLTIPS: Record<string, string> = {
+  // Store Manager KPIs
+  totalInStore: 'Total people currently in the store right now. Use for real-time staffing decisions, fire safety compliance, and understanding current traffic levels.',
+  occupancyRate: 'Percentage of people in defined zones vs capacity. High rate may indicate crowding in specific areas. Use for zone-level staffing and layout decisions.',
+  avgDwellTime: 'How long do customers spend per zone? Longer dwell = higher engagement. Low dwell may indicate poor product placement or layout issues.',
+  avgStoreVisit: 'Total time customers spend in-store. Longer visits typically lead to higher basket sizes. Track to measure overall shopping experience.',
+  queueWaitTime: 'Customer patience indicator. Long waits hurt satisfaction and can cause abandonment. Open more lanes when this exceeds 3 minutes.',
+  cashierOpenCount: 'Active checkout capacity. Match to current traffic to minimize wait times while optimizing labor costs.',
+  passByTraffic: 'Total footfall entering the store. Foundation metric for conversion calculations. Compare across days/weeks for trend analysis.',
+  conversionRate: 'Visitors who made a purchase. The ultimate retail KPI. Low conversion with high traffic = merchandising or pricing issues.',
+  engagementRate: 'Visitors who stopped and browsed (>2 min in zone). High engagement = effective displays. Low engagement = adjust layout or signage.',
+  browsingRate: 'Percentage of visitors who explored beyond entrance. Low rate may indicate entry-point issues or lack of compelling draws.',
+  bounceRate: 'Visitors who left quickly without engaging. High bounce = poor first impression or wrong customer targeting.',
+  alertIndex: 'Number of active alerts requiring attention. Prioritize red alerts for immediate action.',
+  
+  // Category Manager / Merchandising KPIs
+  categoryEngagementRate: 'Percentage of category visitors who engaged deeply (stayed >2 min). Low engagement = review product assortment, pricing, or shelf placement. Compare across categories to identify underperformers.',
+  categoryDwellTime: 'Average time shoppers spend browsing this category. Longer dwell correlates with higher purchase intent. Below 1 min suggests products aren\'t capturing attention.',
+  categoryConversionRate: 'Category browsers who made a purchase. Requires POS integration. Low conversion with high engagement = pricing or availability issues.',
+  categoryRevenuePerVisit: 'Revenue generated per visitor to this category. Requires POS data. Use to prioritize high-value categories for premium shelf space.',
+  categoryComparisonIndex: 'Performance vs category benchmark (1.0 = average). Above 1.0 = outperforming similar stores. Below 0.8 = investigate merchandising issues.',
+  avgBrowseTime: 'Average seconds shoppers examine products on shelf. Longer browse = higher consideration. Below 15 sec suggests poor product visibility or assortment.',
+  passbyCount: 'Shoppers who walked past the category without stopping. High pass-by = opportunity loss. Test end-caps, signage, or promotional displays to capture attention.',
+  brandEfficiencyIndex: 'Brand engagement share ÷ shelf space share. Above 1.0 = brand over-performing its space allocation. Below 0.8 = consider reducing shelf space or repositioning.',
+  skuPositionScoreAvg: 'Average shelf placement quality (0-100). Eye-level center positions score highest. Low scores indicate products in poor visibility zones.',
+};
+
+// Get business tooltip for a KPI
+function getBusinessTooltip(kpiId: string): string {
+  return KPI_BUSINESS_TOOLTIPS[kpiId] || 'Key performance indicator for store operations.';
+}
+
+// Highlight numbers in text with semantic colors
+function highlightNumbers(text: string): React.ReactNode[] {
+  // Regex to match numbers with optional % or "min" suffix
+  const numberRegex = /(\d+\.?\d*)\s*(%|min|visitors|pax)?/g;
+  const parts: React.ReactNode[] = [];
+  let lastIndex = 0;
+  let match;
+  let keyIndex = 0;
+
+  while ((match = numberRegex.exec(text)) !== null) {
+    // Add text before the match
+    if (match.index > lastIndex) {
+      parts.push(text.slice(lastIndex, match.index));
+    }
+
+    const value = parseFloat(match[1]);
+    const suffix = match[2] || '';
+    const fullMatch = match[0];
+
+    // Determine color based on context
+    let colorClass = 'bg-blue-500/20 text-blue-400'; // Default: neutral blue
+    
+    if (suffix === '%') {
+      // Percentage - use semantic colors based on value
+      if (value >= 50) {
+        colorClass = 'bg-green-500/20 text-green-400';
+      } else if (value >= 20) {
+        colorClass = 'bg-amber-500/20 text-amber-400';
+      } else {
+        colorClass = 'bg-red-500/20 text-red-400';
+      }
+    } else if (suffix === 'min') {
+      // Time values - longer is generally better for dwell
+      if (value >= 2) {
+        colorClass = 'bg-green-500/20 text-green-400';
+      } else if (value >= 0.5) {
+        colorClass = 'bg-amber-500/20 text-amber-400';
+      } else {
+        colorClass = 'bg-red-500/20 text-red-400';
+      }
+    } else if (suffix === 'visitors' || suffix === 'pax') {
+      // Visitor counts - neutral blue
+      colorClass = 'bg-cyan-500/20 text-cyan-400';
+    }
+
+    parts.push(
+      <span key={keyIndex++} className={`${colorClass} px-1.5 py-0.5 rounded font-medium`}>
+        {fullMatch}
+      </span>
+    );
+
+    lastIndex = match.index + fullMatch.length;
+  }
+
+  // Add remaining text
+  if (lastIndex < text.length) {
+    parts.push(text.slice(lastIndex));
+  }
+
+  return parts.length > 0 ? parts : [text];
 }
 
 // Status icon component
@@ -89,8 +187,12 @@ export default function Narrator2Drawer({ onExecuteIntent }: Narrator2DrawerProp
     executeIntent,
   } = useNarrator2();
 
+  const { venue } = useVenue();
+
   const [questionInput, setQuestionInput] = useState('');
   const [isAskingQuestion, setIsAskingQuestion] = useState(false);
+  const [showThresholdsPanel, setShowThresholdsPanel] = useState(false);
+  const [hoveredKpiId, setHoveredKpiId] = useState<string | null>(null);
 
   const handleAskQuestion = async () => {
     if (!questionInput.trim()) return;
@@ -115,10 +217,17 @@ export default function Narrator2Drawer({ onExecuteIntent }: Narrator2DrawerProp
       <div className="h-14 border-b border-gray-700 flex items-center justify-between px-4 bg-gradient-to-r from-purple-900/50 to-gray-800">
         <div className="flex items-center gap-2">
           <Sparkles className="w-5 h-5 text-purple-400" />
-          <span className="font-semibold text-white">Narrator2</span>
-          <span className="text-xs text-purple-300 bg-purple-900/50 px-1.5 py-0.5 rounded">v2</span>
+          <span className="font-semibold text-white">Copilot</span>
+          <span className="text-xs text-purple-300 bg-purple-900/50 px-1.5 py-0.5 rounded">AI</span>
         </div>
         <div className="flex items-center gap-1">
+          <button
+            onClick={() => setShowThresholdsPanel(true)}
+            className="p-2 text-gray-400 hover:text-amber-400 hover:bg-amber-500/20 rounded-lg transition-colors"
+            title="KPI Thresholds Settings"
+          >
+            <Settings className="w-4 h-4" />
+          </button>
           <button
             onClick={refresh}
             disabled={isLoading}
@@ -243,14 +352,20 @@ export default function Narrator2Drawer({ onExecuteIntent }: Narrator2DrawerProp
                   {viewPack.kpis.map((kpi) => (
                     <div
                       key={kpi.id}
-                      className={`p-3 rounded-lg border transition-colors ${
+                      onMouseEnter={() => setHoveredKpiId(kpi.id)}
+                      onMouseLeave={() => setHoveredKpiId(null)}
+                      className={`p-3 rounded-lg border transition-all cursor-pointer ${
+                        hoveredKpiId === kpi.id
+                          ? 'ring-2 ring-purple-500 ring-offset-1 ring-offset-gray-900'
+                          : ''
+                      } ${
                         kpi.status === 'red'
-                          ? 'bg-red-900/20 border-red-800/50'
+                          ? 'bg-red-900/20 border-red-800/50 hover:bg-red-900/30'
                           : kpi.status === 'amber'
-                          ? 'bg-amber-900/20 border-amber-800/50'
+                          ? 'bg-amber-900/20 border-amber-800/50 hover:bg-amber-900/30'
                           : kpi.status === 'green'
-                          ? 'bg-green-900/20 border-green-800/50'
-                          : 'bg-gray-800/50 border-gray-700'
+                          ? 'bg-green-900/20 border-green-800/50 hover:bg-green-900/30'
+                          : 'bg-gray-800/50 border-gray-700 hover:bg-gray-800'
                       }`}
                     >
                       <div className="flex items-center justify-between mb-1">
@@ -268,13 +383,30 @@ export default function Narrator2Drawer({ onExecuteIntent }: Narrator2DrawerProp
                           {kpi.delta > 0 ? '+' : ''}{kpi.delta.toFixed(1)}%
                         </div>
                       )}
-                      {kpi.hint && (
-                        <div className="text-xs text-gray-500 mt-1 truncate" title={kpi.hint}>
-                          {kpi.hint}
-                        </div>
-                      )}
                     </div>
                   ))}
+                </div>
+
+                {/* KPI Description Area */}
+                <div className={`mt-3 p-3 rounded-lg border transition-all duration-200 ${
+                  hoveredKpiId 
+                    ? 'bg-purple-900/20 border-purple-700/50 opacity-100' 
+                    : 'bg-gray-800/30 border-gray-700/50 opacity-60'
+                }`}>
+                  {hoveredKpiId ? (
+                    <>
+                      <div className="text-xs text-purple-300 font-medium mb-1">
+                        {viewPack.kpis.find(k => k.id === hoveredKpiId)?.label}
+                      </div>
+                      <div className="text-xs text-gray-300 leading-relaxed">
+                        {getBusinessTooltip(hoveredKpiId)}
+                      </div>
+                    </>
+                  ) : (
+                    <div className="text-xs text-gray-500 italic text-center">
+                      Hover over a KPI card to see its business description
+                    </div>
+                  )}
                 </div>
               </div>
             )}
@@ -287,12 +419,12 @@ export default function Narrator2Drawer({ onExecuteIntent }: Narrator2DrawerProp
                   {narration.headline}
                 </div>
 
-                {/* Bullets */}
+                {/* Bullets with highlighted numbers */}
                 <ul className="space-y-2">
                   {narration.bullets.map((bullet, idx) => (
                     <li key={idx} className="text-sm text-gray-300 flex items-start gap-2">
                       <span className="text-purple-400 mt-1">•</span>
-                      <span>{bullet}</span>
+                      <span>{highlightNumbers(bullet)}</span>
                     </li>
                   ))}
                 </ul>
@@ -405,12 +537,22 @@ export default function Narrator2Drawer({ onExecuteIntent }: Narrator2DrawerProp
       {/* Footer */}
       <div className="border-t border-gray-700 px-4 py-2 bg-gray-800/50">
         <div className="text-xs text-gray-500 text-center flex items-center justify-center gap-2">
-          <span>Narrator2 • ViewPack-powered</span>
+          <span>Copilot • AI-powered insights</span>
           {viewPack?.evidence?.sampleN && (
             <span className="text-gray-600">• {viewPack.evidence.sampleN.toLocaleString()} samples</span>
           )}
         </div>
       </div>
+
+      {/* Venue KPI Thresholds Panel */}
+      {venue && (
+        <VenueKPIThresholdsPanel
+          venueId={venue.id}
+          venueName={venue.name}
+          isOpen={showThresholdsPanel}
+          onClose={() => setShowThresholdsPanel(false)}
+        />
+      )}
     </div>
   );
 }

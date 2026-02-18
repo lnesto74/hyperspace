@@ -1,0 +1,13 @@
+Package: sim-tracker
+Version: 1.0.0
+Section: utils
+Priority: optional
+Architecture: amd64
+Depends: nodejs (>= 18.0.0)
+Maintainer: Hyperspace AI <support@hyperspace.ai>
+Description: Hyperspace SimTracker - Trajectory Publisher
+ A standalone simulation tracker that publishes mock trajectories
+ to MQTT for testing the Hyperspace Edge Runtime (HER).
+ .
+ This package is designed for testing the DEB to Docker
+ conversion pipeline.

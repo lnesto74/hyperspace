@@ -1,0 +1,17 @@
+#!/bin/bash
+# Post-installation script for sim-tracker
+
+set -e
+
+# Install npm dependencies
+cd /opt/sim-tracker
+npm install --production 2>/dev/null || echo "Note: npm install skipped (may need manual run)"
+
+# Make executable
+chmod +x /opt/sim-tracker/src/tracker.js
+
+echo "sim-tracker installed successfully!"
+echo "Run with: sim-tracker"
+echo "Or: /opt/sim-tracker/src/tracker.js"
+
+exit 0

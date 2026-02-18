@@ -5,6 +5,9 @@ import { promisify } from 'util';
 import crypto from 'crypto';
 import WebSocket from 'ws';
 
+// Algorithm providers for HER deployment
+import { getActiveProviders, getProviderById, validateProvider } from '../data/algorithmProviders.js';
+
 const execAsync = promisify(exec);
 const router = Router();
 
@@ -1431,6 +1434,321 @@ router.get('/next-available-ip', (req, res) => {
   } catch (err) {
     console.error('❌ Failed to get next available IP:', err.message);
     res.status(500).json({ error: 'Failed to get next available IP', message: err.message });
+  }
+});
+
+// ============ HER (HYPERSPACE EDGE RUNTIME) API ============
+
+// GET /providers - Get list of available algorithm providers
+router.get('/providers', (req, res) => {
+  try {
+    const providers = getActiveProviders();
+    res.json({
+      success: true,
+      providers,
+      count: providers.length,
+    });
+  } catch (err) {
+    console.error('❌ Failed to get providers:', err.message);
+    res.status(500).json({ error: 'Failed to get providers', message: err.message });
+  }
+});
+
+// GET /providers/:providerId - Get a specific provider
+router.get('/providers/:providerId', (req, res) => {
+  try {
+    const { providerId } = req.params;
+    const provider = getProviderById(providerId);
+    
+    if (!provider) {
+      return res.status(404).json({ error: 'Provider not found', providerId });
+    }
+    
+    res.json({ success: true, provider });
+  } catch (err) {
+    console.error('❌ Failed to get provider:', err.message);
+    res.status(500).json({ error: 'Failed to get provider', message: err.message });
+  }
+});
+
+// POST /edge/:edgeId/deploy-her - Deploy HER with provider module
+router.post('/edge/:edgeId/deploy-her', async (req, res) => {
+  try {
+    const db = req.app.get('db');
+    const { edgeId } = req.params;
+    const { venueId, providerId, mqttBrokerUrl } = req.body;
+    
+    if (!venueId) {
+      return res.status(400).json({ error: 'venueId is required' });
+    }
+    if (!providerId) {
+      return res.status(400).json({ error: 'providerId is required' });
+    }
+    
+    // Validate provider
+    const providerValidation = validateProvider(db, providerId);
+    if (!providerValidation.valid) {
+      return res.status(400).json({ error: providerValidation.error });
+    }
+    const providerModule = providerValidation.provider;
+    
+    console.log(`🏭 [HER Deploy] Starting HER deployment for edge ${edgeId}, venue ${venueId}, provider ${providerId}`);
+    
+    // Validate edge
+    const edge = await validateEdgeIp(edgeId);
+    
+    // Get venue info
+    const venue = db.prepare('SELECT * FROM venues WHERE id = ?').get(venueId);
+    if (!venue) {
+      return res.status(404).json({ error: 'Venue not found', venueId });
+    }
+    
+    // Get pairings for this venue+edge (LEFT JOIN since placements may not exist yet)
+    const pairings = db.prepare(`
+      SELECT elp.*, 
+             COALESCE(lp.position_x, 0) as position_x, 
+             COALESCE(lp.position_y, 0) as position_y, 
+             COALESCE(lp.position_z, 0) as position_z, 
+             COALESCE(lp.rotation_x, 0) as rotation_x, 
+             COALESCE(lp.rotation_y, 0) as rotation_y, 
+             COALESCE(lp.rotation_z, 0) as rotation_z,
+             lp.device_id as placement_device_id
+      FROM edge_lidar_pairings elp
+      LEFT JOIN lidar_placements lp ON elp.placement_id = lp.id
+      WHERE elp.venue_id = ? AND elp.edge_id = ?
+    `).all(venueId, edgeId);
+    
+    if (pairings.length === 0) {
+      return res.status(400).json({ error: 'No LiDAR pairings found for this edge+venue' });
+    }
+    
+    // Get ROI bounds (optional - table may not exist)
+    let roiBounds = null;
+    let roiVertices = [];
+    const dwgLayoutId = venue.dwg_layout_version_id;
+    
+    if (dwgLayoutId) {
+      try {
+        // Check if dwg_rois table exists
+        const tableExists = db.prepare(`
+          SELECT name FROM sqlite_master WHERE type='table' AND name='dwg_rois'
+        `).get();
+        
+        if (tableExists) {
+          const dwgRois = db.prepare(`
+            SELECT * FROM dwg_rois WHERE venue_id = ? AND dwg_layout_version_id = ?
+          `).all(venueId, dwgLayoutId);
+          
+          if (dwgRois.length > 0) {
+            const mainRoi = dwgRois.find(r => r.name?.toLowerCase().includes('main') || r.name?.toLowerCase().includes('store')) || dwgRois[0];
+            if (mainRoi && mainRoi.vertices) {
+              roiVertices = JSON.parse(mainRoi.vertices);
+              const xs = roiVertices.map(v => v.x);
+              const zs = roiVertices.map(v => v.z);
+              roiBounds = {
+                minX: Math.min(...xs),
+                maxX: Math.max(...xs),
+                minZ: Math.min(...zs),
+                maxZ: Math.max(...zs),
+              };
+            }
+          }
+        }
+      } catch (e) {
+        console.error('Failed to get ROI bounds:', e.message);
+      }
+    }
+    
+    // Build lidar configs
+    const MQTT_BROKER = mqttBrokerUrl || process.env.MQTT_BROKER_URL || 'mqtt://localhost:1883';
+    console.log(`🔗 [HER Deploy] Using MQTT broker: ${MQTT_BROKER}`);
+    const deploymentId = uuidv4();
+    
+    const lidarConfigs = pairings.map(p => ({
+      lidarId: p.lidar_id,
+      ip: p.lidar_ip,
+      model: p.lidar_model || 'Unknown',
+      extrinsics: {
+        x_m: p.position_x || 0,
+        y_m: p.position_y || 0,
+        z_m: p.position_z || 0,
+        yaw_deg: p.rotation_z || 0,   // rotation_z = yaw
+        pitch_deg: p.rotation_x || 0, // rotation_x = pitch
+        roll_deg: p.rotation_y || 0,  // rotation_y = roll
+      },
+    }));
+    
+    // Build deployment package (same as existing deploy)
+    const deployment = {
+      deploymentId,
+      edgeId,
+      venueId,
+      mqtt: {
+        broker: MQTT_BROKER,
+        topic: `hyperspace/trajectories/${edgeId}`,
+        qos: 1,
+      },
+      lidars: lidarConfigs,
+      coordinateFrame: {
+        origin: 'ROI SW corner at floor level',
+        roiOffset: roiBounds ? { x: roiBounds.minX, z: roiBounds.minZ } : { x: 0, z: 0 },
+        axis: 'X-East, Y-Up, Z-North',
+        units: 'meters',
+      },
+      venueBounds: roiBounds ? {
+        width: roiBounds.maxX - roiBounds.minX,
+        depth: roiBounds.maxZ - roiBounds.minZ,
+        minX: 0,
+        maxX: roiBounds.maxX - roiBounds.minX,
+        minZ: 0,
+        maxZ: roiBounds.maxZ - roiBounds.minZ,
+        floorY: 0,
+        ceilingY: venue.ceiling_height || 4.5,
+      } : null,
+      operationalParams: {
+        groundPlaneY: 0,
+        ceilingY: venue.ceiling_height || 4.5,
+        minDetectionHeight: 0.3,
+        maxDetectionHeight: 2.2,
+        publishRateHz: 10,
+      },
+    };
+    
+    // Build HER payload
+    const herPayload = {
+      deployment,
+      providerModule: {
+        providerId: providerModule.providerId,
+        name: providerModule.name,
+        version: providerModule.version,
+        dockerImage: providerModule.dockerImage,
+        requiresGpu: providerModule.requiresGpu,
+      },
+    };
+    
+    // Compute config hash
+    const sortedConfig = JSON.stringify(herPayload, Object.keys(herPayload).sort());
+    const configHash = crypto.createHash('sha256').update(sortedConfig).digest('hex').substring(0, 16);
+    
+    // Send to edge HER endpoint
+    let herResponse;
+    const historyId = uuidv4();
+    
+    try {
+      herResponse = await proxyToEdge(edge, '/api/edge/her/deploy', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(herPayload),
+        timeout: 120000, // 2 minute timeout for docker pull
+      });
+    } catch (err) {
+      console.error(`❌ [HER Deploy] Failed to deploy to edge: ${err.message}`);
+      
+      // Record failed attempt
+      db.prepare(`
+        INSERT INTO edge_deploy_history (id, venue_id, edge_id, edge_tailscale_ip, config_hash, config_json, status, deployment_type, provider_module_json, her_response_json)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        historyId, venueId, edgeId, edge.tailscaleIp, configHash,
+        JSON.stringify(deployment), 'failed', 'her',
+        JSON.stringify(providerModule),
+        JSON.stringify({ ok: false, error: err.message })
+      );
+      
+      return res.status(502).json({
+        success: false,
+        error: 'Failed to deploy to edge HER',
+        message: err.message,
+        historyId,
+      });
+    }
+    
+    // Record successful deploy
+    db.prepare(`
+      INSERT INTO edge_deploy_history (id, venue_id, edge_id, edge_tailscale_ip, config_hash, config_json, status, deployment_type, provider_module_json, her_response_json)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      historyId, venueId, edgeId, edge.tailscaleIp, configHash,
+      JSON.stringify(deployment), 'applied', 'her',
+      JSON.stringify(providerModule),
+      JSON.stringify(herResponse)
+    );
+    
+    console.log(`✅ [HER Deploy] Successfully deployed to edge ${edgeId}`);
+    
+    res.json({
+      success: true,
+      deploymentId,
+      configHash,
+      lidarCount: lidarConfigs.length,
+      providerModule: {
+        name: providerModule.name,
+        version: providerModule.version,
+      },
+      herResponse,
+      historyId,
+    });
+    
+  } catch (err) {
+    console.error('❌ [HER Deploy] Error:', err.message);
+    res.status(500).json({ error: 'HER deployment failed', message: err.message });
+  }
+});
+
+// POST /edge/:edgeId/stop-her - Stop HER and revert to simulator
+router.post('/edge/:edgeId/stop-her', async (req, res) => {
+  try {
+    const { edgeId } = req.params;
+    
+    console.log(`🛑 [HER Stop] Stopping HER on edge ${edgeId}`);
+    
+    // Validate edge
+    const edge = await validateEdgeIp(edgeId);
+    
+    // Send stop request to edge
+    const response = await proxyToEdge(edge, '/api/edge/her/stop', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      timeout: 30000,
+    });
+    
+    console.log(`✅ [HER Stop] HER stopped on edge ${edgeId}`);
+    
+    res.json({
+      success: true,
+      message: 'HER stopped, simulator mode active',
+      response,
+    });
+    
+  } catch (err) {
+    console.error('❌ [HER Stop] Error:', err.message);
+    res.status(500).json({ error: 'Failed to stop HER', message: err.message });
+  }
+});
+
+// GET /edge/:edgeId/her-status - Get HER status from edge
+router.get('/edge/:edgeId/her-status', async (req, res) => {
+  try {
+    const { edgeId } = req.params;
+    
+    // Validate edge
+    const edge = await validateEdgeIp(edgeId);
+    
+    // Get HER status from edge
+    const herStatus = await proxyToEdge(edge, '/api/edge/her/status', {
+      method: 'GET',
+      timeout: 10000,
+    });
+    
+    res.json({
+      success: true,
+      edgeId,
+      herStatus,
+    });
+    
+  } catch (err) {
+    console.error('❌ [HER Status] Error:', err.message);
+    res.status(500).json({ error: 'Failed to get HER status', message: err.message });
   }
 });
 

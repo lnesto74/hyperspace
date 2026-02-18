@@ -463,7 +463,7 @@ export default function CheckoutManagerModal({ isOpen, onClose }: CheckoutManage
               }`}
             >
               {tab === 'lanes' && 'Lane Overview'}
-              {tab === 'kpi' && '📊 Live KPIs'}
+              {tab === 'kpi' && 'Live KPIs'}
               {tab === 'rules' && 'Alert Rules'}
               {tab === 'settings' && 'Thresholds'}
             </button>
@@ -546,7 +546,7 @@ export default function CheckoutManagerModal({ isOpen, onClose }: CheckoutManage
 
                     {/* Recent Sessions */}
                     <div className="bg-gray-800 rounded-lg p-3">
-                      <h4 className="text-sm font-medium text-white mb-2">Recent Sessions (last 2 min)</h4>
+                      <h4 className="text-sm font-medium text-white mb-2">Recent Sessions ({kpiPeriod === 'hour' ? 'last hour' : kpiPeriod === 'day' ? 'last 24h' : 'last week'})</h4>
                       <div className="max-h-48 overflow-y-auto space-y-1">
                         {kpiSnapshot.recentSessions.length === 0 ? (
                           <div className="text-xs text-gray-500 text-center py-4">No recent sessions</div>

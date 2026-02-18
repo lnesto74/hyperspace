@@ -316,9 +316,12 @@ export class SmartKpiService {
       // Extra offset toward exit direction (-Z = 1 tile = 1 meter)
       const exitOffset = -1.0;
       
+      // Use sequential numbering for unique names (sorted by X position)
+      const checkoutNumber = index + 1;
+      
       // Service zone (right at the counter, shifted 1m toward exit + user offsets)
       const serviceZone = this.createRectangularRoi({
-        name: `${name} - Service`,
+        name: `Checkout ${checkoutNumber} - Service`,
         centerX: position.x + facingX * (cashierDepth / 2 + serviceZoneDepth / 2 + exitOffset) + serviceOffsetX,
         centerZ: position.z + facingZ * (cashierDepth / 2 + serviceZoneDepth / 2 + exitOffset) + serviceOffsetZ,
         width: actualServiceWidth,
@@ -338,7 +341,7 @@ export class SmartKpiService {
 
       // Queue zone (in front of service zone, shifted 1m toward exit + user offsets)
       const queueZone = this.createRectangularRoi({
-        name: `${name} - Queue`,
+        name: `Checkout ${checkoutNumber} - Queue`,
         centerX: position.x + facingX * (cashierDepth / 2 + serviceZoneDepth + queueDepth / 2 + exitOffset) + queueOffsetX,
         centerZ: position.z + facingZ * (cashierDepth / 2 + serviceZoneDepth + queueDepth / 2 + exitOffset) + queueOffsetZ,
         width: actualQueueWidth,
@@ -397,11 +400,23 @@ export class SmartKpiService {
     const rois = [];
     const { engagementDepth = config.engagementDepth } = options;
 
-    shelves.forEach((shelf, index) => {
+    // Sort shelves by position for consistent numbering (X then Z)
+    const sortedShelves = [...shelves].sort((a, b) => {
+      const dx = (a.position?.x || 0) - (b.position?.x || 0);
+      if (Math.abs(dx) > 0.5) return dx;
+      return (a.position?.z || 0) - (b.position?.z || 0);
+    });
+
+    sortedShelves.forEach((shelf, index) => {
       const { position, scale, rotation, name } = shelf;
       const scaleX = scale?.x || 2.0;
       const scaleZ = scale?.z || 0.5;
       const rotY = rotation?.y || 0;
+
+      // Use sequential numbering for unique names (like checkout zones)
+      const shelfNumber = index + 1;
+      // Create unique display name: "Shelf 1", "Shelf 2", etc. (or original name if already unique)
+      const uniqueName = this.isNameUnique(name, shelves) ? name : `Shelf ${shelfNumber}`;
 
       // Determine long side (product display) for zone height
       const longSide = Math.max(scaleX, scaleZ);
@@ -423,7 +438,7 @@ export class SmartKpiService {
 
       // LEFT engagement zone
       const leftRoi = this.createRectangularRoi({
-        name: `${name} - Engagement (Left)`,
+        name: `${uniqueName} - Engagement (Left)`,
         centerX: position.x + leftDirX * offset,
         centerZ: position.z + leftDirZ * offset,
         width: engagementDepth,
@@ -443,7 +458,7 @@ export class SmartKpiService {
 
       // RIGHT engagement zone
       const rightRoi = this.createRectangularRoi({
-        name: `${name} - Engagement (Right)`,
+        name: `${uniqueName} - Engagement (Right)`,
         centerX: position.x + rightDirX * offset,
         centerZ: position.z + rightDirZ * offset,
         width: engagementDepth,
@@ -463,6 +478,12 @@ export class SmartKpiService {
     });
 
     return rois;
+  }
+
+  // Check if a name is unique among a list of objects
+  isNameUnique(name, objects) {
+    const count = objects.filter(obj => obj.name === name).length;
+    return count <= 1;
   }
 
   // Create a rectangular ROI with rotation support

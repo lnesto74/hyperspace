@@ -24,6 +24,7 @@ export class TrajectoryStorageService extends EventEmitter {
     this.visitSessions = new Map(); // trackKey -> { startTime, lastSeen, roiId, positions[] }
     this.queueSessions = new Map(); // trackKey -> { queueZoneId, queueEntryTime, ... }
     this.zoneLinks = new Map(); // queueZoneId -> serviceZoneId (loaded from DB)
+    this.zoneThresholds = new Map(); // roiId -> { dwellMs, engagementMs } (cached from DB)
     this.dataDir = path.join(__dirname, '../data/trajectories');
     this.flushInterval = null;
     this.syncInterval = null;
@@ -35,11 +36,12 @@ export class TrajectoryStorageService extends EventEmitter {
     this.CLEANUP_MS = 15 * 60 * 1000; // Cleanup old data every 15 minutes
     this.POSITION_SAMPLE_MS = 1000;   // Sample position every 1 second (not every frame)
     this.VISIT_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes visit timeout
-    this.DWELL_THRESHOLD_MS = 10 * 1000;    // 10 seconds for dwell (was 60s)
-    this.ENGAGEMENT_THRESHOLD_MS = 30 * 1000; // 30 seconds for engagement (was 120s)
+    // Default thresholds (fallback if zone/venue settings not found)
+    this.DEFAULT_DWELL_THRESHOLD_MS = 60 * 1000;       // 60 seconds default
+    this.DEFAULT_ENGAGEMENT_THRESHOLD_MS = 120 * 1000; // 120 seconds default
     this.VISIT_END_GRACE_MS = 1000;       // 1 second grace period before ending visit
     this.MIN_VISIT_DURATION_MS = 1000;    // Minimum 1 second to count as a visit
-    this.DATA_RETENTION_MS = 24 * 60 * 60 * 1000; // Keep only 24 hours of detailed data
+    this.DATA_RETENTION_MS = 7 * 24 * 60 * 60 * 1000; // Keep 7 days of detailed data for week heatmaps
     this.MAX_POSITIONS_PER_SESSION = 100; // Limit positions stored per visit session
     
     // Track last sample time per track to avoid over-sampling
@@ -306,6 +308,71 @@ export class TrajectoryStorageService extends EventEmitter {
     }
     
     console.log('📊 Trajectory storage tables initialized');
+  }
+
+  /**
+   * Get dwell/engagement thresholds for a specific ROI
+   * Priority: zone_settings > venue defaults > system defaults
+   * Results are cached in memory for performance
+   */
+  getThresholdsForROI(roiId, venueId) {
+    // Check cache first
+    if (this.zoneThresholds.has(roiId)) {
+      return this.zoneThresholds.get(roiId);
+    }
+    
+    try {
+      // Try zone-specific settings first
+      const zoneSettings = this.db.prepare(`
+        SELECT dwell_threshold_sec, engagement_threshold_sec
+        FROM zone_settings WHERE roi_id = ?
+      `).get(roiId);
+      
+      if (zoneSettings?.dwell_threshold_sec) {
+        const thresholds = {
+          dwellMs: zoneSettings.dwell_threshold_sec * 1000,
+          engagementMs: zoneSettings.engagement_threshold_sec * 1000,
+        };
+        this.zoneThresholds.set(roiId, thresholds);
+        return thresholds;
+      }
+      
+      // Fall back to venue defaults
+      const venueSettings = this.db.prepare(`
+        SELECT default_dwell_threshold_sec, default_engagement_threshold_sec
+        FROM venues WHERE id = ?
+      `).get(venueId);
+      
+      if (venueSettings?.default_dwell_threshold_sec) {
+        const thresholds = {
+          dwellMs: venueSettings.default_dwell_threshold_sec * 1000,
+          engagementMs: venueSettings.default_engagement_threshold_sec * 1000,
+        };
+        this.zoneThresholds.set(roiId, thresholds);
+        return thresholds;
+      }
+    } catch (err) {
+      console.warn('Failed to load thresholds for ROI', roiId, err.message);
+    }
+    
+    // System defaults
+    const defaults = {
+      dwellMs: this.DEFAULT_DWELL_THRESHOLD_MS,
+      engagementMs: this.DEFAULT_ENGAGEMENT_THRESHOLD_MS,
+    };
+    this.zoneThresholds.set(roiId, defaults);
+    return defaults;
+  }
+
+  /**
+   * Clear threshold cache (call when settings are updated)
+   */
+  clearThresholdCache(roiId = null) {
+    if (roiId) {
+      this.zoneThresholds.delete(roiId);
+    } else {
+      this.zoneThresholds.clear();
+    }
   }
 
   /**
@@ -576,17 +643,22 @@ export class TrajectoryStorageService extends EventEmitter {
           this.queueSessions.delete(sessionKey);
         }
       }
-      // Person left queue zone (no service zone tracking needed)
-      else if (!inQueueZone && !inServiceZone) {
+      // Person left queue zone - check dwell time to determine if valid session
+      // NOTE: Service zones are NOT required - exiting queue zone = served
+      else if (!inQueueZone) {
         const timeSinceQueue = timestamp - session.lastSeenInQueue;
         if (timeSinceQueue > GRACE_MS) {
           session.queueExitTime = session.lastSeenInQueue;
           const dwellTime = session.queueExitTime - session.queueEntryTime;
           
-          // Short dwell = walk-through/bounce (abandoned)
-          // Longer dwell = completed queue session (served)
-          session.isAbandoned = dwellTime < MIN_QUEUE_DWELL_MS;
-          this.finalizeQueueSession(session);
+          if (dwellTime < MIN_QUEUE_DWELL_MS) {
+            // Short dwell = pass-by, ignore entirely (don't save to DB)
+            console.log(`📊 Queue pass-by ignored: ${session.trackKey} (${Math.round(dwellTime/1000)}s < 5s threshold)`);
+          } else {
+            // Valid queue session (≥5s dwell) - mark as served
+            session.isAbandoned = false;
+            this.finalizeQueueSession(session);
+          }
           this.queueSessions.delete(sessionKey);
         }
       }
@@ -1056,6 +1128,9 @@ export class TrajectoryStorageService extends EventEmitter {
     const duration = session.lastSeen - session.startTime;
     const lastPos = session.positions[session.positions.length - 1];
     
+    // Get thresholds from zone/venue settings (cached)
+    const thresholds = this.getThresholdsForROI(session.roiId, session.venueId);
+    
     const visit = {
       id: `visit-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
       venueId: session.venueId,
@@ -1065,8 +1140,8 @@ export class TrajectoryStorageService extends EventEmitter {
       endTime: session.lastSeen,
       durationMs: duration,
       isCompleteTrack: this.isCompleteTrack(session),
-      isDwell: duration >= this.DWELL_THRESHOLD_MS,
-      isEngagement: duration >= this.ENGAGEMENT_THRESHOLD_MS,
+      isDwell: duration >= thresholds.dwellMs,
+      isEngagement: duration >= thresholds.engagementMs,
       entryPosition: session.entryPosition,
       exitPosition: { x: lastPos.x, z: lastPos.z },
     };

@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { Play, Pause, SkipBack, SkipForward, Clock, ChevronDown, MapPin } from 'lucide-react'
+import { Play, Pause, SkipBack, SkipForward, Clock, ChevronDown, MapPin, RefreshCw } from 'lucide-react'
 import { useTracking } from '../../context/TrackingContext'
 import { TrackWithTrail } from '../../types'
 
@@ -56,6 +56,7 @@ export default function TimelineReplay({ venueId, isOpen, onTimeChange }: Timeli
   const [zones, setZones] = useState<ROI[]>([])
   const [showZoneDropdown, setShowZoneDropdown] = useState(false)
   const [isDragging, setIsDragging] = useState(false)
+  const [isLoading, setIsLoading] = useState(false)
   const playIntervalRef = useRef<NodeJS.Timeout | null>(null)
   const timelineRef = useRef<HTMLDivElement>(null)
 
@@ -74,39 +75,50 @@ export default function TimelineReplay({ venueId, isOpen, onTimeChange }: Timeli
       .catch(err => console.error('Failed to fetch zones:', err))
   }, [venueId])
 
-  const fetchTimelineData = useCallback(async () => {
+  const fetchTimelineData = useCallback(async (forceRefresh = false) => {
+    setIsLoading(true)
     try {
       let startTime: number
+      let endTime: number
       const now = Date.now()
       
       switch (dateRange) {
         case 'yesterday':
-          const yesterday = new Date()
-          yesterday.setDate(yesterday.getDate() - 1)
-          yesterday.setHours(0, 0, 0, 0)
-          startTime = yesterday.getTime()
+          const yesterdayStart = new Date()
+          yesterdayStart.setDate(yesterdayStart.getDate() - 1)
+          yesterdayStart.setHours(0, 0, 0, 0)
+          startTime = yesterdayStart.getTime()
+          const yesterdayEnd = new Date()
+          yesterdayEnd.setHours(0, 0, 0, 0)
+          endTime = yesterdayEnd.getTime()
           break
         case 'week':
           startTime = now - 7 * 24 * 60 * 60 * 1000
+          endTime = now
           break
         default: // today
           const today = new Date()
           today.setHours(0, 0, 0, 0)
           startTime = today.getTime()
+          endTime = now
       }
       
       const zoneParam = selectedZone !== 'all' ? `&roiId=${selectedZone}` : ''
+      const refreshParam = forceRefresh ? '&refresh=true' : ''
       const res = await fetch(
-        `${API_BASE}/api/venues/${venueId}/timeline?start=${startTime}&end=${now}&interval=15${zoneParam}`
+        `${API_BASE}/api/venues/${venueId}/timeline?start=${startTime}&end=${endTime}&interval=15${zoneParam}${refreshParam}`
       )
       
       if (res.ok) {
         const data = await res.json()
+        console.log(`Timeline data for ${dateRange}:`, data.slots?.length, 'slots', data.fromCache ? '(cached)' : '(fresh)')
         setTimelineData(data.slots || [])
         setCurrentIndex(0)
       }
     } catch (err) {
       console.error('Failed to fetch timeline data:', err)
+    } finally {
+      setIsLoading(false)
     }
   }, [venueId, dateRange, selectedZone])
 
@@ -272,7 +284,7 @@ export default function TimelineReplay({ venueId, isOpen, onTimeChange }: Timeli
   const maxKpi2 = getMaxValue(kpi2)
 
   return (
-    <div className="absolute bottom-12 left-0 right-0 h-32 bg-gray-900/95 backdrop-blur-sm border-t border-gray-700 z-40 flex flex-col">
+    <div className="absolute bottom-12 left-0 right-0 h-40 bg-gray-900/95 backdrop-blur-sm border-t border-gray-700 z-40 flex flex-col">
       {/* Header Row */}
       <div className="flex items-center justify-between px-4 py-2 border-b border-gray-700/50">
         <div className="flex items-center gap-4">
@@ -336,6 +348,14 @@ export default function TimelineReplay({ venueId, isOpen, onTimeChange }: Timeli
                 {range}
               </button>
             ))}
+            <button
+              onClick={() => fetchTimelineData(true)}
+              disabled={isLoading}
+              className="p-1 ml-1 text-gray-400 hover:text-white hover:bg-gray-700 rounded transition-colors disabled:opacity-50"
+              title="Refresh (bypass cache)"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`} />
+            </button>
           </div>
           
           {/* Zone Selector */}
@@ -449,7 +469,14 @@ export default function TimelineReplay({ venueId, isOpen, onTimeChange }: Timeli
         onMouseDown={handleMouseDown}
         style={{ userSelect: 'none' }}
       >
-        {timelineData.length === 0 ? (
+        {isLoading ? (
+          <div className="absolute inset-0 flex items-center justify-center text-gray-400 text-sm">
+            <div className="flex items-center gap-2">
+              <div className="w-4 h-4 border-2 border-gray-500 border-t-blue-500 rounded-full animate-spin" />
+              Loading {dateRange} data...
+            </div>
+          </div>
+        ) : timelineData.length === 0 ? (
           <div className="absolute inset-0 flex items-center justify-center text-gray-500 text-sm">
             No data available for selected period
           </div>
@@ -507,6 +534,42 @@ export default function TimelineReplay({ venueId, isOpen, onTimeChange }: Timeli
           </>
         )}
       </div>
+      
+      {/* Time Axis */}
+      {timelineData.length > 0 && (
+        <div className="h-6 relative px-2 border-t border-gray-700/50 flex-shrink-0">
+          <div className="absolute inset-0 flex items-center px-2">
+            {(() => {
+              // Calculate time labels to show (every ~2 hours for today, every day for week)
+              const labelCount = dateRange === 'week' ? 7 : 6;
+              const step = Math.floor(timelineData.length / labelCount);
+              const labels: { index: number; label: string }[] = [];
+              
+              for (let i = 0; i < timelineData.length; i += Math.max(1, step)) {
+                const slot = timelineData[i];
+                if (dateRange === 'week') {
+                  // Show date for week view
+                  const d = new Date(slot.timestamp);
+                  labels.push({ index: i, label: d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }) });
+                } else {
+                  // Show time for today/yesterday
+                  labels.push({ index: i, label: slot.time });
+                }
+              }
+              
+              return labels.map(({ index, label }) => (
+                <div
+                  key={index}
+                  className="absolute text-[10px] text-gray-500 transform -translate-x-1/2"
+                  style={{ left: `${(index / Math.max(1, timelineData.length - 1)) * 100}%` }}
+                >
+                  {label}
+                </div>
+              ));
+            })()}
+          </div>
+        </div>
+      )}
     </div>
   )
 }

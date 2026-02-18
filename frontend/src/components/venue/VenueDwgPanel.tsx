@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Map as MapIcon, RefreshCw, Check, AlertCircle, Loader2 } from 'lucide-react'
+import { Map as MapIcon, RefreshCw, Check, AlertCircle, Loader2, Plus } from 'lucide-react'
 import { useVenue } from '../../context/VenueContext'
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3001'
@@ -19,7 +19,11 @@ interface LayoutVersion {
   created_at: string
 }
 
-export default function VenueDwgPanel() {
+interface VenueDwgPanelProps {
+  onOpenDwgImporter?: () => void
+}
+
+export default function VenueDwgPanel({ onOpenDwgImporter }: VenueDwgPanelProps) {
   const { loadVenue } = useVenue()
   const [imports, setImports] = useState<DwgImport[]>([])
   const [layouts, setLayouts] = useState<Map<string, LayoutVersion>>(new Map())
@@ -128,13 +132,24 @@ export default function VenueDwgPanel() {
           <MapIcon className="w-4 h-4" />
           DWG Venue
         </h2>
-        <button
-          onClick={handleRefresh}
-          className="p-1.5 text-gray-400 hover:text-white rounded hover:bg-gray-700 transition-colors"
-          title="Refresh"
-        >
-          <RefreshCw className="w-4 h-4" />
-        </button>
+        <div className="flex items-center gap-1">
+          {onOpenDwgImporter && (
+            <button
+              onClick={onOpenDwgImporter}
+              className="p-1.5 text-highlight hover:text-white rounded hover:bg-highlight/20 transition-colors"
+              title="Import New DWG/DXF"
+            >
+              <Plus className="w-4 h-4" />
+            </button>
+          )}
+          <button
+            onClick={handleRefresh}
+            className="p-1.5 text-gray-400 hover:text-white rounded hover:bg-gray-700 transition-colors"
+            title="Refresh"
+          >
+            <RefreshCw className="w-4 h-4" />
+          </button>
+        </div>
       </div>
 
       {/* Description */}
@@ -155,9 +170,17 @@ export default function VenueDwgPanel() {
         <div className="text-center py-8">
           <MapIcon className="w-8 h-8 text-gray-600 mx-auto mb-2" />
           <p className="text-sm text-gray-500">No DWG imports found</p>
-          <p className="text-xs text-gray-600 mt-1">
+          <p className="text-xs text-gray-600 mt-1 mb-3">
             Import a DWG/DXF floorplan first
           </p>
+          {onOpenDwgImporter && (
+            <button
+              onClick={onOpenDwgImporter}
+              className="px-4 py-2 bg-highlight hover:bg-highlight-hover text-white text-sm rounded-lg transition-colors"
+            >
+              Import DWG/DXF
+            </button>
+          )}
         </div>
       ) : (
         <div className="space-y-2">

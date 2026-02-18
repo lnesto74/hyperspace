@@ -2,6 +2,14 @@ import { Router } from 'express';
 import { ShelfKPIEnricher } from '../services/ShelfKPIEnricher.js';
 import { shelfPlanogramQueries, planogramQueries } from '../database/schema.js';
 
+// Timeline cache - stores computed timeline data
+const timelineCache = new Map();
+const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes TTL
+
+function getTimelineCacheKey(venueId, startTime, endTime, interval, roiId) {
+  return `${venueId}:${startTime}:${endTime}:${interval}:${roiId || 'all'}`;
+}
+
 export default function createKpiRoutes(db, kpiCalculator, trajectoryStorage) {
   // Initialize shelf KPI enricher
   const shelfKPIEnricher = new ShelfKPIEnricher(db);
@@ -73,6 +81,37 @@ export default function createKpiRoutes(db, kpiCalculator, trajectoryStorage) {
     } catch (err) {
       console.error('Failed to update KPI settings:', err);
       res.status(500).json({ error: 'Failed to update KPI settings' });
+    }
+  });
+
+  /**
+   * Get all ROIs for a venue with metadata
+   */
+  router.get('/venues/:venueId/rois', (req, res) => {
+    try {
+      const { venueId } = req.params;
+      
+      const rois = db.prepare(`
+        SELECT id, name, vertices, color, opacity, metadata_json
+        FROM regions_of_interest
+        WHERE venue_id = ?
+        ORDER BY name
+      `).all(venueId);
+      
+      // Parse vertices and metadata
+      const result = rois.map(roi => ({
+        id: roi.id,
+        name: roi.name,
+        vertices: JSON.parse(roi.vertices || '[]'),
+        color: roi.color,
+        opacity: roi.opacity,
+        metadata: roi.metadata_json ? JSON.parse(roi.metadata_json) : null
+      }));
+      
+      res.json(result);
+    } catch (err) {
+      console.error('Failed to get ROIs:', err);
+      res.status(500).json({ error: 'Failed to get ROIs' });
     }
   });
 
@@ -320,16 +359,75 @@ export default function createKpiRoutes(db, kpiCalculator, trajectoryStorage) {
   });
 
   /**
+   * Clear timeline cache
+   */
+  router.post('/timeline/cache/clear', (req, res) => {
+    const { venueId } = req.query;
+    
+    if (venueId) {
+      // Clear cache for specific venue
+      let cleared = 0;
+      for (const key of timelineCache.keys()) {
+        if (key.startsWith(`${venueId}:`)) {
+          timelineCache.delete(key);
+          cleared++;
+        }
+      }
+      console.log(`Cleared ${cleared} timeline cache entries for venue ${venueId}`);
+      res.json({ success: true, cleared, venueId });
+    } else {
+      // Clear all cache
+      const size = timelineCache.size;
+      timelineCache.clear();
+      console.log(`Cleared all ${size} timeline cache entries`);
+      res.json({ success: true, cleared: size });
+    }
+  });
+
+  /**
+   * Get timeline cache status
+   */
+  router.get('/timeline/cache/status', (req, res) => {
+    const entries = [];
+    for (const [key, value] of timelineCache.entries()) {
+      entries.push({
+        key,
+        slots: value.data.slots.length,
+        cachedAt: new Date(value.cachedAt).toISOString(),
+        expiresAt: new Date(value.cachedAt + CACHE_TTL_MS).toISOString(),
+      });
+    }
+    res.json({ cacheSize: timelineCache.size, ttlMs: CACHE_TTL_MS, entries });
+  });
+
+  /**
    * Get timeline data for replay with KPI values per time slot
    */
   router.get('/venues/:venueId/timeline', (req, res) => {
     try {
       const { venueId } = req.params;
-      const { start, end, interval = 15, roiId } = req.query;
+      const { start, end, interval = 15, roiId, refresh } = req.query;
       
       const startTime = parseInt(start) || Date.now() - 24 * 60 * 60 * 1000;
       const endTime = parseInt(end) || Date.now();
       const intervalMins = parseInt(interval);
+      
+      // Check cache first (unless refresh=true)
+      const cacheKey = getTimelineCacheKey(venueId, startTime, endTime, intervalMins, roiId);
+      const cached = timelineCache.get(cacheKey);
+      
+      if (cached && refresh !== 'true') {
+        const age = Date.now() - cached.cachedAt;
+        if (age < CACHE_TTL_MS) {
+          console.log(`Timeline cache HIT for ${cacheKey} (age: ${Math.round(age/1000)}s)`);
+          return res.json({ ...cached.data, fromCache: true, cacheAge: age });
+        } else {
+          // Cache expired, remove it
+          timelineCache.delete(cacheKey);
+        }
+      }
+      
+      console.log(`Timeline cache MISS for ${cacheKey}, computing...`);
       
       // Generate time slots
       const slots = [];
@@ -407,18 +505,26 @@ export default function createKpiRoutes(db, kpiCalculator, trajectoryStorage) {
           timestamp: ts,
           time: date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false }),
           date: date.toLocaleDateString(),
-          occupancy: Math.round(occupancy?.avg_occupancy || 0),
+          occupancy: Math.round((occupancy?.avg_occupancy || 0) * 10) / 10,
           peakOccupancy: occupancy?.peak || 0,
           visits: visits?.count || 0,
           dwells: dwells?.count || 0,
           engagements: engagements?.count || 0,
           // For the frontend, map to kpi1Value and kpi2Value
-          kpi1Value: Math.round(occupancy?.avg_occupancy || 0),
+          kpi1Value: Math.round((occupancy?.avg_occupancy || 0) * 10) / 10,
           kpi2Value: visits?.count || 0,
         });
       }
       
-      res.json({ slots, startTime, endTime, interval: intervalMins });
+      // Cache the computed result
+      const responseData = { slots, startTime, endTime, interval: intervalMins };
+      timelineCache.set(cacheKey, {
+        data: responseData,
+        cachedAt: Date.now(),
+      });
+      console.log(`Timeline cached for ${cacheKey} (${slots.length} slots)`);
+      
+      res.json({ ...responseData, fromCache: false });
     } catch (err) {
       console.error('Failed to get timeline data:', err);
       res.status(500).json({ error: 'Failed to get timeline data' });

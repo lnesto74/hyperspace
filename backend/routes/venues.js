@@ -44,6 +44,9 @@ export default function venuesRoutes(db) {
           depth: venue.depth,
           height: venue.height,
           tileSize: venue.tile_size,
+          maxCapacity: venue.max_capacity || 300,
+          defaultDwellThresholdSec: venue.default_dwell_threshold_sec || 60,
+          defaultEngagementThresholdSec: venue.default_engagement_threshold_sec || 120,
           createdAt: venue.created_at,
           updatedAt: venue.updated_at,
           scene_source: venue.scene_source,
@@ -232,6 +235,140 @@ export default function venuesRoutes(db) {
     } catch (error) {
       console.error('Import venue error:', error);
       res.status(500).json({ error: 'Failed to import venue' });
+    }
+  });
+
+  // ============================================
+  // Venue Settings - Capacity and Defaults
+  // ============================================
+
+  // Update venue settings (capacity, thresholds)
+  router.patch('/:venueId/settings', (req, res) => {
+    try {
+      const { venueId } = req.params;
+      const { maxCapacity, defaultDwellThresholdSec, defaultEngagementThresholdSec } = req.body;
+
+      const updates = [];
+      const params = [];
+
+      if (maxCapacity !== undefined) {
+        updates.push('max_capacity = ?');
+        params.push(maxCapacity);
+      }
+      if (defaultDwellThresholdSec !== undefined) {
+        updates.push('default_dwell_threshold_sec = ?');
+        params.push(defaultDwellThresholdSec);
+      }
+      if (defaultEngagementThresholdSec !== undefined) {
+        updates.push('default_engagement_threshold_sec = ?');
+        params.push(defaultEngagementThresholdSec);
+      }
+
+      if (updates.length === 0) {
+        return res.status(400).json({ error: 'No settings to update' });
+      }
+
+      updates.push("updated_at = datetime('now')");
+      params.push(venueId);
+
+      db.prepare(`
+        UPDATE venues SET ${updates.join(', ')} WHERE id = ?
+      `).run(...params);
+
+      res.json({ success: true, updated: updates.length - 1 });
+    } catch (error) {
+      console.error('Update venue settings error:', error);
+      res.status(500).json({ error: 'Failed to update venue settings' });
+    }
+  });
+
+  // ============================================
+  // Venue KPI Thresholds - Narrator settings
+  // ============================================
+
+  // Get all KPI thresholds for a venue
+  router.get('/:venueId/kpi-thresholds', (req, res) => {
+    try {
+      const { venueId } = req.params;
+      const thresholds = db.prepare(`
+        SELECT kpi_id, green_threshold, amber_threshold, direction, updated_at
+        FROM venue_kpi_thresholds
+        WHERE venue_id = ?
+      `).all(venueId);
+
+      // Return as object keyed by kpi_id for easy lookup
+      const thresholdMap = {};
+      for (const t of thresholds) {
+        thresholdMap[t.kpi_id] = {
+          green: t.green_threshold,
+          amber: t.amber_threshold,
+          direction: t.direction,
+          updatedAt: t.updated_at,
+        };
+      }
+
+      res.json({ venueId, thresholds: thresholdMap });
+    } catch (error) {
+      console.error('Get KPI thresholds error:', error);
+      res.status(500).json({ error: 'Failed to get KPI thresholds' });
+    }
+  });
+
+  // Update KPI thresholds for a venue (bulk upsert)
+  router.put('/:venueId/kpi-thresholds', (req, res) => {
+    try {
+      const { venueId } = req.params;
+      const { thresholds } = req.body;
+
+      if (!thresholds || typeof thresholds !== 'object') {
+        return res.status(400).json({ error: 'thresholds object is required' });
+      }
+
+      const upsertStmt = db.prepare(`
+        INSERT INTO venue_kpi_thresholds (venue_id, kpi_id, green_threshold, amber_threshold, direction, updated_at)
+        VALUES (?, ?, ?, ?, ?, datetime('now'))
+        ON CONFLICT(venue_id, kpi_id) DO UPDATE SET
+          green_threshold = excluded.green_threshold,
+          amber_threshold = excluded.amber_threshold,
+          direction = excluded.direction,
+          updated_at = datetime('now')
+      `);
+
+      const upsertMany = db.transaction((items) => {
+        for (const [kpiId, config] of Object.entries(items)) {
+          upsertStmt.run(
+            venueId,
+            kpiId,
+            config.green,
+            config.amber,
+            config.direction || 'higher'
+          );
+        }
+      });
+
+      upsertMany(thresholds);
+
+      res.json({ success: true, updated: Object.keys(thresholds).length });
+    } catch (error) {
+      console.error('Update KPI thresholds error:', error);
+      res.status(500).json({ error: 'Failed to update KPI thresholds' });
+    }
+  });
+
+  // Delete a specific KPI threshold (reset to default)
+  router.delete('/:venueId/kpi-thresholds/:kpiId', (req, res) => {
+    try {
+      const { venueId, kpiId } = req.params;
+      
+      const result = db.prepare(`
+        DELETE FROM venue_kpi_thresholds
+        WHERE venue_id = ? AND kpi_id = ?
+      `).run(venueId, kpiId);
+
+      res.json({ success: true, deleted: result.changes });
+    } catch (error) {
+      console.error('Delete KPI threshold error:', error);
+      res.status(500).json({ error: 'Failed to delete KPI threshold' });
     }
   });
 

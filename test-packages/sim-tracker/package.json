@@ -1,0 +1,21 @@
+{
+  "name": "sim-tracker",
+  "version": "1.0.0",
+  "description": "Hyperspace SimTracker - Standalone trajectory publisher for testing DEB conversion",
+  "main": "src/tracker.js",
+  "bin": {
+    "sim-tracker": "src/tracker.js"
+  },
+  "scripts": {
+    "start": "node src/tracker.js",
+    "build-deb": "./build-deb.sh"
+  },
+  "dependencies": {
+    "mqtt": "^5.3.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "author": "Hyperspace AI",
+  "license": "MIT"
+}

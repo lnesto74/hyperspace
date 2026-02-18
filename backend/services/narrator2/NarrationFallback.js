@@ -433,12 +433,9 @@ export async function answerKpiQuestion(viewPack, question, specializedData = { 
     const displayZones = sortedZones.slice(0, 3);
     const rankLabel = askingWorst ? 'Lowest performing' : 'Top';
     
-    const bullets = [
-      `${rankLabel} ${displayZones.length} zones by engagement:`,
-      ...displayZones.map((z, i) => 
-        `${i + 1}. ${z.zoneName || 'Zone ' + (i+1)} — ${z.engagementRate?.toFixed(1)}% engagement, ${z.totalVisitors} visitors, ${z.avgDwellTime?.toFixed(2)} min avg dwell`
-      ),
-    ];
+    const bullets = displayZones.map((z, i) => 
+      `${z.zoneName || 'Zone ' + (i+1)} — ${z.engagementRate?.toFixed(1)}% engagement, ${z.totalVisitors} visitors, ${z.avgDwellTime?.toFixed(2)} min avg dwell`
+    );
     
     return {
       headline: askingWorst ? `Lowest performing zones` : `Zone engagement breakdown`,
@@ -460,9 +457,8 @@ export async function answerKpiQuestion(viewPack, question, specializedData = { 
     const peakHour = topHours[0];
     const bullets = [
       `Peak hour: ${peakHour.hour}:00 with ${peakHour.visitors} visitors`,
-      `Top traffic hours:`,
-      ...topHours.map(h => 
-        `• ${h.hour}:00 — ${h.visitors} visitors, ${h.avgDwellTime?.toFixed(2)} min avg dwell`
+      ...topHours.slice(1).map(h => 
+        `${h.hour}:00 — ${h.visitors} visitors, ${h.avgDwellTime?.toFixed(2)} min avg dwell`
       ),
     ];
     
@@ -489,7 +485,6 @@ export async function answerKpiQuestion(viewPack, question, specializedData = { 
     const deltaIcon = (val) => val > 0 ? '📈' : val < 0 ? '📉' : '➡️';
     
     const bullets = [
-      `${periodLabel}`,
       `${deltaIcon(deltas.visitors)} Visitors: ${current.visitors || 0} (${formatDelta(deltas.visitors)})`,
       `${deltaIcon(deltas.avgDwellTime)} Avg Dwell: ${(current.avgDwellTime || 0).toFixed(2)} min (${formatDelta(deltas.avgDwellTime)})`,
       `${deltaIcon(deltas.engagementRate)} Engagement: ${(current.engagementRate || 0).toFixed(1)}% (${formatDelta(deltas.engagementRate)})`,

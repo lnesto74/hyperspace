@@ -126,7 +126,59 @@ export interface DeployHistoryItem {
   configHash: string
   status: string
   edgeResponse?: any
+  deploymentType?: 'simulator' | 'her'
+  providerModule?: AlgorithmProvider
+  herResponse?: any
   createdAt: string
+}
+
+export interface DebPackageConfig {
+  downloadUrl: string
+  aptRepo: string
+  aptKey: string
+  serviceName: string
+  packageName: string
+}
+
+export interface AlgorithmProvider {
+  providerId: string
+  name: string
+  version: string
+  packageType: 'docker' | 'deb'
+  // Docker config (if packageType === 'docker')
+  dockerImage: string | null
+  dockerRegistry?: string | null
+  // Deb package config (if packageType === 'deb')
+  debPackage: DebPackageConfig | null
+  requiresGpu: boolean
+  supportedLidarModels: string[]
+  notes?: string
+  website?: string
+  docsUrl?: string
+  isActive?: boolean
+}
+
+export interface HerStatus {
+  mode: 'simulator' | 'her'
+  containerRunning: boolean
+  containerStatus: string | null
+  lastError: string | null
+  providerModule: AlgorithmProvider | null
+  deploymentId: string | null
+  startedAt: string | null
+  uptimeSeconds: number | null
+  recentLogs: string | null
+}
+
+export interface HerDeployResult {
+  success: boolean
+  deploymentId: string
+  configHash: string
+  lidarCount: number
+  providerModule: { name: string; version: string }
+  herResponse: any
+  historyId: string
+  error?: string
 }
 
 export interface CommissionedLidar {
@@ -157,12 +209,18 @@ interface EdgeCommissioningContextType {
   roiBounds: RoiBounds | null
   dwgLayout: DwgLayout | null
   
+  // HER State
+  providers: AlgorithmProvider[]
+  selectedProviderId: string | null
+  herEnabled: boolean
+  
   // Loading states
   isScanning: boolean
   isScanningLidars: boolean
   isLoadingInventory: boolean
   isLoadingPlacements: boolean
   isDeploying: boolean
+  isLoadingProviders: boolean
   
   // Actions
   scanEdges: () => Promise<void>
@@ -178,10 +236,19 @@ interface EdgeCommissioningContextType {
   loadDeployHistory: (venueId?: string, edgeId?: string) => Promise<void>
   loadCommissionedLidars: (venueId: string, edgeId?: string) => Promise<void>
   
+  // HER Actions
+  loadProviders: () => Promise<void>
+  selectProvider: (providerId: string | null) => void
+  setHerEnabled: (enabled: boolean) => void
+  deployHer: (edgeId: string, venueId: string, providerId: string, mqttBrokerUrl?: string) => Promise<HerDeployResult | null>
+  stopHer: (edgeId: string) => Promise<boolean>
+  fetchHerStatus: (edgeId: string) => Promise<HerStatus | null>
+  
   // Helpers
   getPairingForPlacement: (placementId: string) => EdgePairing | undefined
   getLidarById: (lidarId: string) => EdgeLidar | undefined
   getMergedLidars: () => EdgeLidar[]
+  getSelectedProvider: () => AlgorithmProvider | undefined
   
   // Edge name management
   updateEdgeName: (edgeId: string, displayName: string, notes?: string) => Promise<void>
@@ -216,12 +283,18 @@ export function EdgeCommissioningProvider({ children }: Props) {
   const [deployHistory, setDeployHistory] = useState<DeployHistoryItem[]>([])
   const [commissionedLidars, setCommissionedLidars] = useState<CommissionedLidar[]>([])
   
+  // HER State
+  const [providers, setProviders] = useState<AlgorithmProvider[]>([])
+  const [selectedProviderId, setSelectedProviderId] = useState<string | null>(null)
+  const [herEnabled, setHerEnabled] = useState(false)
+  
   // Loading states
   const [isScanning, setIsScanning] = useState(false)
   const [isScanningLidars, setIsScanningLidars] = useState(false)
   const [isLoadingInventory, setIsLoadingInventory] = useState(false)
   const [isLoadingPlacements, setIsLoadingPlacements] = useState(false)
   const [isDeploying, setIsDeploying] = useState(false)
+  const [isLoadingProviders, setIsLoadingProviders] = useState(false)
 
   // Scan for edge devices on tailnet
   const scanEdges = useCallback(async () => {
@@ -513,6 +586,113 @@ export function EdgeCommissioningProvider({ children }: Props) {
     }
   }, [addToast])
 
+  // ========== HER Functions ==========
+
+  // Load algorithm providers from new API
+  const loadProviders = useCallback(async () => {
+    setIsLoadingProviders(true)
+    try {
+      const res = await fetch(`${API_BASE}/api/algorithm-providers`)
+      if (!res.ok) throw new Error('Failed to load providers')
+      const data = await res.json()
+      // Transform API response to match AlgorithmProvider interface
+      const transformed = (data || []).map((p: any) => ({
+        providerId: p.providerId,
+        name: p.name,
+        version: p.version,
+        packageType: 'docker' as const, // All providers are now Docker-only
+        dockerImage: p.dockerImage,
+        dockerRegistry: null,
+        debPackage: null,
+        requiresGpu: p.requiresGpu || false,
+        supportedLidarModels: p.supportedLidarModels || [],
+        notes: p.notes,
+        website: p.website,
+        docsUrl: p.docsUrl,
+        isActive: p.isActive,
+      }))
+      setProviders(transformed)
+    } catch (err: any) {
+      console.error('Failed to load providers:', err)
+      addToast('error', `Failed to load providers: ${err.message}`)
+    } finally {
+      setIsLoadingProviders(false)
+    }
+  }, [addToast])
+
+  // Select a provider
+  const selectProvider = useCallback((providerId: string | null) => {
+    setSelectedProviderId(providerId)
+  }, [])
+
+  // Get selected provider object
+  const getSelectedProvider = useCallback(() => {
+    return providers.find(p => p.providerId === selectedProviderId)
+  }, [providers, selectedProviderId])
+
+  // Deploy HER with provider
+  const deployHer = useCallback(async (edgeId: string, venueId: string, providerId: string, mqttBrokerUrl?: string): Promise<HerDeployResult | null> => {
+    setIsDeploying(true)
+    try {
+      const res = await fetch(`${API_BASE}/api/edge-commissioning/edge/${edgeId}/deploy-her`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ venueId, providerId, mqttBrokerUrl }),
+      })
+      const data = await res.json()
+      
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || data.message || 'HER deploy failed')
+      }
+      
+      addToast('success', `HER deployed: ${data.providerModule?.name} v${data.providerModule?.version}`)
+      
+      // Refresh deploy history
+      await loadDeployHistory(venueId, edgeId)
+      
+      return data
+    } catch (err: any) {
+      addToast('error', `HER deploy failed: ${err.message}`)
+      return null
+    } finally {
+      setIsDeploying(false)
+    }
+  }, [addToast])
+
+  // Stop HER and revert to simulator
+  const stopHer = useCallback(async (edgeId: string): Promise<boolean> => {
+    try {
+      const res = await fetch(`${API_BASE}/api/edge-commissioning/edge/${edgeId}/stop-her`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      })
+      const data = await res.json()
+      
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || data.message || 'Failed to stop HER')
+      }
+      
+      addToast('success', 'HER stopped, simulator mode active')
+      return true
+    } catch (err: any) {
+      addToast('error', `Failed to stop HER: ${err.message}`)
+      return false
+    }
+  }, [addToast])
+
+  // Fetch HER status from edge
+  const fetchHerStatus = useCallback(async (edgeId: string): Promise<HerStatus | null> => {
+    try {
+      const res = await fetch(`${API_BASE}/api/edge-commissioning/edge/${edgeId}/her-status`)
+      if (!res.ok) throw new Error('Failed to fetch HER status')
+      const data = await res.json()
+      return data.herStatus || null
+    } catch (err: any) {
+      console.error('Failed to fetch HER status:', err)
+      return null
+    }
+  }, [])
+
   const value: EdgeCommissioningContextType = {
     edges,
     selectedEdgeId,
@@ -524,11 +704,18 @@ export function EdgeCommissioningProvider({ children }: Props) {
     deployHistory,
     roiBounds,
     dwgLayout,
+    // HER State
+    providers,
+    selectedProviderId,
+    herEnabled,
+    // Loading states
     isScanning,
     isScanningLidars,
     isLoadingInventory,
     isLoadingPlacements,
     isDeploying,
+    isLoadingProviders,
+    // Actions
     scanEdges,
     selectEdge,
     scanEdgeLidars,
@@ -541,9 +728,18 @@ export function EdgeCommissioningProvider({ children }: Props) {
     deployToEdge,
     loadDeployHistory,
     loadCommissionedLidars,
+    // HER Actions
+    loadProviders,
+    selectProvider,
+    setHerEnabled,
+    deployHer,
+    stopHer,
+    fetchHerStatus,
+    // Helpers
     getPairingForPlacement,
     getLidarById,
     getMergedLidars,
+    getSelectedProvider,
     updateEdgeName,
   }
 

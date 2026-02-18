@@ -11,13 +11,14 @@
           "title": "Store Operations Pulse",
           "description": "Overall health of the store right now",
           "kpis": [
+            "totalInStore",
             "occupancyRate",
             "avgDwellTime",
+            "avgStoreVisit",
             "queueWaitTime",
             "cashierOpenCount",
             "passByTraffic",
-            "conversionRate",
-            "alertIndex"
+            "conversionRate"
           ],
           "deepLink": {
             "label": "Open Live Store View",

@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Hyperspace Menu Restyling - Interactive Mockups</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    * { font-family: 'Inter', sans-serif; }
+    body { background: linear-gradient(135deg, #0f0f0f 0%, #1a1a2e 100%); min-height: 100vh; }
+    
+    .option-card {
+      transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+      background: linear-gradient(135deg, rgba(30,30,30,0.9) 0%, rgba(20,20,20,0.9) 100%);
+    }
+    .option-card:hover {
+      transform: translateY(-8px) scale(1.02);
+      box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+    }
+    .option-card:hover .preview-img {
+      transform: scale(1.05);
+    }
+    
+    .preview-img {
+      transition: transform 0.3s ease;
+    }
+    
+    .tag { 
+      background: rgba(59, 130, 246, 0.2);
+      border: 1px solid rgba(59, 130, 246, 0.3);
+    }
+    
+    .gradient-text {
+      background: linear-gradient(135deg, #60a5fa 0%, #a78bfa 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+  </style>
+</head>
+<body class="text-white p-8">
+  <div class="max-w-6xl mx-auto">
+    
+    <!-- Header -->
+    <header class="text-center mb-16">
+      <div class="flex items-center justify-center gap-3 mb-4">
+        <div class="w-12 h-12 rounded-xl bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center">
+          <svg class="w-7 h-7" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/>
+          </svg>
+        </div>
+      </div>
+      <h1 class="text-4xl font-bold mb-2">
+        <span class="gradient-text">Hyperspace</span> Menu Restyling
+      </h1>
+      <p class="text-gray-400 text-lg">Interactive Mockups for Menu & Navigation Proposals</p>
+      <p class="text-gray-500 text-sm mt-2">Click any option to view the interactive prototype</p>
+    </header>
+    
+    <!-- Options Grid -->
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-8">
+      
+      <!-- Option A -->
+      <a href="option-a-v2.html" class="option-card rounded-2xl border border-gray-800 overflow-hidden group">
+        <div class="h-48 bg-gradient-to-br from-blue-900/30 to-purple-900/30 relative overflow-hidden">
+          <div class="preview-img absolute inset-4 bg-[#1a1a1a] rounded-lg border border-gray-700 p-2">
+            <!-- Mini preview of Option A -->
+            <div class="h-3 bg-[#0f0f0f] rounded mb-1 flex items-center px-1">
+              <div class="w-2 h-2 rounded bg-blue-500 mr-1"></div>
+              <div class="flex gap-1">
+                <div class="w-6 h-1.5 bg-blue-500/50 rounded"></div>
+                <div class="w-6 h-1.5 bg-gray-700 rounded"></div>
+                <div class="w-6 h-1.5 bg-gray-700 rounded"></div>
+              </div>
+            </div>
+            <div class="flex gap-1 h-[calc(100%-16px)]">
+              <div class="w-12 bg-[#141414] rounded"></div>
+              <div class="flex-1 bg-[#0f3460] rounded"></div>
+            </div>
+          </div>
+          <div class="absolute top-3 right-3">
+            <span class="tag px-2 py-1 rounded-full text-[10px] font-medium text-blue-400">RECOMMENDED</span>
+          </div>
+        </div>
+        <div class="p-6">
+          <div class="flex items-center gap-2 mb-2">
+            <span class="text-2xl">🎯</span>
+            <h2 class="text-xl font-semibold">Option A</h2>
+          </div>
+          <h3 class="text-lg font-medium text-blue-400 mb-3">Top Navigation + Command Palette</h3>
+          <p class="text-gray-400 text-sm mb-4">Modern SaaS-style with horizontal tabs, searchable command palette (⌘K), and collapsible context sidebar.</p>
+          <div class="flex flex-wrap gap-2">
+            <span class="px-2 py-1 bg-gray-800 rounded text-xs text-gray-400">VS Code Style</span>
+            <span class="px-2 py-1 bg-gray-800 rounded text-xs text-gray-400">Figma Style</span>
+            <span class="px-2 py-1 bg-gray-800 rounded text-xs text-gray-400">Linear Style</span>
+          </div>
+        </div>
+      </a>
+      
+      <!-- Option B -->
+      <a href="option-b-activity-rail.html" class="option-card rounded-2xl border border-gray-800 overflow-hidden group">
+        <div class="h-48 bg-gradient-to-br from-amber-900/30 to-orange-900/30 relative overflow-hidden">
+          <div class="preview-img absolute inset-4 bg-[#1a1a1a] rounded-lg border border-gray-700 p-2">
+            <!-- Mini preview of Option B -->
+            <div class="flex gap-1 h-full">
+              <div class="w-4 bg-[#0f0f0f] rounded flex flex-col items-center py-1 gap-1">
+                <div class="w-2 h-2 rounded bg-amber-500"></div>
+                <div class="w-2 h-2 rounded bg-gray-700"></div>
+                <div class="w-2 h-2 rounded bg-gray-700"></div>
+              </div>
+              <div class="flex-1 bg-[#111] rounded p-2">
+                <div class="grid grid-cols-2 gap-1">
+                  <div class="h-8 bg-gradient-to-br from-blue-900/50 to-blue-800/30 rounded border border-gray-700"></div>
+                  <div class="h-8 bg-gradient-to-br from-amber-900/50 to-amber-800/30 rounded border border-gray-700"></div>
+                  <div class="h-8 bg-gradient-to-br from-purple-900/50 to-purple-800/30 rounded border border-gray-700"></div>
+                  <div class="h-8 bg-gradient-to-br from-gray-800/50 to-gray-700/30 rounded border border-gray-700"></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="p-6">
+          <div class="flex items-center gap-2 mb-2">
+            <span class="text-2xl">🏠</span>
+            <h2 class="text-xl font-semibold">Option B</h2>
+          </div>
+          <h3 class="text-lg font-medium text-amber-400 mb-3">Module Cards + Activity Rail</h3>
+          <p class="text-gray-400 text-sm mb-4">Dashboard-style home with visual module cards, vertical activity rail, and hierarchical navigation.</p>
+          <div class="flex flex-wrap gap-2">
+            <span class="px-2 py-1 bg-gray-800 rounded text-xs text-gray-400">Notion Style</span>
+            <span class="px-2 py-1 bg-gray-800 rounded text-xs text-gray-400">Slack Style</span>
+            <span class="px-2 py-1 bg-gray-800 rounded text-xs text-gray-400">Dashboard</span>
+          </div>
+        </div>
+      </a>
+      
+      <!-- Option C -->
+      <a href="option-c-menu-bar.html" class="option-card rounded-2xl border border-gray-800 overflow-hidden group">
+        <div class="h-48 bg-gradient-to-br from-green-900/30 to-cyan-900/30 relative overflow-hidden">
+          <div class="preview-img absolute inset-4 bg-[#1a1a1a] rounded-lg border border-gray-700 p-2">
+            <!-- Mini preview of Option C -->
+            <div class="h-2 bg-[#0f0f0f] rounded mb-1 flex items-center px-1">
+              <div class="flex gap-2">
+                <div class="w-4 h-1 bg-gray-600 rounded"></div>
+                <div class="w-4 h-1 bg-gray-600 rounded"></div>
+                <div class="w-4 h-1 bg-gray-600 rounded"></div>
+              </div>
+            </div>
+            <div class="h-2 bg-[#141414] rounded mb-1 flex items-center px-1 gap-1">
+              <div class="w-2 h-1 bg-cyan-500 rounded"></div>
+              <div class="w-2 h-1 bg-gray-700 rounded"></div>
+              <div class="w-2 h-1 bg-gray-700 rounded"></div>
+            </div>
+            <div class="flex gap-1 flex-1">
+              <div class="w-3 bg-[#0f0f0f] rounded"></div>
+              <div class="flex-1 flex flex-col gap-1">
+                <div class="flex-1 bg-[#0f3460] rounded"></div>
+                <div class="h-6 bg-[#141414] rounded flex items-center px-1 gap-1">
+                  <div class="w-4 h-1 bg-gray-600 rounded"></div>
+                  <div class="w-4 h-1 bg-gray-600 rounded"></div>
+                </div>
+              </div>
+              <div class="w-8 bg-[#0f0f0f] rounded"></div>
+            </div>
+          </div>
+        </div>
+        <div class="p-6">
+          <div class="flex items-center gap-2 mb-2">
+            <span class="text-2xl">🖥️</span>
+            <h2 class="text-xl font-semibold">Option C</h2>
+          </div>
+          <h3 class="text-lg font-medium text-cyan-400 mb-3">Classic Menu Bar + Docked Panels</h3>
+          <p class="text-gray-400 text-sm mb-4">Professional software style with traditional menu bar, toolbar, tool palette, and dockable panels.</p>
+          <div class="flex flex-wrap gap-2">
+            <span class="px-2 py-1 bg-gray-800 rounded text-xs text-gray-400">Adobe Style</span>
+            <span class="px-2 py-1 bg-gray-800 rounded text-xs text-gray-400">Blender Style</span>
+            <span class="px-2 py-1 bg-gray-800 rounded text-xs text-gray-400">Pro Software</span>
+          </div>
+        </div>
+      </a>
+      
+    </div>
+    
+    <!-- Comparison Table -->
+    <div class="mt-16 bg-[#141414] rounded-2xl border border-gray-800 overflow-hidden">
+      <div class="p-6 border-b border-gray-800">
+        <h2 class="text-xl font-semibold">Quick Comparison</h2>
+      </div>
+      <div class="overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead class="bg-[#0f0f0f]">
+            <tr>
+              <th class="px-6 py-3 text-left text-gray-400 font-medium">Feature</th>
+              <th class="px-6 py-3 text-center text-blue-400 font-medium">Option A</th>
+              <th class="px-6 py-3 text-center text-amber-400 font-medium">Option B</th>
+              <th class="px-6 py-3 text-center text-cyan-400 font-medium">Option C</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-gray-800">
+            <tr>
+              <td class="px-6 py-3 text-gray-300">Navigation Style</td>
+              <td class="px-6 py-3 text-center">Horizontal Tabs</td>
+              <td class="px-6 py-3 text-center">Vertical Rail + Cards</td>
+              <td class="px-6 py-3 text-center">Menu Bar + Toolbar</td>
+            </tr>
+            <tr>
+              <td class="px-6 py-3 text-gray-300">Quick Actions</td>
+              <td class="px-6 py-3 text-center">⌘K Command Palette</td>
+              <td class="px-6 py-3 text-center">Module Cards</td>
+              <td class="px-6 py-3 text-center">Dropdown Menus</td>
+            </tr>
+            <tr>
+              <td class="px-6 py-3 text-gray-300">Learning Curve</td>
+              <td class="px-6 py-3 text-center text-green-400">Low</td>
+              <td class="px-6 py-3 text-center text-green-400">Low</td>
+              <td class="px-6 py-3 text-center text-yellow-400">Medium</td>
+            </tr>
+            <tr>
+              <td class="px-6 py-3 text-gray-300">Screen Efficiency</td>
+              <td class="px-6 py-3 text-center">High</td>
+              <td class="px-6 py-3 text-center">Flexible</td>
+              <td class="px-6 py-3 text-center">Maximum</td>
+            </tr>
+            <tr>
+              <td class="px-6 py-3 text-gray-300">Best For</td>
+              <td class="px-6 py-3 text-center">Power Users</td>
+              <td class="px-6 py-3 text-center">Casual Users</td>
+              <td class="px-6 py-3 text-center">Expert Workflows</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+    
+    <!-- Footer -->
+    <footer class="mt-12 text-center text-gray-500 text-sm">
+      <p>These are standalone mockups for evaluation purposes.</p>
+      <p class="mt-1">They do not affect the existing Hyperspace application.</p>
+    </footer>
+    
+  </div>
+</body>
+</html>

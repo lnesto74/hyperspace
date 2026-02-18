@@ -28,6 +28,9 @@ export function initDatabase() {
       depth REAL NOT NULL DEFAULT 15,
       height REAL NOT NULL DEFAULT 4,
       tile_size REAL NOT NULL DEFAULT 1,
+      max_capacity INTEGER DEFAULT 300,
+      default_dwell_threshold_sec INTEGER DEFAULT 60,
+      default_engagement_threshold_sec INTEGER DEFAULT 120,
       scene_source TEXT NOT NULL DEFAULT 'manual',
       dwg_layout_version_id TEXT DEFAULT NULL,
       dwg_transform_json TEXT DEFAULT NULL,
@@ -297,6 +300,9 @@ export function initDatabase() {
       config_json TEXT NOT NULL,
       status TEXT NOT NULL DEFAULT 'pending',
       edge_response_json TEXT,
+      deployment_type TEXT DEFAULT 'simulator',
+      provider_module_json TEXT,
+      her_response_json TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       FOREIGN KEY (venue_id) REFERENCES venues(id) ON DELETE CASCADE
     );
@@ -630,6 +636,89 @@ export function initDatabase() {
     CREATE INDEX IF NOT EXISTS idx_dooh_video_kpi_buckets_screen_id ON dooh_video_kpi_buckets(screen_id);
     CREATE INDEX IF NOT EXISTS idx_dooh_video_kpi_buckets_video_id ON dooh_video_kpi_buckets(video_id);
     CREATE INDEX IF NOT EXISTS idx_dooh_video_kpi_buckets_bucket_ts ON dooh_video_kpi_buckets(bucket_start_ts);
+
+    -- ============================================
+    -- Venue KPI Thresholds - Configurable narrator thresholds per venue
+    -- Controls green/amber/red status colors in AI Narrator
+    -- ============================================
+    CREATE TABLE IF NOT EXISTS venue_kpi_thresholds (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      venue_id TEXT NOT NULL,
+      kpi_id TEXT NOT NULL,
+      green_threshold REAL NOT NULL,
+      amber_threshold REAL NOT NULL,
+      direction TEXT NOT NULL DEFAULT 'higher',
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (venue_id) REFERENCES venues(id) ON DELETE CASCADE,
+      UNIQUE(venue_id, kpi_id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_venue_kpi_thresholds_venue_id ON venue_kpi_thresholds(venue_id);
+
+    -- ============================================
+    -- Algorithm Provider Registry Tables
+    -- Feature: DEB → Docker Conversion Service
+    -- ============================================
+
+    -- Algorithm Providers - Registry of available HER providers
+    CREATE TABLE IF NOT EXISTS algorithm_providers (
+      id TEXT PRIMARY KEY,
+      provider_id TEXT UNIQUE NOT NULL,
+      display_name TEXT NOT NULL,
+      version TEXT NOT NULL,
+      docker_image_ref TEXT,
+      docker_image_digest TEXT,
+      onboarding_mode TEXT NOT NULL DEFAULT 'docker_existing',
+      supported_lidars_json TEXT NOT NULL DEFAULT '[]',
+      requires_gpu INTEGER NOT NULL DEFAULT 0,
+      run_command_json TEXT,
+      ubuntu_base TEXT DEFAULT '22.04',
+      notes TEXT,
+      docs_url TEXT,
+      website TEXT,
+      config_json TEXT,
+      is_active INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_algorithm_providers_provider_id ON algorithm_providers(provider_id);
+    CREATE INDEX IF NOT EXISTS idx_algorithm_providers_is_active ON algorithm_providers(is_active);
+
+    -- Provider Builds - Build history for DEB → Docker conversions
+    CREATE TABLE IF NOT EXISTS provider_builds (
+      id TEXT PRIMARY KEY,
+      provider_id TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'queued',
+      logs TEXT,
+      docker_image_tag TEXT,
+      docker_image_digest TEXT,
+      error_message TEXT,
+      build_context_path TEXT,
+      deb_files_json TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      started_at TEXT,
+      completed_at TEXT,
+      FOREIGN KEY (provider_id) REFERENCES algorithm_providers(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_provider_builds_provider_id ON provider_builds(provider_id);
+    CREATE INDEX IF NOT EXISTS idx_provider_builds_status ON provider_builds(status);
+    CREATE INDEX IF NOT EXISTS idx_provider_builds_created_at ON provider_builds(created_at);
+
+    -- Provider Secrets - Encrypted license keys/files (stored separately for security)
+    CREATE TABLE IF NOT EXISTS provider_secrets (
+      id TEXT PRIMARY KEY,
+      provider_id TEXT NOT NULL,
+      secret_type TEXT NOT NULL,
+      secret_name TEXT NOT NULL,
+      encrypted_value TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (provider_id) REFERENCES algorithm_providers(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_provider_secrets_provider_id ON provider_secrets(provider_id);
   `);
 
   // Migration: Add DWG-related columns to venues table if they don't exist
@@ -648,6 +737,18 @@ export function initDatabase() {
     if (!columnNames.includes('dwg_transform_json')) {
       db.exec("ALTER TABLE venues ADD COLUMN dwg_transform_json TEXT DEFAULT NULL");
       console.log('📦 Migration: Added dwg_transform_json column to venues');
+    }
+    if (!columnNames.includes('max_capacity')) {
+      db.exec("ALTER TABLE venues ADD COLUMN max_capacity INTEGER DEFAULT 300");
+      console.log('📦 Migration: Added max_capacity column to venues');
+    }
+    if (!columnNames.includes('default_dwell_threshold_sec')) {
+      db.exec("ALTER TABLE venues ADD COLUMN default_dwell_threshold_sec INTEGER DEFAULT 60");
+      console.log('📦 Migration: Added default_dwell_threshold_sec column to venues');
+    }
+    if (!columnNames.includes('default_engagement_threshold_sec')) {
+      db.exec("ALTER TABLE venues ADD COLUMN default_engagement_threshold_sec INTEGER DEFAULT 120");
+      console.log('📦 Migration: Added default_engagement_threshold_sec column to venues');
     }
   } catch (migrationErr) {
     console.log('📦 Migration check completed (columns may already exist)');
@@ -694,6 +795,27 @@ export function initDatabase() {
     if (roiColumnNames.length > 0 && !roiColumnNames.includes('metadata_json')) {
       db.exec("ALTER TABLE regions_of_interest ADD COLUMN metadata_json TEXT DEFAULT NULL");
       console.log('📦 Migration: Added metadata_json column to regions_of_interest');
+    }
+  } catch (migrationErr) {
+    // Table may not exist yet, that's fine
+  }
+
+  // Migration: Add HER columns to edge_deploy_history
+  try {
+    const deployHistoryColumns = db.prepare("PRAGMA table_info(edge_deploy_history)").all();
+    const deployHistoryColumnNames = deployHistoryColumns.map(c => c.name);
+    
+    if (deployHistoryColumnNames.length > 0 && !deployHistoryColumnNames.includes('deployment_type')) {
+      db.exec("ALTER TABLE edge_deploy_history ADD COLUMN deployment_type TEXT DEFAULT 'simulator'");
+      console.log('📦 Migration: Added deployment_type column to edge_deploy_history');
+    }
+    if (deployHistoryColumnNames.length > 0 && !deployHistoryColumnNames.includes('provider_module_json')) {
+      db.exec("ALTER TABLE edge_deploy_history ADD COLUMN provider_module_json TEXT DEFAULT NULL");
+      console.log('📦 Migration: Added provider_module_json column to edge_deploy_history');
+    }
+    if (deployHistoryColumnNames.length > 0 && !deployHistoryColumnNames.includes('her_response_json')) {
+      db.exec("ALTER TABLE edge_deploy_history ADD COLUMN her_response_json TEXT DEFAULT NULL");
+      console.log('📦 Migration: Added her_response_json column to edge_deploy_history');
     }
   } catch (migrationErr) {
     // Table may not exist yet, that's fine

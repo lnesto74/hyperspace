@@ -6,8 +6,9 @@ import { RoiProvider, useRoi } from './context/RoiContext'
 import { HeatmapProvider } from './context/HeatmapContext'
 import { PlanogramProvider, usePlanogram } from './context/PlanogramContext'
 import { DwgProvider, useDwg } from './context/DwgContext'
-import { NarratorProvider } from './context/NarratorContext'
-import { NarratorDrawer, NarratorToggle } from './components/narrator'
+// Legacy Narrator v1 disabled - using Narrator2 (Copilot) only
+// import { NarratorProvider } from './context/NarratorContext'
+// import { NarratorDrawer, NarratorToggle } from './components/narrator'
 import { Narrator2Provider } from './context/Narrator2Context'
 import Narrator2Drawer from './components/narrator/Narrator2Drawer'
 import Narrator2Toggle from './components/narrator/Narrator2Toggle'
@@ -242,10 +243,7 @@ function KPIOverlayToggle() {
           <PieChart className="w-4 h-4" />
         </button>
         
-        {/* AI Narrator Button (v1 - legacy) */}
-        <NarratorToggle />
-        
-        {/* AI Narrator2 Button (v2 - new) */}
+        {/* AI Narrator2 Button (Copilot) */}
         <Narrator2Toggle />
         
         {/* Activity Ledger Button */}
@@ -296,57 +294,7 @@ function KPIOverlayToggle() {
       {/* KPI Overlay Panel */}
       <ZoneKPIOverlayPanel />
       
-      {/* AI Narrator Drawer (v1 - legacy) */}
-      <NarratorDrawer 
-        onExecuteIntent={(intent, entityId) => {
-          // Handle narrator UI intents
-          switch (intent) {
-            case 'OPEN_MAIN_VIEW':
-              setMode('main')
-              break
-            case 'OPEN_DWG_IMPORTER':
-              setMode('dwgImporter')
-              break
-            case 'OPEN_LIDAR_PLANNER':
-              setMode('lidarPlanner')
-              break
-            case 'OPEN_PLANOGRAM_BUILDER':
-              setMode('planogram')
-              break
-            case 'OPEN_EDGE_COMMISSIONING':
-              setMode('edgeCommissioning')
-              break
-            case 'OPEN_DOOH_ANALYTICS':
-              setMode('doohAnalytics')
-              break
-            case 'OPEN_DOOH_EFFECTIVENESS':
-              setMode('doohEffectiveness')
-              break
-            case 'OPEN_BUSINESS_REPORTING':
-              setMode('businessReporting')
-              break
-            case 'OPEN_HEATMAP_MODAL':
-              setShowHeatmapModal(true)
-              break
-            case 'OPEN_CHECKOUT_MANAGER':
-              setShowCheckoutManager(true)
-              break
-            case 'OPEN_SMART_KPI_MODAL':
-              setShowSmartKpiModal(true)
-              break
-            case 'OPEN_ACTIVITY_LEDGER':
-              setShowLedger(true)
-              break
-            case 'TOGGLE_KPI_OVERLAYS':
-              toggleKPIOverlays()
-              break
-            default:
-              console.log('[Narrator] Unhandled intent:', intent, entityId)
-          }
-        }}
-      />
-      
-      {/* AI Narrator2 Drawer (v2 - new ViewPack-based) */}
+      {/* AI Narrator2 Drawer (Copilot) */}
       <Narrator2Drawer 
         onExecuteIntent={(intent) => {
           // Handle narrator2 deep link intents
@@ -436,9 +384,7 @@ function MainApp() {
         <div style={{ display: viewMode === 'main' ? 'block' : 'none' }}>
           <AppShell 
             onOpenDwgImporter={() => setViewMode('dwgImporter')}
-            onOpenLidarPlanner={() => setViewMode('lidarPlanner')}
             onOpenEdgeCommissioning={() => setViewMode('edgeCommissioning')}
-            onOpenDoohAnalytics={() => setViewMode('doohAnalytics')}
           />
           <KPIPopupWrapper />
           <KPIOverlayToggle />
@@ -457,11 +403,9 @@ function App() {
             <RoiProvider>
               <HeatmapProvider>
                 <DwgProvider>
-                  <NarratorProvider>
-                    <Narrator2Provider>
-                      <MainApp />
-                    </Narrator2Provider>
-                  </NarratorProvider>
+                  <Narrator2Provider>
+                    <MainApp />
+                  </Narrator2Provider>
                 </DwgProvider>
               </HeatmapProvider>
             </RoiProvider>

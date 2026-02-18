@@ -34,6 +34,8 @@ import doohAttributionRoutes from './routes/doohAttribution.js';
 import createBusinessReportingRoutes from './routes/businessReporting.js';
 import narratorRoutes from './routes/narrator.js';
 import narrator2Routes from './routes/narrator2Routes.js';
+import algorithmProvidersRoutes from './routes/algorithmProviders.js';
+import { seedProviders } from './data/algorithmProviders.js';
 
 const PORT = process.env.PORT || 3001;
 const MOCK_LIDAR = process.env.MOCK_LIDAR === 'true';
@@ -60,6 +62,9 @@ const io = new Server(httpServer, {
 
 // Initialize database
 const db = initDatabase();
+
+// Seed algorithm providers
+seedProviders(db);
 
 // Initialize services
 const tailscaleService = new TailscaleService();
@@ -264,6 +269,9 @@ app.use('/api/narrator', narratorRoutes);
 // Narrator2 routes (ViewPack-based KPI storytelling - parallel subsystem)
 app.use('/api/narrator2', narrator2Routes);
 
+// Algorithm Providers routes (HER Provider Registry + DEB→Docker Conversion Service)
+app.use('/api/algorithm-providers', algorithmProvidersRoutes);
+
 // Serve uploaded logos
 app.use('/api/uploads/logos', express.static(path.join(__dirname, 'uploads', 'logos')));
 
@@ -360,22 +368,59 @@ app.get('/api/edge-simulator/debug/agents', async (req, res) => {
 });
 
 // Checkout Manager API proxies
-// Use laneId from edge simulator directly for "Lane 1", "Lane 2" naming
+// Merges: lane status from edge simulator + queueCount from MQTT trajectories (source of truth)
 app.get('/api/edge-simulator/checkout/status', async (req, res) => {
   try {
     const response = await fetch(`${EDGE_SERVER_URL}/api/checkout/status`);
     const data = await response.json();
     
-    // Simply use laneId from edge simulator for naming
+    // Get trajectory-based queue counts (MQTT source of truth)
+    const activeSessions = trajectoryStorage.getActiveQueueSessions();
+    
+    // Count people per queue zone from trajectories
+    const trajectoryQueueCounts = new Map();
+    const trajectoryQueuedPeople = new Map();
+    for (const session of activeSessions) {
+      const zoneId = session.queueZoneId;
+      if (!trajectoryQueueCounts.has(zoneId)) {
+        trajectoryQueueCounts.set(zoneId, 0);
+        trajectoryQueuedPeople.set(zoneId, []);
+      }
+      trajectoryQueueCounts.set(zoneId, trajectoryQueueCounts.get(zoneId) + 1);
+      trajectoryQueuedPeople.get(zoneId).push({
+        personId: session.personId,
+        waitTimeSec: session.currentDwellSec,
+        entryTime: session.entryTime
+      });
+    }
+    
+    // Merge: lane status from simulator + queueCount from trajectories
     if (data.lanes && Array.isArray(data.lanes)) {
       data.lanes = data.lanes.map((lane, index) => {
         const laneNum = lane.laneId ?? (index + 1);
+        const queueZoneId = lane.queueZoneId;
+        
+        // Use trajectory-based queue count (source of truth)
+        const trajectoryCount = queueZoneId ? (trajectoryQueueCounts.get(queueZoneId) || 0) : 0;
+        const queuedPeople = queueZoneId ? (trajectoryQueuedPeople.get(queueZoneId) || []) : [];
+        
         return {
           ...lane,
           laneId: laneNum,
-          name: `Lane ${laneNum}`
+          name: `Lane ${laneNum}`,
+          // Override with trajectory-based data (source of truth)
+          queueCount: trajectoryCount,
+          queuedPeople: queuedPeople
         };
       });
+      
+      // Recalculate pressure with trajectory-based counts
+      const totalQueueCount = data.lanes.reduce((sum, l) => sum + l.queueCount, 0);
+      const openLaneCount = data.lanes.filter(l => l.status === 'OPEN').length;
+      if (data.pressure) {
+        data.pressure.totalQueueCount = totalQueueCount;
+        data.pressure.avgQueuePerLane = openLaneCount > 0 ? totalQueueCount / openLaneCount : 0;
+      }
     }
     
     res.json({ connected: true, ...data });
@@ -422,6 +467,7 @@ app.post('/api/edge-simulator/checkout/set_lane_state', async (req, res) => {
             .run(isOpenVal, venueId, laneNum);
         }
         trajectoryStorage.loadOpenLanes(venueId);
+        trajectoryStorage.loadZoneLinks(venueId);
         console.log(`📊 Synced all ${syncData.lanes.length} lane states from edge simulator`);
       }
     } catch (syncErr) {
@@ -602,19 +648,19 @@ app.get('/api/venues/:venueId/checkout/active-sessions', (req, res) => {
   try {
     const activeSessions = trajectoryStorage.getActiveQueueSessions();
     
-    // Get all queue zones sorted by name for consistent Lane 1, 2, 3 numbering
+    // Get queue zones with lane numbers from zone_settings
     const queueRois = db.prepare(`
-      SELECT r.id, r.name, zs.is_open
-      FROM regions_of_interest r
-      LEFT JOIN zone_settings zs ON r.id = zs.roi_id AND zs.venue_id = r.venue_id
-      WHERE r.venue_id = ?
-      ORDER BY r.name
+      SELECT zs.roi_id, zs.lane_number, zs.is_open, r.name
+      FROM zone_settings zs
+      JOIN regions_of_interest r ON r.id = zs.roi_id
+      WHERE zs.venue_id = ?
+      ORDER BY zs.lane_number
     `).all(venueId);
     
-    // Map: roi_id -> "Lane X" (index-based)
+    // Map: roi_id -> "Lane X" (using lane_number + 1 for 1-indexed display)
     const laneInfo = new Map();
-    queueRois.forEach((roi, index) => {
-      laneInfo.set(roi.id, { name: `Lane ${index + 1}`, isOpen: roi.is_open === 1 });
+    queueRois.forEach(row => {
+      laneInfo.set(row.roi_id, { name: `Lane ${row.lane_number + 1}`, isOpen: row.is_open === 1 });
     });
     
     // Add lane name and open status to each session
@@ -651,20 +697,22 @@ app.get('/api/venues/:venueId/checkout/kpi-snapshot', (req, res) => {
     if (period === 'day') startTs = now - 24 * 60 * 60 * 1000;
     if (period === 'week') startTs = now - 7 * 24 * 60 * 60 * 1000;
     
-    // Get all ROIs sorted by name for consistent Lane 1, 2, 3 numbering
+    // Get queue zones with lane numbers from zone_settings
     const queueRois = db.prepare(`
-      SELECT id, name FROM regions_of_interest 
-      WHERE venue_id = ?
-      ORDER BY name
+      SELECT zs.roi_id, zs.lane_number, r.name
+      FROM zone_settings zs
+      JOIN regions_of_interest r ON r.id = zs.roi_id
+      WHERE zs.venue_id = ?
+      ORDER BY zs.lane_number
     `).all(venueId);
     
-    // Map: queue_zone_id -> "Lane X" (index-based)
+    // Map: queue_zone_id -> "Lane X" (using lane_number + 1 for 1-indexed display)
     const laneNameMap = new Map();
-    queueRois.forEach((roi, index) => {
-      laneNameMap.set(roi.id, `Lane ${index + 1}`);
+    queueRois.forEach(row => {
+      laneNameMap.set(row.roi_id, `Lane ${row.lane_number + 1}`);
     });
     
-    // Get queue session stats
+    // Get queue session stats - ONLY ≥5s dwell (sessions exist only if lane was open when recorded)
     const stats = db.prepare(`
       SELECT 
         COUNT(*) as totalSessions,
@@ -674,10 +722,12 @@ app.get('/api/venues/:venueId/checkout/kpi-snapshot', (req, res) => {
         ROUND(MAX(waiting_time_ms) / 1000.0, 1) as maxWaitSec,
         COUNT(DISTINCT queue_zone_id) as lanesUsed
       FROM queue_sessions
-      WHERE venue_id = ? AND queue_entry_time >= ?
+      WHERE venue_id = ? 
+        AND queue_entry_time >= ?
+        AND waiting_time_ms >= 5000
     `).get(venueId, startTs);
     
-    // Get per-lane breakdown (raw data, we'll add lane names in JS)
+    // Get per-lane breakdown - ONLY ≥5s dwell (sessions exist only if lane was open when recorded)
     const perLaneRaw = db.prepare(`
       SELECT 
         queue_zone_id,
@@ -685,7 +735,9 @@ app.get('/api/venues/:venueId/checkout/kpi-snapshot', (req, res) => {
         SUM(CASE WHEN is_abandoned = 0 THEN 1 ELSE 0 END) as completed,
         ROUND(AVG(waiting_time_ms) / 1000.0, 1) as avgWaitSec
       FROM queue_sessions
-      WHERE venue_id = ? AND queue_entry_time >= ?
+      WHERE venue_id = ? 
+        AND queue_entry_time >= ?
+        AND waiting_time_ms >= 5000
       GROUP BY queue_zone_id
     `).all(venueId, startTs);
     
@@ -697,29 +749,31 @@ app.get('/api/venues/:venueId/checkout/kpi-snapshot', (req, res) => {
       avgWaitSec: row.avgWaitSec
     })).sort((a, b) => a.laneId.localeCompare(b.laneId));
     
-    // Get recent sessions (last 2 minutes)
+    // Get recent sessions - ONLY ≥5s dwell (sessions exist only if lane was open when recorded)
     const recentSessionsRaw = db.prepare(`
       SELECT 
         track_key as personId,
         datetime(queue_entry_time/1000, 'unixepoch', 'localtime') as entryTime,
         datetime(queue_exit_time/1000, 'unixepoch', 'localtime') as exitTime,
-        ROUND(waiting_time_ms / 1000.0, 1) as dwellSec,
-        is_abandoned as abandoned,
-        queue_zone_id
+        waiting_time_ms as waitMs,
+        queue_zone_id as queueZoneId,
+        is_abandoned as isAbandoned
       FROM queue_sessions
-      WHERE venue_id = ? AND queue_entry_time >= ?
+      WHERE venue_id = ? 
+        AND queue_entry_time >= ?
+        AND waiting_time_ms >= 5000
       ORDER BY queue_entry_time DESC
-      LIMIT 20
-    `).all(venueId, now - 120000);
+      LIMIT 50
+    `).all(venueId, startTs);
     
     // Apply lane names
     const recentSessions = recentSessionsRaw.map(row => ({
       personId: row.personId,
       entryTime: row.entryTime,
       exitTime: row.exitTime,
-      dwellSec: row.dwellSec,
-      abandoned: row.abandoned,
-      laneId: laneNameMap.get(row.queue_zone_id) || row.queue_zone_id.substring(0, 8)
+      dwellSec: row.waitMs / 1000,
+      abandoned: row.isAbandoned,
+      laneId: laneNameMap.get(row.queueZoneId) || row.queueZoneId.substring(0, 8)
     }));
     
     // Calculate KPIs

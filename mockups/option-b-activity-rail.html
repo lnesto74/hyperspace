@@ -1,0 +1,637 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Hyperspace - Option B: Module Cards + Activity Rail</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    * { font-family: 'Inter', sans-serif; }
+    body { background: #0a0a0a; }
+    
+    .rail-item { transition: all 0.2s; }
+    .rail-item:hover { background: rgba(255,255,255,0.05); }
+    .rail-item.active { background: rgba(59, 130, 246, 0.15); border-left: 3px solid #3b82f6; }
+    .rail-item.active .rail-icon { color: #3b82f6; }
+    
+    .submenu { 
+      max-height: 0; 
+      overflow: hidden; 
+      transition: max-height 0.3s ease-out;
+    }
+    .submenu.open { max-height: 200px; }
+    
+    .module-card {
+      transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+      background: linear-gradient(135deg, #1a1a1a 0%, #141414 100%);
+    }
+    .module-card:hover {
+      transform: translateY(-4px);
+      box-shadow: 0 20px 40px -15px rgba(0,0,0,0.5);
+      border-color: rgba(59, 130, 246, 0.5);
+    }
+    .module-card:hover .module-icon {
+      transform: scale(1.1);
+    }
+    
+    .module-icon { transition: transform 0.3s; }
+    
+    .breadcrumb-item { transition: color 0.15s; }
+    .breadcrumb-item:hover { color: #60a5fa; }
+    
+    .stat-card {
+      background: linear-gradient(135deg, rgba(59, 130, 246, 0.1) 0%, rgba(139, 92, 246, 0.1) 100%);
+    }
+    
+    .view-panel {
+      animation: fadeIn 0.3s ease-out;
+    }
+    @keyframes fadeIn {
+      from { opacity: 0; }
+      to { opacity: 1; }
+    }
+    
+    .context-panel {
+      animation: slideIn 0.3s ease-out;
+    }
+    @keyframes slideIn {
+      from { transform: translateX(20px); opacity: 0; }
+      to { transform: translateX(0); opacity: 1; }
+    }
+    
+    .mock-3d {
+      background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+      background-size: 400% 400%;
+      animation: gradientShift 15s ease infinite;
+    }
+    @keyframes gradientShift {
+      0% { background-position: 0% 50%; }
+      50% { background-position: 100% 50%; }
+      100% { background-position: 0% 50%; }
+    }
+    
+    .grid-pattern {
+      background-image: 
+        linear-gradient(rgba(255,255,255,0.03) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,0.03) 1px, transparent 1px);
+      background-size: 40px 40px;
+    }
+    
+    .notification-badge {
+      animation: pulse 2s infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.7; }
+    }
+  </style>
+</head>
+<body class="h-screen overflow-hidden text-white flex">
+  
+  <!-- ACTIVITY RAIL (Left) -->
+  <aside class="w-16 bg-[#0f0f0f] border-r border-[#1a1a1a] flex flex-col items-center py-3">
+    <!-- Logo -->
+    <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center mb-6">
+      <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/>
+      </svg>
+    </div>
+    
+    <!-- Main Navigation -->
+    <nav class="flex-1 w-full">
+      <button onclick="showView('home')" id="rail-home" class="rail-item active w-full py-3 flex flex-col items-center gap-1 text-gray-400">
+        <svg class="rail-icon w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"/>
+        </svg>
+        <span class="text-[10px]">Home</span>
+      </button>
+      
+      <div class="w-8 h-px bg-[#2a2a2a] mx-auto my-2"></div>
+      
+      <button onclick="showView('live')" id="rail-live" class="rail-item w-full py-3 flex flex-col items-center gap-1 text-gray-400">
+        <svg class="rail-icon w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/>
+        </svg>
+        <span class="text-[10px]">Live</span>
+      </button>
+      
+      <button onclick="showView('planogram')" id="rail-planogram" class="rail-item w-full py-3 flex flex-col items-center gap-1 text-gray-400">
+        <svg class="rail-icon w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 5a1 1 0 011-1h14a1 1 0 011 1v2a1 1 0 01-1 1H5a1 1 0 01-1-1V5zM4 13a1 1 0 011-1h6a1 1 0 011 1v6a1 1 0 01-1 1H5a1 1 0 01-1-1v-6zM16 13a1 1 0 011-1h2a1 1 0 011 1v6a1 1 0 01-1 1h-2a1 1 0 01-1-1v-6z"/>
+        </svg>
+        <span class="text-[10px]">Plano</span>
+      </button>
+      
+      <button onclick="toggleSubmenu('analytics')" id="rail-analytics" class="rail-item w-full py-3 flex flex-col items-center gap-1 text-gray-400 relative">
+        <svg class="rail-icon w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/>
+        </svg>
+        <span class="text-[10px]">Analytics</span>
+        <div id="analytics-dot" class="hidden absolute right-2 top-2 w-1.5 h-1.5 bg-blue-500 rounded-full"></div>
+      </button>
+      
+      <button onclick="showView('config')" id="rail-config" class="rail-item w-full py-3 flex flex-col items-center gap-1 text-gray-400">
+        <svg class="rail-icon w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/>
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+        </svg>
+        <span class="text-[10px]">Config</span>
+      </button>
+    </nav>
+    
+    <!-- Bottom Actions -->
+    <div class="w-full">
+      <div class="w-8 h-px bg-[#2a2a2a] mx-auto my-2"></div>
+      
+      <button class="rail-item w-full py-3 flex flex-col items-center gap-1 text-gray-400">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/>
+        </svg>
+        <span class="text-[10px]">AI</span>
+      </button>
+      
+      <button class="rail-item w-full py-3 flex flex-col items-center gap-1 text-gray-400 relative">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/>
+        </svg>
+        <span class="text-[10px]">Alerts</span>
+        <span class="notification-badge absolute top-2 right-3 w-4 h-4 bg-red-500 text-[9px] font-bold rounded-full flex items-center justify-center">3</span>
+      </button>
+      
+      <button class="w-full py-3 flex justify-center">
+        <div class="w-8 h-8 rounded-full bg-gradient-to-br from-amber-500 to-orange-600 flex items-center justify-center text-sm font-medium">
+          U
+        </div>
+      </button>
+    </div>
+  </aside>
+  
+  <!-- Expandable Submenu Panel -->
+  <div id="submenu-panel" class="hidden w-48 bg-[#111] border-r border-[#1a1a1a] py-4">
+    <div id="submenu-analytics" class="hidden">
+      <div class="px-4 mb-3">
+        <h3 class="text-xs font-semibold text-gray-400 uppercase tracking-wider">Analytics</h3>
+      </div>
+      <button onclick="showView('heatmap')" class="w-full px-4 py-2 text-left text-sm text-gray-300 hover:bg-[#1a1a1a] flex items-center gap-2">
+        <svg class="w-4 h-4 text-orange-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17.657 18.657A8 8 0 016.343 7.343S7 9 9 10c0-2 .5-5 2.986-7C14 5 16.09 5.777 17.656 7.343A7.975 7.975 0 0120 13a7.975 7.975 0 01-2.343 5.657z"/>
+        </svg>
+        Heatmaps
+      </button>
+      <button onclick="showView('kpis')" class="w-full px-4 py-2 text-left text-sm text-gray-300 hover:bg-[#1a1a1a] flex items-center gap-2">
+        <svg class="w-4 h-4 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"/>
+        </svg>
+        Zone KPIs
+      </button>
+      <button onclick="showView('dooh')" class="w-full px-4 py-2 text-left text-sm text-gray-300 hover:bg-[#1a1a1a] flex items-center gap-2">
+        <svg class="w-4 h-4 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/>
+        </svg>
+        DOOH
+      </button>
+      <button onclick="showView('reports')" class="w-full px-4 py-2 text-left text-sm text-gray-300 hover:bg-[#1a1a1a] flex items-center gap-2">
+        <svg class="w-4 h-4 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+        </svg>
+        Reports
+      </button>
+    </div>
+  </div>
+  
+  <!-- MAIN CONTENT -->
+  <main class="flex-1 flex flex-col overflow-hidden">
+    
+    <!-- Breadcrumb Header -->
+    <header class="h-12 bg-[#111] border-b border-[#1a1a1a] flex items-center px-6">
+      <nav class="flex items-center gap-2 text-sm">
+        <span class="breadcrumb-item text-gray-400 cursor-pointer" onclick="showView('home')">Hyperspace</span>
+        <svg class="w-4 h-4 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
+        </svg>
+        <span class="breadcrumb-item text-gray-400 cursor-pointer">Demo Store</span>
+        <svg class="w-4 h-4 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
+        </svg>
+        <span id="breadcrumb-current" class="text-white font-medium">Home</span>
+      </nav>
+      <div class="flex-1"></div>
+      <div class="flex items-center gap-3">
+        <span class="flex items-center gap-2 text-xs text-gray-400">
+          <span class="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
+          Live
+        </span>
+      </div>
+    </header>
+    
+    <!-- Content Area -->
+    <div class="flex-1 overflow-y-auto">
+      
+      <!-- HOME VIEW (Module Cards) -->
+      <div id="view-home" class="view-panel p-8">
+        <div class="max-w-6xl mx-auto">
+          <h1 class="text-2xl font-bold mb-2">Welcome back</h1>
+          <p class="text-gray-400 mb-8">Select a module to get started</p>
+          
+          <!-- Quick Stats -->
+          <div class="grid grid-cols-4 gap-4 mb-8">
+            <div class="stat-card rounded-xl p-4 border border-[#2a2a2a]">
+              <div class="text-2xl font-bold">47</div>
+              <div class="text-xs text-gray-400">People Now</div>
+            </div>
+            <div class="stat-card rounded-xl p-4 border border-[#2a2a2a]">
+              <div class="text-2xl font-bold text-green-400">3</div>
+              <div class="text-xs text-gray-400">LiDARs Online</div>
+            </div>
+            <div class="stat-card rounded-xl p-4 border border-[#2a2a2a]">
+              <div class="text-2xl font-bold">12</div>
+              <div class="text-xs text-gray-400">Active Zones</div>
+            </div>
+            <div class="stat-card rounded-xl p-4 border border-[#2a2a2a]">
+              <div class="text-2xl font-bold text-amber-400">89%</div>
+              <div class="text-xs text-gray-400">Coverage</div>
+            </div>
+          </div>
+          
+          <!-- Module Cards Grid -->
+          <div class="grid grid-cols-3 gap-6">
+            <!-- Live View -->
+            <button onclick="showView('live')" class="module-card text-left p-6 rounded-2xl border border-[#2a2a2a]">
+              <div class="module-icon w-12 h-12 rounded-xl bg-blue-500/20 flex items-center justify-center mb-4">
+                <svg class="w-6 h-6 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/>
+                </svg>
+              </div>
+              <h3 class="text-lg font-semibold mb-1">Live View</h3>
+              <p class="text-sm text-gray-400">Monitor your venue in real-time with 3D visualization</p>
+            </button>
+            
+            <!-- Planogram -->
+            <button onclick="showView('planogram')" class="module-card text-left p-6 rounded-2xl border border-[#2a2a2a]">
+              <div class="module-icon w-12 h-12 rounded-xl bg-amber-500/20 flex items-center justify-center mb-4">
+                <svg class="w-6 h-6 text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 5a1 1 0 011-1h14a1 1 0 011 1v2a1 1 0 01-1 1H5a1 1 0 01-1-1V5zM4 13a1 1 0 011-1h6a1 1 0 011 1v6a1 1 0 01-1 1H5a1 1 0 01-1-1v-6zM16 13a1 1 0 011-1h2a1 1 0 011 1v6a1 1 0 01-1 1h-2a1 1 0 01-1-1v-6z"/>
+                </svg>
+              </div>
+              <h3 class="text-lg font-semibold mb-1">Planogram</h3>
+              <p class="text-sm text-gray-400">Design and manage shelf layouts with SKU placement</p>
+            </button>
+            
+            <!-- Analytics -->
+            <button onclick="showView('analytics-home')" class="module-card text-left p-6 rounded-2xl border border-[#2a2a2a]">
+              <div class="module-icon w-12 h-12 rounded-xl bg-purple-500/20 flex items-center justify-center mb-4">
+                <svg class="w-6 h-6 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/>
+                </svg>
+              </div>
+              <h3 class="text-lg font-semibold mb-1">Analytics</h3>
+              <p class="text-sm text-gray-400">Heatmaps, KPIs, DOOH metrics, and business reports</p>
+            </button>
+            
+            <!-- Configuration -->
+            <button onclick="showView('config')" class="module-card text-left p-6 rounded-2xl border border-[#2a2a2a]">
+              <div class="module-icon w-12 h-12 rounded-xl bg-gray-500/20 flex items-center justify-center mb-4">
+                <svg class="w-6 h-6 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/>
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+                </svg>
+              </div>
+              <h3 class="text-lg font-semibold mb-1">Configuration</h3>
+              <p class="text-sm text-gray-400">Venue settings, LiDAR devices, and objects</p>
+            </button>
+            
+            <!-- Edge Devices -->
+            <button onclick="showView('edge')" class="module-card text-left p-6 rounded-2xl border border-[#2a2a2a]">
+              <div class="module-icon w-12 h-12 rounded-xl bg-green-500/20 flex items-center justify-center mb-4">
+                <svg class="w-6 h-6 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2m-2-4h.01M17 16h.01"/>
+                </svg>
+              </div>
+              <h3 class="text-lg font-semibold mb-1">Edge Devices</h3>
+              <p class="text-sm text-gray-400">Commission and manage edge computing nodes</p>
+            </button>
+            
+            <!-- AI Copilot -->
+            <button onclick="showView('ai')" class="module-card text-left p-6 rounded-2xl border border-[#2a2a2a]">
+              <div class="module-icon w-12 h-12 rounded-xl bg-cyan-500/20 flex items-center justify-center mb-4">
+                <svg class="w-6 h-6 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/>
+                </svg>
+              </div>
+              <h3 class="text-lg font-semibold mb-1">AI Copilot</h3>
+              <p class="text-sm text-gray-400">Get smart insights and recommendations</p>
+            </button>
+          </div>
+        </div>
+      </div>
+      
+      <!-- LIVE VIEW -->
+      <div id="view-live" class="view-panel hidden h-full flex">
+        <div class="flex-1 flex flex-col">
+          <!-- Toolbar -->
+          <div class="h-10 bg-[#111] border-b border-[#1a1a1a] flex items-center px-4 gap-2">
+            <div class="flex items-center gap-1 pr-3 border-r border-[#2a2a2a]">
+              <button class="p-1.5 rounded text-blue-400 bg-blue-500/20">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 15l-2 5L9 9l11 4-5 2zm0 0l5 5M7.188 2.239l.777 2.897M5.136 7.965l-2.898-.777M13.95 4.05l-2.122 2.122m-5.657 5.656l-2.12 2.122"/>
+                </svg>
+              </button>
+              <button class="p-1.5 rounded text-gray-400 hover:bg-[#2a2a2a]">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 11.5V14m0-2.5v-6a1.5 1.5 0 113 0m-3 6a1.5 1.5 0 00-3 0v2a7.5 7.5 0 0015 0v-5a1.5 1.5 0 00-3 0m-6-3V11m0-5.5v-1a1.5 1.5 0 013 0v1m0 0V11m0-5.5a1.5 1.5 0 013 0v3m0 0V11"/>
+                </svg>
+              </button>
+            </div>
+            <div class="flex items-center gap-1">
+              <button class="px-2 py-1 text-xs text-gray-400 hover:bg-[#2a2a2a] rounded">Top</button>
+              <button class="px-2 py-1 text-xs text-gray-400 hover:bg-[#2a2a2a] rounded">Front</button>
+              <button class="px-2 py-1 text-xs text-gray-400 hover:bg-[#2a2a2a] rounded">Side</button>
+              <button class="px-2 py-1 text-xs text-blue-400 bg-blue-500/20 rounded">3D</button>
+            </div>
+            <div class="flex-1"></div>
+            <button class="flex items-center gap-2 px-2 py-1 text-xs text-gray-400 hover:bg-[#2a2a2a] rounded">
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4"/>
+              </svg>
+              Layers
+            </button>
+          </div>
+          
+          <!-- 3D Viewport -->
+          <div class="flex-1 mock-3d grid-pattern relative">
+            <div class="absolute inset-0 flex items-center justify-center">
+              <div class="text-center">
+                <div class="w-32 h-32 mx-auto mb-4 border-2 border-dashed border-gray-600 rounded-lg flex items-center justify-center">
+                  <svg class="w-16 h-16 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"/>
+                  </svg>
+                </div>
+                <p class="text-gray-500 text-sm">3D Live Viewport</p>
+              </div>
+            </div>
+            
+            <!-- Live stats overlay -->
+            <div class="absolute top-4 right-4 bg-black/60 backdrop-blur-sm rounded-lg p-3 space-y-2">
+              <div class="flex items-center gap-2">
+                <span class="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
+                <span class="text-xs text-green-400">47 tracked</span>
+              </div>
+              <div class="text-xs text-gray-400">Updated: 2s ago</div>
+            </div>
+          </div>
+        </div>
+        
+        <!-- Context Panel -->
+        <div class="context-panel w-64 bg-[#111] border-l border-[#1a1a1a] flex flex-col">
+          <div class="p-4 border-b border-[#1a1a1a]">
+            <h3 class="text-sm font-medium">Properties</h3>
+          </div>
+          <div class="flex-1 p-4">
+            <p class="text-xs text-gray-500">Click an object to view properties</p>
+          </div>
+          <div class="p-4 border-t border-[#1a1a1a]">
+            <h4 class="text-xs text-gray-400 uppercase tracking-wider mb-2">Layers</h4>
+            <div class="space-y-1">
+              <label class="flex items-center gap-2 text-sm cursor-pointer">
+                <input type="checkbox" checked class="rounded bg-[#2a2a2a] border-gray-600 text-blue-500">
+                Objects
+              </label>
+              <label class="flex items-center gap-2 text-sm cursor-pointer">
+                <input type="checkbox" checked class="rounded bg-[#2a2a2a] border-gray-600 text-blue-500">
+                LiDARs
+              </label>
+              <label class="flex items-center gap-2 text-sm cursor-pointer">
+                <input type="checkbox" checked class="rounded bg-[#2a2a2a] border-gray-600 text-blue-500">
+                Regions
+              </label>
+              <label class="flex items-center gap-2 text-sm cursor-pointer">
+                <input type="checkbox" class="rounded bg-[#2a2a2a] border-gray-600 text-blue-500">
+                Heatmap
+              </label>
+            </div>
+          </div>
+        </div>
+      </div>
+      
+      <!-- ANALYTICS HOME -->
+      <div id="view-analytics-home" class="view-panel hidden p-8">
+        <div class="max-w-4xl mx-auto">
+          <h1 class="text-2xl font-bold mb-2">Analytics</h1>
+          <p class="text-gray-400 mb-8">Choose an analytics module</p>
+          
+          <div class="grid grid-cols-2 gap-6">
+            <button onclick="showView('heatmap')" class="module-card text-left p-6 rounded-2xl border border-[#2a2a2a]">
+              <div class="module-icon w-10 h-10 rounded-lg bg-orange-500/20 flex items-center justify-center mb-3">
+                <svg class="w-5 h-5 text-orange-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17.657 18.657A8 8 0 016.343 7.343S7 9 9 10c0-2 .5-5 2.986-7C14 5 16.09 5.777 17.656 7.343A7.975 7.975 0 0120 13a7.975 7.975 0 01-2.343 5.657z"/>
+                </svg>
+              </div>
+              <h3 class="font-semibold mb-1">Heatmaps</h3>
+              <p class="text-sm text-gray-400">Visualize traffic patterns and dwell times</p>
+            </button>
+            
+            <button onclick="showView('kpis')" class="module-card text-left p-6 rounded-2xl border border-[#2a2a2a]">
+              <div class="module-icon w-10 h-10 rounded-lg bg-purple-500/20 flex items-center justify-center mb-3">
+                <svg class="w-5 h-5 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"/>
+                </svg>
+              </div>
+              <h3 class="font-semibold mb-1">Zone KPIs</h3>
+              <p class="text-sm text-gray-400">Performance metrics by zone</p>
+            </button>
+            
+            <button onclick="showView('dooh')" class="module-card text-left p-6 rounded-2xl border border-[#2a2a2a]">
+              <div class="module-icon w-10 h-10 rounded-lg bg-blue-500/20 flex items-center justify-center mb-3">
+                <svg class="w-5 h-5 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/>
+                </svg>
+              </div>
+              <h3 class="font-semibold mb-1">DOOH Analytics</h3>
+              <p class="text-sm text-gray-400">Digital display effectiveness</p>
+            </button>
+            
+            <button onclick="showView('reports')" class="module-card text-left p-6 rounded-2xl border border-[#2a2a2a]">
+              <div class="module-icon w-10 h-10 rounded-lg bg-green-500/20 flex items-center justify-center mb-3">
+                <svg class="w-5 h-5 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+                </svg>
+              </div>
+              <h3 class="font-semibold mb-1">Business Reports</h3>
+              <p class="text-sm text-gray-400">Executive dashboards and exports</p>
+            </button>
+          </div>
+        </div>
+      </div>
+      
+      <!-- Placeholder views -->
+      <div id="view-planogram" class="view-panel hidden p-8">
+        <div class="text-center py-20">
+          <div class="w-16 h-16 mx-auto mb-4 rounded-xl bg-amber-500/20 flex items-center justify-center">
+            <svg class="w-8 h-8 text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 5a1 1 0 011-1h14a1 1 0 011 1v2a1 1 0 01-1 1H5a1 1 0 01-1-1V5zM4 13a1 1 0 011-1h6a1 1 0 011 1v6a1 1 0 01-1 1H5a1 1 0 01-1-1v-6zM16 13a1 1 0 011-1h2a1 1 0 011 1v6a1 1 0 01-1 1h-2a1 1 0 01-1-1v-6z"/>
+            </svg>
+          </div>
+          <h2 class="text-xl font-semibold mb-2">Planogram Builder</h2>
+          <p class="text-gray-400">Design shelf layouts and manage SKU placements</p>
+        </div>
+      </div>
+      
+      <div id="view-config" class="view-panel hidden p-8">
+        <div class="text-center py-20">
+          <div class="w-16 h-16 mx-auto mb-4 rounded-xl bg-gray-500/20 flex items-center justify-center">
+            <svg class="w-8 h-8 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/>
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+            </svg>
+          </div>
+          <h2 class="text-xl font-semibold mb-2">Configuration</h2>
+          <p class="text-gray-400">Venue settings, LiDAR devices, and objects</p>
+        </div>
+      </div>
+      
+      <div id="view-heatmap" class="view-panel hidden p-8">
+        <div class="text-center py-20">
+          <div class="w-16 h-16 mx-auto mb-4 rounded-xl bg-orange-500/20 flex items-center justify-center">
+            <svg class="w-8 h-8 text-orange-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17.657 18.657A8 8 0 016.343 7.343S7 9 9 10c0-2 .5-5 2.986-7C14 5 16.09 5.777 17.656 7.343A7.975 7.975 0 0120 13a7.975 7.975 0 01-2.343 5.657z"/>
+            </svg>
+          </div>
+          <h2 class="text-xl font-semibold mb-2">Heatmap Viewer</h2>
+          <p class="text-gray-400">Visualize traffic patterns and dwell times</p>
+        </div>
+      </div>
+      
+      <div id="view-kpis" class="view-panel hidden p-8">
+        <div class="text-center py-20">
+          <div class="w-16 h-16 mx-auto mb-4 rounded-xl bg-purple-500/20 flex items-center justify-center">
+            <svg class="w-8 h-8 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"/>
+            </svg>
+          </div>
+          <h2 class="text-xl font-semibold mb-2">Zone KPIs</h2>
+          <p class="text-gray-400">Performance metrics by zone</p>
+        </div>
+      </div>
+      
+      <div id="view-dooh" class="view-panel hidden p-8">
+        <div class="text-center py-20">
+          <div class="w-16 h-16 mx-auto mb-4 rounded-xl bg-blue-500/20 flex items-center justify-center">
+            <svg class="w-8 h-8 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/>
+            </svg>
+          </div>
+          <h2 class="text-xl font-semibold mb-2">DOOH Analytics</h2>
+          <p class="text-gray-400">Digital display effectiveness metrics</p>
+        </div>
+      </div>
+      
+      <div id="view-reports" class="view-panel hidden p-8">
+        <div class="text-center py-20">
+          <div class="w-16 h-16 mx-auto mb-4 rounded-xl bg-green-500/20 flex items-center justify-center">
+            <svg class="w-8 h-8 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+            </svg>
+          </div>
+          <h2 class="text-xl font-semibold mb-2">Business Reports</h2>
+          <p class="text-gray-400">Executive dashboards and exports</p>
+        </div>
+      </div>
+      
+      <div id="view-edge" class="view-panel hidden p-8">
+        <div class="text-center py-20">
+          <div class="w-16 h-16 mx-auto mb-4 rounded-xl bg-green-500/20 flex items-center justify-center">
+            <svg class="w-8 h-8 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2m-2-4h.01M17 16h.01"/>
+            </svg>
+          </div>
+          <h2 class="text-xl font-semibold mb-2">Edge Devices</h2>
+          <p class="text-gray-400">Commission and manage edge computing nodes</p>
+        </div>
+      </div>
+      
+      <div id="view-ai" class="view-panel hidden p-8">
+        <div class="text-center py-20">
+          <div class="w-16 h-16 mx-auto mb-4 rounded-xl bg-cyan-500/20 flex items-center justify-center">
+            <svg class="w-8 h-8 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/>
+            </svg>
+          </div>
+          <h2 class="text-xl font-semibold mb-2">AI Copilot</h2>
+          <p class="text-gray-400">Get smart insights and recommendations</p>
+        </div>
+      </div>
+      
+    </div>
+  </main>
+
+  <script>
+    const views = ['home', 'live', 'planogram', 'analytics-home', 'config', 'heatmap', 'kpis', 'dooh', 'reports', 'edge', 'ai'];
+    const railItems = ['home', 'live', 'planogram', 'analytics', 'config'];
+    
+    function showView(viewName) {
+      // Hide all views
+      views.forEach(v => {
+        const el = document.getElementById('view-' + v);
+        if (el) el.classList.add('hidden');
+      });
+      
+      // Show selected view
+      const view = document.getElementById('view-' + viewName);
+      if (view) view.classList.remove('hidden');
+      
+      // Update rail active state
+      railItems.forEach(r => {
+        const rail = document.getElementById('rail-' + r);
+        if (rail) rail.classList.remove('active');
+      });
+      
+      // Determine which rail item to highlight
+      let activeRail = viewName;
+      if (['heatmap', 'kpis', 'dooh', 'reports', 'analytics-home'].includes(viewName)) {
+        activeRail = 'analytics';
+      }
+      
+      const activeRailEl = document.getElementById('rail-' + activeRail);
+      if (activeRailEl) activeRailEl.classList.add('active');
+      
+      // Update breadcrumb
+      const breadcrumb = document.getElementById('breadcrumb-current');
+      const names = {
+        'home': 'Home',
+        'live': 'Live View',
+        'planogram': 'Planogram',
+        'analytics-home': 'Analytics',
+        'config': 'Configuration',
+        'heatmap': 'Heatmaps',
+        'kpis': 'Zone KPIs',
+        'dooh': 'DOOH Analytics',
+        'reports': 'Business Reports',
+        'edge': 'Edge Devices',
+        'ai': 'AI Copilot'
+      };
+      breadcrumb.textContent = names[viewName] || viewName;
+      
+      // Close submenu when navigating away
+      document.getElementById('submenu-panel').classList.add('hidden');
+    }
+    
+    function toggleSubmenu(menu) {
+      const panel = document.getElementById('submenu-panel');
+      const submenu = document.getElementById('submenu-' + menu);
+      
+      // Hide all submenus
+      document.querySelectorAll('#submenu-panel > div').forEach(el => el.classList.add('hidden'));
+      
+      if (panel.classList.contains('hidden')) {
+        panel.classList.remove('hidden');
+        submenu.classList.remove('hidden');
+      } else {
+        panel.classList.add('hidden');
+      }
+    }
+  </script>
+</body>
+</html>

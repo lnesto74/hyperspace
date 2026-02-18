@@ -1,0 +1,509 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Hyperspace - Option A: Top Navigation + Command Palette</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            'app-bg': '#0f0f14',
+            'card-bg': '#1a1a24',
+            'panel-bg': '#12121a',
+            'border-dark': '#2a2a3a',
+            'highlight': '#3b82f6',
+            'highlight-hover': '#2563eb',
+            'success': '#22c55e',
+            'warning': '#f59e0b',
+            'danger': '#ef4444',
+          },
+          fontFamily: {
+            sans: ['Inter', 'system-ui', 'sans-serif'],
+            mono: ['JetBrains Mono', 'monospace'],
+          },
+        }
+      }
+    }
+  </script>
+  <style>
+    * { font-family: 'Inter', sans-serif; }
+    html, body { background: #0f0f14; margin: 0; padding: 0; overflow: hidden; }
+    
+    /* Scale everything to 80% using zoom (better than transform for full-page scaling) */
+    .app-container {
+      zoom: 0.8;
+    }
+    
+    .nav-tab { transition: all 0.2s; }
+    .nav-tab:hover { background: rgba(59, 130, 246, 0.1); }
+    .nav-tab.active { background: rgba(59, 130, 246, 0.15); border-bottom: 2px solid #3b82f6; color: #3b82f6; }
+    
+    .sidebar-item { transition: all 0.15s; }
+    .sidebar-item:hover { background: rgba(255,255,255,0.05); }
+    
+    .layer-toggle { transition: all 0.2s; }
+    .layer-toggle:hover { background: rgba(255,255,255,0.05); }
+    
+    .command-palette { animation: slideDown 0.2s ease-out; box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5); }
+    @keyframes slideDown { from { opacity: 0; transform: translateY(-10px); } to { opacity: 1; transform: translateY(0); } }
+    
+    .command-item { transition: all 0.1s; }
+    .command-item:hover { background: rgba(59, 130, 246, 0.15); }
+    
+    .inspector-panel { animation: slideIn 0.3s ease-out; }
+    @keyframes slideIn { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+    
+    .viewport-btn { transition: all 0.15s; }
+    .viewport-btn:hover { background: rgba(255,255,255,0.1); }
+    .viewport-btn.active { background: rgba(59, 130, 246, 0.2); color: #3b82f6; }
+    
+    .quick-action { transition: all 0.2s; }
+    .quick-action:hover { background: rgba(59, 130, 246, 0.1); border-color: #3b82f6; }
+    
+    .mock-3d { background: linear-gradient(135deg, #12121a 0%, #1a1a2e 50%, #0f3460 100%); }
+    .grid-pattern { background-image: linear-gradient(rgba(255,255,255,0.03) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.03) 1px, transparent 1px); background-size: 20px 20px; }
+    
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: #12121a; }
+    ::-webkit-scrollbar-thumb { background: #2a2a3a; border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: #3a3a4a; }
+  </style>
+</head>
+<body class="h-screen overflow-hidden text-gray-200">
+  <div class="app-container min-h-screen h-screen overflow-hidden flex flex-col">
+  
+  <!-- TOP NAVIGATION BAR -->
+  <header class="h-14 bg-panel-bg border-b border-border-dark flex items-center px-4">
+    <!-- Logo -->
+    <div class="flex items-center gap-2 mr-6">
+      <div class="w-8 h-8 rounded-lg bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center">
+        <i data-lucide="radar" class="w-5 h-5 text-white"></i>
+      </div>
+      <div>
+        <span class="font-semibold text-sm text-white">Hyperspace</span>
+        <p class="text-[10px] text-gray-500">LiDAR Configurator</p>
+      </div>
+    </div>
+    
+    <!-- Main Tabs -->
+    <nav class="flex h-full">
+      <button class="nav-tab active px-4 text-sm font-medium flex items-center gap-2">
+        <i data-lucide="eye" class="w-4 h-4"></i>
+        Live View
+      </button>
+      <button class="nav-tab px-4 text-sm font-medium text-gray-400 flex items-center gap-2">
+        <i data-lucide="layout-grid" class="w-4 h-4"></i>
+        Planogram
+      </button>
+      <button class="nav-tab px-4 text-sm font-medium text-gray-400 flex items-center gap-2">
+        <i data-lucide="bar-chart-3" class="w-4 h-4"></i>
+        Analytics
+      </button>
+      <button class="nav-tab px-4 text-sm font-medium text-gray-400 flex items-center gap-2">
+        <i data-lucide="settings" class="w-4 h-4"></i>
+        Config
+      </button>
+    </nav>
+    
+    <div class="flex-1"></div>
+    
+    <!-- Command Palette Trigger -->
+    <button onclick="toggleCommandPalette()" class="flex items-center gap-2 px-3 py-1.5 bg-card-bg hover:bg-border-dark rounded-lg text-sm text-gray-400 transition-colors mr-4">
+      <i data-lucide="search" class="w-4 h-4"></i>
+      <span>Search...</span>
+      <kbd class="px-1.5 py-0.5 bg-panel-bg rounded text-xs font-mono">⌘K</kbd>
+    </button>
+    
+    <!-- Notifications -->
+    <button class="relative p-2 text-gray-400 hover:text-white transition-colors mr-2">
+      <i data-lucide="bell" class="w-4 h-4"></i>
+      <span class="absolute top-1 right-1 w-2 h-2 bg-danger rounded-full"></span>
+    </button>
+    
+    <!-- User -->
+    <button class="w-8 h-8 rounded-full bg-gradient-to-br from-amber-500 to-orange-600 flex items-center justify-center text-sm font-medium text-white">
+      U
+    </button>
+  </header>
+  
+  <!-- MAIN CONTENT -->
+  <div class="flex h-[calc(100vh-56px)]">
+    
+    <!-- CONTEXT SIDEBAR -->
+    <aside class="w-72 flex-shrink-0 bg-panel-bg border-r border-border-dark flex flex-col overflow-hidden">
+      
+      <!-- Context Switcher -->
+      <div class="p-3 border-b border-border-dark">
+        <button class="w-full flex items-center justify-between p-2 bg-card-bg rounded-lg hover:bg-border-dark/50 transition-colors">
+          <div class="flex items-center gap-2">
+            <div class="w-6 h-6 rounded bg-white/5 flex items-center justify-center">
+              <i data-lucide="map-pin" class="w-4 h-4 text-gray-400"></i>
+            </div>
+            <div class="text-left">
+              <div class="text-sm font-medium text-white">Demo Store</div>
+              <div class="text-xs text-gray-500">Live View</div>
+            </div>
+          </div>
+          <i data-lucide="chevron-down" class="w-4 h-4 text-gray-500"></i>
+        </button>
+      </div>
+      
+      <!-- Tab Navigation (like current app) -->
+      <div class="flex border-b border-border-dark">
+        <button class="flex-1 py-3 px-2 text-xs font-medium transition-colors flex flex-col items-center gap-1 text-highlight border-b-2 border-highlight bg-highlight/5">
+          <i data-lucide="map" class="w-4 h-4"></i>
+          DWG
+        </button>
+        <button class="flex-1 py-3 px-2 text-xs font-medium transition-colors flex flex-col items-center gap-1 text-gray-400 hover:text-gray-200 hover:bg-white/5">
+          <i data-lucide="box" class="w-4 h-4"></i>
+          Venue
+        </button>
+        <button class="flex-1 py-3 px-2 text-xs font-medium transition-colors flex flex-col items-center gap-1 text-gray-400 hover:text-gray-200 hover:bg-white/5">
+          <i data-lucide="package" class="w-4 h-4"></i>
+          Objects
+        </button>
+        <button class="flex-1 py-3 px-2 text-xs font-medium transition-colors flex flex-col items-center gap-1 text-gray-400 hover:text-gray-200 hover:bg-white/5">
+          <i data-lucide="radar" class="w-4 h-4"></i>
+          LiDARs
+        </button>
+        <button class="flex-1 py-3 px-2 text-xs font-medium transition-colors flex flex-col items-center gap-1 text-gray-400 hover:text-gray-200 hover:bg-white/5">
+          <i data-lucide="hexagon" class="w-4 h-4"></i>
+          Regions
+        </button>
+      </div>
+      
+      <!-- Layers Section -->
+      <div class="p-3 border-b border-border-dark">
+        <div class="flex items-center justify-between mb-2">
+          <span class="text-xs font-medium text-gray-400 uppercase tracking-wider">Layers</span>
+          <i data-lucide="chevron-down" class="w-4 h-4 text-gray-500"></i>
+        </div>
+        <div class="space-y-1">
+          <label class="layer-toggle flex items-center gap-2 p-2 rounded cursor-pointer">
+            <input type="checkbox" checked class="rounded bg-card-bg border-border-dark text-highlight focus:ring-highlight w-4 h-4">
+            <i data-lucide="box" class="w-4 h-4 text-gray-400"></i>
+            <span class="text-sm">Objects</span>
+          </label>
+          <label class="layer-toggle flex items-center gap-2 p-2 rounded cursor-pointer">
+            <input type="checkbox" checked class="rounded bg-card-bg border-border-dark text-highlight focus:ring-highlight w-4 h-4">
+            <i data-lucide="radar" class="w-4 h-4 text-gray-400"></i>
+            <span class="text-sm">LiDARs</span>
+            <span class="ml-auto text-xs text-success">3 online</span>
+          </label>
+          <label class="layer-toggle flex items-center gap-2 p-2 rounded cursor-pointer">
+            <input type="checkbox" checked class="rounded bg-card-bg border-border-dark text-highlight focus:ring-highlight w-4 h-4">
+            <i data-lucide="hexagon" class="w-4 h-4 text-gray-400"></i>
+            <span class="text-sm">Regions</span>
+            <span class="ml-auto text-xs text-gray-500">12</span>
+          </label>
+          <label class="layer-toggle flex items-center gap-2 p-2 rounded cursor-pointer">
+            <input type="checkbox" class="rounded bg-card-bg border-border-dark text-highlight focus:ring-highlight w-4 h-4">
+            <i data-lucide="flame" class="w-4 h-4 text-gray-400"></i>
+            <span class="text-sm text-gray-400">Heatmap</span>
+          </label>
+          <label class="layer-toggle flex items-center gap-2 p-2 rounded cursor-pointer">
+            <input type="checkbox" checked class="rounded bg-card-bg border-border-dark text-highlight focus:ring-highlight w-4 h-4">
+            <i data-lucide="grid-3x3" class="w-4 h-4 text-gray-400"></i>
+            <span class="text-sm">Grid</span>
+          </label>
+        </div>
+      </div>
+      
+      <!-- Quick Actions -->
+      <div class="p-3 border-b border-border-dark">
+        <div class="flex items-center justify-between mb-2">
+          <span class="text-xs font-medium text-gray-400 uppercase tracking-wider">Quick Actions</span>
+        </div>
+        <div class="space-y-2">
+          <button class="quick-action w-full flex items-center gap-2 p-2 border border-dashed border-border-dark rounded-lg text-sm text-gray-400 hover:text-highlight">
+            <i data-lucide="plus" class="w-4 h-4"></i>
+            Add Object
+          </button>
+          <button class="quick-action w-full flex items-center gap-2 p-2 border border-dashed border-border-dark rounded-lg text-sm text-gray-400 hover:text-highlight">
+            <i data-lucide="plus" class="w-4 h-4"></i>
+            Add LiDAR
+          </button>
+          <button class="quick-action w-full flex items-center gap-2 p-2 border border-dashed border-border-dark rounded-lg text-sm text-gray-400 hover:text-highlight">
+            <i data-lucide="file-up" class="w-4 h-4"></i>
+            Import DWG
+          </button>
+        </div>
+      </div>
+      
+      <!-- Objects List -->
+      <div class="flex-1 overflow-y-auto p-3">
+        <div class="flex items-center justify-between mb-2">
+          <span class="text-xs font-medium text-gray-400 uppercase tracking-wider">Objects</span>
+          <span class="text-xs text-gray-500">5 items</span>
+        </div>
+        <div class="space-y-1">
+          <button onclick="showInspector('Shelf_01')" class="sidebar-item w-full flex items-center gap-2 p-2 rounded text-left">
+            <div class="w-6 h-6 rounded bg-white/5 flex items-center justify-center">
+              <i data-lucide="package" class="w-4 h-4 text-gray-400"></i>
+            </div>
+            <span class="text-sm">Shelf_01</span>
+          </button>
+          <button onclick="showInspector('Shelf_02')" class="sidebar-item w-full flex items-center gap-2 p-2 rounded text-left">
+            <div class="w-6 h-6 rounded bg-white/5 flex items-center justify-center">
+              <i data-lucide="package" class="w-4 h-4 text-gray-400"></i>
+            </div>
+            <span class="text-sm">Shelf_02</span>
+          </button>
+          <button onclick="showInspector('Counter')" class="sidebar-item w-full flex items-center gap-2 p-2 rounded text-left">
+            <div class="w-6 h-6 rounded bg-white/5 flex items-center justify-center">
+              <i data-lucide="square" class="w-4 h-4 text-gray-400"></i>
+            </div>
+            <span class="text-sm">Counter</span>
+          </button>
+        </div>
+      </div>
+      
+      <!-- Footer (minimal - actions moved to command palette) -->
+      <div class="h-10 border-t border-border-dark flex items-center justify-between px-4">
+        <div class="flex items-center gap-2 text-xs text-gray-500">
+          <span class="w-2 h-2 bg-success rounded-full animate-pulse"></span>
+          <span>3 LiDARs connected</span>
+        </div>
+        <span class="text-[10px] text-gray-600">v1.0.0</span>
+      </div>
+    </aside>
+    
+    <!-- VIEWPORT -->
+    <main class="flex-1 flex flex-col">
+      <!-- Viewport Toolbar -->
+      <div class="h-10 bg-panel-bg border-b border-border-dark flex items-center px-3 gap-1">
+        <div class="flex items-center gap-1 pr-3 border-r border-border-dark">
+          <button class="viewport-btn active p-1.5 rounded">
+            <i data-lucide="mouse-pointer" class="w-4 h-4"></i>
+          </button>
+          <button class="viewport-btn p-1.5 rounded text-gray-400">
+            <i data-lucide="hand" class="w-4 h-4"></i>
+          </button>
+          <button class="viewport-btn p-1.5 rounded text-gray-400">
+            <i data-lucide="rotate-3d" class="w-4 h-4"></i>
+          </button>
+        </div>
+        
+        <div class="flex items-center gap-1 px-3 border-r border-border-dark">
+          <button class="viewport-btn px-2 py-1 rounded text-xs text-gray-400">Top</button>
+          <button class="viewport-btn px-2 py-1 rounded text-xs text-gray-400">Front</button>
+          <button class="viewport-btn px-2 py-1 rounded text-xs text-gray-400">Side</button>
+          <button class="viewport-btn active px-2 py-1 rounded text-xs">3D</button>
+        </div>
+        
+        <div class="flex-1"></div>
+        
+        <div class="flex items-center gap-2 text-xs text-gray-500">
+          <span>15m × 10m</span>
+          <span>•</span>
+          <span>Grid: 0.5m</span>
+        </div>
+      </div>
+      
+      <!-- 3D Viewport Area -->
+      <div class="flex-1 relative mock-3d grid-pattern">
+        <div class="absolute inset-0 flex items-center justify-center">
+          <div class="text-center">
+            <div class="w-32 h-32 mx-auto mb-4 border-2 border-dashed border-border-dark rounded-lg flex items-center justify-center">
+              <i data-lucide="box" class="w-8 h-8 text-gray-600"></i>
+            </div>
+            <p class="text-gray-500 text-sm">3D Viewport</p>
+            <p class="text-gray-600 text-xs mt-1">Click objects to select • Drag to move</p>
+          </div>
+        </div>
+        
+        <!-- Live tracking indicators -->
+        <div class="absolute top-4 right-4 flex items-center gap-2 bg-app-bg/80 backdrop-blur px-3 py-2 rounded-lg border border-border-dark">
+          <span class="w-2 h-2 bg-success rounded-full animate-pulse"></span>
+          <span class="text-xs text-success">47 people tracked</span>
+        </div>
+        
+        <!-- Viewport Overlay FABs (minimal - matching original app style) -->
+        <div class="absolute bottom-4 right-4 flex items-center gap-1 bg-panel-bg/95 backdrop-blur border border-border-dark rounded-lg p-1">
+          <button onclick="toggleOverlay('kpis')" id="fab-kpis" class="fab-btn p-2 rounded text-gray-400 hover:text-white hover:bg-white/10 transition-all" title="Toggle KPIs">
+            <i data-lucide="gauge" class="w-4 h-4"></i>
+          </button>
+          <button onclick="toggleOverlay('heatmap')" id="fab-heatmap" class="fab-btn p-2 rounded text-gray-400 hover:text-white hover:bg-white/10 transition-all" title="Toggle Heatmap">
+            <i data-lucide="flame" class="w-4 h-4"></i>
+          </button>
+          <button onclick="toggleOverlay('tracking')" id="fab-tracking" class="fab-btn p-2 rounded text-white bg-white/10 transition-all" title="Toggle Tracking">
+            <i data-lucide="users" class="w-4 h-4"></i>
+          </button>
+          <div class="w-px h-4 bg-border-dark mx-0.5"></div>
+          <button onclick="alert('AI Narrator would open')" class="fab-btn p-2 rounded text-gray-400 hover:text-white hover:bg-white/10 transition-all" title="AI Narrator">
+            <i data-lucide="sparkles" class="w-4 h-4"></i>
+          </button>
+        </div>
+      </div>
+      
+      <!-- Status Bar -->
+      <div class="h-8 bg-app-bg border-t border-border-dark flex items-center px-3 text-xs text-gray-500">
+        <span class="mr-4">Venue: <span class="text-gray-300">Demo Store</span></span>
+        <span class="mr-4">•</span>
+        <span class="flex items-center gap-1"><i data-lucide="check-circle" class="w-4 h-4 text-gray-400"></i> Ready</span>
+        <div class="flex-1"></div>
+        <span>Last sync: 2s ago</span>
+      </div>
+    </main>
+    
+    <!-- INSPECTOR PANEL -->
+    <aside id="inspector" class="hidden inspector-panel w-72 bg-panel-bg border-l border-border-dark flex flex-col">
+      <div class="h-12 border-b border-border-dark flex items-center justify-between px-4">
+        <span class="text-sm font-medium text-white">Properties</span>
+        <button onclick="hideInspector()" class="text-gray-400 hover:text-white">
+          <i data-lucide="x" class="w-4 h-4"></i>
+        </button>
+      </div>
+      <div class="flex-1 p-4 space-y-4">
+        <div>
+          <label class="block text-xs text-gray-400 mb-1">Name</label>
+          <input type="text" id="inspector-name" value="Shelf_01" class="w-full bg-card-bg border border-border-dark rounded px-3 py-2 text-sm focus:border-highlight focus:outline-none">
+        </div>
+        <div>
+          <label class="block text-xs text-gray-400 mb-2">Position</label>
+          <div class="grid grid-cols-3 gap-2">
+            <div><span class="text-[10px] text-gray-500">X</span><input type="number" value="2.5" class="w-full bg-card-bg border border-border-dark rounded px-2 py-1 text-sm focus:border-highlight focus:outline-none"></div>
+            <div><span class="text-[10px] text-gray-500">Y</span><input type="number" value="0" class="w-full bg-card-bg border border-border-dark rounded px-2 py-1 text-sm focus:border-highlight focus:outline-none"></div>
+            <div><span class="text-[10px] text-gray-500">Z</span><input type="number" value="3.0" class="w-full bg-card-bg border border-border-dark rounded px-2 py-1 text-sm focus:border-highlight focus:outline-none"></div>
+          </div>
+        </div>
+        <div>
+          <label class="block text-xs text-gray-400 mb-2">Scale</label>
+          <div class="grid grid-cols-3 gap-2">
+            <div><span class="text-[10px] text-gray-500">W</span><input type="number" value="1.2" class="w-full bg-card-bg border border-border-dark rounded px-2 py-1 text-sm focus:border-highlight focus:outline-none"></div>
+            <div><span class="text-[10px] text-gray-500">H</span><input type="number" value="2.0" class="w-full bg-card-bg border border-border-dark rounded px-2 py-1 text-sm focus:border-highlight focus:outline-none"></div>
+            <div><span class="text-[10px] text-gray-500">D</span><input type="number" value="0.4" class="w-full bg-card-bg border border-border-dark rounded px-2 py-1 text-sm focus:border-highlight focus:outline-none"></div>
+          </div>
+        </div>
+        <div>
+          <label class="block text-xs text-gray-400 mb-1">Rotation</label>
+          <input type="range" min="0" max="360" value="0" class="w-full accent-highlight">
+          <div class="text-right text-xs text-gray-500">0°</div>
+        </div>
+      </div>
+      <div class="p-4 border-t border-border-dark">
+        <button class="w-full py-2 bg-danger/20 hover:bg-danger/30 text-danger rounded text-sm transition-colors flex items-center justify-center gap-2">
+          <i data-lucide="trash-2" class="w-4 h-4 text-gray-400"></i>
+          Delete Object
+        </button>
+      </div>
+    </aside>
+  </div>
+  </div><!-- end app-container -->
+  
+  <!-- COMMAND PALETTE OVERLAY -->
+  <div id="command-palette-overlay" class="hidden fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-start justify-center pt-24" onclick="hideCommandPalette(event)">
+    <div class="command-palette w-[500px] bg-panel-bg border border-border-dark rounded-xl overflow-hidden" onclick="event.stopPropagation()">
+      <div class="flex items-center gap-3 p-4 border-b border-border-dark">
+        <i data-lucide="search" class="w-4 h-4 text-gray-400"></i>
+        <input type="text" placeholder="Type a command or search..." class="flex-1 bg-transparent text-white placeholder-gray-500 focus:outline-none">
+        <kbd class="px-2 py-1 bg-card-bg rounded text-xs text-gray-400 font-mono">ESC</kbd>
+      </div>
+      <div class="max-h-80 overflow-y-auto">
+        <div class="p-2">
+          <div class="text-xs text-gray-500 px-3 py-2">RECENT</div>
+          <button class="command-item w-full flex items-center gap-3 px-3 py-2 rounded-lg text-left">
+            <i data-lucide="flame" class="w-4 h-4 text-gray-400"></i>
+            <span class="text-sm">Open Heatmap Viewer</span>
+          </button>
+          <button class="command-item w-full flex items-center gap-3 px-3 py-2 rounded-lg text-left">
+            <i data-lucide="layout-grid" class="w-4 h-4 text-gray-400"></i>
+            <span class="text-sm">Open Planogram Builder</span>
+          </button>
+        </div>
+        <div class="p-2 border-t border-border-dark">
+          <div class="text-xs text-gray-500 px-3 py-2">NAVIGATION</div>
+          <button class="command-item w-full flex items-center gap-3 px-3 py-2 rounded-lg text-left">
+            <i data-lucide="eye" class="w-4 h-4 text-gray-400"></i>
+            <span class="text-sm">Go to Live View</span>
+            <span class="ml-auto text-xs text-gray-500">Current</span>
+          </button>
+          <button class="command-item w-full flex items-center gap-3 px-3 py-2 rounded-lg text-left">
+            <i data-lucide="bar-chart-3" class="w-4 h-4 text-gray-400"></i>
+            <span class="text-sm">Go to Analytics</span>
+          </button>
+          <button class="command-item w-full flex items-center gap-3 px-3 py-2 rounded-lg text-left">
+            <i data-lucide="settings" class="w-4 h-4 text-gray-400"></i>
+            <span class="text-sm">Go to Configuration</span>
+          </button>
+        </div>
+        <div class="p-2 border-t border-border-dark">
+          <div class="text-xs text-gray-500 px-3 py-2">ACTIONS</div>
+          <button class="command-item w-full flex items-center gap-3 px-3 py-2 rounded-lg text-left">
+            <i data-lucide="plus" class="w-4 h-4 text-gray-400"></i>
+            <span class="text-sm">Add new LiDAR</span>
+          </button>
+          <button class="command-item w-full flex items-center gap-3 px-3 py-2 rounded-lg text-left">
+            <i data-lucide="file-up" class="w-4 h-4 text-gray-400"></i>
+            <span class="text-sm">Import DWG floorplan</span>
+          </button>
+          <button class="command-item w-full flex items-center gap-3 px-3 py-2 rounded-lg text-left">
+            <i data-lucide="message-circle" class="w-4 h-4 text-gray-400"></i>
+            <span class="text-sm">Open AI Assistant</span>
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // Initialize Lucide icons
+    lucide.createIcons();
+    
+    // Overlay toggle states
+    const overlayStates = { kpis: false, heatmap: false, tracking: true };
+    
+    function toggleOverlay(type) {
+      overlayStates[type] = !overlayStates[type];
+      const btn = document.getElementById('fab-' + type);
+      if (overlayStates[type]) {
+        btn.classList.remove('text-gray-400');
+        btn.classList.add('text-white', 'bg-white/10');
+      } else {
+        btn.classList.add('text-gray-400');
+        btn.classList.remove('text-white', 'bg-white/10');
+      }
+    }
+    
+    function toggleCommandPalette() {
+      const overlay = document.getElementById('command-palette-overlay');
+      overlay.classList.toggle('hidden');
+      if (!overlay.classList.contains('hidden')) {
+        overlay.querySelector('input').focus();
+      }
+    }
+    
+    function hideCommandPalette(event) {
+      if (event.target.id === 'command-palette-overlay') {
+        document.getElementById('command-palette-overlay').classList.add('hidden');
+      }
+    }
+    
+    function showInspector(name) {
+      document.getElementById('inspector').classList.remove('hidden');
+      document.getElementById('inspector-name').value = name;
+    }
+    
+    function hideInspector() {
+      document.getElementById('inspector').classList.add('hidden');
+    }
+    
+    // Keyboard shortcuts
+    document.addEventListener('keydown', (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+        e.preventDefault();
+        toggleCommandPalette();
+      }
+      if (e.key === 'Escape') {
+        document.getElementById('command-palette-overlay').classList.add('hidden');
+        hideInspector();
+      }
+    });
+  </script>
+</body>
+</html>

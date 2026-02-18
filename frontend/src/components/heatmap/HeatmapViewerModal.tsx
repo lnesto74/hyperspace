@@ -47,18 +47,46 @@ function getZoneBounds(vertices: Vector2[]): { minX: number; maxX: number; minZ:
   }
 }
 
+// Vibrant heatmap colors using HSL interpolation for better contrast
+// Cool (blue/purple) -> Warm (yellow/orange) -> Hot (red/magenta)
 function getHeatColor(value: number, max: number): THREE.Color {
-  if (max === 0) return new THREE.Color(0x4c1d95)
-  const t = Math.min(value / max, 1)
-  if (t < 0.33) {
-    const ratio = t / 0.33
-    return new THREE.Color().setRGB(0.3 - ratio * 0.1, 0.1 + ratio * 0.3, 0.6 + ratio * 0.3)
-  } else if (t < 0.66) {
-    const ratio = (t - 0.33) / 0.33
-    return new THREE.Color().setRGB(0.2 + ratio * 0.6, 0.4 - ratio * 0.2, 0.9 - ratio * 0.3)
+  if (max === 0) return new THREE.Color(0x1e3a5f) // dark blue for zero
+  
+  // Apply power curve to spread out low values (makes differences more visible)
+  const linearT = Math.min(value / max, 1)
+  const t = Math.pow(linearT, 0.6) // gamma correction - spreads values, emphasizes differences
+  
+  // HSL-based gradient: Blue (240°) -> Cyan (180°) -> Green (120°) -> Yellow (60°) -> Orange (30°) -> Red (0°)
+  // This creates a classic "thermal" heatmap look
+  let h: number, s: number, l: number
+  
+  if (t < 0.25) {
+    // Blue to Cyan (cool zone)
+    const ratio = t / 0.25
+    h = 240 - ratio * 60 // 240 -> 180
+    s = 0.7 + ratio * 0.2 // 70% -> 90%
+    l = 0.35 + ratio * 0.15 // 35% -> 50%
+  } else if (t < 0.5) {
+    // Cyan to Green
+    const ratio = (t - 0.25) / 0.25
+    h = 180 - ratio * 60 // 180 -> 120
+    s = 0.9
+    l = 0.5 + ratio * 0.05 // 50% -> 55%
+  } else if (t < 0.75) {
+    // Green to Yellow/Orange (warm zone)
+    const ratio = (t - 0.5) / 0.25
+    h = 120 - ratio * 80 // 120 -> 40
+    s = 0.9 + ratio * 0.1 // 90% -> 100%
+    l = 0.55 - ratio * 0.05 // 55% -> 50%
+  } else {
+    // Yellow/Orange to Red/Magenta (hot zone)
+    const ratio = (t - 0.75) / 0.25
+    h = 40 - ratio * 40 // 40 -> 0
+    s = 1.0
+    l = 0.5 + ratio * 0.1 // 50% -> 60% (brighter for hotspots)
   }
-  const ratio = (t - 0.66) / 0.34
-  return new THREE.Color().setRGB(0.8 + ratio * 0.2, 0.2 - ratio * 0.1, 0.6 - ratio * 0.4)
+  
+  return new THREE.Color().setHSL(h / 360, s, l)
 }
 
 export default function HeatmapViewerModal({ isOpen, onClose }: HeatmapViewerModalProps) {
@@ -265,15 +293,34 @@ export default function HeatmapViewerModal({ isOpen, onClose }: HeatmapViewerMod
 
     if (filteredTiles.length === 0) return
 
-    const { tileSize, maxVisits, maxDwell } = heatmapData
+    const { tileSize } = heatmapData
     const ELEVATION = 0.5 // Elevated plane for heatmap
+
+    // Use 95th percentile for normalization to handle outliers
+    // This prevents a single hot tile from flattening all other colors
+    const getPercentile = (arr: number[], p: number) => {
+      const sorted = [...arr].sort((a, b) => a - b)
+      const idx = Math.ceil((p / 100) * sorted.length) - 1
+      return sorted[Math.max(0, idx)] || 1
+    }
+    
+    const visitValues = filteredTiles.map(t => t.visits).filter(v => v > 0)
+    const dwellValues = filteredTiles.map(t => t.dwellSec).filter(v => v > 0)
+    
+    // Use 95th percentile for color (spreads colors better) but keep some headroom
+    const p95Visits = visitValues.length > 0 ? getPercentile(visitValues, 95) : 1
+    const p95Dwell = dwellValues.length > 0 ? getPercentile(dwellValues, 95) : 1
+    
+    // For max, use actual max but cap at 2x the 95th percentile to avoid extreme outliers
+    const maxVisitsNorm = Math.min(heatmapData.maxVisits, p95Visits * 2) || 1
+    const maxDwellNorm = Math.min(heatmapData.maxDwell, p95Dwell * 2) || 1
 
     filteredTiles.forEach(tile => {
       const heightValue = tile[heightKpi]
       const colorValue = tile[colorKpi]
-      const maxH = heightKpi === 'visits' ? maxVisits : maxDwell
-      const maxC = colorKpi === 'visits' ? maxVisits : maxDwell
-      const normHeight = maxH > 0 ? heightValue / maxH : 0
+      const maxH = heightKpi === 'visits' ? maxVisitsNorm : maxDwellNorm
+      const maxC = colorKpi === 'visits' ? maxVisitsNorm : maxDwellNorm
+      const normHeight = maxH > 0 ? Math.min(heightValue / maxH, 1.5) : 0 // Allow slight overflow for outliers
       const height = 0.05 + normHeight * 1.5
       const color = getHeatColor(colorValue, maxC)
 
@@ -481,7 +528,7 @@ export default function HeatmapViewerModal({ isOpen, onClose }: HeatmapViewerMod
             <div className="text-xs text-gray-400 mb-2">Intensity</div>
             <div className="flex items-center gap-2">
               <span className="text-[10px] text-gray-500">Low</span>
-              <div className="flex-1 h-2 rounded-full bg-gradient-to-r from-purple-900 via-blue-600 via-fuchsia-600 to-red-600" />
+              <div className="flex-1 h-2 rounded-full" style={{ background: 'linear-gradient(to right, #1e3a5f, #00bcd4, #4caf50, #ffeb3b, #ff9800, #f44336)' }} />
               <span className="text-[10px] text-gray-500">High</span>
             </div>
           </div>

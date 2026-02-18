@@ -1,9 +1,10 @@
 import { useState, useEffect } from 'react'
-import { Save, Download, Upload, Plus, RefreshCw, FolderOpen, Trash2, FileUp, Loader2 } from 'lucide-react'
+import { Save, Download, Upload, Plus, RefreshCw, FolderOpen, Trash2, FileUp, Loader2, Settings } from 'lucide-react'
 import { useVenue } from '../../context/VenueContext'
 import { useLidar } from '../../context/LidarContext'
 import { useToast } from '../../context/ToastContext'
 import { LidarPlacement } from '../../types'
+import VenueSettingsPanel from './VenueSettingsPanel'
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3001'
 
@@ -21,6 +22,7 @@ export default function VenuePanel() {
   const { addToast } = useToast()
   const [showNewVenue, setShowNewVenue] = useState(false)
   const [showDwgImport, setShowDwgImport] = useState(false)
+  const [showVenueSettings, setShowVenueSettings] = useState(false)
   const [dwgLayouts, setDwgLayouts] = useState<DwgLayoutOption[]>([])
   const [selectedDwgLayout, setSelectedDwgLayout] = useState<string>('')
   const [dwgVenueName, setDwgVenueName] = useState('DWG Venue')
@@ -326,7 +328,16 @@ export default function VenuePanel() {
 
       {/* Venue Info */}
       <div className="bg-card-bg border border-border-dark rounded-lg p-4">
-        <label className="block text-xs text-gray-400 mb-1">Venue Name</label>
+        <div className="flex items-center justify-between mb-1">
+          <label className="block text-xs text-gray-400">Venue Name</label>
+          <button
+            onClick={() => setShowVenueSettings(true)}
+            className="p-1.5 text-gray-400 hover:text-blue-400 hover:bg-blue-400/10 rounded transition-colors"
+            title="Venue Settings (Capacity, Thresholds)"
+          >
+            <Settings className="w-4 h-4" />
+          </button>
+        </div>
         <input
           type="text"
           value={venue.name}
@@ -334,6 +345,14 @@ export default function VenuePanel() {
           className="w-full bg-panel-bg border border-border-dark rounded px-3 py-2 text-sm text-white focus:border-highlight focus:outline-none"
         />
       </div>
+
+      {/* Venue Settings Panel */}
+      <VenueSettingsPanel
+        venueId={venue.id}
+        venueName={venue.name}
+        isOpen={showVenueSettings}
+        onClose={() => setShowVenueSettings(false)}
+      />
 
       {/* Dimensions */}
       <div className="bg-card-bg border border-border-dark rounded-lg p-4 space-y-3">

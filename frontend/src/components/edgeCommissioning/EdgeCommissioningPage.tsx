@@ -1,12 +1,13 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import { 
   Server, Radio, Wifi, WifiOff, RefreshCw, Search, Upload, 
-  Check, X, AlertCircle, Clock, Link2, Unlink, Download, Wand2, Camera, Pencil
+  Check, X, AlertCircle, Clock, Link2, Unlink, Download, Wand2, Camera, Pencil, Package, Maximize2, StopCircle, Terminal, ChevronDown, ChevronUp
 } from 'lucide-react'
 import { useEdgeCommissioning, EdgeDevice, EdgeLidar, EdgePlacement, EdgePairing, RoiBounds, DwgLayout, DwgFixture } from '../../context/EdgeCommissioningContext'
 import { useVenue } from '../../context/VenueContext'
 import LidarCommissioningWizard from './LidarCommissioningWizard'
 import PointCloudViewer from './PointCloudViewer'
+import ProviderSelectionPanel from './ProviderSelectionPanel'
 
 export default function EdgeCommissioningPage({ onClose }: { onClose: () => void }) {
   const { venue } = useVenue()
@@ -39,6 +40,15 @@ export default function EdgeCommissioningPage({ onClose }: { onClose: () => void
     getPairingForPlacement,
     getMergedLidars,
     updateEdgeName,
+    // HER
+    herEnabled,
+    setHerEnabled,
+    selectedProviderId,
+    selectProvider,
+    deployHer,
+    stopHer,
+    loadProviders,
+    getSelectedProvider,
   } = useEdgeCommissioning()
 
   const [draggedLidar, setDraggedLidar] = useState<EdgeLidar | null>(null)
@@ -48,6 +58,15 @@ export default function EdgeCommissioningPage({ onClose }: { onClose: () => void
   const [editingEdge, setEditingEdge] = useState<EdgeDevice | null>(null)
   const [editName, setEditName] = useState('')
   const [hoveredPlacementIndex, setHoveredPlacementIndex] = useState<number | null>(null)
+  const [showWireframeModal, setShowWireframeModal] = useState(false)
+  const [middlePanelTab, setMiddlePanelTab] = useState<'lidar' | 'algorithm'>('lidar')
+  const [herDeployLogs, setHerDeployLogs] = useState<string[]>([])
+  const [showDeployDebug, setShowDeployDebug] = useState(false)
+  const debugLogRef = useRef<HTMLDivElement>(null)
+  const [mqttBrokerUrl, setMqttBrokerUrl] = useState(() => {
+    // Try to load from localStorage, default to empty
+    return localStorage.getItem('herMqttBrokerUrl') || ''
+  })
 
   // Load data when venue changes
   useEffect(() => {
@@ -113,12 +132,68 @@ export default function EdgeCommissioningPage({ onClose }: { onClose: () => void
     setDraggedLidar(null)
   }
 
-  const handleDeploy = async () => {
+  // Load providers on mount
+  useEffect(() => {
+    loadProviders()
+  }, [loadProviders])
+
+  // Deploy simulator config (existing behavior)
+  const handleDeploySimulator = async () => {
     if (!selectedEdgeId || !venue?.id) return
     await deployToEdge(selectedEdgeId, venue.id)
     // Refresh edge status after deploy
     await fetchEdgeStatus(selectedEdgeId)
   }
+
+  // Deploy HER with provider
+  const handleDeployHer = async () => {
+    if (!selectedEdgeId || !venue?.id || !selectedProviderId) return
+    
+    // Clear previous logs and show debug panel
+    setHerDeployLogs([])
+    setShowDeployDebug(true)
+    
+    const addLog = (msg: string) => {
+      const timestamp = new Date().toLocaleTimeString()
+      setHerDeployLogs(prev => [...prev, `[${timestamp}] ${msg}`])
+    }
+    
+    addLog('Starting HER deployment...')
+    addLog(`Provider: ${selectedProvider?.name} v${selectedProvider?.version}`)
+    addLog(`Edge: ${selectedEdge?.hostname}`)
+    addLog(`Docker Image: ${selectedProvider?.dockerImage}`)
+    addLog(`MQTT Broker: ${mqttBrokerUrl || '(default localhost)'}`)
+    addLog('Sending deploy request to backend...')
+    
+    const result = await deployHer(selectedEdgeId, venue.id, selectedProviderId, mqttBrokerUrl || undefined)
+    
+    if (result) {
+      addLog('✅ Deploy request sent successfully')
+      addLog(`Deployment ID: ${result.deploymentId}`)
+      if (result.herResponse) {
+        addLog(`Container ID: ${result.herResponse.moduleStatus?.containerId?.substring(0, 12) || 'N/A'}`)
+        addLog(`Image Pulled: ${result.herResponse.moduleStatus?.imagePulled ? 'Yes' : 'No'}`)
+        addLog(`Container Running: ${result.herResponse.moduleStatus?.containerRunning ? 'Yes' : 'No'}`)
+      }
+      addLog('✅ HER deployment complete!')
+    } else {
+      addLog('❌ Deploy failed - check error above')
+    }
+    
+    // Refresh edge status after deploy
+    await fetchEdgeStatus(selectedEdgeId)
+  }
+
+  // Stop HER and return to simulator
+  const handleStopHer = async () => {
+    if (!selectedEdgeId) return
+    await stopHer(selectedEdgeId)
+    // Refresh edge status after stop
+    await fetchEdgeStatus(selectedEdgeId)
+  }
+
+  const selectedProvider = getSelectedProvider()
+  const canDeployHer = canDeploy && herEnabled && selectedProviderId
 
   const handleExportConfig = async () => {
     if (!venue?.id) return
@@ -204,21 +279,97 @@ export default function EdgeCommissioningPage({ onClose }: { onClose: () => void
             </button>
           )}
           {selectedEdge && (
-            <button
-              onClick={handleDeploy}
-              disabled={!canDeploy}
-              className={`flex items-center gap-2 px-4 py-1.5 rounded text-sm font-medium transition-colors ${
-                canDeploy
-                  ? 'bg-green-600 hover:bg-green-700 text-white'
-                  : 'bg-gray-700 text-gray-500 cursor-not-allowed'
-              }`}
-            >
-              <Upload className="w-4 h-4" />
-              {isDeploying ? 'Deploying...' : `Deploy to ${selectedEdge.hostname}`}
-            </button>
+            <div className="flex items-center gap-2">
+              {/* Simulator Deploy */}
+              <button
+                onClick={handleDeploySimulator}
+                disabled={!canDeploy || isDeploying}
+                className={`flex items-center gap-2 px-3 py-1.5 rounded text-sm font-medium transition-colors ${
+                  canDeploy && !herEnabled
+                    ? 'bg-green-600 hover:bg-green-700 text-white'
+                    : 'bg-gray-700 hover:bg-gray-600 text-gray-300'
+                } disabled:opacity-50 disabled:cursor-not-allowed`}
+                title="Deploy simulator configuration"
+              >
+                <Upload className="w-4 h-4" />
+                {isDeploying && !herEnabled ? 'Deploying...' : 'Deploy Simulator'}
+              </button>
+              
+              {/* HER Deploy */}
+              {herEnabled && selectedProviderId && (
+                <button
+                  onClick={handleDeployHer}
+                  disabled={!canDeployHer || isDeploying}
+                  className={`flex items-center gap-2 px-3 py-1.5 rounded text-sm font-medium transition-colors ${
+                    canDeployHer
+                      ? 'bg-purple-600 hover:bg-purple-700 text-white'
+                      : 'bg-gray-700 text-gray-500 cursor-not-allowed'
+                  }`}
+                  title={`Deploy HER with ${selectedProvider?.name || 'provider'}`}
+                >
+                  <Package className="w-4 h-4" />
+                  {isDeploying && herEnabled ? 'Deploying...' : `Deploy HER`}
+                </button>
+              )}
+              
+              {/* Stop HER - Return to Simulator */}
+              {herEnabled && (
+                <button
+                  onClick={handleStopHer}
+                  disabled={!selectedEdgeId || isDeploying}
+                  className="flex items-center gap-2 px-3 py-1.5 rounded text-sm font-medium transition-colors bg-red-600 hover:bg-red-700 text-white disabled:bg-gray-700 disabled:text-gray-500 disabled:cursor-not-allowed"
+                  title="Stop HER and return to simulator mode"
+                >
+                  <StopCircle className="w-4 h-4" />
+                  Stop HER
+                </button>
+              )}
+            </div>
           )}
         </div>
       </div>
+
+      {/* HER Deploy Debug Panel */}
+      {showDeployDebug && (
+        <div className="border-b border-gray-700 bg-gray-950">
+          <button
+            onClick={() => setShowDeployDebug(!showDeployDebug)}
+            className="w-full px-4 py-2 flex items-center justify-between text-sm hover:bg-gray-800"
+          >
+            <div className="flex items-center gap-2 text-purple-400">
+              <Terminal className="w-4 h-4" />
+              <span className="font-medium">HER Deploy Log</span>
+              {isDeploying && <RefreshCw className="w-3 h-3 animate-spin text-yellow-400" />}
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-gray-500">{herDeployLogs.length} entries</span>
+              {showDeployDebug ? <ChevronUp className="w-4 h-4 text-gray-400" /> : <ChevronDown className="w-4 h-4 text-gray-400" />}
+            </div>
+          </button>
+          <div 
+            ref={debugLogRef}
+            className="max-h-48 overflow-y-auto px-4 pb-3 font-mono text-xs"
+          >
+            {herDeployLogs.length === 0 ? (
+              <div className="text-gray-500 py-2">Waiting for deployment...</div>
+            ) : (
+              herDeployLogs.map((log, i) => (
+                <div 
+                  key={i} 
+                  className={`py-0.5 ${
+                    log.includes('✅') ? 'text-green-400' : 
+                    log.includes('❌') ? 'text-red-400' : 
+                    log.includes('Docker Image:') ? 'text-cyan-400' :
+                    'text-gray-300'
+                  }`}
+                >
+                  {log}
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      )}
 
       <div className="flex-1 flex overflow-hidden">
         {/* Left Panel - Edge Devices */}
@@ -258,67 +409,168 @@ export default function EdgeCommissioningPage({ onClose }: { onClose: () => void
           </div>
         </div>
 
-        {/* Middle Panel - LiDAR Inventory */}
+        {/* Middle Panel - LiDAR Inventory / Algorithm Provider (Tabbed) */}
         <div className="w-80 border-r border-gray-700 flex flex-col bg-gray-850">
-          <div className="p-3 border-b border-gray-700 flex items-center justify-between">
-            <span className="text-sm font-medium text-white">
-              {selectedEdge ? `LiDARs on ${selectedEdge.hostname}` : 'Select an Edge'}
-            </span>
-            {selectedEdge && (
-              <div className="flex items-center gap-1">
-                <button
-                  onClick={() => setShowCommissioningWizard(true)}
-                  disabled={!selectedEdge.online || placements.length === 0}
-                  className="p-1.5 hover:bg-gray-700 rounded disabled:opacity-50"
-                  title="Commission LiDARs"
-                >
-                  <Wand2 className="w-4 h-4 text-amber-400" />
-                </button>
-                <button
-                  onClick={() => scanEdgeLidars(selectedEdge.edgeId)}
-                  disabled={isScanningLidars || !selectedEdge.online}
-                  className="p-1.5 hover:bg-gray-700 rounded disabled:opacity-50"
-                  title="Scan LAN for LiDARs"
-                >
-                  <Search className={`w-4 h-4 text-gray-400 ${isScanningLidars ? 'animate-pulse' : ''}`} />
-                </button>
-              </div>
-            )}
+          {/* Tabs */}
+          <div className="flex border-b border-gray-700">
+            <button
+              onClick={() => setMiddlePanelTab('lidar')}
+              className={`flex-1 py-2.5 px-3 text-sm font-medium flex items-center justify-center gap-2 transition-colors ${
+                middlePanelTab === 'lidar'
+                  ? 'text-white border-b-2 border-blue-500 bg-gray-800'
+                  : 'text-gray-400 hover:text-white hover:bg-gray-800'
+              }`}
+            >
+              <Radio className="w-4 h-4" />
+              LiDARs
+              {mergedLidars.length > 0 && (
+                <span className={`text-xs px-1.5 py-0.5 rounded-full ${
+                  middlePanelTab === 'lidar' ? 'bg-blue-600' : 'bg-gray-600'
+                }`}>
+                  {mergedLidars.length}
+                </span>
+              )}
+            </button>
+            <button
+              onClick={() => setMiddlePanelTab('algorithm')}
+              className={`flex-1 py-2.5 px-3 text-sm font-medium flex items-center justify-center gap-2 transition-colors ${
+                middlePanelTab === 'algorithm'
+                  ? 'text-white border-b-2 border-purple-500 bg-gray-800'
+                  : 'text-gray-400 hover:text-white hover:bg-gray-800'
+              }`}
+            >
+              <Package className="w-4 h-4" />
+              Algorithm
+              {herEnabled && (
+                <span className="w-2 h-2 bg-purple-500 rounded-full" />
+              )}
+            </button>
           </div>
 
-          <div className="flex-1 overflow-auto p-2 space-y-2">
-            {!selectedEdge ? (
-              <div className="text-center text-gray-500 py-8 text-sm">
-                <Radio className="w-8 h-8 mx-auto mb-2 opacity-50" />
-                <p>Select an edge device</p>
+          {/* Tab Content */}
+          {middlePanelTab === 'lidar' ? (
+            <>
+              {/* LiDAR Actions Bar */}
+              {selectedEdge && (
+                <div className="p-2 border-b border-gray-700 flex items-center justify-between bg-gray-800/50">
+                  <span className="text-xs text-gray-400">
+                    {selectedEdge.hostname}
+                  </span>
+                  <div className="flex items-center gap-1">
+                    <button
+                      onClick={() => setShowCommissioningWizard(true)}
+                      disabled={!selectedEdge.online || placements.length === 0}
+                      className="p-1.5 hover:bg-gray-700 rounded disabled:opacity-50"
+                      title="Commission LiDARs"
+                    >
+                      <Wand2 className="w-4 h-4 text-amber-400" />
+                    </button>
+                    <button
+                      onClick={() => scanEdgeLidars(selectedEdge.edgeId)}
+                      disabled={isScanningLidars || !selectedEdge.online}
+                      className="p-1.5 hover:bg-gray-700 rounded disabled:opacity-50"
+                      title="Scan LAN for LiDARs"
+                    >
+                      <Search className={`w-4 h-4 text-gray-400 ${isScanningLidars ? 'animate-pulse' : ''}`} />
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* LiDAR List */}
+              <div className="flex-1 overflow-auto p-2 space-y-2">
+                {!selectedEdge ? (
+                  <div className="text-center text-gray-500 py-8 text-sm">
+                    <Radio className="w-8 h-8 mx-auto mb-2 opacity-50" />
+                    <p>Select an edge device</p>
+                  </div>
+                ) : isLoadingInventory ? (
+                  <div className="text-center text-gray-500 py-8">
+                    <RefreshCw className="w-6 h-6 mx-auto mb-2 animate-spin" />
+                    <p className="text-sm">Loading inventory...</p>
+                  </div>
+                ) : mergedLidars.length === 0 ? (
+                  <div className="text-center text-gray-500 py-8 text-sm">
+                    <Radio className="w-8 h-8 mx-auto mb-2 opacity-50" />
+                    <p>No LiDARs discovered</p>
+                    <p className="text-xs mt-1">Click search icon to scan LAN</p>
+                  </div>
+                ) : (
+                  mergedLidars.map(lidar => (
+                    <LidarCard
+                      key={lidar.lidarId}
+                      lidar={lidar}
+                      isPaired={pairings.some(p => p.lidarId === lidar.lidarId || p.lidarIp === lidar.ip)}
+                      onDragStart={() => handleDragStart(lidar)}
+                      onDragEnd={handleDragEnd}
+                      onViewPointCloud={() => selectedEdge && setPointCloudLidar({ 
+                        ip: lidar.ip, 
+                        tailscaleIp: selectedEdge.tailscaleIp 
+                      })}
+                    />
+                  ))
+                )}
               </div>
-            ) : isLoadingInventory ? (
-              <div className="text-center text-gray-500 py-8">
-                <RefreshCw className="w-6 h-6 mx-auto mb-2 animate-spin" />
-                <p className="text-sm">Loading inventory...</p>
-              </div>
-            ) : mergedLidars.length === 0 ? (
-              <div className="text-center text-gray-500 py-8 text-sm">
-                <Radio className="w-8 h-8 mx-auto mb-2 opacity-50" />
-                <p>No LiDARs discovered</p>
-                <p className="text-xs mt-1">Click search icon to scan LAN</p>
-              </div>
-            ) : (
-              mergedLidars.map(lidar => (
-                <LidarCard
-                  key={lidar.lidarId}
-                  lidar={lidar}
-                  isPaired={pairings.some(p => p.lidarId === lidar.lidarId || p.lidarIp === lidar.ip)}
-                  onDragStart={() => handleDragStart(lidar)}
-                  onDragEnd={handleDragEnd}
-                  onViewPointCloud={() => selectedEdge && setPointCloudLidar({ 
-                    ip: lidar.ip, 
-                    tailscaleIp: selectedEdge.tailscaleIp 
-                  })}
-                />
-              ))
-            )}
-          </div>
+            </>
+          ) : (
+            /* Algorithm Tab Content - Just the HER toggle */
+            <div className="flex-1 overflow-auto p-3">
+              {!selectedEdge ? (
+                <div className="text-center text-gray-500 py-8 text-sm">
+                  <Package className="w-8 h-8 mx-auto mb-2 opacity-50" />
+                  <p>Select an edge device first</p>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  <div className="text-xs text-gray-400 mb-3">
+                    Enable HER mode for production deployment with real LiDAR data
+                  </div>
+                  
+                  {/* HER Enable Toggle */}
+                  <label className={`flex items-center gap-3 p-4 rounded-lg border cursor-pointer transition-colors ${
+                    herEnabled 
+                      ? 'bg-purple-900/30 border-purple-500/50' 
+                      : 'bg-gray-800 border-gray-700 hover:border-gray-600'
+                  }`}>
+                    <input
+                      type="checkbox"
+                      checked={herEnabled}
+                      onChange={(e) => {
+                        setHerEnabled(e.target.checked)
+                        if (!e.target.checked) {
+                          selectProvider(null)
+                        }
+                      }}
+                      disabled={!canDeploy}
+                      className="w-5 h-5 rounded border-gray-600 bg-gray-700 text-purple-500 focus:ring-purple-500 focus:ring-offset-0"
+                    />
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <Package className="w-5 h-5 text-purple-400" />
+                        <span className="font-medium text-white">HER Mode</span>
+                      </div>
+                      <p className="text-xs text-gray-400 mt-1">
+                        Production deployment with algorithm provider
+                      </p>
+                    </div>
+                  </label>
+                  
+                  {herEnabled && (
+                    <div className="text-xs text-green-400 flex items-center gap-2 p-2 bg-green-900/20 rounded">
+                      <Check className="w-4 h-4" />
+                      <span>Select provider in right panel →</span>
+                    </div>
+                  )}
+                  
+                  {!herEnabled && (
+                    <div className="text-xs text-gray-500 p-2">
+                      When disabled, deploy will use the built-in simulator for testing.
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Edge Status */}
           {selectedEdge && edgeStatus && (
@@ -348,77 +600,173 @@ export default function EdgeCommissioningPage({ onClose }: { onClose: () => void
           )}
         </div>
 
-        {/* Right Panel - Placements */}
+        {/* Right Panel - Content based on middle panel tab */}
         <div className="flex-1 flex flex-col bg-gray-900">
-          <div className="p-3 border-b border-gray-700 flex items-center justify-between">
-            <span className="text-sm font-medium text-white">
-              Venue Placements ({placements.length})
-            </span>
-            <button
-              onClick={() => setShowDeployHistory(!showDeployHistory)}
-              className={`text-xs px-2 py-1 rounded ${showDeployHistory ? 'bg-blue-600 text-white' : 'bg-gray-700 text-gray-300 hover:bg-gray-600'}`}
-            >
-              <Clock className="w-3 h-3 inline mr-1" />
-              History
-            </button>
-          </div>
+          {middlePanelTab === 'lidar' ? (
+            <>
+              {/* LiDAR Tab -> Show Placements */}
+              <div className="p-3 border-b border-gray-700 flex items-center justify-between">
+                <span className="text-sm font-medium text-white">
+                  Venue Placements ({placements.length})
+                </span>
+                <button
+                  onClick={() => setShowDeployHistory(!showDeployHistory)}
+                  className={`text-xs px-2 py-1 rounded ${showDeployHistory ? 'bg-blue-600 text-white' : 'bg-gray-700 text-gray-300 hover:bg-gray-600'}`}
+                >
+                  <Clock className="w-3 h-3 inline mr-1" />
+                  History
+                </button>
+              </div>
 
-          {showDeployHistory ? (
-            <DeployHistoryPanel history={deployHistory} onClose={() => setShowDeployHistory(false)} />
-          ) : (
-            <div className="flex-1 overflow-auto p-3">
-              {isLoadingPlacements ? (
-                <div className="text-center text-gray-500 py-8">
-                  <RefreshCw className="w-6 h-6 mx-auto mb-2 animate-spin" />
-                  <p className="text-sm">Loading placements...</p>
-                </div>
-              ) : placements.length === 0 ? (
-                <div className="text-center text-gray-500 py-8">
-                  <Radio className="w-8 h-8 mx-auto mb-2 opacity-50" />
-                  <p className="text-sm">No placements in this venue</p>
-                  <p className="text-xs mt-1">Add placements in LiDAR Planner first</p>
-                </div>
+              {showDeployHistory ? (
+                <DeployHistoryPanel history={deployHistory} onClose={() => setShowDeployHistory(false)} />
               ) : (
-                <div className="flex flex-col h-full">
-                  {/* ROI Wireframe Visualization - Sticky */}
-                  {roiBounds && (
-                    <div className="sticky top-0 z-10 bg-gray-900 pb-3">
-                      <RoiWireframe 
-                        placements={placements} 
-                        roiBounds={roiBounds}
-                        pairings={pairings}
-                        mergedLidars={mergedLidars}
-                        hoveredIndex={hoveredPlacementIndex}
-                        dwgLayout={dwgLayout}
+                <div className="flex-1 overflow-auto p-3">
+                  {isLoadingPlacements ? (
+                    <div className="text-center text-gray-500 py-8">
+                      <RefreshCw className="w-6 h-6 mx-auto mb-2 animate-spin" />
+                      <p className="text-sm">Loading placements...</p>
+                    </div>
+                  ) : placements.length === 0 ? (
+                    <div className="text-center text-gray-500 py-8">
+                      <Radio className="w-8 h-8 mx-auto mb-2 opacity-50" />
+                      <p className="text-sm">No placements in this venue</p>
+                      <p className="text-xs mt-1">Add placements in LiDAR Planner first</p>
+                    </div>
+                  ) : (
+                    <div className="flex flex-col h-full">
+                      {/* ROI Wireframe Visualization - Compact with expand button */}
+                      {roiBounds && (
+                        <div className="bg-gray-800 rounded mb-3 p-2">
+                          <div className="flex items-center justify-between mb-1">
+                            <span className="text-xs text-gray-400">ROI Wireframe</span>
+                            <button
+                              onClick={() => setShowWireframeModal(true)}
+                              className="p-1 hover:bg-gray-700 rounded text-gray-400 hover:text-white"
+                              title="Expand wireframe view"
+                            >
+                              <Maximize2 className="w-3 h-3" />
+                            </button>
+                          </div>
+                          <div className="h-[240px] overflow-hidden">
+                            <RoiWireframe 
+                              placements={placements} 
+                              roiBounds={roiBounds}
+                              pairings={pairings}
+                              mergedLidars={mergedLidars}
+                              hoveredIndex={hoveredPlacementIndex}
+                              dwgLayout={dwgLayout}
+                              compact={true}
+                            />
+                          </div>
+                        </div>
+                      )}
+                      
+                      {/* Placement Cards - Scrollable */}
+                      <div className="flex-1 overflow-y-auto pr-1">
+                        <div className="grid grid-cols-2 gap-3">
+                          {placements.map((placement, index) => (
+                            <PlacementCard
+                              key={placement.id}
+                              placement={placement}
+                              pairing={getPairingForPlacement(placement.id)}
+                              isDragOver={draggedLidar !== null}
+                              onDrop={() => handleDrop(placement)}
+                              onUnpair={() => venue?.id && unpairPlacement(venue.id, placement.id)}
+                              roiBounds={roiBounds}
+                              mergedLidars={mergedLidars}
+                              index={index + 1}
+                              onHover={(hovering) => setHoveredPlacementIndex(hovering ? index + 1 : null)}
+                            />
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </>
+          ) : (
+            <>
+              {/* Algorithm Tab -> Show Provider Selection */}
+              <div className="p-3 border-b border-gray-700 flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Package className="w-4 h-4 text-purple-400" />
+                  <span className="text-sm font-medium text-white">Algorithm Provider Configuration</span>
+                </div>
+                <button
+                  onClick={() => setShowDeployHistory(!showDeployHistory)}
+                  className={`text-xs px-2 py-1 rounded ${showDeployHistory ? 'bg-blue-600 text-white' : 'bg-gray-700 text-gray-300 hover:bg-gray-600'}`}
+                >
+                  <Clock className="w-3 h-3 inline mr-1" />
+                  History
+                </button>
+              </div>
+
+              {showDeployHistory ? (
+                <DeployHistoryPanel history={deployHistory} onClose={() => setShowDeployHistory(false)} />
+              ) : (
+                <div className="flex-1 overflow-auto p-4">
+                  {!selectedEdge ? (
+                    <div className="text-center text-gray-500 py-8">
+                      <Package className="w-8 h-8 mx-auto mb-2 opacity-50" />
+                      <p className="text-sm">Select an edge device first</p>
+                    </div>
+                  ) : !herEnabled ? (
+                    <div className="text-center text-gray-500 py-8">
+                      <Package className="w-8 h-8 mx-auto mb-2 opacity-50" />
+                      <p className="text-sm">Enable HER Mode in the Algorithm tab</p>
+                      <p className="text-xs mt-1">← Click the checkbox to enable</p>
+                    </div>
+                  ) : (
+                    <div className="space-y-4">
+                      <div className="flex items-center gap-2 text-green-400 text-sm bg-green-900/20 rounded-lg p-3">
+                        <Check className="w-4 h-4" />
+                        <span>HER Mode Enabled - Select a provider below</span>
+                      </div>
+                      <ProviderSelectionPanel 
+                        disabled={!canDeploy} 
+                        mqttBrokerUrl={mqttBrokerUrl}
+                        onMqttBrokerUrlChange={(url) => {
+                          setMqttBrokerUrl(url)
+                          localStorage.setItem('herMqttBrokerUrl', url)
+                        }}
                       />
                     </div>
                   )}
-                  
-                  {/* Placement Cards - Scrollable */}
-                  <div className="flex-1 overflow-y-auto max-h-[400px] pr-1">
-                    <div className="grid grid-cols-2 gap-3">
-                      {placements.map((placement, index) => (
-                        <PlacementCard
-                          key={placement.id}
-                          placement={placement}
-                          pairing={getPairingForPlacement(placement.id)}
-                          isDragOver={draggedLidar !== null}
-                          onDrop={() => handleDrop(placement)}
-                          onUnpair={() => venue?.id && unpairPlacement(venue.id, placement.id)}
-                          roiBounds={roiBounds}
-                          mergedLidars={mergedLidars}
-                          index={index + 1}
-                          onHover={(hovering) => setHoveredPlacementIndex(hovering ? index + 1 : null)}
-                        />
-                      ))}
-                    </div>
-                  </div>
                 </div>
               )}
-            </div>
+            </>
           )}
         </div>
       </div>
+
+      {/* ROI Wireframe Modal - Expanded View */}
+      {showWireframeModal && roiBounds && (
+        <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50">
+          <div className="bg-gray-800 rounded-lg p-4 w-[800px] max-w-[90vw] border border-gray-700">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-medium text-white">ROI Wireframe - Full View</h3>
+              <button
+                onClick={() => setShowWireframeModal(false)}
+                className="p-1 hover:bg-gray-700 rounded text-gray-400 hover:text-white"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="h-[500px]">
+              <RoiWireframe 
+                placements={placements} 
+                roiBounds={roiBounds}
+                pairings={pairings}
+                mergedLidars={mergedLidars}
+                hoveredIndex={hoveredPlacementIndex}
+                dwgLayout={dwgLayout}
+              />
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Edit Edge Name Modal */}
       {editingEdge && (
@@ -735,6 +1083,7 @@ function RoiWireframe({
   mergedLidars,
   hoveredIndex,
   dwgLayout,
+  compact = false,
 }: {
   placements: EdgePlacement[]
   roiBounds: RoiBounds
@@ -742,6 +1091,7 @@ function RoiWireframe({
   mergedLidars: EdgeLidar[]
   hoveredIndex: number | null
   dwgLayout: DwgLayout | null
+  compact?: boolean
 }) {
   const width = roiBounds.maxX - roiBounds.minX
   const height = roiBounds.maxZ - roiBounds.minZ
@@ -750,16 +1100,100 @@ function RoiWireframe({
   const maxRange = placements.length > 0 ? Math.max(...placements.map(p => p.range)) : 0
   
   // SVG dimensions and scaling - add extra padding for lidar coverage circles
-  const baseWidth = 330
+  const baseWidth = compact ? 200 : 330
   const scale = baseWidth / width
   const circleOverhang = maxRange * scale * 0.9 // How much circles extend beyond ROI
-  const padding = Math.max(60, circleOverhang + 10) // Ensure padding covers full circles
+  const padding = compact ? Math.max(30, circleOverhang + 5) : Math.max(60, circleOverhang + 10)
   const svgWidth = baseWidth + padding * 2
   const svgHeight = (height * scale) + padding * 2
 
   // Transform DWG coordinates to SVG coordinates
   const toSvgX = (x: number) => padding + (x - roiBounds.minX) * scale
   const toSvgY = (z: number) => padding + (z - roiBounds.minZ) * scale
+
+  // In compact mode, render without wrapper div
+  if (compact) {
+    return (
+      <svg 
+        width="100%" 
+        height="100%" 
+        viewBox={`0 0 ${svgWidth} ${svgHeight}`}
+        className="bg-gray-900 rounded"
+        preserveAspectRatio="xMidYMid meet"
+      >
+        {/* ROI boundary */}
+        <rect
+          x={padding}
+          y={padding}
+          width={baseWidth}
+          height={height * scale}
+          fill="none"
+          stroke="#374151"
+          strokeWidth="1"
+          strokeDasharray="4,4"
+        />
+        
+        {/* Placements */}
+        {placements.map((p, i) => {
+          const cx = toSvgX(p.position.x)
+          const cy = toSvgY(p.position.z)
+          const pairing = pairings.find(pr => pr.placementId === p.id)
+          const isPaired = !!pairing
+          const isHovered = hoveredIndex === i + 1
+          
+          // Find the paired LiDAR to check online status
+          const pairedLidar = pairing 
+            ? mergedLidars.find(l => l.lidarId === pairing.lidarId || l.ip === pairing.lidarIp)
+            : null
+          const isOnline = pairedLidar?.reachable ?? false
+          
+          // Color scheme: green=paired+online, amber=paired+offline, blue=unpaired
+          let strokeColor = '#3b82f6' // blue - unpaired
+          let fillColor = 'rgba(59, 130, 246, 0.1)'
+          let textColor = '#9ca3af' // gray
+          
+          if (isPaired && isOnline) {
+            strokeColor = '#22c55e' // green
+            fillColor = 'rgba(34, 197, 94, 0.1)'
+            textColor = '#22c55e'
+          } else if (isPaired && !isOnline) {
+            strokeColor = '#f59e0b' // amber
+            fillColor = 'rgba(245, 158, 11, 0.1)'
+            textColor = '#f59e0b'
+          }
+          
+          return (
+            <g key={p.id}>
+              <circle
+                cx={cx}
+                cy={cy}
+                r={p.range * scale * 0.8}
+                fill={fillColor}
+                stroke={strokeColor}
+                strokeWidth={isHovered ? 2 : 1}
+                opacity={0.6}
+              />
+              <circle
+                cx={cx}
+                cy={cy}
+                r={4}
+                fill={strokeColor}
+              />
+              <text
+                x={cx}
+                y={cy - 8}
+                textAnchor="middle"
+                fill={textColor}
+                fontSize="8"
+              >
+                {i + 1}
+              </text>
+            </g>
+          )
+        })}
+      </svg>
+    )
+  }
 
   return (
     <div className="bg-gray-800 rounded-lg p-3 border border-gray-700">

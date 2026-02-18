@@ -9,7 +9,7 @@ import { useLidar } from '../../context/LidarContext'
 import { useDwg } from '../../context/DwgContext'
 import { useAutoSave } from '../../hooks/useAutoSave'
 
-export type SidebarTab = 'venueDwg' | 'venue' | 'objects' | 'lidars' | 'regions'
+export type SidebarTab = 'floorplan' | 'venueDwg' | 'venue' | 'objects' | 'lidars' | 'regions'
 export type CameraView = 'perspective' | 'top' | 'isometric' | 'front'
 
 export interface LightingSettings {
@@ -46,13 +46,11 @@ const defaultTracking: TrackingSettings = {
 
 interface AppShellProps {
   onOpenDwgImporter?: () => void
-  onOpenLidarPlanner?: () => void
   onOpenEdgeCommissioning?: () => void
-  onOpenDoohAnalytics?: () => void
 }
 
-export default function AppShell({ onOpenDwgImporter, onOpenLidarPlanner, onOpenEdgeCommissioning, onOpenDoohAnalytics }: AppShellProps) {
-  const [activeTab, setActiveTab] = useState<SidebarTab>('venue')
+export default function AppShell({ onOpenDwgImporter, onOpenEdgeCommissioning }: AppShellProps) {
+  const [activeTab, setActiveTab] = useState<SidebarTab>('floorplan')
   const [cameraView, setCameraView] = useState<CameraView>('perspective')
   const [showLightingPopup, setShowLightingPopup] = useState(false)
   const [showTrackingPopup, setShowTrackingPopup] = useState(false)
@@ -95,7 +93,7 @@ export default function AppShell({ onOpenDwgImporter, onOpenLidarPlanner, onOpen
   return (
     <div className="h-screen w-screen flex bg-app-bg overflow-hidden">
       {/* Left Sidebar */}
-      <Sidebar activeTab={activeTab} onTabChange={setActiveTab} onOpenDwgImporter={onOpenDwgImporter} onOpenLidarPlanner={onOpenLidarPlanner} onOpenEdgeCommissioning={onOpenEdgeCommissioning} onOpenDoohAnalytics={onOpenDoohAnalytics} />
+      <Sidebar activeTab={activeTab} onTabChange={setActiveTab} onOpenDwgImporter={onOpenDwgImporter} onOpenEdgeCommissioning={onOpenEdgeCommissioning} />
       
       {/* Main 3D Viewport - flex-1 min-w-0 ensures it shrinks when panels open */}
       <div className="flex-1 min-w-0 relative overflow-hidden">
