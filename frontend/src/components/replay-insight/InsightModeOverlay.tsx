@@ -1,13 +1,13 @@
 /**
  * InsightModeOverlay
  * 
- * Overlay controls shown when the user enters Insight Mode from the panel.
- * Shows episode context, play/pause, step-through, and "Explain this" button.
- * Uses existing setReplayMode/setReplayTracks from TrackingContext.
+ * Minimal top bar shown when the user enters Insight Mode.
+ * Shows episode title, time, and playback controls only.
+ * Step-through and "Explain this" are now in the right panel.
  */
 
-import { useEffect, useState, useCallback } from 'react';
-import { Play, Pause, SkipForward, X, MessageSquare, Eye } from 'lucide-react';
+import { useEffect, useCallback } from 'react';
+import { X } from 'lucide-react';
 import { useReplayInsight } from '../../context/ReplayInsightContext';
 import { useTracking } from '../../context/TrackingContext';
 
@@ -19,8 +19,6 @@ export default function InsightModeOverlay() {
   } = useReplayInsight();
 
   const { setReplayMode, setReplayTracks } = useTracking();
-  const [isPlaying, setIsPlaying] = useState(false);
-  const [currentStep, setCurrentStep] = useState(0);
 
   // Enter/exit replay mode when insight mode changes
   useEffect(() => {
@@ -62,117 +60,39 @@ export default function InsightModeOverlay() {
   }, [isInsightMode, selectedEpisode, setReplayMode, setReplayTracks]);
 
   const handleExit = useCallback(() => {
-    setIsPlaying(false);
-    setCurrentStep(0);
     exitInsightMode();
   }, [exitInsightMode]);
 
   if (!isInsightMode || !selectedEpisode) return null;
 
-  const totalSteps = selectedEpisode.recommended_actions?.length || 1;
-
   return (
-    <>
-      {/* Top bar — episode context */}
-      <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50">
-        <div className="bg-gray-900/95 backdrop-blur-md rounded-xl border border-gray-700 px-5 py-3 shadow-2xl flex items-center gap-4 max-w-xl">
-          {/* Episode indicator */}
-          <div
-            className="w-2.5 h-2.5 rounded-full shrink-0 animate-pulse"
-            style={{ backgroundColor: selectedEpisode.color }}
-          />
+    <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50">
+      <div className="bg-gray-900/95 backdrop-blur-md rounded-xl border border-gray-700 px-4 py-2.5 shadow-2xl flex items-center gap-3">
+        {/* Episode indicator */}
+        <div
+          className="w-2 h-2 rounded-full shrink-0 animate-pulse"
+          style={{ backgroundColor: selectedEpisode.color }}
+        />
 
-          {/* Title + time */}
-          <div className="min-w-0">
-            <div className="text-sm font-medium text-white truncate">
-              {selectedEpisode.title}
-            </div>
-            <div className="text-[10px] text-gray-400">
-              {selectedEpisode.time_label}
-            </div>
+        {/* Title + time */}
+        <div className="min-w-0">
+          <div className="text-sm font-medium text-white truncate max-w-[280px]">
+            {selectedEpisode.title}
           </div>
-
-          {/* Controls */}
-          <div className="flex items-center gap-1 ml-auto shrink-0">
-            <button
-              onClick={() => setIsPlaying(!isPlaying)}
-              className="p-2 text-gray-400 hover:text-white hover:bg-gray-700 rounded-lg transition-colors"
-              title={isPlaying ? 'Pause' : 'Play'}
-            >
-              {isPlaying ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
-            </button>
-            <button
-              onClick={() => setCurrentStep(Math.min(totalSteps - 1, currentStep + 1))}
-              className="p-2 text-gray-400 hover:text-white hover:bg-gray-700 rounded-lg transition-colors"
-              title="Next step"
-            >
-              <SkipForward className="w-4 h-4" />
-            </button>
-            <div className="w-px h-5 bg-gray-700 mx-1" />
-            <button
-              onClick={handleExit}
-              className="p-2 text-gray-400 hover:text-white hover:bg-gray-700 rounded-lg transition-colors"
-              title="Exit Insight Mode"
-            >
-              <X className="w-4 h-4" />
-            </button>
+          <div className="text-[10px] text-gray-400">
+            {selectedEpisode.time_label}
           </div>
         </div>
+
+        {/* Exit button */}
+        <button
+          onClick={handleExit}
+          className="p-1.5 text-gray-400 hover:text-white hover:bg-gray-700 rounded-lg transition-colors ml-2"
+          title="Exit Insight Mode"
+        >
+          <X className="w-4 h-4" />
+        </button>
       </div>
-
-      {/* Bottom left — explanation step */}
-      <div className="fixed bottom-16 left-4 z-50">
-        <div className="bg-gray-900/95 backdrop-blur-md rounded-xl border border-gray-700 p-4 shadow-2xl max-w-sm">
-          <div className="flex items-center gap-2 mb-2">
-            <Eye className="w-3.5 h-3.5 text-gray-400" />
-            <span className="text-[10px] text-gray-400 uppercase tracking-wider">
-              Step {currentStep + 1} of {totalSteps}
-            </span>
-          </div>
-          <p className="text-sm text-gray-200 leading-relaxed">
-            {selectedEpisode.recommended_actions?.[currentStep] || selectedEpisode.business_summary}
-          </p>
-          <div className="mt-3 flex gap-2">
-            <button
-              onClick={() => {
-                // Dispatch narrator2 intent to explain the episode
-                const event = new CustomEvent('narrator2-intent', {
-                  detail: { intent: `explain_episode:${selectedEpisode.episode_id}` },
-                });
-                window.dispatchEvent(event);
-              }}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-gray-300 bg-gray-700 hover:bg-gray-600 rounded-lg transition-colors"
-            >
-              <MessageSquare className="w-3 h-3" />
-              Explain this
-            </button>
-          </div>
-        </div>
-      </div>
-
-      {/* Zone highlight overlay hint */}
-      {selectedEpisode.highlight_zones && selectedEpisode.highlight_zones.length > 0 && (
-        <div className="fixed bottom-16 right-[396px] z-50">
-          <div className="bg-gray-900/90 backdrop-blur-sm rounded-lg border border-gray-700/50 px-3 py-2 shadow-lg">
-            <div className="text-[10px] text-gray-400 uppercase tracking-wider mb-1">Focus zones</div>
-            <div className="flex flex-wrap gap-1">
-              {selectedEpisode.highlight_zones.map((zone) => (
-                <span
-                  key={zone.id}
-                  className="text-[11px] px-2 py-0.5 rounded-full border"
-                  style={{
-                    color: zone.color,
-                    borderColor: zone.color + '40',
-                    backgroundColor: zone.color + '15',
-                  }}
-                >
-                  {zone.name}
-                </span>
-              ))}
-            </div>
-          </div>
-        </div>
-      )}
-    </>
+    </div>
   );
 }

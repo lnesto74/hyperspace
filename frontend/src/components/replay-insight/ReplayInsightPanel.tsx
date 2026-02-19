@@ -6,7 +6,8 @@
  * Does NOT modify any existing panel or drawer.
  */
 
-import { X, Play, ChevronLeft, ChevronRight, Zap, AlertTriangle, Info, CheckCircle } from 'lucide-react';
+import { useState } from 'react';
+import { X, Play, ChevronLeft, ChevronRight, Zap, AlertTriangle, Info, CheckCircle, MessageSquare, MapPin } from 'lucide-react';
 import { useReplayInsight } from '../../context/ReplayInsightContext';
 import EpisodeKPICards from './EpisodeKPICards';
 
@@ -36,6 +37,10 @@ export default function ReplayInsightPanel() {
   const severity = SEVERITY_CONFIG[selectedEpisode.severity] || SEVERITY_CONFIG.low;
   const SeverityIcon = severity.icon;
   const hasPlaylist = activePlaylist.length > 0;
+  
+  // Step-through state for Insight Mode
+  const [currentStep, setCurrentStep] = useState(0);
+  const totalSteps = selectedEpisode.recommended_actions?.length || 1;
 
   return (
     <div className="fixed right-0 top-0 bottom-0 w-[380px] bg-gray-900/98 backdrop-blur-md border-l border-gray-700 z-50 flex flex-col shadow-2xl">
@@ -142,7 +147,76 @@ export default function ReplayInsightPanel() {
             {Math.round(selectedEpisode.confidence * 100)}% confidence
           </span>
         </div>
+
+        {/* Focus Zones (shown during Insight Mode) */}
+        {isInsightMode && selectedEpisode.highlight_zones && selectedEpisode.highlight_zones.length > 0 && (
+          <div className="space-y-1.5 pt-3 border-t border-gray-700/30 mt-3">
+            <div className="flex items-center gap-1.5">
+              <MapPin className="w-3 h-3 text-gray-400" />
+              <h4 className="text-[11px] font-medium text-gray-400 uppercase tracking-wider">
+                Focus zones
+              </h4>
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {selectedEpisode.highlight_zones.map((zone: { id: string; name: string; color: string }) => (
+                <span
+                  key={zone.id}
+                  className="text-[11px] px-2 py-0.5 rounded-full border"
+                  style={{
+                    color: zone.color,
+                    borderColor: zone.color + '40',
+                    backgroundColor: zone.color + '15',
+                  }}
+                >
+                  {zone.name}
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
+
+      {/* Insight Mode: Step-through section */}
+      {isInsightMode && (
+        <div className="px-4 py-3 border-t border-gray-700/50 bg-gray-800/50">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-[10px] text-gray-400 uppercase tracking-wider">
+              Step {currentStep + 1} of {totalSteps}
+            </span>
+            <div className="flex items-center gap-1">
+              <button
+                onClick={() => setCurrentStep(Math.max(0, currentStep - 1))}
+                disabled={currentStep === 0}
+                className="p-1 text-gray-400 hover:text-white disabled:opacity-30 disabled:cursor-not-allowed rounded transition-colors"
+              >
+                <ChevronLeft className="w-3.5 h-3.5" />
+              </button>
+              <button
+                onClick={() => setCurrentStep(Math.min(totalSteps - 1, currentStep + 1))}
+                disabled={currentStep >= totalSteps - 1}
+                className="p-1 text-gray-400 hover:text-white disabled:opacity-30 disabled:cursor-not-allowed rounded transition-colors"
+              >
+                <ChevronRight className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          </div>
+          <p className="text-sm text-gray-200 leading-relaxed mb-3">
+            {selectedEpisode.recommended_actions?.[currentStep] || selectedEpisode.business_summary}
+          </p>
+          <button
+            onClick={() => {
+              const event = new CustomEvent('narrator2-intent', {
+                detail: { intent: `explain_episode:${selectedEpisode.episode_id}` },
+              });
+              window.dispatchEvent(event);
+            }}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-gray-300 bg-gray-700 hover:bg-gray-600 rounded-lg transition-colors"
+          >
+            <MessageSquare className="w-3 h-3" />
+            Explain this
+          </button>
+        </div>
+      )}
 
       {/* Footer — Play Insight button */}
       <div className="px-4 py-3 border-t border-gray-700/50">
