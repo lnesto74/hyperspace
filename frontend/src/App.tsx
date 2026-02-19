@@ -380,30 +380,17 @@ function KPIOverlayToggle() {
 
 function MainApp() {
   const [viewMode, setViewMode] = useState<ViewMode>('main')
-  const { venue } = useVenue()
   const [showLanding, setShowLanding] = useState(true)
-  
-  // Show landing when a new venue is loaded (reset on venue change)
-  useEffect(() => {
-    if (venue?.id) {
-      // Check session preference
-      const dismissed = sessionStorage.getItem(`landing-dismissed-${venue.id}`)
-      setShowLanding(!dismissed)
-    }
-  }, [venue?.id])
   
   const handleDismissLanding = () => {
     setShowLanding(false)
-    if (venue?.id) {
-      sessionStorage.setItem(`landing-dismissed-${venue.id}`, '1')
-    }
   }
   
   return (
     <ViewModeContext.Provider value={{ mode: viewMode, setMode: setViewMode }}>
       <PlanogramProvider>
-        {/* Landing Experience — shown once per session per venue */}
-        {venue && showLanding && viewMode === 'main' && (
+        {/* Landing Experience — entry screen before venue interaction */}
+        {showLanding && viewMode === 'main' && (
           <LandingExperience onDismiss={handleDismissLanding} />
         )}
         {/* DWG Importer View */}

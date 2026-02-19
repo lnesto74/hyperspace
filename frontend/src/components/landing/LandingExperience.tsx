@@ -11,6 +11,8 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { ArrowRight, Zap, TrendingUp, TrendingDown, Clock, SkipForward, AlertTriangle, Users, MapPin } from 'lucide-react';
 import { useVenue } from '../../context/VenueContext';
+import { useLidar } from '../../context/LidarContext';
+import type { LidarPlacement } from '../../types';
 import { useReplayInsight, NarrationPack } from '../../context/ReplayInsightContext';
 import NarrativeTimeline from './NarrativeTimeline';
 import LandingNarrator from './LandingNarrator';
@@ -155,11 +157,45 @@ function EpisodeCard({ episode, index, onClick }: {
   );
 }
 
+// ─── Venue List Item ───
+function VenueListCard({ name, dimensions, onClick, index }: {
+  name: string; dimensions: string; onClick: () => void; index: number;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className="group relative overflow-hidden rounded-xl border border-gray-700/30 hover:border-blue-500/30 transition-all duration-500 hover:scale-[1.02] hover:shadow-xl hover:shadow-blue-500/5 text-left"
+      style={{
+        background: 'linear-gradient(135deg, rgba(59,130,246,0.04), rgba(17,24,39,0.95))',
+        opacity: 0,
+        animation: `landing-card-in 0.6s ${0.12 * index}s cubic-bezier(0.16, 1, 0.3, 1) forwards`,
+      }}
+    >
+      <div className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity duration-500"
+        style={{ background: 'radial-gradient(ellipse at center, rgba(59,130,246,0.08), transparent 70%)' }}
+      />
+      <div className="relative p-4 flex items-center gap-4">
+        <div className="w-10 h-10 rounded-lg bg-blue-500/10 border border-blue-500/15 flex items-center justify-center shrink-0 group-hover:bg-blue-500/15 transition-colors">
+          <MapPin className="w-5 h-5 text-blue-400" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <h4 className="text-sm font-medium text-white truncate group-hover:text-blue-100 transition-colors">{name}</h4>
+          <p className="text-[11px] text-gray-500">{dimensions}</p>
+        </div>
+        <ArrowRight className="w-4 h-4 text-gray-600 group-hover:text-blue-400 group-hover:translate-x-0.5 transition-all shrink-0" />
+      </div>
+      <div className="h-0.5 w-0 group-hover:w-full transition-all duration-700 bg-blue-500/40" />
+    </button>
+  );
+}
+
 // ─── Main Component ───
 export default function LandingExperience({ onDismiss }: { onDismiss: () => void }) {
-  const { venue } = useVenue();
+  const { venue, venueList, fetchVenueList, loadVenue } = useVenue();
   const { episodes, fetchEpisodes, selectEpisode } = useReplayInsight();
+  const { setPlacements } = useLidar();
   const [stage, setStage] = useState<Stage>('black');
+  const [phase, setPhase] = useState<'welcome' | 'briefing'>('welcome');
   const [isExiting, setIsExiting] = useState(false);
   const stageTimerRef = useRef<ReturnType<typeof setTimeout>[]>([]);
   const particlesRef = useRef(
@@ -172,16 +208,36 @@ export default function LandingExperience({ onDismiss }: { onDismiss: () => void
     }))
   );
 
-  // Fetch episodes on mount
+  // Fetch venue list on mount
   useEffect(() => {
-    if (venue?.id) {
+    fetchVenueList();
+  }, [fetchVenueList]);
+
+  // When venue loads, switch to briefing phase
+  useEffect(() => {
+    if (venue?.id && phase === 'welcome') {
+      setPhase('briefing');
+      // Reset stage sequence for briefing
+      stageTimerRef.current.forEach(clearTimeout);
+      stageTimerRef.current = [];
+      setStage('black');
+
+      const stages: Stage[] = ['black', 'grid', 'venue', 'headline', 'episodes', 'ready'];
+      let cumulative = 0;
+      stages.forEach((s) => {
+        cumulative += STAGE_TIMINGS[s];
+        const timer = setTimeout(() => setStage(s), cumulative);
+        stageTimerRef.current.push(timer);
+      });
+
+      // Fetch episodes for the briefing
       fetchEpisodes({ period: 'day', type: undefined });
     }
-  }, [venue?.id, fetchEpisodes]);
+  }, [venue?.id, phase, fetchEpisodes]);
 
-  // Auto-advance stages
+  // Auto-advance stages (welcome phase)
   useEffect(() => {
-    const stages: Stage[] = ['black', 'grid', 'venue', 'headline', 'episodes', 'ready'];
+    const stages: Stage[] = ['black', 'grid', 'venue', 'ready'];
     let cumulative = 0;
 
     stages.forEach((s) => {
@@ -207,6 +263,13 @@ export default function LandingExperience({ onDismiss }: { onDismiss: () => void
     setStage('ready');
   }, []);
 
+  // Venue selection from landing
+  const handleSelectVenue = useCallback((venueId: string) => {
+    loadVenue(venueId, (loadedPlacements) => {
+      setPlacements(loadedPlacements as LidarPlacement[]);
+    });
+  }, [loadVenue, setPlacements]);
+
   // Episode click
   const handleEpisodeClick = useCallback((episodeId: string) => {
     selectEpisode(episodeId);
@@ -228,11 +291,9 @@ export default function LandingExperience({ onDismiss }: { onDismiss: () => void
     return order.indexOf(stage) >= order.indexOf(target);
   };
 
-  if (!venue) return null;
-
   return (
     <div
-      className={`fixed inset-0 z-[100] overflow-hidden transition-opacity duration-600 ${
+      className={`fixed inset-0 z-[100] overflow-hidden ${
         isExiting ? 'opacity-0 scale-105' : 'opacity-100 scale-100'
       }`}
       style={{ transition: 'opacity 0.6s ease, transform 0.6s ease' }}
@@ -324,186 +385,289 @@ export default function LandingExperience({ onDismiss }: { onDismiss: () => void
       {isAtLeast('venue') && <ScanLine />}
 
       {/* ─── Content ─── */}
-      <div className="absolute inset-0 flex flex-col items-center justify-center px-8">
+      <div className="absolute inset-0 flex flex-col items-center justify-center px-8 overflow-y-auto">
 
-        {/* Skip button (top right) */}
-        <button
-          onClick={handleSkip}
-          className={`absolute top-6 right-6 flex items-center gap-1.5 px-3 py-1.5 text-xs text-gray-500 hover:text-gray-300 transition-all duration-300 ${
-            isAtLeast('grid') && !isAtLeast('ready') ? 'opacity-100' : 'opacity-0 pointer-events-none'
-          }`}
-        >
-          <SkipForward className="w-3 h-3" />
-          Skip intro
-        </button>
-
-        {/* ─── VENUE IDENTITY BLOCK ─── */}
-        <div className="text-center mb-12">
-          {/* Animated ring */}
-          <div
-            className="relative inline-flex items-center justify-center mb-6 transition-all duration-[1500ms]"
-            style={{
-              opacity: isAtLeast('venue') ? 1 : 0,
-              transform: isAtLeast('venue') ? 'scale(1)' : 'scale(0.5)',
-            }}
+        {/* Skip button (top right) — only during intro animation */}
+        {phase === 'welcome' && (
+          <button
+            onClick={handleSkip}
+            className={`fixed top-6 right-6 z-10 flex items-center gap-1.5 px-3 py-1.5 text-xs text-gray-500 hover:text-gray-300 transition-all duration-300 ${
+              isAtLeast('grid') && !isAtLeast('ready') ? 'opacity-100' : 'opacity-0 pointer-events-none'
+            }`}
           >
-            <div
-              className="absolute w-20 h-20 rounded-full border border-blue-500/20"
-              style={{ animation: 'landing-pulse-ring 3s ease-out infinite' }}
-            />
-            <div
-              className="absolute w-20 h-20 rounded-full border border-blue-500/10"
-              style={{ animation: 'landing-pulse-ring 3s 1s ease-out infinite' }}
-            />
-            <div className="w-14 h-14 rounded-full bg-blue-500/10 border border-blue-500/20 flex items-center justify-center">
-              <Zap className="w-6 h-6 text-blue-400" />
-            </div>
-          </div>
+            <SkipForward className="w-3 h-3" />
+            Skip intro
+          </button>
+        )}
 
-          {/* HYPERSPACE text */}
-          <div
-            className="transition-all duration-[1200ms]"
-            style={{
-              opacity: isAtLeast('venue') ? 1 : 0,
-              transform: isAtLeast('venue') ? 'translateY(0)' : 'translateY(20px)',
-            }}
-          >
-            <h1 className="text-xs font-bold tracking-[0.3em] text-gray-500 uppercase mb-2">
-              Hyperspace
-            </h1>
-            <h2 className="text-2xl font-semibold text-white mb-1">
-              {venue.name}
-            </h2>
-            <p className="text-sm text-gray-500">
-              Daily Brief — {new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })}
-            </p>
-          </div>
-
-          {/* Episode count badge */}
-          {isAtLeast('headline') && episodes.length > 0 && (
-            <div className="mt-4 inline-flex items-center gap-3">
+        {/* ════════════════════════════════════════════════
+            PHASE 1: WELCOME — No venue selected yet
+            ════════════════════════════════════════════════ */}
+        {phase === 'welcome' && (
+          <>
+            {/* ─── HYPERSPACE IDENTITY ─── */}
+            <div className="text-center mb-10">
+              {/* Animated ring */}
               <div
-                className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-gray-800/80 border border-gray-700/50 text-xs"
-                style={{ animation: 'landing-badge-pop 0.5s cubic-bezier(0.16, 1, 0.3, 1) forwards' }}
+                className="relative inline-flex items-center justify-center mb-6 transition-all duration-[1500ms]"
+                style={{
+                  opacity: isAtLeast('venue') ? 1 : 0,
+                  transform: isAtLeast('venue') ? 'scale(1)' : 'scale(0.5)',
+                }}
               >
-                <span className="text-white font-medium">{episodes.length}</span>
-                <span className="text-gray-400">moments detected</span>
-              </div>
-              {severityCounts.high > 0 && (
                 <div
-                  className="flex items-center gap-1 px-2 py-1 rounded-full bg-red-500/10 border border-red-500/20 text-[10px] text-red-400 font-medium"
-                  style={{ opacity: 0, animation: 'landing-badge-pop 0.5s 0.2s cubic-bezier(0.16, 1, 0.3, 1) forwards' }}
-                >
-                  <AlertTriangle className="w-3 h-3" />
-                  {severityCounts.high} high severity
+                  className="absolute w-20 h-20 rounded-full border border-blue-500/20"
+                  style={{ animation: 'landing-pulse-ring 3s ease-out infinite' }}
+                />
+                <div
+                  className="absolute w-20 h-20 rounded-full border border-blue-500/10"
+                  style={{ animation: 'landing-pulse-ring 3s 1s ease-out infinite' }}
+                />
+                <div className="w-14 h-14 rounded-full bg-blue-500/10 border border-blue-500/20 flex items-center justify-center">
+                  <Zap className="w-6 h-6 text-blue-400" />
                 </div>
-              )}
+              </div>
+
+              {/* Title */}
+              <div
+                className="transition-all duration-[1200ms]"
+                style={{
+                  opacity: isAtLeast('venue') ? 1 : 0,
+                  transform: isAtLeast('venue') ? 'translateY(0)' : 'translateY(20px)',
+                }}
+              >
+                <h1 className="text-xs font-bold tracking-[0.3em] text-gray-500 uppercase mb-3">
+                  Hyperspace
+                </h1>
+                <h2 className="text-2xl font-semibold text-white mb-2">
+                  Welcome back
+                </h2>
+                <p className="text-sm text-gray-500">
+                  {new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}
+                </p>
+              </div>
             </div>
-          )}
-        </div>
 
-        {/* ─── AI HEADLINE ─── */}
-        <div
-          className="max-w-2xl text-center mb-10 transition-all duration-[1000ms]"
-          style={{
-            opacity: isAtLeast('headline') ? 1 : 0,
-            transform: isAtLeast('headline') ? 'translateY(0)' : 'translateY(15px)',
-          }}
-        >
-          {isAtLeast('headline') && (
-            <LandingNarrator episodes={topEpisodes} />
-          )}
-        </div>
-
-        {/* ─── EPISODE CARDS ─── */}
-        <div
-          className="w-full max-w-4xl transition-all duration-[1000ms]"
-          style={{
-            opacity: isAtLeast('episodes') ? 1 : 0,
-          }}
-        >
-          {topEpisodes.length > 0 && isAtLeast('episodes') && (
-            <>
-              {/* Divider line */}
+            {/* ─── VENUE LIST ─── */}
+            <div
+              className="w-full max-w-md transition-all duration-[1000ms]"
+              style={{
+                opacity: isAtLeast('ready') ? 1 : 0,
+                transform: isAtLeast('ready') ? 'translateY(0)' : 'translateY(20px)',
+              }}
+            >
+              {/* Section label */}
               <div className="flex items-center gap-3 mb-4">
                 <div
                   className="h-px bg-gradient-to-r from-transparent via-gray-700 to-transparent"
-                  style={{ flex: 1, animation: 'landing-line-draw 1s ease forwards' }}
+                  style={{ flex: 1 }}
                 />
-                <span className="text-[10px] text-gray-500 uppercase tracking-widest">Key Moments</span>
+                <span className="text-[10px] text-gray-500 uppercase tracking-widest">Select a venue</span>
                 <div
                   className="h-px bg-gradient-to-r from-transparent via-gray-700 to-transparent"
-                  style={{ flex: 1, animation: 'landing-line-draw 1s ease forwards' }}
+                  style={{ flex: 1 }}
                 />
               </div>
 
-              {/* Cards grid */}
-              <div className="grid grid-cols-3 gap-3">
-                {topEpisodes.slice(0, 6).map((ep, i) => (
-                  <EpisodeCard
-                    key={ep.episode_id}
-                    episode={ep}
-                    index={i}
-                    onClick={() => handleEpisodeClick(ep.episode_id)}
-                  />
-                ))}
+              {/* Venue cards */}
+              <div className="space-y-2 max-h-[40vh] overflow-y-auto pr-1">
+                {venueList.length > 0 ? (
+                  venueList.map((v, i) => (
+                    <VenueListCard
+                      key={v.id}
+                      name={v.name}
+                      dimensions={`${v.width}m × ${v.depth}m`}
+                      onClick={() => handleSelectVenue(v.id)}
+                      index={i}
+                    />
+                  ))
+                ) : (
+                  <div className="text-center py-8">
+                    <p className="text-sm text-gray-500">No venues available</p>
+                    <p className="text-xs text-gray-600 mt-1">Create a venue from the sidebar to get started</p>
+                  </div>
+                )}
               </div>
-            </>
-          )}
 
-          {episodes.length === 0 && isAtLeast('episodes') && (
-            <div className="text-center py-8">
-              <p className="text-sm text-gray-500">No episodes detected today yet.</p>
-              <p className="text-xs text-gray-600 mt-1">Episodes will appear as trajectory data flows in.</p>
+              {/* Skip to workspace link */}
+              <div className="mt-6 text-center">
+                <button
+                  onClick={handleExit}
+                  className="text-xs text-gray-600 hover:text-gray-400 transition-colors"
+                >
+                  Skip to workspace →
+                </button>
+              </div>
             </div>
-          )}
-        </div>
-
-        {/* ─── NARRATIVE TIMELINE ─── */}
-        {isAtLeast('episodes') && topEpisodes.length > 0 && (
-          <div
-            className="w-full max-w-4xl mt-6"
-            style={{
-              opacity: 0,
-              animation: 'landing-card-in 0.8s 0.5s cubic-bezier(0.16, 1, 0.3, 1) forwards',
-            }}
-          >
-            <NarrativeTimeline
-              episodes={topEpisodes}
-              onEpisodeClick={handleEpisodeClick}
-            />
-          </div>
+          </>
         )}
 
-        {/* ─── ENTER WORKSPACE BUTTON ─── */}
-        <div
-          className="mt-10 transition-all duration-700"
-          style={{
-            opacity: isAtLeast('ready') ? 1 : 0,
-            transform: isAtLeast('ready') ? 'translateY(0)' : 'translateY(20px)',
-          }}
-        >
-          <button
-            onClick={handleExit}
-            className="group relative flex items-center gap-3 px-8 py-3 rounded-xl text-sm font-medium text-white overflow-hidden transition-all duration-300 hover:shadow-lg hover:shadow-blue-500/10"
-            style={{
-              background: 'linear-gradient(135deg, rgba(59,130,246,0.15), rgba(59,130,246,0.05))',
-              border: '1px solid rgba(59,130,246,0.2)',
-            }}
-          >
-            {/* Shimmer effect */}
+        {/* ════════════════════════════════════════════════
+            PHASE 2: BRIEFING — Venue loaded, show episodes
+            ════════════════════════════════════════════════ */}
+        {phase === 'briefing' && venue && (
+          <>
+            {/* Skip briefing button */}
+            <button
+              onClick={handleSkip}
+              className={`fixed top-6 right-6 z-10 flex items-center gap-1.5 px-3 py-1.5 text-xs text-gray-500 hover:text-gray-300 transition-all duration-300 ${
+                isAtLeast('grid') && !isAtLeast('ready') ? 'opacity-100' : 'opacity-0 pointer-events-none'
+              }`}
+            >
+              <SkipForward className="w-3 h-3" />
+              Skip briefing
+            </button>
+
+            {/* ─── VENUE IDENTITY BLOCK ─── */}
+            <div className="text-center mb-12">
+              <div
+                className="relative inline-flex items-center justify-center mb-6 transition-all duration-[1500ms]"
+                style={{
+                  opacity: isAtLeast('venue') ? 1 : 0,
+                  transform: isAtLeast('venue') ? 'scale(1)' : 'scale(0.5)',
+                }}
+              >
+                <div
+                  className="absolute w-20 h-20 rounded-full border border-blue-500/20"
+                  style={{ animation: 'landing-pulse-ring 3s ease-out infinite' }}
+                />
+                <div
+                  className="absolute w-20 h-20 rounded-full border border-blue-500/10"
+                  style={{ animation: 'landing-pulse-ring 3s 1s ease-out infinite' }}
+                />
+                <div className="w-14 h-14 rounded-full bg-blue-500/10 border border-blue-500/20 flex items-center justify-center">
+                  <Zap className="w-6 h-6 text-blue-400" />
+                </div>
+              </div>
+
+              <div
+                className="transition-all duration-[1200ms]"
+                style={{
+                  opacity: isAtLeast('venue') ? 1 : 0,
+                  transform: isAtLeast('venue') ? 'translateY(0)' : 'translateY(20px)',
+                }}
+              >
+                <h1 className="text-xs font-bold tracking-[0.3em] text-gray-500 uppercase mb-2">
+                  Hyperspace
+                </h1>
+                <h2 className="text-2xl font-semibold text-white mb-1">
+                  {venue.name}
+                </h2>
+                <p className="text-sm text-gray-500">
+                  Daily Brief — {new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })}
+                </p>
+              </div>
+
+              {/* Episode count badge */}
+              {isAtLeast('headline') && episodes.length > 0 && (
+                <div className="mt-4 inline-flex items-center gap-3">
+                  <div
+                    className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-gray-800/80 border border-gray-700/50 text-xs"
+                    style={{ animation: 'landing-badge-pop 0.5s cubic-bezier(0.16, 1, 0.3, 1) forwards' }}
+                  >
+                    <span className="text-white font-medium">{episodes.length}</span>
+                    <span className="text-gray-400">moments detected</span>
+                  </div>
+                  {severityCounts.high > 0 && (
+                    <div
+                      className="flex items-center gap-1 px-2 py-1 rounded-full bg-red-500/10 border border-red-500/20 text-[10px] text-red-400 font-medium"
+                      style={{ opacity: 0, animation: 'landing-badge-pop 0.5s 0.2s cubic-bezier(0.16, 1, 0.3, 1) forwards' }}
+                    >
+                      <AlertTriangle className="w-3 h-3" />
+                      {severityCounts.high} high severity
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* ─── AI HEADLINE ─── */}
             <div
-              className="absolute inset-0 pointer-events-none"
+              className="max-w-2xl text-center mb-10 transition-all duration-[1000ms]"
               style={{
-                background: 'linear-gradient(90deg, transparent, rgba(59,130,246,0.1), transparent)',
-                backgroundSize: '200% 100%',
-                animation: 'landing-shimmer 3s ease-in-out infinite',
+                opacity: isAtLeast('headline') ? 1 : 0,
+                transform: isAtLeast('headline') ? 'translateY(0)' : 'translateY(15px)',
               }}
-            />
-            <span className="relative">Enter Workspace</span>
-            <ArrowRight className="relative w-4 h-4 group-hover:translate-x-1 transition-transform" />
-          </button>
-        </div>
+            >
+              {isAtLeast('headline') && (
+                <LandingNarrator episodes={topEpisodes} />
+              )}
+            </div>
+
+            {/* ─── EPISODE CARDS ─── */}
+            <div
+              className="w-full max-w-4xl transition-all duration-[1000ms]"
+              style={{ opacity: isAtLeast('episodes') ? 1 : 0 }}
+            >
+              {topEpisodes.length > 0 && isAtLeast('episodes') && (
+                <>
+                  <div className="flex items-center gap-3 mb-4">
+                    <div className="h-px bg-gradient-to-r from-transparent via-gray-700 to-transparent" style={{ flex: 1, animation: 'landing-line-draw 1s ease forwards' }} />
+                    <span className="text-[10px] text-gray-500 uppercase tracking-widest">Key Moments</span>
+                    <div className="h-px bg-gradient-to-r from-transparent via-gray-700 to-transparent" style={{ flex: 1, animation: 'landing-line-draw 1s ease forwards' }} />
+                  </div>
+
+                  <div className="grid grid-cols-3 gap-3">
+                    {topEpisodes.slice(0, 6).map((ep, i) => (
+                      <EpisodeCard
+                        key={ep.episode_id}
+                        episode={ep}
+                        index={i}
+                        onClick={() => handleEpisodeClick(ep.episode_id)}
+                      />
+                    ))}
+                  </div>
+                </>
+              )}
+
+              {episodes.length === 0 && isAtLeast('episodes') && (
+                <div className="text-center py-8">
+                  <p className="text-sm text-gray-500">No episodes detected today yet.</p>
+                  <p className="text-xs text-gray-600 mt-1">Episodes will appear as trajectory data flows in.</p>
+                </div>
+              )}
+            </div>
+
+            {/* ─── NARRATIVE TIMELINE ─── */}
+            {isAtLeast('episodes') && topEpisodes.length > 0 && (
+              <div
+                className="w-full max-w-4xl mt-6"
+                style={{ opacity: 0, animation: 'landing-card-in 0.8s 0.5s cubic-bezier(0.16, 1, 0.3, 1) forwards' }}
+              >
+                <NarrativeTimeline episodes={topEpisodes} onEpisodeClick={handleEpisodeClick} />
+              </div>
+            )}
+
+            {/* ─── ENTER WORKSPACE BUTTON ─── */}
+            <div
+              className="mt-10 transition-all duration-700"
+              style={{
+                opacity: isAtLeast('ready') ? 1 : 0,
+                transform: isAtLeast('ready') ? 'translateY(0)' : 'translateY(20px)',
+              }}
+            >
+              <button
+                onClick={handleExit}
+                className="group relative flex items-center gap-3 px-8 py-3 rounded-xl text-sm font-medium text-white overflow-hidden transition-all duration-300 hover:shadow-lg hover:shadow-blue-500/10"
+                style={{
+                  background: 'linear-gradient(135deg, rgba(59,130,246,0.15), rgba(59,130,246,0.05))',
+                  border: '1px solid rgba(59,130,246,0.2)',
+                }}
+              >
+                <div
+                  className="absolute inset-0 pointer-events-none"
+                  style={{
+                    background: 'linear-gradient(90deg, transparent, rgba(59,130,246,0.1), transparent)',
+                    backgroundSize: '200% 100%',
+                    animation: 'landing-shimmer 3s ease-in-out infinite',
+                  }}
+                />
+                <span className="relative">Enter Workspace</span>
+                <ArrowRight className="relative w-4 h-4 group-hover:translate-x-1 transition-transform" />
+              </button>
+            </div>
+          </>
+        )}
       </div>
 
       {/* Bottom fade */}
