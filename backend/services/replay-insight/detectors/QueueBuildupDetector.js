@@ -87,9 +87,10 @@ export class QueueBuildupDetector {
 
       if (conditionsMet < 2) continue;
 
-      // Compute throughput (completed sessions per minute)
-      const completed = windowSessions.filter(s => s.is_complete).length;
-      const throughput = completed / (WINDOW_MS / 60000);
+      // Compute throughput (served sessions per minute)
+      // A session is "served" if it is NOT abandoned (includes is_complete + normal queue exits)
+      const served = windowSessions.filter(s => !s.is_abandoned).length;
+      const throughput = served / (WINDOW_MS / 60000);
 
       // Abandonment rate in this window
       const abandoned = windowSessions.filter(s => s.is_abandoned).length;
@@ -145,7 +146,8 @@ export class QueueBuildupDetector {
           queueThroughput: {
             value: Math.round(throughput * 100) / 100,
             unit: 'per_minute',
-            direction: throughput < (completed / (WINDOW_MS / 60000)) ? 'down' : 'flat',
+            baseline: null,
+            direction: throughput < 1 ? 'down' : 'flat',
           },
           queueAbandonmentRate: {
             value: Math.round(abandonRate * 100),

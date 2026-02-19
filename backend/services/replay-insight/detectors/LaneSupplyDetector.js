@@ -55,9 +55,10 @@ export class LaneSupplyDetector {
       // Arrival rate (sessions entering queue per minute)
       const arrivalRate = windowSessions.length / (WINDOW_MS / 60000);
 
-      // Throughput (completed sessions per minute)
-      const completed = windowSessions.filter(s => s.is_complete || s.queue_exit_time).length;
-      const throughput = completed / (WINDOW_MS / 60000);
+      // Throughput (served sessions per minute)
+      // A session is "served" if NOT abandoned (includes is_complete + normal queue exits)
+      const served = windowSessions.filter(s => !s.is_abandoned).length;
+      const throughput = served / (WINDOW_MS / 60000);
 
       // Wait times
       const waitTimes = windowSessions

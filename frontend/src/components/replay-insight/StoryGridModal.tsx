@@ -7,7 +7,7 @@
  */
 
 import { useEffect } from 'react';
-import { X, Zap, Play, BookOpen, Filter } from 'lucide-react';
+import { X, Zap, Play, BookOpen, Filter, Users, AlertTriangle, TrendingUp, TrendingDown, MapPin, Clock, Eye, ShoppingCart, ArrowRightLeft } from 'lucide-react';
 import { useReplayInsight } from '../../context/ReplayInsightContext';
 
 const EPISODE_COLORS: Record<string, string> = {
@@ -34,6 +34,28 @@ const CATEGORY_ICONS: Record<string, string> = {
   'Retail Media': '📺',
   'Merchandising': '🏷️',
   'Store Layout': '🏪',
+};
+
+const EPISODE_ICONS: Record<string, typeof Zap> = {
+  QUEUE_BUILDUP_SPIKE: Users,
+  LANE_UNDERSUPPLY: ShoppingCart,
+  LANE_OVERSUPPLY: ShoppingCart,
+  ABANDONMENT_WAVE: Users,
+  QUEUE_SWITCHING: ArrowRightLeft,
+  HIGH_PASSBY_LOW_BROWSE: Eye,
+  BROWSE_NO_CONVERT_PROXY: MapPin,
+  BOTTLENECK_CORRIDOR: Users,
+  ROUTE_DETOUR: ArrowRightLeft,
+  STORE_VISIT_TIME_SHIFT: Clock,
+  EXPOSURE_TO_ACTION_WIN: TrendingUp,
+  EXPOSURE_NO_FOLLOWTHROUGH: TrendingDown,
+  ATTENTION_QUALITY_DROP: AlertTriangle,
+};
+
+const SEVERITY_LABELS: Record<string, { text: string; bg: string; border: string }> = {
+  high: { text: 'text-red-400', bg: 'bg-red-500/10', border: 'border-red-500/25' },
+  medium: { text: 'text-amber-400', bg: 'bg-amber-500/10', border: 'border-amber-500/25' },
+  low: { text: 'text-blue-400', bg: 'bg-blue-500/10', border: 'border-blue-500/25' },
 };
 
 export default function StoryGridModal() {
@@ -153,38 +175,74 @@ export default function StoryGridModal() {
                           selectEpisode(episode.episode_id);
                           closeStoryGrid();
                         }}
-                        className="group text-left bg-gray-800/50 hover:bg-gray-800 border border-gray-700/50 hover:border-gray-600 rounded-xl overflow-hidden transition-all"
+                        className="group text-left bg-gray-800/50 hover:bg-gray-800 border border-gray-700/50 hover:border-gray-600 rounded-xl overflow-hidden transition-all hover:scale-[1.02] hover:shadow-lg"
                       >
-                        {/* Mini-map placeholder */}
+                        {/* Card header visual */}
                         <div
-                          className="h-20 relative"
+                          className="h-[72px] relative overflow-hidden"
                           style={{
-                            background: `linear-gradient(135deg, ${color}10, ${color}05, transparent)`,
+                            background: `linear-gradient(135deg, ${color}12, ${color}06, rgba(17,24,39,0.9))`,
                           }}
                         >
-                          {/* Zone dots placeholder */}
-                          <div className="absolute inset-2 flex items-center justify-center">
-                            <div
-                              className="w-8 h-8 rounded-full opacity-20 group-hover:opacity-30 transition-opacity"
-                              style={{ backgroundColor: color }}
-                            />
+                          {/* Background icon (large, faded) */}
+                          {(() => {
+                            const Icon = EPISODE_ICONS[episode.episode_type] || Zap;
+                            return (
+                              <Icon
+                                className="absolute -right-2 -bottom-2 w-16 h-16 opacity-[0.06] group-hover:opacity-[0.1] transition-opacity"
+                                style={{ color }}
+                              />
+                            );
+                          })()}
+
+                          {/* Top row: severity + type badge */}
+                          <div className="absolute top-2 left-2.5 right-2.5 flex items-center justify-between">
+                            {(() => {
+                              const sev = SEVERITY_LABELS[episode.severity] || SEVERITY_LABELS.low;
+                              return (
+                                <span className={`text-[9px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded ${sev.bg} ${sev.text} border ${sev.border}`}>
+                                  {episode.severity}
+                                </span>
+                              );
+                            })()}
+                            <span className="text-[9px] text-gray-500 font-mono">
+                              {Math.round(episode.score * 100)}%
+                            </span>
                           </div>
 
-                          {/* Severity dot */}
-                          <div
-                            className="absolute top-2 right-2 w-2 h-2 rounded-full"
-                            style={{ backgroundColor: color }}
-                          />
-
-                          {/* Score */}
-                          <div className="absolute bottom-1 right-2 text-[9px] text-gray-500">
-                            {Math.round(episode.score * 100)}%
+                          {/* Bottom row: KPI deltas */}
+                          <div className="absolute bottom-2 left-2.5 flex items-center gap-2">
+                            {episode.kpis && episode.kpis.length > 0 ? (
+                              episode.kpis.slice(0, 3).map((kpi, ki) => (
+                                <div
+                                  key={ki}
+                                  className="flex items-center gap-0.5 text-[9px]"
+                                  style={{ color: kpi.direction === 'up' ? '#34d399' : kpi.direction === 'down' ? '#f87171' : '#9ca3af' }}
+                                >
+                                  {kpi.direction === 'up' ? <TrendingUp className="w-2.5 h-2.5" /> : kpi.direction === 'down' ? <TrendingDown className="w-2.5 h-2.5" /> : null}
+                                  <span className="truncate max-w-[50px]">{kpi.label}</span>
+                                </div>
+                              ))
+                            ) : (
+                              <div className="flex items-center gap-1 text-[9px] text-gray-600">
+                                <Zap className="w-2.5 h-2.5" style={{ color }} />
+                                <span>{episode.category}</span>
+                              </div>
+                            )}
                           </div>
+
+                          {/* Zone count badge */}
+                          {episode.highlight_zones && episode.highlight_zones.length > 0 && (
+                            <div className="absolute bottom-2 right-2.5 flex items-center gap-0.5 text-[9px] text-gray-500">
+                              <MapPin className="w-2.5 h-2.5" />
+                              {episode.highlight_zones.length}
+                            </div>
+                          )}
                         </div>
 
                         {/* Caption */}
                         <div className="px-3 py-2.5">
-                          <div className="text-xs font-medium text-white leading-snug line-clamp-2 mb-1">
+                          <div className="text-xs font-medium text-white leading-snug line-clamp-2 mb-1 group-hover:text-gray-100">
                             {episode.title}
                           </div>
                           <div className="text-[10px] text-gray-500">
