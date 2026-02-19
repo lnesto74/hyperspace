@@ -100,6 +100,7 @@ export class NarrationPackBuilder {
       },
       highlight_zones: episode.highlight_zones || [],
       representative_tracks: episode.representative_tracks || [],
+      track_positions: episode.track_positions || {},
       
       // Actions
       recommended_actions: episode.recommended_actions || [],
