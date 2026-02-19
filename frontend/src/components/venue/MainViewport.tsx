@@ -9,6 +9,7 @@ import { useVenue } from '../../context/VenueContext'
 import { useLidar } from '../../context/LidarContext'
 import { useTracking } from '../../context/TrackingContext'
 import { useRoi } from '../../context/RoiContext'
+import { useReplayInsight } from '../../context/ReplayInsightContext'
 import SkuDebugOverlay from './SkuDebugOverlay'
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3001'
@@ -223,6 +224,9 @@ export default function MainViewport({
     openKPIPopup,
     setHoveredRoiId,
   } = useRoi()
+  
+  // Replay Insight context for zone highlighting
+  const { isInsightMode, selectedEpisode } = useReplayInsight()
   
   // Fetch custom models
   const fetchCustomModels = useCallback(async () => {
@@ -2834,6 +2838,71 @@ export default function MainViewport({
       handles.forEach(h => { h.visible = showRoiLayer && isSelected })
     })
   }, [showRoiLayer, regions, selectedRoiId])
+  
+  // Pulse animation for highlighted zones during Insight Mode
+  useEffect(() => {
+    if (!isInsightMode || !selectedEpisode?.highlight_zones) {
+      // Reset any previously highlighted zones to normal
+      roiMeshesRef.current.forEach((group) => {
+        group.children.forEach(child => {
+          if (child instanceof THREE.Mesh && child.userData.roiId && !child.userData.isRoiVertex) {
+            const material = child.material as THREE.MeshBasicMaterial
+            if (material.userData?.originalOpacity !== undefined) {
+              material.opacity = material.userData.originalOpacity
+              delete material.userData.originalOpacity
+            }
+          }
+        })
+      })
+      return
+    }
+
+    const highlightedIds = new Set(selectedEpisode.highlight_zones.map((z: { id: string }) => z.id))
+    let animationId: number
+    let startTime = Date.now()
+
+    const animate = () => {
+      const elapsed = Date.now() - startTime
+      // Pulse: oscillate between 0.3 and 0.8 opacity over 1.2 seconds
+      const pulse = 0.3 + 0.5 * (0.5 + 0.5 * Math.sin(elapsed / 190))
+
+      roiMeshesRef.current.forEach((group, roiId) => {
+        group.children.forEach(child => {
+          if (child instanceof THREE.Mesh && child.userData.roiId && !child.userData.isRoiVertex) {
+            const material = child.material as THREE.MeshBasicMaterial
+            if (highlightedIds.has(roiId)) {
+              // Store original opacity if not stored
+              if (material.userData?.originalOpacity === undefined) {
+                material.userData = material.userData || {}
+                material.userData.originalOpacity = material.opacity
+              }
+              material.opacity = pulse
+            }
+          }
+        })
+      })
+
+      animationId = requestAnimationFrame(animate)
+    }
+
+    animate()
+
+    return () => {
+      cancelAnimationFrame(animationId)
+      // Reset opacities on cleanup
+      roiMeshesRef.current.forEach((group) => {
+        group.children.forEach(child => {
+          if (child instanceof THREE.Mesh && child.userData.roiId && !child.userData.isRoiVertex) {
+            const material = child.material as THREE.MeshBasicMaterial
+            if (material.userData?.originalOpacity !== undefined) {
+              material.opacity = material.userData.originalOpacity
+              delete material.userData.originalOpacity
+            }
+          }
+        })
+      })
+    }
+  }, [isInsightMode, selectedEpisode])
   
   // Toggle layer visibility - Tracks
   useEffect(() => {
