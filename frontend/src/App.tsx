@@ -31,7 +31,7 @@ import { EdgeCommissioningProvider } from './context/EdgeCommissioningContext'
 import DoohAnalyticsPage from './components/dooh/DoohAnalyticsPage'
 import DoohEffectivenessPage from './components/dooh/DoohEffectivenessPage'
 import { BusinessReportingPage } from './features/businessReporting'
-import { BarChart3, Bell, Thermometer, Zap, LayoutGrid, ShoppingCart, Monitor, Activity, PieChart, Sparkles } from 'lucide-react'
+import { BarChart3, Bell, Thermometer, Zap, LayoutGrid, ShoppingCart, Monitor, Activity, PieChart, Clapperboard } from 'lucide-react'
 import { useState, useEffect, createContext, useContext } from 'react'
 import { useVenue } from './context/VenueContext'
 
@@ -273,7 +273,7 @@ function KPIOverlayToggle() {
           className="flex items-center justify-center w-10 h-10 rounded-lg shadow-lg transition-all bg-gray-800 hover:bg-indigo-600 text-gray-300 hover:text-white border border-gray-600 hover:border-indigo-500"
           title="Replay Insights - Behavior Episodes"
         >
-          <Sparkles className="w-4 h-4" />
+          <Clapperboard className="w-4 h-4" />
         </button>
         
         {/* AI Narrator2 Button (Copilot) */}

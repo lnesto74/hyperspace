@@ -73,20 +73,32 @@ export class BottleneckDetector {
 
       const uniqueTracks = new Set(visits.map(v => v.track_key)).size;
 
+      // HARD GATES for congestion:
+      // 1. Meaningful peak occupancy (not just 1-2 people)
+      // 2. People actually dwelling (not just passing through quickly)
+      const MIN_PEAK_OCCUPANCY = 3;
+      const MIN_AVG_DWELL_MS = 20000; // 20 seconds minimum avg dwell
+      const MIN_LONG_VISIT_RATIO = 0.15; // At least 15% staying >30s
+
+      if (peakOcc < MIN_PEAK_OCCUPANCY) continue;
+      if (avgDwell < MIN_AVG_DWELL_MS && longVisitRatio < MIN_LONG_VISIT_RATIO) continue;
+
       // Evaluate against baselines
       const occEval = this.baselineTracker.evaluate(venueId, 'zone', zone.id, 'peak_occupancy', peakOcc);
 
       let conditionsMet = 0;
       const conditionsTotal = 3;
 
-      // Occupancy spike
-      if (occEval.isSpike || peakOcc > 10) conditionsMet++;
+      // Occupancy spike (required for congestion)
+      const hasOccupancySpike = occEval.isSpike || peakOcc >= 5;
+      if (hasOccupancySpike) conditionsMet++;
       // Elevated dwell (people stuck, not just passing)
-      if (longVisitRatio > 0.4 && avgDwell > 45000) conditionsMet++; // >40% staying >30s, avg >45s
+      if (longVisitRatio > 0.3 && avgDwell > 30000) conditionsMet++; // >30% staying >30s, avg >30s
       // High density relative to zone traffic
       if (uniqueTracks >= MIN_POPULATION.zone * 2) conditionsMet++;
 
-      if (conditionsMet < 2) continue;
+      // Must have occupancy spike + elevated dwell (both required for true congestion)
+      if (!hasOccupancySpike || conditionsMet < 2) continue;
 
       const confidence = computeConfidence({
         conditionsSatisfied: conditionsMet,
