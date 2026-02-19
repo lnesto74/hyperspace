@@ -9,7 +9,7 @@ import { DwgProvider, useDwg } from './context/DwgContext'
 // Legacy Narrator v1 disabled - using Narrator2 (Copilot) only
 // import { NarratorProvider } from './context/NarratorContext'
 // import { NarratorDrawer, NarratorToggle } from './components/narrator'
-import { Narrator2Provider } from './context/Narrator2Context'
+import { Narrator2Provider, useNarrator2 } from './context/Narrator2Context'
 import Narrator2Drawer from './components/narrator/Narrator2Drawer'
 import Narrator2Toggle from './components/narrator/Narrator2Toggle'
 import { ReplayInsightProvider, useReplayInsight } from './context/ReplayInsightContext'
@@ -71,7 +71,8 @@ function KPIOverlayToggle() {
   const { venue } = useVenue()
   const { setMode } = useViewMode()
   const { dwgLayoutId } = useDwg()
-  const { openStoryGrid, explainKpi, selectEpisode } = useReplayInsight()
+  const { openStoryGrid, explainKpi, selectEpisode, selectedEpisode } = useReplayInsight()
+  const { openNarrator, askQuestion } = useNarrator2()
   const [showLedger, setShowLedger] = useState(false)
   const [showHeatmapModal, setShowHeatmapModal] = useState(false)
   const [showSmartKpiModal, setShowSmartKpiModal] = useState(false)
@@ -149,7 +150,16 @@ function KPIOverlayToggle() {
             openStoryGrid()
           } else if (intent.startsWith('explain_episode:')) {
             const episodeId = intent.replace('explain_episode:', '')
+            // First select the episode to get its details
             selectEpisode(episodeId)
+            // Open Narrator2 and ask about the episode
+            openNarrator()
+            // Use selectedEpisode context to ask a question after a small delay
+            setTimeout(() => {
+              if (selectedEpisode) {
+                askQuestion(`Explain this insight: "${selectedEpisode.title}". ${selectedEpisode.business_summary}`)
+              }
+            }, 500)
           } else {
             console.warn('[App] Unknown Narrator2 intent:', intent)
           }
@@ -167,7 +177,7 @@ function KPIOverlayToggle() {
       window.removeEventListener('narrator2-intent', handleNarrator2Intent as EventListener)
       window.removeEventListener('replay-insight-explain', handleExplainKpi as EventListener)
     }
-  }, [setMode, openStoryGrid, explainKpi, selectEpisode])
+  }, [setMode, openStoryGrid, explainKpi, selectEpisode, selectedEpisode, openNarrator, askQuestion])
   
   return (
     <>
