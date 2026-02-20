@@ -2,4 +2,4 @@ User-agent: *
 Allow: /
 Disallow: /assets/
 
-Sitemap: https://intelligentspaces.tech/sitemap.xml
+Sitemap: https://www.hyspace.app/sitemap.xml
