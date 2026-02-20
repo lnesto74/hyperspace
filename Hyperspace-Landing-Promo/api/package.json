@@ -1,7 +1,6 @@
 {
   "name": "hyperspace-landing-api",
   "version": "1.0.0",
-  "type": "module",
   "scripts": {
     "start": "node _local-server.js",
     "dev": "node --watch _local-server.js"

@@ -1,10 +1,10 @@
-import { Resend } from 'resend';
+const { Resend } = require('resend');
 
 const resend = new Resend(process.env.RESEND_API_KEY);
 const FROM_EMAIL = process.env.RESEND_FROM_EMAIL || 'Hyperspace <ln@ulisse.tech>';
 const NOTIFICATION_EMAIL = process.env.LEAD_NOTIFICATION_EMAIL || 'ln@ulisse.tech';
 
-export default async function handler(req, res) {
+module.exports = async function handler(req, res) {
   // CORS headers
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
