@@ -301,7 +301,7 @@
       .cfg-progress .cfg-step-dot.active { border-color:var(--hs-blue); color:white; background:var(--hs-blue); box-shadow:0 0 0 4px rgba(59,130,246,0.2); }
       .cfg-progress .cfg-step-dot.done { border-color:var(--hs-green); color:white; background:var(--hs-green); cursor:pointer; }
       .cfg-progress .cfg-step-dot.done:hover { box-shadow:0 0 0 4px rgba(34,197,94,0.2); }
-      .cfg-progress .cfg-step-line { width:72px; height:3px; border-radius:2px; background:var(--hs-bg-card); transition:background 0.3s; margin-top:18px; flex-shrink:0; }
+      .cfg-progress .cfg-step-line { width:48px; height:3px; border-radius:2px; background:var(--hs-bg-card); transition:background 0.3s; margin-top:18px; flex-shrink:0; }
       .cfg-progress .cfg-step-line.done { background:linear-gradient(90deg, var(--hs-green), var(--hs-green)); }
       .cfg-progress .cfg-step-line.active { background:linear-gradient(90deg, var(--hs-green), var(--hs-blue)); }
       .cfg-progress .cfg-step-label { font-size:0.6875rem; color:var(--hs-text-muted); margin-top:0.5rem; text-align:center; transition:color 0.3s; }
@@ -457,7 +457,9 @@
       }
       .cfg-outcome-card:hover { border-color:rgba(59,130,246,0.4); }
       .cfg-outcome-card.active { border-color:var(--hs-blue); background:rgba(59,130,246,0.08); }
-      .cfg-outcome-card .cfg-oc-icon { font-size:1.25rem; margin-bottom:0.25rem; }
+      .cfg-outcome-card .cfg-oc-icon { margin-bottom:0.25rem; color:var(--hs-blue); }
+      .cfg-outcome-card .cfg-oc-icon svg { width:20px; height:20px; }
+      .cfg-outcome-card.active .cfg-oc-icon { color:white; }
       .cfg-outcome-card .cfg-oc-label { font-size:0.8125rem; font-weight:600; color:white; margin-bottom:0.125rem; }
       .cfg-outcome-card .cfg-oc-desc { font-size:0.6875rem; color:var(--hs-text-muted); line-height:1.4; }
       .cfg-outcome-card .cfg-oc-badge {
@@ -1789,6 +1791,7 @@
           <!-- STEP 5: Pricing & Lead Capture -->
           <div class="cfg-panel" id="cfgStep4">
             <div class="cfg-summary-bar" id="cfgSummaryBar2"></div>
+            <div style="text-align:center; margin-bottom:1rem;"><span class="cfg-tier-label core" id="cfgPricingTier">Recommended: Core Plan</span></div>
             <div class="cfg-pricing-cards">
               <div class="cfg-price-card selected" onclick="cfgSelectPricing(this,'opex')">
                 <div class="cfg-recommended">Recommended</div>
@@ -1927,6 +1930,15 @@
         });
       }, { threshold: 0.1, rootMargin: '0px 0px -50px 0px' });
       document.querySelectorAll('.reveal').forEach(el => observer.observe(el));
+
+      // If page loaded with a hash, immediately reveal elements inside the target
+      if (window.location.hash) {
+        const target = document.querySelector(window.location.hash);
+        if (target) {
+          target.querySelectorAll('.reveal').forEach(el => el.classList.add('visible'));
+          if (target.classList.contains('reveal')) target.classList.add('visible');
+        }
+      }
 
       // Video modal
       function openVideoModal(src) {
@@ -2334,6 +2346,7 @@
         `;
         document.getElementById('cfgSummaryBar').innerHTML = summaryHtml;
         if (document.getElementById('cfgSummaryBar2')) document.getElementById('cfgSummaryBar2').innerHTML = summaryHtml;
+        if (document.getElementById('cfgSummaryBar3')) document.getElementById('cfgSummaryBar3').innerHTML = summaryHtml;
         // Stats cards
         document.getElementById('cfgStats').innerHTML = `
           <div class="cfg-stat"><div class="cfg-stat-val">${CFG.lidars.length}</div><div class="cfg-stat-lbl">LiDARs Required</div></div>
@@ -2374,7 +2387,8 @@
         const T = CFG.CONTRACT_MONTHS;
         const Hs = CFG.HW_SELL;           // hardware sell price per unit
         const Ss = CFG.SW_SELL_MONTHLY;    // software sell price per unit/mo
-        const P  = CFG.PLATFORM_FEE;       // optional platform fee
+        // Tier-aware platform fee
+        const P = CFG.recommendedTier === 'pro' ? CFG.PLATFORM_FEE_PRO : CFG.PLATFORM_FEE_CORE;
         // HYBRID: upfront = N × Hs, monthly = P + N × Ss
         const hybridUpfront = cfgRoundPrice(N * Hs, 100);
         const hybridMonthly = cfgRoundPrice(P + N * Ss);
@@ -2386,6 +2400,12 @@
         document.getElementById('cfgPriceHw').textContent = '$' + hybridUpfront.toLocaleString();
         document.getElementById('cfgPriceHybridMo').textContent = '$' + hybridMonthly.toLocaleString();
         document.getElementById('cfgContractLabel').textContent = T + '-month contract';
+        // Show recommended tier label on pricing step
+        var tierEl = document.getElementById('cfgPricingTier');
+        if (tierEl) {
+          tierEl.className = 'cfg-tier-label ' + CFG.recommendedTier;
+          tierEl.textContent = 'Recommended: ' + (CFG.recommendedTier === 'pro' ? 'Pro Plan' : 'Core Plan');
+        }
       }
       // Round to clean price: $349 not $347.23
       function cfgRoundPrice(val, step) {
@@ -2423,11 +2443,16 @@
         // Lazy-load Three.js r128 (stable UMD build with examples/js)
         const THREE_VER = '0.128.0';
         const CDN = 'https://unpkg.com/three@' + THREE_VER;
-        if (typeof THREE !== 'undefined' && THREE.OrbitControls) { cfgInit3D(); return; }
+        function on3DReady() {
+          // Route to correct initializer based on current step
+          if (CFG.step === 3 && typeof cfgInitO3D === 'function') cfgInitO3D();
+          else cfgInit3D();
+        }
+        if (typeof THREE !== 'undefined' && THREE.OrbitControls) { on3DReady(); return; }
         if (typeof THREE !== 'undefined' && !THREE.OrbitControls) {
           const s2 = document.createElement('script');
           s2.src = CDN + '/examples/js/controls/OrbitControls.js';
-          s2.onload = () => { console.log('OrbitControls loaded'); cfgInit3D(); };
+          s2.onload = () => { console.log('OrbitControls loaded'); on3DReady(); };
           s2.onerror = () => console.error('Failed to load OrbitControls from ' + s2.src);
           document.head.appendChild(s2);
           return;
@@ -2438,7 +2463,7 @@
           console.log('Three.js loaded');
           const s2 = document.createElement('script');
           s2.src = CDN + '/examples/js/controls/OrbitControls.js';
-          s2.onload = () => { console.log('OrbitControls loaded'); cfgInit3D(); };
+          s2.onload = () => { console.log('OrbitControls loaded'); on3DReady(); };
           s2.onerror = () => console.error('Failed to load OrbitControls from ' + s2.src);
           document.head.appendChild(s2);
         };
@@ -2715,43 +2740,43 @@
         }
       }
 
-      // === OUTCOMES REGISTRY ===
-      const OUTCOMES_REGISTRY = {
+      // === OUTCOMES REGISTRY (consumed by outcomes.js) ===
+      var OUTCOMES_REGISTRY = {
         retail: [
-          { id:'people_count', label:'People Count', desc:'Total visitors by zone and time', tier:'base', icon:'👥', overlay:'counters', defaultOn:true },
-          { id:'hot_zones', label:'Hot Zones', desc:'Heatmap of most-visited areas', tier:'base', icon:'🔥', overlay:'heatmap', defaultOn:true },
-          { id:'dwell_time', label:'Dwell by Area', desc:'Time spent in each zone', tier:'base', icon:'⏱', overlay:'heatmap', defaultOn:true },
-          { id:'conversion_proxy', label:'Conversion Signals', desc:'Entry-to-zone engagement ratio', tier:'advanced', icon:'📈', overlay:'counters' },
-          { id:'queue_congestion', label:'Queue & Congestion', desc:'Wait times and bottleneck alerts', tier:'advanced', icon:'🚦', overlay:'queue' },
-          { id:'campaign_impact', label:'Campaign Impact', desc:'Before/after traffic comparison', tier:'advanced', icon:'📊', overlay:'density' },
+          { id:'people_count', label:'People Count', desc:'Total visitors by zone and time', tier:'base', icon:'users', overlay:'counters', defaultOn:true },
+          { id:'hot_zones', label:'Hot Zones', desc:'Heatmap of most-visited areas', tier:'base', icon:'flame', overlay:'heatmap', defaultOn:true },
+          { id:'dwell_time', label:'Dwell by Area', desc:'Time spent in each zone', tier:'base', icon:'clock', overlay:'heatmap', defaultOn:true },
+          { id:'conversion_proxy', label:'Conversion Signals', desc:'Entry-to-zone engagement ratio', tier:'advanced', icon:'trending-up', overlay:'counters' },
+          { id:'queue_congestion', label:'Queue & Congestion', desc:'Wait times and bottleneck alerts', tier:'advanced', icon:'alarm-clock', overlay:'queue' },
+          { id:'campaign_impact', label:'Campaign Impact', desc:'Before/after traffic comparison', tier:'advanced', icon:'bar-chart-3', overlay:'density' },
         ],
         grocery: [
-          { id:'people_count', label:'People Count', desc:'Shopper volume by aisle and hour', tier:'base', icon:'👥', overlay:'counters', defaultOn:true },
-          { id:'flow_paths', label:'Flow Paths', desc:'Most common shopper journeys', tier:'base', icon:'🔀', overlay:'flow', defaultOn:true },
-          { id:'dwell_time', label:'Dwell by Area', desc:'Shelf engagement and browse time', tier:'base', icon:'⏱', overlay:'heatmap', defaultOn:true },
-          { id:'queue_congestion', label:'Queue & Congestion', desc:'Checkout wait and lane alerts', tier:'advanced', icon:'🚦', overlay:'queue' },
-          { id:'zone_attractiveness', label:'Zone Attraction', desc:'Which aisles pull traffic', tier:'advanced', icon:'🧲', overlay:'heatmap' },
-          { id:'staff_density', label:'Staff vs Guests', desc:'Staff-to-customer density', tier:'advanced', icon:'👔', overlay:'density' },
+          { id:'people_count', label:'People Count', desc:'Shopper volume by aisle and hour', tier:'base', icon:'users', overlay:'counters', defaultOn:true },
+          { id:'flow_paths', label:'Flow Paths', desc:'Most common shopper journeys', tier:'base', icon:'git-branch', overlay:'flow', defaultOn:true },
+          { id:'dwell_time', label:'Dwell by Area', desc:'Shelf engagement and browse time', tier:'base', icon:'clock', overlay:'heatmap', defaultOn:true },
+          { id:'queue_congestion', label:'Queue & Congestion', desc:'Checkout wait and lane alerts', tier:'advanced', icon:'alarm-clock', overlay:'queue' },
+          { id:'zone_attractiveness', label:'Zone Attraction', desc:'Which aisles pull traffic', tier:'advanced', icon:'magnet', overlay:'heatmap' },
+          { id:'staff_density', label:'Staff vs Guests', desc:'Staff-to-customer density', tier:'advanced', icon:'user-check', overlay:'density' },
         ],
         transit: [
-          { id:'passenger_flow', label:'Passenger Flow', desc:'Movement through gates', tier:'base', icon:'🚶', overlay:'flow', defaultOn:true },
-          { id:'occupancy_zone', label:'Zone Occupancy', desc:'Real-time count by area', tier:'base', icon:'👥', overlay:'counters', defaultOn:true },
-          { id:'queue_congestion', label:'Queue & Congestion', desc:'Security and boarding queues', tier:'advanced', icon:'🚦', overlay:'queue', defaultOn:true },
-          { id:'bottleneck', label:'Bottleneck Detection', desc:'Auto-identified chokepoints', tier:'advanced', icon:'⚠️', overlay:'queue' },
-          { id:'safety_density', label:'Safety Density', desc:'Crowd density alerts', tier:'advanced', icon:'🛡', overlay:'density' },
+          { id:'passenger_flow', label:'Passenger Flow', desc:'Movement through gates', tier:'base', icon:'footprints', overlay:'flow', defaultOn:true },
+          { id:'occupancy_zone', label:'Zone Occupancy', desc:'Real-time count by area', tier:'base', icon:'users', overlay:'counters', defaultOn:true },
+          { id:'queue_congestion', label:'Queue & Congestion', desc:'Security and boarding queues', tier:'advanced', icon:'alarm-clock', overlay:'queue', defaultOn:true },
+          { id:'bottleneck', label:'Bottleneck Detection', desc:'Auto-identified chokepoints', tier:'advanced', icon:'alert-triangle', overlay:'queue' },
+          { id:'safety_density', label:'Safety Density', desc:'Crowd density alerts', tier:'advanced', icon:'shield', overlay:'density' },
         ],
         office: [
-          { id:'occupancy', label:'Occupancy', desc:'People present by floor/zone', tier:'base', icon:'👥', overlay:'counters', defaultOn:true },
-          { id:'utilization', label:'Space Utilization', desc:'Actual use vs capacity', tier:'base', icon:'📐', overlay:'heatmap', defaultOn:true },
-          { id:'peak_times', label:'Peak Times', desc:'Busiest hours by zone', tier:'base', icon:'📈', overlay:'heatmap', defaultOn:true },
-          { id:'anomaly', label:'Anomaly Detection', desc:'Unusual patterns flagged', tier:'advanced', icon:'🔍', overlay:'density' },
-          { id:'energy_proxy', label:'Energy Proxy', desc:'Occupancy-linked HVAC hints', tier:'advanced', icon:'⚡', overlay:'counters' },
+          { id:'occupancy', label:'Occupancy', desc:'People present by floor/zone', tier:'base', icon:'users', overlay:'counters', defaultOn:true },
+          { id:'utilization', label:'Space Utilization', desc:'Actual use vs capacity', tier:'base', icon:'layout', overlay:'heatmap', defaultOn:true },
+          { id:'peak_times', label:'Peak Times', desc:'Busiest hours by zone', tier:'base', icon:'trending-up', overlay:'heatmap', defaultOn:true },
+          { id:'anomaly', label:'Anomaly Detection', desc:'Unusual patterns flagged', tier:'advanced', icon:'search', overlay:'density' },
+          { id:'energy_proxy', label:'Energy Proxy', desc:'Occupancy-linked HVAC hints', tier:'advanced', icon:'zap', overlay:'counters' },
         ],
         museum: [
-          { id:'visitor_flow', label:'Visitor Flow', desc:'Movement through galleries', tier:'base', icon:'🚶', overlay:'flow', defaultOn:true },
-          { id:'exhibit_dwell', label:'Exhibit Dwell', desc:'Time at each exhibit', tier:'base', icon:'🖼', overlay:'heatmap', defaultOn:true },
-          { id:'congestion', label:'Congestion Hotspots', desc:'Overcrowded gallery alerts', tier:'advanced', icon:'🚦', overlay:'queue', defaultOn:true },
-          { id:'path_preference', label:'Path Preference', desc:'Most vs least popular routes', tier:'advanced', icon:'🗺', overlay:'flow' },
+          { id:'visitor_flow', label:'Visitor Flow', desc:'Movement through galleries', tier:'base', icon:'footprints', overlay:'flow', defaultOn:true },
+          { id:'exhibit_dwell', label:'Exhibit Dwell', desc:'Time at each exhibit', tier:'base', icon:'image', overlay:'heatmap', defaultOn:true },
+          { id:'congestion', label:'Congestion Hotspots', desc:'Overcrowded gallery alerts', tier:'advanced', icon:'alarm-clock', overlay:'queue', defaultOn:true },
+          { id:'path_preference', label:'Path Preference', desc:'Most vs least popular routes', tier:'advanced', icon:'map', overlay:'flow' },
         ],
       };
 
@@ -2767,6 +2792,8 @@
           role: document.getElementById('cfgRole').value || '',
           venue: { width: CFG.width, length: CFG.length, height: CFG.height, unit: CFG.unit, type: CFG.venueType },
           result: { lidars: CFG.lidars.length, coveragePct: CFG.coveragePct, optimize: CFG.optimize, pricingMode: CFG.pricingMode },
+          outcomes: Array.from(CFG.selectedOutcomes),
+          recommendedPlan: CFG.recommendedTier,
           ts: new Date().toISOString()
         };
         // Save locally as backup
@@ -2830,6 +2857,7 @@
         }
       }
     </script>
+    <script src="./outcomes.js"></script>
 
   </body>
 </html>
