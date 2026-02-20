@@ -286,7 +286,7 @@
       .lead-form input[type=email]::placeholder { color:var(--hs-text-muted); }
       .lead-form .btn-primary { white-space:nowrap; }
       .lead-success { display:none; color:var(--hs-green); font-size:0.9375rem; margin-top:1rem; }
-      .lead-success.show { display:flex; }
+      .lead-success.show { display:flex; align-items:center; justify-content:center; gap:0.5rem; }
 
       /* ===== CONFIGURATOR WIZARD ===== */
       .cfg-section { background: var(--hs-bg); }
@@ -1860,7 +1860,7 @@
               <i data-lucide="send" style="width:16px;height:16px;"></i> Request Demo
             </button>
           </form>
-          <div class="lead-success" id="demoSuccess" style="display:none; align-items:center; justify-content:center; gap:0.5rem;">
+          <div class="lead-success" id="demoSuccess">
             <i data-lucide="check-circle" style="width:18px;height:18px;flex-shrink:0;"></i>
             Thank you! We'll be in touch within 24 hours.
           </div>
@@ -1973,6 +1973,12 @@
         CONTRACT_MONTHS: 36,             // T: contract length
         // Floor plan state
         fpImage: null, fpLine: null, fpDrawing: false, fpStart: null,
+        // Outcomes state
+        selectedOutcomes: new Set(),
+        recommendedTier: 'core',
+        // Tier pricing
+        PLATFORM_FEE_CORE: 0,
+        PLATFORM_FEE_PRO: 99,
       };
 
       function cfgToMeters(v) { return CFG.unit === 'ft' ? v * 0.3048 : v; }
@@ -2050,7 +2056,8 @@
         // Delay rendering until after layout paint (fixes blank SVG on first visit)
         requestAnimationFrame(() => {
           if (step === 2) { cfgRunPlacement(); cfgRenderResults(); }
-          if (step === 3) { cfgComputePricing(); }
+          if (step === 3) { cfgInitOutcomesStep(); }
+          if (step === 4) { cfgComputePricing(); }
         });
       }
       function cfgClickStep(step) {
@@ -2066,7 +2073,7 @@
         CFG.width = parseFloat(document.getElementById('cfgWidth').value) || 30;
         CFG.length = parseFloat(document.getElementById('cfgLength').value) || 20;
         CFG.height = parseFloat(document.getElementById('cfgHeight').value) || 3.5;
-        if (CFG.step < 3) cfgGoTo(CFG.step + 1);
+        if (CFG.step < 4) cfgGoTo(CFG.step + 1);
       }
       function cfgBack() { if (CFG.step > 0) cfgGoTo(CFG.step - 1); }
 
@@ -2707,6 +2714,46 @@
           btn.classList.remove('active');
         }
       }
+
+      // === OUTCOMES REGISTRY ===
+      const OUTCOMES_REGISTRY = {
+        retail: [
+          { id:'people_count', label:'People Count', desc:'Total visitors by zone and time', tier:'base', icon:'👥', overlay:'counters', defaultOn:true },
+          { id:'hot_zones', label:'Hot Zones', desc:'Heatmap of most-visited areas', tier:'base', icon:'🔥', overlay:'heatmap', defaultOn:true },
+          { id:'dwell_time', label:'Dwell by Area', desc:'Time spent in each zone', tier:'base', icon:'⏱', overlay:'heatmap', defaultOn:true },
+          { id:'conversion_proxy', label:'Conversion Signals', desc:'Entry-to-zone engagement ratio', tier:'advanced', icon:'📈', overlay:'counters' },
+          { id:'queue_congestion', label:'Queue & Congestion', desc:'Wait times and bottleneck alerts', tier:'advanced', icon:'🚦', overlay:'queue' },
+          { id:'campaign_impact', label:'Campaign Impact', desc:'Before/after traffic comparison', tier:'advanced', icon:'📊', overlay:'density' },
+        ],
+        grocery: [
+          { id:'people_count', label:'People Count', desc:'Shopper volume by aisle and hour', tier:'base', icon:'👥', overlay:'counters', defaultOn:true },
+          { id:'flow_paths', label:'Flow Paths', desc:'Most common shopper journeys', tier:'base', icon:'🔀', overlay:'flow', defaultOn:true },
+          { id:'dwell_time', label:'Dwell by Area', desc:'Shelf engagement and browse time', tier:'base', icon:'⏱', overlay:'heatmap', defaultOn:true },
+          { id:'queue_congestion', label:'Queue & Congestion', desc:'Checkout wait and lane alerts', tier:'advanced', icon:'🚦', overlay:'queue' },
+          { id:'zone_attractiveness', label:'Zone Attraction', desc:'Which aisles pull traffic', tier:'advanced', icon:'🧲', overlay:'heatmap' },
+          { id:'staff_density', label:'Staff vs Guests', desc:'Staff-to-customer density', tier:'advanced', icon:'👔', overlay:'density' },
+        ],
+        transit: [
+          { id:'passenger_flow', label:'Passenger Flow', desc:'Movement through gates', tier:'base', icon:'🚶', overlay:'flow', defaultOn:true },
+          { id:'occupancy_zone', label:'Zone Occupancy', desc:'Real-time count by area', tier:'base', icon:'👥', overlay:'counters', defaultOn:true },
+          { id:'queue_congestion', label:'Queue & Congestion', desc:'Security and boarding queues', tier:'advanced', icon:'🚦', overlay:'queue', defaultOn:true },
+          { id:'bottleneck', label:'Bottleneck Detection', desc:'Auto-identified chokepoints', tier:'advanced', icon:'⚠️', overlay:'queue' },
+          { id:'safety_density', label:'Safety Density', desc:'Crowd density alerts', tier:'advanced', icon:'🛡', overlay:'density' },
+        ],
+        office: [
+          { id:'occupancy', label:'Occupancy', desc:'People present by floor/zone', tier:'base', icon:'👥', overlay:'counters', defaultOn:true },
+          { id:'utilization', label:'Space Utilization', desc:'Actual use vs capacity', tier:'base', icon:'📐', overlay:'heatmap', defaultOn:true },
+          { id:'peak_times', label:'Peak Times', desc:'Busiest hours by zone', tier:'base', icon:'📈', overlay:'heatmap', defaultOn:true },
+          { id:'anomaly', label:'Anomaly Detection', desc:'Unusual patterns flagged', tier:'advanced', icon:'🔍', overlay:'density' },
+          { id:'energy_proxy', label:'Energy Proxy', desc:'Occupancy-linked HVAC hints', tier:'advanced', icon:'⚡', overlay:'counters' },
+        ],
+        museum: [
+          { id:'visitor_flow', label:'Visitor Flow', desc:'Movement through galleries', tier:'base', icon:'🚶', overlay:'flow', defaultOn:true },
+          { id:'exhibit_dwell', label:'Exhibit Dwell', desc:'Time at each exhibit', tier:'base', icon:'🖼', overlay:'heatmap', defaultOn:true },
+          { id:'congestion', label:'Congestion Hotspots', desc:'Overcrowded gallery alerts', tier:'advanced', icon:'🚦', overlay:'queue', defaultOn:true },
+          { id:'path_preference', label:'Path Preference', desc:'Most vs least popular routes', tier:'advanced', icon:'🗺', overlay:'flow' },
+        ],
+      };
 
       // === LEAD CAPTURE ===
       const API_BASE = window.location.hostname === 'localhost' ? 'http://localhost:3002' : '';
