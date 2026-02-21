@@ -1,0 +1,347 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LiDAR vs. Cameras for In-Store Analytics: A Complete Comparison</title>
+  <meta name="description" content="A head-to-head comparison of LiDAR vs. camera analytics for retail. Discover which technology offers better accuracy, privacy, and ROI for understanding shopper behavior.">
+  <meta name="keywords" content="lidar vs camera analytics, retail analytics comparison, in-store tracking, people counting, privacy analytics, lidar accuracy, camera analytics problems, gdpr analytics, retail technology">
+  <meta name="robots" content="index, follow, max-image-preview:large, max-snippet:-1">
+  <link rel="canonical" href="https://www.hyspace.app/blog/lidar-vs-cameras.html">
+
+  <meta property="og:type" content="article">
+  <meta property="og:url" content="https://www.hyspace.app/blog/lidar-vs-cameras.html">
+  <meta property="og:title" content="LiDAR vs. Cameras for In-Store Analytics: A Complete Comparison">
+  <meta property="og:description" content="Head-to-head comparison of LiDAR vs. camera analytics for retail — accuracy, privacy, cost, and deployment.">
+  <meta property="og:image" content="https://www.hyspace.app/blog/lidars-vs-cameras.png">
+  <meta property="og:site_name" content="Hyperspace">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="LiDAR vs. Cameras for In-Store Analytics: A Complete Comparison">
+  <meta name="twitter:description" content="Head-to-head comparison of LiDAR vs. camera analytics for retail — accuracy, privacy, cost, and deployment.">
+  <meta name="twitter:image" content="https://www.hyspace.app/blog/lidars-vs-cameras.png">
+
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "BlogPosting",
+    "headline": "LiDAR vs. Cameras for In-Store Analytics: A Complete Comparison",
+    "description": "A head-to-head comparison of LiDAR vs. camera analytics for retail. Discover which technology offers better accuracy, privacy, and ROI.",
+    "image": "https://www.hyspace.app/blog/lidars-vs-cameras.png",
+    "author": { "@type": "Organization", "name": "Hyperspace" },
+    "publisher": { "@type": "Organization", "name": "Hyperspace", "logo": { "@type": "ImageObject", "url": "https://www.hyspace.app/hyperspace-logo.png" } },
+    "datePublished": "2026-02-21",
+    "dateModified": "2026-02-21",
+    "mainEntityOfPage": "https://www.hyspace.app/blog/lidar-vs-cameras.html"
+  }
+  </script>
+
+  <link rel="icon" type="image/png" href="../hyperspace-logo.png">
+  <link rel="apple-touch-icon" href="../hyperspace-logo.png">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../seo-pages.css">
+  <style>
+    .blog-hero-img { width:100%; max-height:420px; object-fit:cover; border-radius:16px; margin-bottom:2rem; }
+    .blog-meta { display:flex; gap:1rem; flex-wrap:wrap; align-items:center; margin-bottom:2rem; color:var(--hs-text-muted,#94a3b8); font-size:0.875rem; }
+    .blog-meta .tag { background:rgba(59,130,246,0.15); color:#60a5fa; padding:0.25rem 0.75rem; border-radius:20px; font-size:0.75rem; font-weight:600; }
+    .blog-callout { background:rgba(59,130,246,0.08); border-left:3px solid #3b82f6; padding:1.25rem 1.5rem; border-radius:0 12px 12px 0; margin:2rem 0; font-style:italic; color:var(--hs-text-muted,#94a3b8); }
+    .blog-callout p { margin:0; }
+    .impact-box { background:rgba(34,197,94,0.08); border:1px solid rgba(34,197,94,0.2); border-radius:12px; padding:1.25rem 1.5rem; margin:1.5rem 0; }
+    .impact-box strong { color:#22c55e; }
+    .compare-table { width:100%; border-collapse:collapse; margin:1.5rem 0; font-size:0.875rem; }
+    .compare-table th { background:rgba(59,130,246,0.12); color:var(--hs-blue,#3b82f6); padding:0.75rem 1rem; text-align:left; font-weight:700; border-bottom:2px solid rgba(59,130,246,0.3); }
+    .compare-table td { padding:0.75rem 1rem; border-bottom:1px solid rgba(255,255,255,0.06); vertical-align:top; }
+    .compare-table tr:hover td { background:rgba(255,255,255,0.02); }
+    .compare-table .winner { color:#22c55e; font-weight:600; }
+    .compare-table .draw { color:#eab308; font-weight:600; }
+    .blog-kpi-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:1rem; margin:1.5rem 0; }
+    .blog-kpi { background:rgba(255,255,255,0.04); border:1px solid rgba(255,255,255,0.08); border-radius:12px; padding:1rem; }
+    .blog-kpi strong { color:var(--hs-blue,#3b82f6); display:block; margin-bottom:0.25rem; }
+    .never-list { list-style:none; padding:0; }
+    .never-list li { padding:0.4rem 0; }
+    .never-list li::before { content:''; margin-right:0.5rem; }
+    .cost-table { width:100%; border-collapse:collapse; margin:1.5rem 0; font-size:0.875rem; }
+    .cost-table th { background:rgba(139,92,246,0.12); color:var(--hs-purple,#8b5cf6); padding:0.75rem 1rem; text-align:left; font-weight:700; border-bottom:2px solid rgba(139,92,246,0.3); }
+    .cost-table td { padding:0.75rem 1rem; border-bottom:1px solid rgba(255,255,255,0.06); vertical-align:top; }
+    .cost-table tr:hover td { background:rgba(255,255,255,0.02); }
+    .feature-table { width:100%; border-collapse:collapse; margin:1.5rem 0; font-size:0.875rem; }
+    .feature-table th { background:rgba(34,197,94,0.12); color:#22c55e; padding:0.75rem 1rem; text-align:left; font-weight:700; border-bottom:2px solid rgba(34,197,94,0.3); }
+    .feature-table td { padding:0.75rem 1rem; border-bottom:1px solid rgba(255,255,255,0.06); vertical-align:top; }
+    .feature-table tr:hover td { background:rgba(255,255,255,0.02); }
+  </style>
+</head>
+<body>
+
+  <header class="site-header">
+    <div class="inner">
+      <a href="../" class="logo">
+        <img src="../hyperspace-logo.png" alt="Hyperspace">
+        <span>Hyperspace</span>
+      </a>
+      <nav>
+        <a href="../physical-ai.html">Physical AI</a>
+        <a href="../spatial-intelligence.html">Spatial Intelligence</a>
+        <a href="../lidar-analytics.html">LiDAR Analytics</a>
+        <a href="../#configurator" class="btn-primary">Configure Your Space</a>
+      </nav>
+    </div>
+  </header>
+
+  <nav class="breadcrumb" aria-label="Breadcrumb">
+    <a href="../">Home</a><span>/</span><a href="../#blog">Blog</a><span>/</span><strong>LiDAR vs. Cameras</strong>
+  </nav>
+
+  <section class="page-hero">
+    <span class="badge badge-blue">Technology Comparison</span>
+    <h1>LiDAR vs. Cameras for In-Store Analytics: <span class="gradient-text">A Complete Comparison</span></h1>
+    <p class="subtitle">A direct, technical comparison across the metrics that matter most to retailers — accuracy, privacy, scalability, and total cost of ownership.</p>
+  </section>
+
+  <article class="container">
+
+    <img src="./lidars-vs-cameras.png" alt="Side-by-side comparison of camera analytics issues versus LiDAR analytics advantages: privacy, accuracy, anonymous tracking" class="blog-hero-img" loading="lazy">
+
+    <div class="blog-meta">
+      <span>February 21, 2026</span>
+      <span>&middot;</span>
+      <span>15 min read</span>
+      <span class="tag">Retail Technology</span>
+      <span class="tag">Analytics</span>
+      <span class="tag">Privacy</span>
+    </div>
+
+    <section class="content-section">
+      <p>For retailers, understanding in-store customer behavior is the holy grail. For years, video analytics — using cameras and computer vision — has been the go-to solution. But a new technology, LiDAR, is rapidly emerging as a superior alternative, offering unparalleled accuracy and privacy.</p>
+      <p>So, which is right for your business? This article provides a direct, technical comparison of LiDAR vs. camera analytics across the metrics that matter most.</p>
+    </section>
+
+    <section class="content-section">
+      <h2>What is LiDAR and How is it Different?</h2>
+      <p><strong>Camera Analytics</strong> work by capturing and interpreting 2D images. Computer vision algorithms analyze these images to identify people, track their paths, and estimate behaviors like dwell time. The system is fundamentally dependent on visual information — lighting, contrast, and clear sightlines.</p>
+      <p><strong>LiDAR (Light Detection and Ranging)</strong> works by emitting pulses of invisible laser light (typically 905nm wavelength) and measuring how long they take to return. This creates a real-time <strong>3D point cloud</strong> of the environment — a hyper-accurate, depth-aware map of the space and everything in it.</p>
+      <p>Platforms like <strong>Hyperspace</strong> then process this point cloud to track the movement of every person and object with <strong>millimeter-level precision</strong>. The system samples at <strong>1Hz</strong> (one position reading per second per person), creating a complete trajectory dataset.</p>
+    </section>
+
+    <section class="content-section">
+      <h2>Head-to-Head Comparison</h2>
+      <table class="compare-table">
+        <thead>
+          <tr><th>Feature</th><th>LiDAR Analytics (Hyperspace)</th><th>Camera Analytics</th><th>Winner</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><strong>Tracking Accuracy</strong></td><td>99%+</td><td>75–90% (varies greatly)</td><td class="winner">LiDAR</td></tr>
+          <tr><td><strong>Privacy Compliance</strong></td><td>100% Anonymous by Design</td><td>High Risk (captures PII)</td><td class="winner">LiDAR</td></tr>
+          <tr><td><strong>Lighting Performance</strong></td><td>Unaffected</td><td>Degrades in low light, glare, shadows</td><td class="winner">LiDAR</td></tr>
+          <tr><td><strong>3D vs. 2D Tracking</strong></td><td>True 3D Spatial Tracking</td><td>2D Image Interpretation</td><td class="winner">LiDAR</td></tr>
+          <tr><td><strong>Occlusion Handling</strong></td><td>Excellent (sees around objects)</td><td>Poor (loses track when blocked)</td><td class="winner">LiDAR</td></tr>
+          <tr><td><strong>Crowd Density</strong></td><td>Unlimited (100+ simultaneous)</td><td>Degrades above 20 people</td><td class="winner">LiDAR</td></tr>
+          <tr><td><strong>Data Granularity</strong></td><td>1Hz position sampling</td><td>Frame-based (15–30 FPS, lossy)</td><td class="winner">LiDAR</td></tr>
+          <tr><td><strong>Installation</strong></td><td>Ceiling-mount, minimal cabling</td><td>Extensive cabling and power</td><td class="winner">LiDAR</td></tr>
+          <tr><td><strong>Maintenance</strong></td><td>Minimal (no lens cleaning)</td><td>Regular cleaning, recalibration</td><td class="winner">LiDAR</td></tr>
+          <tr><td><strong>Hardware Cost</strong></td><td>Moderate (falling rapidly)</td><td>Low to Moderate</td><td class="draw">Draw</td></tr>
+          <tr><td><strong>Compliance Overhead</strong></td><td>Zero (no PII captured)</td><td>High (GDPR, CCPA, signage, consent)</td><td class="winner">LiDAR</td></tr>
+          <tr><td><strong>Public Perception</strong></td><td>Neutral / Positive</td><td>Increasingly Negative</td><td class="winner">LiDAR</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="content-section">
+      <h2>1. Accuracy &amp; Reliability: The Data You Can Trust</h2>
+      <p>Camera accuracy is notoriously inconsistent. Shadows, bright sunlight, reflections, and clothing color all affect results. Crowd counting is a rough estimate, and tracking through a busy store is error-prone.</p>
+      <p><strong>LiDAR is a measurement tool, not an interpretation tool.</strong> It measures distance and shape with laser precision, resulting in <strong>over 99% tracking accuracy</strong> in all conditions.</p>
+      <div class="blog-kpi-grid">
+        <div class="blog-kpi"><strong>&plusmn;5mm Accuracy</strong> Millimeter-level position precision</div>
+        <div class="blog-kpi"><strong>1Hz Sampling</strong> Complete movement trajectories</div>
+        <div class="blog-kpi"><strong>Multi-Sensor Fusion</strong> Seamless coverage across zones</div>
+        <div class="blog-kpi"><strong>Persistent Tracking</strong> Maintains IDs through occlusion</div>
+      </div>
+      <div class="impact-box">
+        <strong>Real-World Example:</strong> A grocery chain tested both systems side-by-side. The camera system reported <strong>"approximately 850–920 visitors"</strong>. Hyperspace's LiDAR reported <strong>exactly 887 unique visitors</strong>. POS transactions showed 891 — LiDAR was within <strong>0.4% accuracy</strong>, while the camera had <strong>&plusmn;8% margin of error</strong>.
+      </div>
+    </section>
+
+    <section class="content-section">
+      <h2>2. Privacy by Design: The Competitive Differentiator</h2>
+      <p>This is LiDAR's single greatest advantage. Camera systems capture <strong>Personally Identifiable Information (PII)</strong> by default — faces, clothing, gait. This creates a massive compliance burden and risk to customer trust.</p>
+      <p>Many camera-based analytics systems are simply <strong>illegal in jurisdictions like the EU</strong> without explicit, opt-in consent from every shopper — a non-starter for any retailer.</p>
+      <p><strong>LiDAR is anonymous by design.</strong> It generates a point cloud of abstract shapes. It is <strong>physically impossible</strong> to identify an individual from LiDAR data.</p>
+      <h3>What Hyperspace Captures:</h3>
+      <ul>
+        <li><strong>Position data:</strong> (x, y, z) coordinates in 3D space</li>
+        <li><strong>Velocity:</strong> Movement speed and direction</li>
+        <li><strong>Zone interactions:</strong> Which areas a person entered and exited</li>
+        <li><strong>Dwell events:</strong> How long they stayed in each zone</li>
+      </ul>
+      <h3>What Hyperspace NEVER Captures:</h3>
+      <ul class="never-list">
+        <li>&#10060; Faces or facial features</li>
+        <li>&#10060; Clothing or appearance</li>
+        <li>&#10060; Gender, age, or demographics</li>
+        <li>&#10060; Any personally identifiable information</li>
+      </ul>
+      <div class="blog-callout"><p>In an age of increasing consumer skepticism about data collection, offering a truly anonymous analytics solution is a powerful brand differentiator. Retailers using Hyperspace can confidently market their stores as "privacy-first" environments.</p></div>
+    </section>
+
+    <section class="content-section">
+      <h2>3. Superior Performance in Real-World Conditions</h2>
+      <p>Retail environments are chaotic — lighting changes, crowds surge, displays get moved. Camera systems struggle with this variability:</p>
+      <ul>
+        <li><strong>Glare</strong> from a window can blind a camera for hours</li>
+        <li><strong>Shadows</strong> can be misinterpreted as objects or people</li>
+        <li><strong>Crowds</strong> make it impossible to track individuals accurately</li>
+        <li><strong>Reflective surfaces</strong> (glass, polished floors) confuse computer vision</li>
+        <li><strong>Varying lighting</strong> (daylight vs. evening) requires constant recalibration</li>
+      </ul>
+      <p><strong>LiDAR is immune to these issues.</strong> Because it generates its own light, it is completely unaffected by ambient lighting. Its 3D capability handles dense crowds with ease.</p>
+      <div class="impact-box">
+        <strong>Real-World Example:</strong> A fashion retailer with floor-to-ceiling windows found camera accuracy dropped to <strong>62%</strong> during peak sunlight (11 AM – 2 PM). The LiDAR system maintained <strong>99.2% accuracy</strong> throughout the entire day.
+      </div>
+    </section>
+
+    <section class="content-section">
+      <h2>4. Scalability &amp; Deployment Efficiency</h2>
+      <div class="blog-kpi-grid">
+        <div class="blog-kpi" style="border-color:rgba(239,68,68,0.3);">
+          <strong style="color:#ef4444;">Camera Systems</strong>
+          <ul style="margin:0.5rem 0 0; padding-left:1.25rem; font-size:0.8125rem;">
+            <li>Extensive cabling (power + data per camera)</li>
+            <li>10–20+ cameras for 2,000m&sup2;</li>
+            <li>Overlapping coverage = double-counting</li>
+            <li>Regular cleaning &amp; recalibration</li>
+          </ul>
+        </div>
+        <div class="blog-kpi" style="border-color:rgba(34,197,94,0.3);">
+          <strong style="color:#22c55e;">Hyperspace LiDAR</strong>
+          <ul style="margin:0.5rem 0 0; padding-left:1.25rem; font-size:0.8125rem;">
+            <li>Ceiling-mount, minimal cabling</li>
+            <li>4–6 sensors for 2,000m&sup2;</li>
+            <li>Multi-sensor fusion, no double-counting</li>
+            <li>Self-calibrating, minimal maintenance</li>
+          </ul>
+        </div>
+      </div>
+      <h3>The Hyperspace Deployment Process:</h3>
+      <ol>
+        <li><strong>Planning:</strong> Web-based LiDAR Coverage Planner simulates optimal placement</li>
+        <li><strong>Installation:</strong> Mount sensors on ceiling (like WiFi access points)</li>
+        <li><strong>Commissioning:</strong> Edge Commissioning Portal — pair sensors and deploy remotely</li>
+        <li><strong>Validation:</strong> Real-time LiDAR Network Panel shows connection status</li>
+        <li><strong>Go-Live:</strong> Analytics dashboard starts displaying insights immediately</li>
+      </ol>
+      <div class="impact-box">
+        <strong>Real-World Example:</strong> A 2,500m&sup2; grocery store deployed Hyperspace with <strong>5 Livox Mid-360 sensors</strong> in <strong>6 hours</strong>. A comparable camera system required <strong>18 cameras</strong> and <strong>3 days</strong> to install and calibrate.
+      </div>
+    </section>
+
+    <section class="content-section">
+      <h2>5. Advanced Analytics Capabilities</h2>
+      <p>Because LiDAR provides true 3D position data at 1Hz, it enables analytics that are impossible with cameras:</p>
+      <table class="feature-table">
+        <thead>
+          <tr><th>Feature</th><th>Hyperspace (LiDAR)</th><th>Camera Capability</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><strong>Queue Management</strong></td><td>Millisecond precision tracking</td><td>&#10060; Unreliable in crowds</td></tr>
+          <tr><td><strong>Velocity Analysis</strong></td><td>Browsing vs. passing differentiation</td><td>&#10060; Frame-rate limited</td></tr>
+          <tr><td><strong>Heatmap Accuracy</strong></td><td>True occupancy with exact dwell locations</td><td>&#9888;&#65039; Approximate</td></tr>
+          <tr><td><strong>Path Reconstruction</strong></td><td>Complete journey, entrance to exit</td><td>&#10060; Loses tracks frequently</td></tr>
+          <tr><td><strong>DOOH Attribution (PEBLE&trade;)</strong></td><td>Attention measurement + post-exposure behavior</td><td>&#10060; Cannot measure accurately</td></tr>
+          <tr><td><strong>Shelf-Level Analytics</strong></td><td>Per-product engagement tracking</td><td>&#10060; Requires very high resolution</td></tr>
+          <tr><td><strong>AI Narrator</strong></td><td>Natural language insights and suggestions</td><td>&#9888;&#65039; Limited by data quality</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="content-section">
+      <h2>When Are Cameras Still Useful?</h2>
+      <p>Cameras are not obsolete, but their role is changing. They remain essential for two functions:</p>
+      <ol>
+        <li><strong>Security &amp; Loss Prevention:</strong> When you need to identify a specific individual for security reasons. However, this should be a <strong>separate system</strong> from your analytics infrastructure.</li>
+        <li><strong>Demographics (with caution):</strong> Computer vision can attempt to estimate age and gender, though accuracy is often below 70% and carries the same privacy risks.</li>
+      </ol>
+      <p><strong>For operational analytics</strong> — understanding flow, dwell time, queue length, and layout effectiveness — <strong>LiDAR is the clear winner.</strong></p>
+    </section>
+
+    <section class="content-section">
+      <h2>The Total Cost of Ownership</h2>
+      <p>While a single camera costs less than a single LiDAR sensor, the <strong>total cost of ownership</strong> for a comprehensive system often favors LiDAR:</p>
+      <table class="cost-table">
+        <thead>
+          <tr><th>Cost Factor</th><th>Camera System</th><th>LiDAR System (Hyperspace)</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><strong>Hardware</strong></td><td>$200–500 &times; 15–20 units = $3,000–10,000</td><td>$1,500–3,000 &times; 5–6 units = $7,500–18,000</td></tr>
+          <tr><td><strong>Installation</strong></td><td>2–3 days, extensive cabling = $3,000–5,000</td><td>1 day, minimal cabling = $1,500–2,500</td></tr>
+          <tr><td><strong>Software License</strong></td><td>$500–2,000/month</td><td>Included (or LiDAR-as-a-Service)</td></tr>
+          <tr><td><strong>Compliance Costs</strong></td><td>Legal review, signage, consent = $5,000–20,000</td><td>$0 (no PII captured)</td></tr>
+          <tr><td><strong>Maintenance</strong></td><td>Lens cleaning, recalibration = $200–500/month</td><td>Minimal (~$50/month)</td></tr>
+          <tr><td><strong>Data Quality</strong></td><td>75–90% accuracy = hidden cost in bad decisions</td><td>99%+ accuracy = confidence in decisions</td></tr>
+        </tbody>
+      </table>
+      <p><strong>LiDAR-as-a-Service:</strong> Hyperspace offers a <strong>zero-CAPEX deployment model</strong> — a monthly fee per sensor, eliminating upfront hardware costs entirely.</p>
+    </section>
+
+    <section class="content-section">
+      <h2>Conclusion: The Choice is Clear</h2>
+      <p>For retailers seeking accurate, reliable, and privacy-respecting data on in-store behavior, <strong>LiDAR is the definitive modern solution</strong>. While cameras will always have a role in security, they are an outdated and risky choice for customer analytics.</p>
+      <div class="blog-kpi-grid">
+        <div class="blog-kpi"><strong>99%+ Accuracy</strong> In all conditions</div>
+        <div class="blog-kpi"><strong>100% Anonymous</strong> No cameras, no PII</div>
+        <div class="blog-kpi"><strong>Real-Time</strong> 1Hz position sampling</div>
+        <div class="blog-kpi"><strong>Zero CAPEX</strong> LiDAR-as-a-Service option</div>
+      </div>
+      <p style="margin-top:2rem; text-align:center;">
+        <a href="../#configurator" class="btn-primary" style="margin-right:1rem;">Learn More About Hyperspace</a>
+        <a href="../#configurator" class="btn-primary" style="background:var(--hs-purple);">Calculate Store Coverage</a>
+      </p>
+    </section>
+
+    <section class="content-section" style="border-top:1px solid rgba(255,255,255,0.06); padding-top:2rem; margin-top:2rem;">
+      <p style="color:var(--hs-text-muted,#94a3b8); font-size:0.875rem;"><strong>About Hyperspace:</strong> Hyperspace is the leading Physical AI platform for retail, using LiDAR sensors to provide privacy-first spatial analytics. Our mission is to help retailers understand and optimize their physical spaces without compromising customer privacy.</p>
+    </section>
+
+  </article>
+
+  <section class="cta-band">
+    <h2>Ready to Replace Cameras with LiDAR?</h2>
+    <p>See how Hyperspace delivers 99%+ accuracy with zero privacy risk.</p>
+    <a href="../#configurator" class="btn-primary" style="margin-right:1rem;">Configure Your Space</a>
+    <a href="./5-ways-lidar-grocery-layouts.html" class="btn-primary" style="background:var(--hs-green);">Read: 5 Ways LiDAR Transforms Grocery</a>
+  </section>
+
+  <section class="container related-pages">
+    <h2>Related Reading</h2>
+    <div class="related-links">
+      <a href="./5-ways-lidar-grocery-layouts.html" class="related-link">
+        <strong>5 Ways LiDAR Analytics Are Revolutionizing Grocery Store Layouts</strong>
+        <span>From bottleneck elimination to planogram validation — real-world grocery use cases.</span>
+      </a>
+      <a href="../privacy-first-analytics.html" class="related-link">
+        <strong>Privacy-First Analytics</strong>
+        <span>GDPR-safe by architecture, not by configuration.</span>
+      </a>
+      <a href="../hardware-agnostic-lidar.html" class="related-link">
+        <strong>Hardware-Agnostic LiDAR</strong>
+        <span>Compatible with Livox, Ouster, Velodyne, and more.</span>
+      </a>
+      <a href="../lidar-as-a-service.html" class="related-link">
+        <strong>LiDAR as a Service</strong>
+        <span>Capex-free deployment — zero upfront investment.</span>
+      </a>
+    </div>
+  </section>
+
+  <footer class="site-footer">
+    <div class="footer-links">
+      <a href="../">Home</a>
+      <a href="../physical-ai.html">Physical AI</a>
+      <a href="../spatial-intelligence.html">Spatial Intelligence</a>
+      <a href="../lidar-analytics.html">LiDAR Analytics</a>
+      <a href="../solutions/retail-analytics.html">Retail</a>
+      <a href="../lidar-as-a-service.html">LiDAR as a Service</a>
+      <a href="../privacy-first-analytics.html">Privacy-First</a>
+    </div>
+    <p>&copy; 2026 Hyperspace. All rights reserved.</p>
+  </footer>
+
+</body>
+</html>
