@@ -18,7 +18,7 @@ services:
       - caddy_config:/config
       - /var/log/caddy:/var/log/caddy
     environment:
-      - DOMAIN=${DOMAIN:-localhost}
+      - DOMAIN=${DOMAIN:-}
     depends_on:
       backend:
         condition: service_healthy
