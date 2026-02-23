@@ -6,8 +6,8 @@ import {
 } from 'lucide-react'
 import { useVenue } from '../../context/VenueContext'
 import { QueueCircles } from '../settings/QueueCircles'
+import { API_BASE } from '../../config/api'
 
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3001'
 
 // Types
 interface QueuedPerson {

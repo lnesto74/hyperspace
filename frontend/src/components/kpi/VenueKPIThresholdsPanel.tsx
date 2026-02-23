@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { X, Settings, Save, RotateCcw, TrendingUp, TrendingDown, Minus } from 'lucide-react'
+import { API_BASE } from '../../config/api'
 
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3001'
 
 // Default thresholds from PersonaStepRegistry (fallback values)
 const DEFAULT_THRESHOLDS: Record<string, ThresholdConfig> = {

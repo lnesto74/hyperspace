@@ -35,15 +35,25 @@ export default function Sidebar({ activeTab, onTabChange, onOpenDwgImporter, onO
   return (
     <div className="w-72 flex-shrink-0 h-full bg-panel-bg border-r border-border-dark flex flex-col overflow-hidden">
       {/* Header */}
-      <div className="h-14 border-b border-border-dark flex items-center px-4">
-        <div className="flex items-center gap-2">
-          <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center">
-            <Radar className="w-5 h-5 text-white" />
-          </div>
-          <div>
-            <h1 className="text-sm font-semibold text-white">Hyperspace</h1>
-            <p className="text-[10px] text-gray-500">LiDAR Configurator</p>
-          </div>
+      <style>{`
+        @keyframes sidebar-hue { from { filter: hue-rotate(0deg); } to { filter: hue-rotate(-360deg); } }
+        .sidebar-gradient-text {
+          font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+          font-weight: 100;
+          letter-spacing: 0.15em;
+          text-transform: uppercase;
+          color: #f35626;
+          background-image: linear-gradient(92deg, #f35626, #feab3a);
+          -webkit-background-clip: text;
+          background-clip: text;
+          -webkit-text-fill-color: transparent;
+          animation: sidebar-hue 10s infinite linear;
+        }
+      `}</style>
+      <div className="h-20 border-b border-border-dark flex items-center px-4">
+        <div className="flex items-center gap-3">
+          <img src="/hyperspace-logo.png" alt="" className="w-14 h-14 object-contain" onError={(e) => { (e.target as HTMLImageElement).src = '/hyperspace.svg'; }} />
+          <h1 className="sidebar-gradient-text text-xl">Hyperspace</h1>
         </div>
       </div>
 

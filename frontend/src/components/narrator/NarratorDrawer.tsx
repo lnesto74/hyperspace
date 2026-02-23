@@ -18,6 +18,7 @@ import {
 } from 'lucide-react';
 import { useNarrator } from '../../context/NarratorContext';
 import { PERSONAS } from '../../features/businessReporting/personas';
+import { API_BASE } from '../../config/api';
 import type { PersonaId, ProactiveInsight, RecommendedAction } from '../../types/narrator';
 
 interface NarratorDrawerProps {
@@ -64,7 +65,7 @@ export default function NarratorDrawer({ onExecuteIntent }: NarratorDrawerProps)
 
   // Fetch story paths
   useEffect(() => {
-    fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:3001'}/api/narrator/story-paths`)
+    fetch(`${API_BASE}/api/narrator/story-paths`)
       .then(res => res.json())
       .then(data => {
         if (data.success) {

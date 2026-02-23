@@ -1,8 +1,8 @@
 import { createContext, useContext, useState, useCallback, ReactNode } from 'react'
 import { RegionOfInterest, Vector2 } from '../types'
 import { useToast } from './ToastContext'
+import { API_BASE } from '../config/api'
 
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3001'
 
 interface RoiContextType {
   regions: RegionOfInterest[]

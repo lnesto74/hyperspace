@@ -4,8 +4,8 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { Layers, Eye, EyeOff } from 'lucide-react'
 import { useVenue } from '../../context/VenueContext'
 import { usePlanogram, ShelfPlanogram, SkuItem, SlotFacing } from '../../context/PlanogramContext'
+import { API_BASE } from '../../config/api'
 
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3001'
 
 // Tooltip component for 3D viewport
 function Slot3DTooltip({ sku, position }: { sku: SkuItem; position: { x: number; y: number } }) {

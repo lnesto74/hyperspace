@@ -1,3 +1,4 @@
+import { API_BASE } from '../config/api'
 /**
  * Narrator2 Context
  * 
@@ -18,7 +19,7 @@ import type {
   Narrator2PersonasResponse,
 } from '../types/narrator2';
 
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3001';
+;
 
 // Storage keys
 const STORAGE_KEYS = {

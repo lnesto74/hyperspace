@@ -2,8 +2,8 @@ import { useState, useEffect, useRef } from 'react'
 import { Package, Square, ShoppingCart, DoorOpen, Circle, Shapes, Upload, FolderUp, X, ChevronDown, Plus, Monitor, Radio } from 'lucide-react'
 import { useVenue } from '../../context/VenueContext'
 import { ObjectType, Vector3 } from '../../types'
+import { API_BASE } from '../../config/api'
 
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3001'
 
 interface ObjectPreset {
   type: ObjectType

@@ -1,7 +1,8 @@
+import { API_BASE } from '../../../config/api'
 import { useState, useEffect, useMemo } from 'react';
 import { MapPin } from 'lucide-react';
 
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3001';
+;
 
 interface DeadZone {
   id: string;

@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react'
 import { Upload, Trash2, GripVertical, Play, Pause, Plus, Film, Clock, CheckCircle, AlertCircle } from 'lucide-react'
+import { API_BASE } from '../../config/api'
 
-const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:3001'
 
 interface PlaylistVideo {
   id: string

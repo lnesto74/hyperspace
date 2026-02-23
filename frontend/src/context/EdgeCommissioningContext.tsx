@@ -1,7 +1,7 @@
 import { createContext, useContext, useState, useCallback, ReactNode } from 'react'
 import { useToast } from './ToastContext'
+import { API_BASE } from '../config/api'
 
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3001'
 
 // Types
 export interface EdgeDevice {

@@ -1,3 +1,4 @@
+import { API_BASE } from '../../config/api'
 /**
  * LandingNarrator
  * 
@@ -10,7 +11,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { useVenue } from '../../context/VenueContext';
 import type { NarrationPack } from '../../context/ReplayInsightContext';
 
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3001';
+;
 
 interface LandingNarratorProps {
   episodes: NarrationPack[];

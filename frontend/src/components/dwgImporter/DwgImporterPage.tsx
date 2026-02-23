@@ -7,8 +7,8 @@ import MappingPanel from './MappingPanel'
 import PreviewPanel from './PreviewPanel'
 import Layout3DPreview from './Layout3DPreview'
 import DwgImportsList from './DwgImportsList'
+import { API_BASE } from '../../config/api'
 
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3001'
 
 // LiDAR types
 export interface LidarModel {

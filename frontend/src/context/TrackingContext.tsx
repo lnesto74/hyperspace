@@ -2,6 +2,7 @@ import { createContext, useContext, useState, useCallback, useEffect, useRef, Re
 import { io, Socket } from 'socket.io-client'
 import { Track, TrackWithTrail, LidarStatus } from '../types'
 import { useVenue } from './VenueContext'
+import { API_BASE } from '../config/api'
 
 const MAX_TRAIL_LENGTH = 100 // ~10 seconds at 10Hz
 const TRACK_TTL_MS = 5000 // 5 seconds before track is removed
@@ -33,7 +34,7 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
   const tracks = isReplayMode ? replayTracks : liveTracks
 
   useEffect(() => {
-    const socket = io('http://localhost:3001/tracking', {
+    const socket = io(`${API_BASE}/tracking`, {
       transports: ['websocket', 'polling'],
       autoConnect: true,
     })

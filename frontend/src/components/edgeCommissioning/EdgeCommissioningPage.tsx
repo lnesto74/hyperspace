@@ -8,6 +8,7 @@ import { useVenue } from '../../context/VenueContext'
 import LidarCommissioningWizard from './LidarCommissioningWizard'
 import PointCloudViewer from './PointCloudViewer'
 import ProviderSelectionPanel from './ProviderSelectionPanel'
+import { API_BASE } from '../../config/api'
 
 export default function EdgeCommissioningPage({ onClose }: { onClose: () => void }) {
   const { venue } = useVenue()
@@ -52,6 +53,8 @@ export default function EdgeCommissioningPage({ onClose }: { onClose: () => void
   } = useEdgeCommissioning()
 
   const [draggedLidar, setDraggedLidar] = useState<EdgeLidar | null>(null)
+  const [exportConfigJson, setExportConfigJson] = useState<string | null>(null)
+  const [isExportingConfig, setIsExportingConfig] = useState(false)
   const [showDeployHistory, setShowDeployHistory] = useState(false)
   const [showCommissioningWizard, setShowCommissioningWizard] = useState(false)
   const [pointCloudLidar, setPointCloudLidar] = useState<{ ip: string; tailscaleIp: string } | null>(null)
@@ -195,31 +198,42 @@ export default function EdgeCommissioningPage({ onClose }: { onClose: () => void
   const selectedProvider = getSelectedProvider()
   const canDeployHer = canDeploy && herEnabled && selectedProviderId
 
-  const handleExportConfig = async () => {
-    if (!venue?.id) return
-    try {
-      const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3001'
-      let url = `${API_BASE}/api/edge-commissioning/export-config?venueId=${venue.id}`
-      if (selectedEdgeId) {
-        url += `&edgeId=${selectedEdgeId}`
-      }
-      const res = await fetch(url)
-      if (!res.ok) throw new Error('Export failed')
-      const data = await res.json()
-      
-      // Download as JSON file
-      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
-      const downloadUrl = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = downloadUrl
-      a.download = `edge-config-${venue.id}-${new Date().toISOString().split('T')[0]}.json`
-      document.body.appendChild(a)
-      a.click()
-      document.body.removeChild(a)
-      URL.revokeObjectURL(downloadUrl)
-    } catch (err: any) {
-      console.error('Export failed:', err)
+  const fetchExportConfig = async () => {
+    if (!venue?.id) return null
+        let url = `${API_BASE}/api/edge-commissioning/export-config?venueId=${venue.id}`
+    if (selectedEdgeId) {
+      url += `&edgeId=${selectedEdgeId}`
     }
+    const res = await fetch(url)
+    if (!res.ok) throw new Error('Export failed')
+    return await res.json()
+  }
+
+  const handlePreviewExportConfig = async () => {
+    if (!venue?.id) return
+    setIsExportingConfig(true)
+    try {
+      const data = await fetchExportConfig()
+      setExportConfigJson(JSON.stringify(data, null, 2))
+    } catch (err: any) {
+      console.error('Export preview failed:', err)
+      setExportConfigJson(`// Error: ${err.message}`)
+    } finally {
+      setIsExportingConfig(false)
+    }
+  }
+
+  const handleDownloadExportConfig = () => {
+    if (!exportConfigJson || !venue?.id) return
+    const blob = new Blob([exportConfigJson], { type: 'application/json' })
+    const downloadUrl = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = downloadUrl
+    a.download = `edge-config-${venue.id}-${new Date().toISOString().split('T')[0]}.json`
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(downloadUrl)
   }
 
   return (
@@ -268,16 +282,6 @@ export default function EdgeCommissioningPage({ onClose }: { onClose: () => void
           )}
         </div>
         <div className="flex items-center gap-2">
-          {venue && pairings.length > 0 && (
-            <button
-              onClick={handleExportConfig}
-              className="flex items-center gap-2 px-3 py-1.5 rounded text-sm font-medium transition-colors bg-gray-700 hover:bg-gray-600 text-gray-200"
-              title="Export config JSON for algorithm provider"
-            >
-              <Download className="w-4 h-4" />
-              Export Config
-            </button>
-          )}
           {selectedEdge && (
             <div className="flex items-center gap-2">
               {/* Simulator Deploy */}
@@ -732,6 +736,47 @@ export default function EdgeCommissioningPage({ onClose }: { onClose: () => void
                           localStorage.setItem('herMqttBrokerUrl', url)
                         }}
                       />
+                    </div>
+                  )}
+
+                  {/* Export Config JSON Section */}
+                  {venue && pairings.length > 0 && (
+                    <div className="border-t border-gray-700 mt-4 pt-4">
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-xs font-medium text-gray-300 flex items-center gap-1.5">
+                          <Download className="w-3.5 h-3.5 text-cyan-400" />
+                          Export Config JSON
+                        </span>
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            onClick={handlePreviewExportConfig}
+                            disabled={isExportingConfig}
+                            className="px-2 py-1 text-xs rounded bg-gray-700 hover:bg-gray-600 text-gray-200 transition-colors disabled:opacity-50"
+                          >
+                            {isExportingConfig ? 'Loading...' : exportConfigJson ? 'Refresh' : 'Preview'}
+                          </button>
+                          {exportConfigJson && (
+                            <button
+                              onClick={handleDownloadExportConfig}
+                              className="px-2 py-1 text-xs rounded bg-cyan-600 hover:bg-cyan-500 text-white transition-colors flex items-center gap-1"
+                            >
+                              <Download className="w-3 h-3" />
+                              Download
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                      {exportConfigJson && (
+                        <textarea
+                          readOnly
+                          value={exportConfigJson}
+                          className="w-full h-48 bg-gray-950 border border-gray-700 rounded-lg p-2 text-[11px] font-mono text-gray-300 resize-y focus:outline-none focus:border-cyan-500/50"
+                          spellCheck={false}
+                        />
+                      )}
+                      {!exportConfigJson && (
+                        <p className="text-[10px] text-gray-500">Click Preview to generate the config JSON for the algorithm provider.</p>
+                      )}
                     </div>
                   )}
                 </div>

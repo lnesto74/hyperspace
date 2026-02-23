@@ -1,3 +1,4 @@
+import { API_BASE } from '../config/api'
 import React, { createContext, useContext, useState, useCallback, useEffect, useMemo } from 'react';
 import { useVenue } from './VenueContext';
 import { useRoi } from './RoiContext';
@@ -20,7 +21,7 @@ import type {
   NarratorUsageHistory,
 } from '../types/narrator';
 
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3001';
+;
 
 // Generate session ID for rate limiting
 const SESSION_ID = `narrator-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;

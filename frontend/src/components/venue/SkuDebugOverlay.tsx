@@ -3,8 +3,8 @@ import * as THREE from 'three'
 import { useVenue } from '../../context/VenueContext'
 import { useTracking } from '../../context/TrackingContext'
 import { Package, Eye, Clock } from 'lucide-react'
+import { API_BASE } from '../../config/api'
 
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3001'
 
 interface DetectedSku {
   skuId: string

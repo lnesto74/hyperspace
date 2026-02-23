@@ -32,6 +32,7 @@ import { useVenue } from '../../context/VenueContext'
 import { TierCard, ImpressionsChart, AqsGauge, AqsHistogram } from './DoohCharts'
 import { KPI_DEFINITIONS } from '../kpi/kpiDefinitions'
 import PlaylistManager from './PlaylistManager'
+import { API_BASE } from '../../config/api'
 
 type AnalyticsTab = 'overview' | 'timeseries' | 'attention' | 'video'
 
@@ -47,7 +48,6 @@ interface VideoKpi {
   totalPlayDurationMs: number
 }
 
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3001'
 
 function HelpTooltip({ definitionKey }: { definitionKey: string }) {
   const [showTooltip, setShowTooltip] = useState(false)
@@ -538,6 +538,12 @@ export default function DoohAnalyticsPage({ onClose }: { onClose: () => void }) 
     }
   }, [selectedScreen?.id, loadCachedKpis])
 
+  // Reload KPIs from API when time range changes (so 1h/24h/7d actually updates)
+  useEffect(() => {
+    if (!selectedScreen) return
+    loadKpis()
+  }, [timeRange, customStartTs, customEndTs])
+
   // Consolidate buckets by period (hour/day/week/month)
   const consolidatedBuckets = useMemo(() => {
     if (!kpiBuckets.length) return []
@@ -582,17 +588,20 @@ export default function DoohAnalyticsPage({ onClose }: { onClose: () => void }) 
     })).sort((a, b) => a.bucketStartTs - b.bucketStartTs)
   }, [kpiBuckets, consolidation])
 
-  // Calculate summary stats
-  const summaryStats = {
-    totalImpressions: kpiBuckets.reduce((sum, b) => sum + b.impressions, 0),
-    qualifiedImpressions: kpiBuckets.reduce((sum, b) => sum + b.qualifiedImpressions, 0),
-    premiumImpressions: kpiBuckets.reduce((sum, b) => sum + b.premiumImpressions, 0),
-    avgAqs: kpiBuckets.length > 0
-      ? kpiBuckets.reduce((sum, b) => sum + (b.avgAqs || 0), 0) / kpiBuckets.length
-      : 0,
-    totalAttention: kpiBuckets.reduce((sum, b) => sum + b.totalAttentionS, 0),
-    uniqueVisitors: kpiBuckets.reduce((sum, b) => sum + b.uniqueVisitors, 0),
-  }
+  // Calculate summary stats from consolidated buckets so they update on period change
+  const summaryStats = useMemo(() => {
+    const src = consolidatedBuckets.length > 0 ? consolidatedBuckets : kpiBuckets
+    return {
+      totalImpressions: src.reduce((sum, b) => sum + b.impressions, 0),
+      qualifiedImpressions: src.reduce((sum, b) => sum + b.qualifiedImpressions, 0),
+      premiumImpressions: src.reduce((sum, b) => sum + b.premiumImpressions, 0),
+      avgAqs: src.length > 0
+        ? src.reduce((sum, b) => sum + (b.avgAqs || 0), 0) / src.length
+        : 0,
+      totalAttention: src.reduce((sum, b) => sum + (b.totalAttentionS || 0), 0),
+      uniqueVisitors: src.reduce((sum, b) => sum + (b.uniqueVisitors || 0), 0),
+    }
+  }, [consolidatedBuckets, kpiBuckets])
 
   return (
     <div className="fixed inset-0 bg-gray-900 z-50 flex flex-col">

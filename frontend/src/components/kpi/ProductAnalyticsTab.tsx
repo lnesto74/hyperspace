@@ -5,8 +5,8 @@ import {
   ChevronDown, ChevronUp, HelpCircle
 } from 'lucide-react'
 import { KPI_DEFINITIONS } from './kpiDefinitions'
+import { API_BASE } from '../../config/api'
 
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3001'
 
 function HelpTooltip({ definitionKey }: { definitionKey: string }) {
   const [showTooltip, setShowTooltip] = useState(false)
@@ -466,7 +466,7 @@ export default function ProductAnalyticsTab({
               <MetricCard
                 icon={Eye}
                 label="Browsing Rate"
-                value={`${data.browsingRate.toFixed(1)}%`}
+                value={`${(data.browsingRate ?? 0).toFixed(1)}%`}
                 subValue="Visitors who stopped"
                 color="text-purple-400"
                 definitionKey="browsingRate"
@@ -474,7 +474,7 @@ export default function ProductAnalyticsTab({
               <MetricCard
                 icon={Clock}
                 label="Avg Browse Time"
-                value={`${data.avgBrowseTime}s`}
+                value={`${data.avgBrowseTime ?? 0}s`}
                 subValue="Time at shelf"
                 color="text-blue-400"
                 definitionKey="avgBrowseTime"
@@ -482,7 +482,7 @@ export default function ProductAnalyticsTab({
               <MetricCard
                 icon={Target}
                 label="Passby Count"
-                value={data.passbyCount}
+                value={data.passbyCount ?? 0}
                 subValue="Walked past"
                 color="text-orange-400"
                 definitionKey="passbyCount"
@@ -500,28 +500,28 @@ export default function ProductAnalyticsTab({
               <MetricCard
                 icon={Grid3X3}
                 label="Total Slots"
-                value={data.planogramData.totalSlots}
+                value={data.planogramData?.totalSlots ?? 0}
                 color="text-gray-400"
                 definitionKey="totalSlots"
               />
               <MetricCard
                 icon={Package}
                 label="Occupied"
-                value={data.planogramData.occupiedSlots}
-                subValue={`${data.planogramData.occupancyRate.toFixed(0)}%`}
+                value={data.planogramData?.occupiedSlots ?? 0}
+                subValue={`${(data.planogramData?.occupancyRate ?? 0).toFixed(0)}%`}
                 color="text-green-400"
                 definitionKey="occupiedSlots"
               />
               <MetricCard
                 icon={Layers}
                 label="Levels"
-                value={data.planogramData.numLevels}
+                value={data.planogramData?.numLevels ?? 0}
                 color="text-blue-400"
               />
               <MetricCard
                 icon={BarChart3}
                 label="Categories"
-                value={data.categoryBreakdown.length}
+                value={data.categoryBreakdown?.length ?? 0}
                 color="text-purple-400"
               />
             </div>
@@ -537,14 +537,14 @@ export default function ProductAnalyticsTab({
               <MetricCard
                 icon={DollarSign}
                 label="Avg Shelf Price"
-                value={`$${data.revenueMetrics.avgShelfPrice.toFixed(2)}`}
+                value={`$${(data.revenueMetrics?.avgShelfPrice ?? 0).toFixed(2)}`}
                 color="text-green-400"
                 definitionKey="avgShelfPrice"
               />
               <MetricCard
                 icon={TrendingUp}
                 label="Est. Engagement Value"
-                value={`$${data.revenueMetrics.estimatedEngagementValue.toFixed(0)}`}
+                value={`$${(data.revenueMetrics?.estimatedEngagementValue ?? 0).toFixed(0)}`}
                 subValue="Based on dwells"
                 color="text-green-400"
                 definitionKey="estimatedEngagementValue"
@@ -552,7 +552,7 @@ export default function ProductAnalyticsTab({
               <MetricCard
                 icon={Percent}
                 label="Revenue/Visit"
-                value={`$${data.revenueMetrics.revenuePerVisit.toFixed(2)}`}
+                value={`$${(data.revenueMetrics?.revenuePerVisit ?? 0).toFixed(2)}`}
                 color="text-green-400"
                 definitionKey="revenuePerVisit"
               />

@@ -2,8 +2,8 @@ import { useState, useEffect, useCallback, useMemo } from 'react'
 import { X, Zap, ShoppingCart, DoorOpen, Package, Check, Loader2, Eye, Sparkles, AlertCircle, Settings2, Maximize2, RefreshCw, PenTool, Trash2, Plus, MousePointer } from 'lucide-react'
 import { useVenue } from '../../context/VenueContext'
 import { useRoi } from '../../context/RoiContext'
+import { API_BASE } from '../../config/api'
 
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3001'
 
 interface KpiDefinition {
   id: string

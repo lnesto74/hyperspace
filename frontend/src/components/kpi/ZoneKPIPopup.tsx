@@ -3,8 +3,8 @@ import { X, TrendingUp, Users, Clock, Target, Activity, ArrowUpRight, ArrowDownR
 import { KPI_DEFINITIONS } from './kpiDefinitions'
 import ZoneSettingsPanel from './ZoneSettingsPanel'
 import ProductAnalyticsTab from './ProductAnalyticsTab'
+import { API_BASE } from '../../config/api'
 
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3001'
 
 interface KPIData {
   visits: number

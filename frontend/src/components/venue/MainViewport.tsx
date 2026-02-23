@@ -10,9 +10,9 @@ import { useLidar } from '../../context/LidarContext'
 import { useTracking } from '../../context/TrackingContext'
 import { useRoi } from '../../context/RoiContext'
 import { useReplayInsight } from '../../context/ReplayInsightContext'
+import { useProfitRadar } from '../../context/ProfitRadarContext'
 import SkuDebugOverlay from './SkuDebugOverlay'
 
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3001'
 
 const COLORS = {
   grid: 0x333344,
@@ -48,6 +48,68 @@ const pointInPolygon = (point: { x: number; z: number }, polygon: { x: number; z
   return inside
 }
 
+// Generate random 3D points distributed within a capsule volume (human-like shape)
+function generateCapsulePoints(radius: number, height: number, count: number): Float32Array {
+  const positions = new Float32Array(count * 3)
+  const halfH = height / 2
+
+  for (let i = 0; i < count; i++) {
+    const i3 = i * 3
+    const t = Math.random()
+
+    let x: number, y: number, z: number
+
+    if (t < 0.15) {
+      // Bottom hemisphere cap
+      const phi = Math.acos(Math.random()) // 0..PI/2 range via acos
+      const theta = Math.random() * Math.PI * 2
+      const r = radius * Math.cbrt(Math.random())
+      x = r * Math.sin(phi) * Math.cos(theta)
+      z = r * Math.sin(phi) * Math.sin(theta)
+      y = -halfH - r * Math.cos(phi)
+    } else if (t > 0.85) {
+      // Top hemisphere cap
+      const phi = Math.acos(Math.random())
+      const theta = Math.random() * Math.PI * 2
+      const r = radius * Math.cbrt(Math.random())
+      x = r * Math.sin(phi) * Math.cos(theta)
+      z = r * Math.sin(phi) * Math.sin(theta)
+      y = halfH + r * Math.cos(phi)
+    } else {
+      // Cylinder body — slight taper for human-like silhouette
+      const bodyT = (Math.random() - 0.5) // -0.5 to 0.5
+      y = bodyT * height
+      // Narrow at top (head) and bottom (feet), wider at torso
+      const taper = 1.0 - 0.3 * Math.abs(bodyT * 2) // 0.7..1.0
+      const angle = Math.random() * Math.PI * 2
+      const r = radius * taper * Math.sqrt(Math.random())
+      x = r * Math.cos(angle)
+      z = r * Math.sin(angle)
+    }
+
+    positions[i3] = x
+    positions[i3 + 1] = y
+    positions[i3 + 2] = z
+  }
+
+  return positions
+}
+
+// Apply jitter relative to stored base positions so points never drift outside the volume
+function jitterPointCloud(points: THREE.Points, jitterAmount: number = 0.035) {
+  const basePositions = points.userData.basePositions as Float32Array
+  if (!basePositions) return
+  const pos = points.geometry.attributes.position as THREE.BufferAttribute
+  const count = pos.count
+  for (let i = 0; i < count; i++) {
+    const i3 = i * 3
+    pos.setX(i, basePositions[i3]     + (Math.random() - 0.5) * jitterAmount)
+    pos.setY(i, basePositions[i3 + 1] + (Math.random() - 0.5) * jitterAmount)
+    pos.setZ(i, basePositions[i3 + 2] + (Math.random() - 0.5) * jitterAmount)
+  }
+  pos.needsUpdate = true
+}
+
 interface CustomModel {
   object_type: string
   file_path: string
@@ -55,6 +117,30 @@ interface CustomModel {
 }
 
 import type { CameraView, LightingSettings, TrackingSettings } from '../layout/AppShell'
+import { API_BASE } from '../../config/api'
+
+export type CaptureZone = {
+  vertices: Array<{ x: number; z: number }>;
+  color: string;
+};
+
+export type CaptureTrackSnapshot = {
+  x: number;
+  z: number;
+  color?: number;
+};
+
+export type CaptureScreenshotFn = (options: {
+  targetX?: number;
+  targetZ?: number;
+  height?: number;
+  fov?: number;
+  width?: number;
+  imageHeight?: number;
+  zones?: CaptureZone[];
+  angleOffset?: number;
+  trackPositions?: CaptureTrackSnapshot[];
+}) => string | null;
 
 interface MainViewportProps {
   cameraView?: CameraView
@@ -62,6 +148,7 @@ interface MainViewportProps {
   tracking?: TrackingSettings
   isReplayMode?: boolean
   replayTimestamp?: number | null
+  onCaptureReady?: (captureFn: CaptureScreenshotFn) => void
 }
 
 const defaultLighting: LightingSettings = {
@@ -78,6 +165,7 @@ const defaultTracking: TrackingSettings = {
   cylinderOpacity: 0.5,
   showSkuDebug: false,
   autoShowSlotHighlight: false,
+  trackDisplayMode: 'cylinder',
 }
 
 export default function MainViewport({ 
@@ -85,7 +173,8 @@ export default function MainViewport({
   lighting = defaultLighting, 
   tracking = defaultTracking,
   isReplayMode = false,
-  replayTimestamp = null
+  replayTimestamp = null,
+  onCaptureReady,
 }: MainViewportProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const sceneRef = useRef<THREE.Scene | null>(null)
@@ -227,6 +316,12 @@ export default function MainViewport({
   
   // Replay Insight context for zone highlighting
   const { isInsightMode, selectedEpisode } = useReplayInsight()
+  
+  // Profit Radar — Intent Field 3D layers
+  const { intentFieldEnabled, zoneField, clusters } = useProfitRadar()
+  const intentGlowsRef = useRef<Map<string, THREE.Mesh>>(new Map())
+  const intentClusterGroupRef = useRef<THREE.Group | null>(null)
+  const tracksRef = useRef<Map<string, { trail?: { x: number; z: number }[] }>>(new Map())
   
   // Fetch custom models
   const fetchCustomModels = useCallback(async () => {
@@ -472,6 +567,7 @@ export default function MainViewport({
   const { venue, objects, selectedObjectId, selectObject, updateObject, removeObject, snapToGrid } = useVenue()
   const { placements, selectedPlacementId, selectPlacement, updatePlacement, removePlacement, getDeviceById } = useLidar()
   const { tracks } = useTracking()
+  tracksRef.current = tracks
   
   // Stable references for callbacks
   const venueRef = useRef(venue)
@@ -555,6 +651,7 @@ export default function MainViewport({
       antialias: true,
       logarithmicDepthBuffer: true, // Better depth precision for large scenes
       alpha: true,
+      preserveDrawingBuffer: true, // Required for screenshot capture
     })
     renderer.setSize(width, height)
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
@@ -620,6 +717,15 @@ export default function MainViewport({
       }
       animationFrameId = requestAnimationFrame(animate)
       controls.update()
+
+      // Animate point clouds every frame for living shimmer
+      trackMeshesRef.current.forEach((group) => {
+        const pc = group.children[4]
+        if (pc && pc.visible && pc instanceof THREE.Points) {
+          jitterPointCloud(pc)
+        }
+      })
+
       renderer.render(scene, camera)
       labelRenderer.render(scene, camera)
     }
@@ -634,6 +740,145 @@ export default function MainViewport({
     document.addEventListener('visibilitychange', handleVisibilityChange)
     
     animate()
+
+    // Expose screenshot capture function
+    if (onCaptureReady) {
+      const captureFn: CaptureScreenshotFn = ({
+        targetX = 0,
+        targetZ = 0,
+        height = 25,
+        fov = 50,
+        width: capW = 800,
+        imageHeight: capH = 450,
+        zones,
+        angleOffset = 0,
+      }) => {
+        try {
+          // Save current state
+          const savedPos = camera.position.clone()
+          const savedTarget = controls.target.clone()
+          const savedFov = camera.fov
+          const savedAspect = camera.aspect
+
+          // Temporarily add zone highlight meshes
+          const tempMeshes: THREE.Object3D[] = []
+          if (zones && zones.length > 0) {
+            // Compute tight bounding box from zone vertices
+            let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity
+            for (const zone of zones) {
+              for (const v of zone.vertices) {
+                if (v.x < minX) minX = v.x
+                if (v.x > maxX) maxX = v.x
+                if (v.z < minZ) minZ = v.z
+                if (v.z > maxZ) maxZ = v.z
+              }
+            }
+            if (isFinite(minX)) {
+              // Override target to zone centroid
+              targetX = (minX + maxX) / 2
+              targetZ = (minZ + maxZ) / 2
+              // Compute camera height to frame the zone with padding
+              const spanX = maxX - minX
+              const spanZ = maxZ - minZ
+              const span = Math.max(spanX, spanZ, 3) * 1.6
+              height = span / (2 * Math.tan((fov * Math.PI) / 360))
+              height = Math.max(height, 5)
+              height = Math.min(height, 40)
+            }
+
+            // Create colored overlay polygons for each zone
+            for (const zone of zones) {
+              if (zone.vertices.length < 3) continue
+              const verts: number[] = []
+              const idx: number[] = []
+              for (const v of zone.vertices) verts.push(v.x, 0.15, v.z)
+              for (let i = 1; i < zone.vertices.length - 1; i++) idx.push(0, i, i + 1)
+              const geo = new THREE.BufferGeometry()
+              geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3))
+              geo.setIndex(idx)
+              const c = new THREE.Color(zone.color)
+              const mat = new THREE.MeshBasicMaterial({ color: c, transparent: true, opacity: 0.45, side: THREE.DoubleSide, depthWrite: false })
+              const mesh = new THREE.Mesh(geo, mat)
+              mesh.renderOrder = 10
+              scene.add(mesh)
+              tempMeshes.push(mesh)
+
+              // Bright outline
+              const pts = zone.vertices.map(v => new THREE.Vector3(v.x, 0.16, v.z))
+              pts.push(pts[0].clone())
+              const lineGeo = new THREE.BufferGeometry().setFromPoints(pts)
+              const lineMat = new THREE.LineBasicMaterial({ color: c, linewidth: 2 })
+              const line = new THREE.Line(lineGeo, lineMat)
+              line.renderOrder = 11
+              scene.add(line)
+              tempMeshes.push(line)
+            }
+          }
+
+          // Temporarily add track position cylinders (frozen moment people)
+          if (zones && zones.length > 0) {
+            // Hide live tracks during capture to avoid overlap
+            trackMeshesRef.current.forEach(g => { g.visible = false })
+          }
+          const trackOpts = (zones && zones.length > 0) ? options.trackPositions : undefined
+          if (trackOpts && trackOpts.length > 0) {
+            for (const tp of trackOpts) {
+              const cylGeo = new THREE.CylinderGeometry(0.2, 0.2, 1.7, 8)
+              const cylMat = new THREE.MeshBasicMaterial({ color: tp.color ?? 0x3b82f6, transparent: true, opacity: 0.85 })
+              const cyl = new THREE.Mesh(cylGeo, cylMat)
+              cyl.position.set(tp.x, 0.85, tp.z)
+              cyl.renderOrder = 12
+              scene.add(cyl)
+              tempMeshes.push(cyl)
+            }
+          }
+
+          // Set up camera — slight angle offset for variety
+          const offsetX = Math.sin(angleOffset) * height * 0.25
+          const offsetZ = Math.cos(angleOffset) * height * 0.25
+          camera.position.set(targetX + offsetX, height, targetZ + offsetZ)
+          camera.fov = fov
+          camera.aspect = capW / capH
+          camera.updateProjectionMatrix()
+          camera.lookAt(targetX, 0, targetZ)
+          controls.target.set(targetX, 0, targetZ)
+
+          // Render one frame at capture resolution
+          const savedSize = new THREE.Vector2()
+          renderer.getSize(savedSize)
+          renderer.setSize(capW, capH, false)
+          renderer.render(scene, camera)
+
+          // Capture
+          const dataUrl = renderer.domElement.toDataURL('image/jpeg', 0.75)
+
+          // Clean up temp meshes
+          for (const m of tempMeshes) {
+            scene.remove(m)
+            if (m instanceof THREE.Mesh) { m.geometry.dispose(); (m.material as THREE.Material).dispose() }
+            if (m instanceof THREE.Line) { m.geometry.dispose(); (m.material as THREE.Material).dispose() }
+          }
+
+          // Restore live tracks visibility
+          trackMeshesRef.current.forEach(g => { g.visible = true })
+
+          // Restore everything
+          renderer.setSize(savedSize.x, savedSize.y, false)
+          camera.position.copy(savedPos)
+          camera.fov = savedFov
+          camera.aspect = savedAspect
+          camera.updateProjectionMatrix()
+          controls.target.copy(savedTarget)
+          camera.lookAt(savedTarget)
+
+          return dataUrl
+        } catch (err) {
+          console.warn('[MainViewport] Screenshot capture failed:', err)
+          return null
+        }
+      }
+      onCaptureReady(captureFn)
+    }
 
     // Resize handler - triggered by both window resize and container size changes
     const handleResize = () => {
@@ -2328,7 +2573,7 @@ export default function MainViewport({
       if (!currentTrackKeys.has(key)) {
         scene.remove(group)
         group.traverse(child => {
-          if (child instanceof THREE.Mesh || child instanceof THREE.Line) {
+          if (child instanceof THREE.Mesh || child instanceof THREE.Line || child instanceof THREE.Points || child instanceof THREE.LineSegments) {
             child.geometry.dispose()
             if (Array.isArray(child.material)) {
               child.material.forEach(m => {
@@ -2497,6 +2742,45 @@ export default function MainViewport({
         labelSprite.userData.isSezLabel = true
         group.add(labelSprite) // index 3
 
+        // Point cloud representation (300 scattered points in capsule volume)
+        const pcPositions = generateCapsulePoints(cylinderRadius, cylinderHeight, 300)
+        const pcGeometry = new THREE.BufferGeometry()
+        pcGeometry.setAttribute('position', new THREE.BufferAttribute(pcPositions, 3))
+        const pcMaterial = new THREE.PointsMaterial({
+          color,
+          size: 0.04,
+          transparent: true,
+          opacity: 0.9,
+          sizeAttenuation: true,
+          depthWrite: false,
+        })
+        const pointCloud = new THREE.Points(pcGeometry, pcMaterial)
+        pointCloud.userData.isPointCloud = true
+        pointCloud.userData.basePositions = new Float32Array(pcPositions)
+        pointCloud.visible = tracking.trackDisplayMode === 'pointcloud'
+        group.add(pointCloud) // index 4
+
+        // Wireframe bounding box
+        const wfBoxGeo = new THREE.BoxGeometry(bbox.width, bbox.height, bbox.depth)
+        const wfEdgesGeo = new THREE.EdgesGeometry(wfBoxGeo)
+        wfBoxGeo.dispose()
+        const wfMaterial = new THREE.LineBasicMaterial({
+          color,
+          transparent: true,
+          opacity: 0.7,
+        })
+        const wireframe = new THREE.LineSegments(wfEdgesGeo, wfMaterial)
+        wireframe.userData.isWireframe = true
+        wireframe.visible = tracking.trackDisplayMode === 'pointcloud'
+        group.add(wireframe) // index 5
+
+        // Set initial cylinder visibility based on mode
+        if (tracking.trackDisplayMode === 'pointcloud') {
+          cylinder.visible = false
+          topCap.visible = false
+          bottomCap.visible = false
+        }
+
         scene.add(group)
         trackMeshesRef.current.set(key, group)
       }
@@ -2548,6 +2832,18 @@ export default function MainViewport({
         scene.add(trail)
       }
 
+      // Toggle visibility based on display mode
+      const isCylinderMode = tracking.trackDisplayMode === 'cylinder'
+      cylinder.visible = isCylinderMode
+      topCap.visible = isCylinderMode
+      bottomCap.visible = isCylinderMode
+
+      // Point cloud + wireframe (indices 4 & 5)
+      const pointCloud = group.children[4] as THREE.Points | undefined
+      const wireframe = group.children[5] as THREE.LineSegments | undefined
+      if (pointCloud) pointCloud.visible = !isCylinderMode
+      if (wireframe) wireframe.visible = !isCylinderMode
+
       // Update colors - red translucent if in SEZ, otherwise normal
       const cylinderMat = cylinder.material as THREE.MeshStandardMaterial
       const topCapMat = topCap.material as THREE.MeshStandardMaterial
@@ -2566,6 +2862,9 @@ export default function MainViewport({
         topCapMat.emissive.set(color)
         bottomCapMat.color.set(color)
         bottomCapMat.emissive.set(color)
+        // Update point cloud + wireframe colors
+        if (pointCloud) (pointCloud.material as THREE.PointsMaterial).color.set(color)
+        if (wireframe) (wireframe.material as THREE.LineBasicMaterial).color.set(color)
       } else {
         cylinderMat.color.setHex(color)
         cylinderMat.emissive.setHex(color)
@@ -2573,6 +2872,9 @@ export default function MainViewport({
         topCapMat.emissive.setHex(color)
         bottomCapMat.color.setHex(color)
         bottomCapMat.emissive.setHex(color)
+        // Update point cloud + wireframe colors
+        if (pointCloud) (pointCloud.material as THREE.PointsMaterial).color.setHex(color)
+        if (wireframe) (wireframe.material as THREE.LineBasicMaterial).color.setHex(color)
       }
       
       // Increase emissive intensity when influenced for "shocked" effect
@@ -2580,6 +2882,11 @@ export default function MainViewport({
       cylinderMat.emissiveIntensity = emissiveIntensity
       topCapMat.emissiveIntensity = emissiveIntensity
       bottomCapMat.emissiveIntensity = emissiveIntensity
+
+      // Apply shimmer jitter to point cloud when visible
+      if (pointCloud && !isCylinderMode && pointCloud instanceof THREE.Points) {
+        jitterPointCloud(pointCloud)
+      }
     })
     
     // Clean up stale SEZ entry times for tracks that no longer exist
@@ -2588,7 +2895,8 @@ export default function MainViewport({
         sezEntryTimesRef.current.delete(key)
       }
     })
-  }, [tracks, doohScreens])
+
+  }, [tracks, doohScreens, tracking])
 
   // Render ROIs (regions of interest) as polygons
   useEffect(() => {
@@ -3261,6 +3569,173 @@ export default function MainViewport({
     
     loadAndRenderArrows()
   }, [showSlotArrows, venue])
+
+  // ─── Intent Field: 3D Layers (Profit Radar) ───
+  // Axis color map matching IntentFieldOverlay.tsx
+  const INTENT_AXIS_COLORS: Record<string, number> = {
+    exploration: 0x3b82f6, goal_directedness: 0x22c55e, urgency: 0xef4444,
+    commitment: 0x10b981, hesitation: 0xf59e0b, confusion: 0xf97316,
+    social_groupness: 0x8b5cf6, avoidance: 0x6b7280, waiting_queueing: 0x06b6d4,
+    engagement_with_POI: 0x14b8a6, churn_exit_intent: 0xdc2626, friction: 0xe11d48,
+  }
+  const INTENT_AXIS_LABELS: Record<string, string> = {
+    exploration: 'Exploring', goal_directedness: 'Goal-directed', urgency: 'Urgent',
+    commitment: 'Committed', hesitation: 'Hesitating', confusion: 'Confused',
+    social_groupness: 'Group', avoidance: 'Avoiding', waiting_queueing: 'Queueing',
+    engagement_with_POI: 'Engaged', churn_exit_intent: 'Leaving', friction: 'Friction',
+  }
+
+  // Layer 1 — Zone Glows: colored translucent polygon overlays on ROI zones
+  useEffect(() => {
+    if (!sceneRef.current) return
+    const scene = sceneRef.current
+
+    // Remove old glows
+    intentGlowsRef.current.forEach((mesh, id) => {
+      scene.remove(mesh)
+      mesh.geometry.dispose()
+      ;(mesh.material as THREE.Material).dispose()
+    })
+    intentGlowsRef.current.clear()
+
+    if (!intentFieldEnabled || zoneField.length === 0) return
+
+    for (const zf of zoneField) {
+      // Find the matching ROI to get its vertices
+      const roi = regions.find(r => r.id === zf.roiId)
+      if (!roi || roi.vertices.length < 3) continue
+
+      const color = INTENT_AXIS_COLORS[zf.dominant] ?? 0x888888
+
+      // Build polygon at Y=0.04 (above normal ROI at 0.02)
+      const verts: number[] = []
+      const indices: number[] = []
+      for (const v of roi.vertices) verts.push(v.x, 0.04, v.z)
+      for (let i = 1; i < roi.vertices.length - 1; i++) indices.push(0, i, i + 1)
+
+      const geo = new THREE.BufferGeometry()
+      geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3))
+      geo.setIndex(indices)
+      geo.computeVertexNormals()
+
+      const mat = new THREE.MeshBasicMaterial({
+        color,
+        transparent: true,
+        opacity: 0.25 + zf.dominantScore * 0.35,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+        polygonOffset: true,
+        polygonOffsetFactor: -3,
+        polygonOffsetUnits: -3,
+      })
+      const mesh = new THREE.Mesh(geo, mat)
+      mesh.renderOrder = 3
+      mesh.name = `intent-glow-${zf.roiId}`
+      scene.add(mesh)
+      intentGlowsRef.current.set(zf.roiId, mesh)
+    }
+  }, [intentFieldEnabled, zoneField, regions])
+
+  // Layer 2 — (cluster card hover effects removed — cards only)
+
+  // Layer 3 — Sparse Cluster Billboards: one per cluster, anchored at most-active zone
+  useEffect(() => {
+    if (!sceneRef.current) return
+    const scene = sceneRef.current
+
+    // Remove old cluster billboard group
+    if (intentClusterGroupRef.current) {
+      scene.remove(intentClusterGroupRef.current)
+      intentClusterGroupRef.current.traverse((child: THREE.Object3D) => {
+        if (child instanceof THREE.Sprite) {
+          ;(child.material as THREE.SpriteMaterial).map?.dispose()
+          child.material.dispose()
+        }
+        if (child instanceof THREE.Line) {
+          child.geometry.dispose()
+          ;(child.material as THREE.Material).dispose()
+        }
+      })
+      intentClusterGroupRef.current = null
+    }
+
+    if (!intentFieldEnabled || clusters.length === 0) return
+
+    const group = new THREE.Group()
+    group.name = 'intent-cluster-billboards'
+
+    for (const c of clusters) {
+      // Only show billboard for substantial clusters with a known anchor zone
+      if (c.memberCount < 3 || !c.anchorZoneId) continue
+
+      const color = INTENT_AXIS_COLORS[c.dominant] ?? 0x888888
+      const label = INTENT_AXIS_LABELS[c.dominant] ?? c.dominant
+      const hex = '#' + new THREE.Color(color).getHexString()
+      const traj = c.trajectory
+      const anchor = c.anchorPosition
+
+      // Canvas billboard
+      const canvas = document.createElement('canvas')
+      canvas.width = 256
+      canvas.height = 128
+      const ctx = canvas.getContext('2d')!
+      // Background
+      ctx.fillStyle = 'rgba(0,0,0,0.8)'
+      ctx.beginPath()
+      ctx.roundRect(0, 0, 256, 128, 14)
+      ctx.fill()
+      // Left color bar
+      ctx.fillStyle = hex
+      ctx.fillRect(0, 0, 6, 128)
+      // Count badge
+      ctx.fillStyle = hex
+      ctx.beginPath()
+      ctx.arc(34, 36, 16, 0, Math.PI * 2)
+      ctx.fill()
+      ctx.fillStyle = '#fff'
+      ctx.font = 'bold 18px sans-serif'
+      ctx.textAlign = 'center'
+      ctx.textBaseline = 'middle'
+      ctx.fillText(String(c.memberCount), 34, 36)
+      // Behavior label
+      ctx.fillStyle = hex
+      ctx.font = 'bold 15px sans-serif'
+      ctx.textAlign = 'left'
+      ctx.fillText(label, 60, 32)
+      // Journey context
+      ctx.fillStyle = '#aaa'
+      ctx.font = '11px sans-serif'
+      ctx.fillText(`${traj.journeyType} · ${traj.avgStops} stops · ${traj.avgDwellSec}s`, 60, 54)
+      // Zone path
+      if (traj.zonesVisited.length > 0) {
+        ctx.fillStyle = '#777'
+        ctx.font = '10px sans-serif'
+        ctx.fillText(traj.zonesVisited.slice(0, 3).join(' → '), 14, 96)
+      }
+
+      const texture = new THREE.CanvasTexture(canvas)
+      texture.minFilter = THREE.LinearFilter
+      const spriteMat = new THREE.SpriteMaterial({ map: texture, transparent: true, depthWrite: false })
+      const sprite = new THREE.Sprite(spriteMat)
+      sprite.position.set(anchor.x, 2.8, anchor.z)
+      sprite.scale.set(3.0, 1.5, 1)
+      sprite.renderOrder = 20
+      group.add(sprite)
+
+      // Vertical connector line
+      const lineGeo = new THREE.BufferGeometry().setFromPoints([
+        new THREE.Vector3(anchor.x, 0.05, anchor.z),
+        new THREE.Vector3(anchor.x, 2.2, anchor.z),
+      ])
+      const lineMat = new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.4 })
+      const line = new THREE.Line(lineGeo, lineMat)
+      line.renderOrder = 19
+      group.add(line)
+    }
+
+    scene.add(group)
+    intentClusterGroupRef.current = group
+  }, [intentFieldEnabled, clusters])
 
   return (
     <div className="w-full h-full flex flex-col">

@@ -1,7 +1,8 @@
 import { useMemo, useRef, useEffect, useState, useCallback } from 'react'
-import { ZoomIn, ZoomOut, Maximize2, Grid, MousePointer2, Square, Move, Focus, Save, Download, Radio, Play, Wand2, Trash2, Pencil, Check, X, Settings, Plus, Bug, Layers, Eye, EyeOff } from 'lucide-react'
+import { ZoomIn, ZoomOut, Maximize2, Grid, MousePointer2, Square, Move, Focus, Save, Download, Radio, Play, Wand2, Trash2, Pencil, Check, X, Settings, Plus, Bug, Layers, Eye, ImagePlus, Ruler, FileDown, RotateCw, Scissors, Image as ImageIcon } from 'lucide-react'
 import type { ImportData, GroupMapping, LidarModel, LidarInstance, SimulationResult, AutoplaceSettings } from './DwgImporterPage'
 import LidarDebugPanel from './LidarDebugPanel'
+import { API_BASE } from '../../config/api'
 
 export interface RoiVertex {
   x: number  // in meters
@@ -41,7 +42,33 @@ interface PreviewPanelProps {
   layoutVersionId?: string | null  // For saving ROI by layout version ID
 }
 
-type Tool = 'pan' | 'select' | 'rectangle' | 'place_lidar' | 'draw_roi'
+type Tool = 'pan' | 'select' | 'rectangle' | 'place_lidar' | 'draw_roi' | 'move_floorplan' | 'calibrate_floorplan' | 'crop_floorplan'
+
+type ViewMode = 'dwg' | 'floorplan' | 'overlay'
+
+interface FloorplanOverlay {
+  id: string
+  import_id: string
+  original_filename: string
+  mime_type: string
+  imageUrl: string
+  transform: {
+    x: number      // DXF X offset
+    y: number      // DXF Y offset
+    scaleX: number  // pixels-to-DXF-units scale
+    scaleY: number
+    rotation: number // degrees
+    opacity: number  // 0-1
+  }
+  calibration: {
+    p1Screen: { x: number; y: number }
+    p2Screen: { x: number; y: number }
+    realWorldMeters: number
+  } | null
+  naturalWidth: number
+  naturalHeight: number
+  cropRect: { x: number; y: number; w: number; h: number } | null  // image-relative 0-1 coords
+}
 
 export default function PreviewPanel({ 
   importData, 
@@ -105,6 +132,7 @@ export default function PreviewPanel({
   const [dragStartOffset, setDragStartOffset] = useState({ x: 0, y: 0 })
   const [showGrid, setShowGrid] = useState(false)
   const [activeTool, setActiveTool] = useState<Tool>('select')
+  const [viewMode, setViewMode] = useState<ViewMode>('dwg')
   const [selectionRect, setSelectionRect] = useState<{ x: number; y: number; w: number; h: number } | null>(null)
   const [hasSavedView, setHasSavedView] = useState(false)
   const [justSaved, setJustSaved] = useState(false)
@@ -222,6 +250,7 @@ export default function PreviewPanel({
   const [showLayersPanel, setShowLayersPanel] = useState(false)
   const [layerVisibility, setLayerVisibility] = useState({
     base: true,           // Base fixtures from DWG
+    floorplan: true,      // Floor plan image overlay
     lidarDevices: true,   // LiDAR device markers
     coverageCircles: true, // Coverage circles for LiDARs
     coverageHeatmap: true, // Coverage heatmap
@@ -229,6 +258,21 @@ export default function PreviewPanel({
     roi: true,            // ROI polygon
     grid: false           // Grid overlay (debug)
   })
+
+  // Floor plan overlay state
+  const [floorplan, setFloorplan] = useState<FloorplanOverlay | null>(null)
+  const [isUploadingFloorplan, setIsUploadingFloorplan] = useState(false)
+  const floorplanInputRef = useRef<HTMLInputElement>(null)
+  // Calibration line drawing state
+  const [calibrationPoints, setCalibrationPoints] = useState<{ x: number; y: number }[]>([])
+  const [showCalibrationDialog, setShowCalibrationDialog] = useState(false)
+  const [calibrationLength, setCalibrationLength] = useState('')
+  // Floorplan drag state
+  const [fpDragStart, setFpDragStart] = useState<{ x: number; y: number } | null>(null)
+  const [fpDragStartTransform, setFpDragStartTransform] = useState<{ x: number; y: number } | null>(null)
+  // Floorplan crop rectangle drawing state (screen coords while drawing)
+  const [fpCropStart, setFpCropStart] = useState<{ x: number; y: number } | null>(null)
+  const [fpCropCurrent, setFpCropCurrent] = useState<{ x: number; y: number } | null>(null)
 
   // Save autoplace settings whenever they change
   useEffect(() => {
@@ -243,6 +287,136 @@ export default function PreviewPanel({
     }
     localStorage.setItem(autoplaceStorageKey, JSON.stringify(settings))
   }, [autoplaceStorageKey, autoplaceOverlapMode, autoplaceKRequired, autoplaceOverlapTargetPct, autoplaceLosEnabled, autoplaceSampleSpacing, autoplaceMountHeight, scaleCorrection])
+
+  // Load floor plan overlay from backend on mount
+  useEffect(() => {
+    if (!importData?.import_id) return
+    const loadFloorplan = async () => {
+      try {
+        const res = await fetch(`${API_BASE}/api/dwg/import/${importData.import_id}/floorplan`)
+        if (!res.ok) return
+        const data = await res.json()
+        if (data.floorplan) {
+          const imageUrl = `${API_BASE}/api/dwg/import/${importData.import_id}/floorplan/image`
+          // Pre-load image to get natural dimensions
+          const img = new Image()
+          img.onload = () => {
+            setFloorplan({
+              ...data.floorplan,
+              imageUrl,
+              naturalWidth: img.naturalWidth,
+              naturalHeight: img.naturalHeight,
+              cropRect: data.floorplan.cropRect || null
+            })
+          }
+          img.src = imageUrl
+        }
+      } catch (err) {
+        console.error('Failed to load floorplan:', err)
+      }
+    }
+    loadFloorplan()
+  }, [importData?.import_id])
+
+  // Upload floor plan image
+  const handleFloorplanUpload = useCallback(async (file: File) => {
+    if (!importData?.import_id) return
+    setIsUploadingFloorplan(true)
+    try {
+      const formData = new FormData()
+      formData.append('image', file)
+      const res = await fetch(`${API_BASE}/api/dwg/import/${importData.import_id}/floorplan`, {
+        method: 'POST',
+        body: formData
+      })
+      if (!res.ok) throw new Error('Upload failed')
+      const data = await res.json()
+      const imageUrl = `${API_BASE}/api/dwg/import/${importData.import_id}/floorplan/image?t=${Date.now()}`
+      // Pre-load image
+      const img = new Image()
+      img.onload = () => {
+        // Initialize transform: fit image within ~50% of DWG bounds, centered
+        const { bounds } = importData
+        const dwgW = bounds.maxX - bounds.minX
+        const dwgH = bounds.maxY - bounds.minY
+        const dwgCenterX = bounds.minX + dwgW / 2
+        const dwgCenterY = bounds.minY + dwgH / 2
+        // Scale to fit within half the DWG area (reasonable starting size)
+        const imgScaleX = (dwgW * 0.5) / img.naturalWidth
+        const imgScaleY = (dwgH * 0.5) / img.naturalHeight
+        const uniformScale = Math.min(imgScaleX, imgScaleY)
+        // Center the image on the DWG center
+        const imgDxfW = img.naturalWidth * uniformScale
+        const imgDxfH = img.naturalHeight * uniformScale
+        const startX = dwgCenterX - imgDxfW / 2
+        const startY = dwgCenterY - imgDxfH / 2
+        setFloorplan({
+          id: data.id,
+          import_id: data.import_id,
+          original_filename: data.original_filename,
+          mime_type: data.mime_type,
+          imageUrl,
+          transform: {
+            x: startX,
+            y: startY,
+            scaleX: uniformScale,
+            scaleY: uniformScale,
+            rotation: 0,
+            opacity: 0.5
+          },
+          calibration: null,
+          naturalWidth: img.naturalWidth,
+          naturalHeight: img.naturalHeight,
+          cropRect: null
+        })
+        // Save initial transform to backend
+        saveFloorplanTransform({
+          x: startX, y: startY,
+          scaleX: uniformScale, scaleY: uniformScale,
+          rotation: 0, opacity: 0.5
+        })
+        // Auto-switch to Floor Plan view for editing
+        setViewMode('floorplan')
+      }
+      img.src = imageUrl
+    } catch (err) {
+      console.error('Floor plan upload failed:', err)
+    } finally {
+      setIsUploadingFloorplan(false)
+    }
+  }, [importData])
+
+  // Save floorplan transform to backend (debounced)
+  const saveFloorplanTransformTimeout = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const saveFloorplanTransform = useCallback((transform: FloorplanOverlay['transform'], calibration?: FloorplanOverlay['calibration'], cropRect?: FloorplanOverlay['cropRect']) => {
+    if (!importData?.import_id) return
+    if (saveFloorplanTransformTimeout.current) clearTimeout(saveFloorplanTransformTimeout.current)
+    saveFloorplanTransformTimeout.current = setTimeout(async () => {
+      try {
+        const body: any = { transform }
+        if (calibration !== undefined) body.calibration = calibration
+        if (cropRect !== undefined) body.cropRect = cropRect
+        await fetch(`${API_BASE}/api/dwg/import/${importData.import_id}/floorplan/transform`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body)
+        })
+      } catch (err) {
+        console.error('Failed to save floorplan transform:', err)
+      }
+    }, 500)
+  }, [importData?.import_id])
+
+  // Delete floorplan
+  const handleDeleteFloorplan = useCallback(async () => {
+    if (!importData?.import_id) return
+    try {
+      await fetch(`${API_BASE}/api/dwg/import/${importData.import_id}/floorplan`, { method: 'DELETE' })
+      setFloorplan(null)
+    } catch (err) {
+      console.error('Failed to delete floorplan:', err)
+    }
+  }, [importData?.import_id])
 
   // Check if saved view exists and load it on mount
   useEffect(() => {
@@ -512,8 +686,8 @@ export default function PreviewPanel({
 
     if (activeTool === 'pan') {
       // Pan mode - do nothing special on down
-    } else if (activeTool === 'select') {
-      // Check if clicking on a fixture
+    } else if (activeTool === 'select' && viewMode !== 'floorplan') {
+      // Check if clicking on a fixture (only in DWG/overlay modes)
       const fixture = findFixtureAt(pos.x, pos.y)
       if (fixture) {
         if (e.shiftKey) {
@@ -552,14 +726,32 @@ export default function PreviewPanel({
       // Store in DXF units (will convert to meters when passing to API)
       setRoiVertices(prev => [...prev, { x: worldPos.x, z: worldPos.y }])
       setIsDragging(false)
+    } else if (activeTool === 'move_floorplan' && floorplan) {
+      // Start dragging the floorplan image
+      setFpDragStart(pos)
+      setFpDragStartTransform({ x: floorplan.transform.x, y: floorplan.transform.y })
+    } else if (activeTool === 'calibrate_floorplan' && floorplan) {
+      // Add calibration point (in DXF coords)
+      const worldPos = fromScreen(pos.x, pos.y)
+      if (calibrationPoints.length === 0) {
+        setCalibrationPoints([{ x: worldPos.x, y: worldPos.y }])
+      } else if (calibrationPoints.length === 1) {
+        setCalibrationPoints(prev => [...prev, { x: worldPos.x, y: worldPos.y }])
+        setShowCalibrationDialog(true)
+      }
+      setIsDragging(false)
+    } else if (activeTool === 'crop_floorplan' && floorplan) {
+      // Start drawing crop rectangle
+      setFpCropStart(pos)
+      setFpCropCurrent(pos)
     }
-  }, [activeTool, getMousePos, panOffset, findFixtureAt, selectedFixtureIds, onSelectFixtures, fromScreen, importData.unit_scale_to_m, scaleCorrection, onAddLidarInstance])
+  }, [activeTool, getMousePos, panOffset, findFixtureAt, selectedFixtureIds, onSelectFixtures, fromScreen, importData.unit_scale_to_m, scaleCorrection, onAddLidarInstance, floorplan, calibrationPoints, viewMode])
 
   const handleMouseMove = useCallback((e: React.MouseEvent) => {
     const pos = getMousePos(e)
     
-    // Track hover when not dragging
-    if (!isDragging && onHoverFixture) {
+    // Track hover when not dragging (skip during floor plan tools and floorplan view)
+    if (!isDragging && onHoverFixture && viewMode !== 'floorplan' && activeTool !== 'move_floorplan' && activeTool !== 'calibrate_floorplan' && activeTool !== 'crop_floorplan') {
       const fixture = findFixtureAt(pos.x, pos.y)
       onHoverFixture(fixture?.id || null)
     }
@@ -569,6 +761,19 @@ export default function PreviewPanel({
     const dx = pos.x - dragStart.x
     const dy = pos.y - dragStart.y
 
+    if (activeTool === 'move_floorplan' && floorplan && fpDragStart && fpDragStartTransform) {
+      // Move floorplan image in DXF coordinate space
+      const worldStart = fromScreen(fpDragStart.x, fpDragStart.y)
+      const worldNow = fromScreen(pos.x, pos.y)
+      const newTransform = {
+        ...floorplan.transform,
+        x: fpDragStartTransform.x + (worldNow.x - worldStart.x),
+        y: fpDragStartTransform.y + (worldNow.y - worldStart.y)
+      }
+      setFloorplan(prev => prev ? { ...prev, transform: newTransform } : null)
+      return
+    }
+    
     if (activeTool === 'pan' || (activeTool === 'select' && !selectionRect && Math.abs(dx) + Math.abs(dy) > 5)) {
       // Pan the view (Y inverted because DXF Y+ is up, screen Y+ is down)
       setPanOffset({
@@ -583,10 +788,55 @@ export default function PreviewPanel({
         w: Math.abs(pos.x - dragStart.x),
         h: Math.abs(pos.y - dragStart.y)
       })
+    } else if (activeTool === 'crop_floorplan' && fpCropStart) {
+      setFpCropCurrent(pos)
     }
-  }, [isDragging, getMousePos, dragStart, dragStartOffset, activeTool, selectionRect, onHoverFixture, findFixtureAt])
+  }, [isDragging, getMousePos, dragStart, dragStartOffset, activeTool, selectionRect, onHoverFixture, findFixtureAt, fpCropStart, viewMode, floorplan, fpDragStart, fpDragStartTransform, fromScreen])
 
   const handleMouseUp = useCallback((e: React.MouseEvent) => {
+    // Save floorplan position on drag end
+    if (activeTool === 'move_floorplan' && floorplan && fpDragStart) {
+      saveFloorplanTransform(floorplan.transform)
+      setFpDragStart(null)
+      setFpDragStartTransform(null)
+      setIsDragging(false)
+      return
+    }
+
+    // Finish crop rectangle
+    if (activeTool === 'crop_floorplan' && fpCropStart && fpCropCurrent && floorplan) {
+      const minSx = Math.min(fpCropStart.x, fpCropCurrent.x)
+      const maxSx = Math.max(fpCropStart.x, fpCropCurrent.x)
+      const minSy = Math.min(fpCropStart.y, fpCropCurrent.y)
+      const maxSy = Math.max(fpCropStart.y, fpCropCurrent.y)
+      // Only apply if rectangle is big enough
+      if (maxSx - minSx > 10 && maxSy - minSy > 10) {
+        const topLeftDxf = fromScreen(minSx, minSy)
+        const bottomRightDxf = fromScreen(maxSx, maxSy)
+        const t = floorplan.transform
+        const fpDxfW = floorplan.naturalWidth * t.scaleX
+        const fpDxfH = floorplan.naturalHeight * t.scaleY
+        // Store as image-relative 0-1 coords so crop stays aligned on resize/move
+        const dxfX = Math.min(topLeftDxf.x, bottomRightDxf.x)
+        const dxfY = Math.min(topLeftDxf.y, bottomRightDxf.y)
+        const dxfW = Math.abs(bottomRightDxf.x - topLeftDxf.x)
+        const dxfH = Math.abs(bottomRightDxf.y - topLeftDxf.y)
+        const cropRect = {
+          x: (dxfX - t.x) / fpDxfW,
+          y: (dxfY - t.y) / fpDxfH,
+          w: dxfW / fpDxfW,
+          h: dxfH / fpDxfH
+        }
+        setFloorplan(prev => prev ? { ...prev, cropRect } : null)
+        // Persist crop to backend
+        saveFloorplanTransform(floorplan.transform, floorplan.calibration, cropRect)
+      }
+      setFpCropStart(null)
+      setFpCropCurrent(null)
+      setIsDragging(false)
+      return
+    }
+    
     if (activeTool === 'rectangle' && selectionRect && selectionRect.w > 5 && selectionRect.h > 5) {
       // Select all fixtures in rectangle
       const fixtures = findFixturesInRect(
@@ -607,7 +857,7 @@ export default function PreviewPanel({
     
     setIsDragging(false)
     setSelectionRect(null)
-  }, [activeTool, selectionRect, findFixturesInRect, selectedFixtureIds, onSelectFixtures])
+  }, [activeTool, selectionRect, findFixturesInRect, selectedFixtureIds, onSelectFixtures, floorplan, fpDragStart, saveFloorplanTransform, fpCropStart, fpCropCurrent, fromScreen])
 
   // Zoom with mouse wheel - zoom towards cursor
   const handleWheel = useCallback((e: React.WheelEvent) => {
@@ -698,38 +948,154 @@ export default function PreviewPanel({
 
   return (
     <div className="h-full flex flex-col bg-gray-900">
+      {/* View Mode Tabs */}
+      <div className="h-8 border-b border-gray-700 flex items-center px-3 gap-0.5 bg-gray-800/80">
+        <input ref={floorplanInputRef} type="file" accept="image/png,image/jpeg,image/gif,image/bmp,image/webp,image/svg+xml" className="hidden" onChange={(e) => { const file = e.target.files?.[0]; if (file) handleFloorplanUpload(file); e.target.value = '' }} />
+        {(['dwg', 'floorplan', 'overlay'] as ViewMode[]).map(mode => (
+          <button
+            key={mode}
+            onClick={() => { setViewMode(mode); setActiveTool('select') }}
+            className={`px-3 py-1 text-xs font-medium rounded-t transition-colors flex items-center gap-1 ${viewMode === mode ? 'bg-gray-900 text-white border-t border-x border-gray-600' : 'text-gray-400 hover:text-white hover:bg-gray-700/50'}`}
+          >
+            {mode === 'dwg' ? 'DWG' : mode === 'floorplan' ? 'Floor Plan' : 'Overlay'}
+            {mode === 'floorplan' && floorplan && <span className="w-1.5 h-1.5 rounded-full bg-orange-400" />}
+            {mode === 'floorplan' && floorplan?.cropRect && <span className="w-1.5 h-1.5 rounded-full bg-purple-400" />}
+          </button>
+        ))}
+        <div className="flex-1" />
+        {/* Floor plan upload button - available from any tab when no floor plan exists */}
+        {!floorplan && (
+          <button onClick={() => floorplanInputRef.current?.click()} disabled={isUploadingFloorplan} className="px-2 py-1 rounded text-xs flex items-center gap-1 bg-orange-600/80 hover:bg-orange-500 text-white transition-colors">
+            <ImagePlus className="w-3 h-3" />
+            {isUploadingFloorplan ? 'Uploading...' : 'Upload Floor Plan'}
+          </button>
+        )}
+        {/* Floor plan info when loaded */}
+        {floorplan && viewMode === 'dwg' && (
+          <span className="text-[10px] text-gray-500">{floorplan.original_filename}</span>
+        )}
+        {floorplan?.cropRect && viewMode === 'overlay' && (
+          <span className="text-[10px] text-purple-400 flex items-center gap-1"><Scissors className="w-3 h-3" />Cropped</span>
+        )}
+      </div>
+
       {/* Toolbar */}
       <div className="h-10 border-b border-border-dark flex items-center px-3 gap-1 bg-panel-bg">
+        {(viewMode === 'dwg' || viewMode === 'overlay') && (<>
         <span className="text-xs text-gray-400 mr-2">Tools:</span>
-        <button
-          onClick={() => setActiveTool('select')}
-          className={`p-1.5 rounded transition-colors ${activeTool === 'select' ? 'bg-highlight text-white' : 'text-gray-400 hover:text-white hover:bg-gray-700'}`}
-          title="Select (click or Shift+click for multi)"
-        >
-          <MousePointer2 className="w-4 h-4" />
-        </button>
-        <button
-          onClick={() => setActiveTool('rectangle')}
-          className={`p-1.5 rounded transition-colors ${activeTool === 'rectangle' ? 'bg-highlight text-white' : 'text-gray-400 hover:text-white hover:bg-gray-700'}`}
-          title="Rectangle Select"
-        >
-          <Square className="w-4 h-4" />
-        </button>
-        <button
-          onClick={() => setActiveTool('pan')}
-          className={`p-1.5 rounded transition-colors ${activeTool === 'pan' ? 'bg-highlight text-white' : 'text-gray-400 hover:text-white hover:bg-gray-700'}`}
-          title="Pan"
-        >
-          <Move className="w-4 h-4" />
-        </button>
+        <button onClick={() => setActiveTool('select')} className={`p-1.5 rounded transition-colors ${activeTool === 'select' ? 'bg-highlight text-white' : 'text-gray-400 hover:text-white hover:bg-gray-700'}`} title="Select"><MousePointer2 className="w-4 h-4" /></button>
+        <button onClick={() => setActiveTool('rectangle')} className={`p-1.5 rounded transition-colors ${activeTool === 'rectangle' ? 'bg-highlight text-white' : 'text-gray-400 hover:text-white hover:bg-gray-700'}`} title="Rectangle Select"><Square className="w-4 h-4" /></button>
+        <button onClick={() => setActiveTool('pan')} className={`p-1.5 rounded transition-colors ${activeTool === 'pan' ? 'bg-highlight text-white' : 'text-gray-400 hover:text-white hover:bg-gray-700'}`} title="Pan"><Move className="w-4 h-4" /></button>
         <div className="w-px h-5 bg-gray-700 mx-2" />
-        <button
-          onClick={() => setShowGrid(!showGrid)}
-          className={`p-1.5 rounded transition-colors ${showGrid ? 'bg-gray-700 text-white' : 'text-gray-500 hover:text-white'}`}
-          title="Toggle Grid"
-        >
-          <Grid className="w-4 h-4" />
-        </button>
+        <button onClick={() => setShowGrid(!showGrid)} className={`p-1.5 rounded transition-colors ${showGrid ? 'bg-gray-700 text-white' : 'text-gray-500 hover:text-white'}`} title="Toggle Grid"><Grid className="w-4 h-4" /></button>
+        </>)}
+        {/* Floor Plan Controls - shown in floorplan and overlay modes */}
+        {(viewMode === 'floorplan' || viewMode === 'overlay') && floorplan && (<>
+            {viewMode === 'floorplan' && (<>
+              <button onClick={() => setActiveTool('pan')} className={`p-1.5 rounded transition-colors ${activeTool === 'pan' ? 'bg-highlight text-white' : 'text-gray-400 hover:text-white hover:bg-gray-700'}`} title="Pan"><Move className="w-4 h-4" /></button>
+              <div className="w-px h-5 bg-gray-700 mx-1" />
+            </>)}
+            {viewMode === 'overlay' && <div className="w-px h-5 bg-gray-700 mx-1" />}
+            <button onClick={() => setActiveTool(activeTool === 'move_floorplan' ? 'select' : 'move_floorplan')} className={`p-1.5 rounded text-xs transition-colors ${activeTool === 'move_floorplan' ? 'bg-orange-600 text-white' : 'text-gray-400 hover:text-white hover:bg-gray-700'}`} title="Move floor plan">
+              <Move className="w-3.5 h-3.5" />
+            </button>
+            <button onClick={() => { setCalibrationPoints([]); setActiveTool(activeTool === 'calibrate_floorplan' ? 'select' : 'calibrate_floorplan') }} className={`p-1.5 rounded text-xs transition-colors ${activeTool === 'calibrate_floorplan' ? 'bg-red-600 text-white' : 'text-gray-400 hover:text-white hover:bg-gray-700'}`} title="Calibrate scale">
+              <Ruler className="w-3.5 h-3.5" />
+            </button>
+            {viewMode === 'floorplan' && (
+              <button onClick={() => setActiveTool(activeTool === 'crop_floorplan' ? 'select' : 'crop_floorplan')} className={`p-1.5 rounded text-xs transition-colors ${activeTool === 'crop_floorplan' ? 'bg-purple-600 text-white' : 'text-gray-400 hover:text-white hover:bg-gray-700'}`} title="Crop: draw rectangle to select portion for overlay">
+                <Scissors className="w-3.5 h-3.5" />
+              </button>
+            )}
+            {viewMode === 'floorplan' && floorplan.cropRect && (
+              <button onClick={() => { setFloorplan(prev => prev ? { ...prev, cropRect: null } : null); saveFloorplanTransform(floorplan.transform, floorplan.calibration, null) }} className="p-1 rounded text-xs text-purple-400 hover:text-purple-300 hover:bg-gray-700" title="Clear crop">
+                <X className="w-3 h-3" />
+              </button>
+            )}
+            {/* Floor plan resize: scale around center so image stays in view */}
+            <div className="flex items-center border border-gray-600 rounded overflow-hidden">
+              <button
+                onClick={() => {
+                  const factor = 0.9
+                  const t = floorplan.transform
+                  const newScaleX = t.scaleX * factor
+                  const newScaleY = t.scaleY * factor
+                  // Adjust origin so the image center stays fixed
+                  const newX = t.x + floorplan.naturalWidth * (t.scaleX - newScaleX) / 2
+                  const newY = t.y + floorplan.naturalHeight * (t.scaleY - newScaleY) / 2
+                  const newTransform = { ...t, scaleX: newScaleX, scaleY: newScaleY, x: newX, y: newY }
+                  setFloorplan(prev => prev ? { ...prev, transform: newTransform } : null)
+                  saveFloorplanTransform(newTransform)
+                }}
+                className="px-1.5 py-1 text-xs text-gray-400 hover:text-white hover:bg-gray-700 transition-colors border-r border-gray-600"
+                title="Shrink floor plan (−10%)"
+              >
+                <ZoomOut className="w-3 h-3" />
+              </button>
+              <span className="px-1.5 py-1 text-[10px] text-orange-400 font-mono min-w-[36px] text-center bg-gray-800" title="Floor plan scale">
+                {(floorplan.transform.scaleX * 100).toFixed(0)}%
+              </span>
+              <button
+                onClick={() => {
+                  const factor = 1.1
+                  const t = floorplan.transform
+                  const newScaleX = t.scaleX * factor
+                  const newScaleY = t.scaleY * factor
+                  const newX = t.x + floorplan.naturalWidth * (t.scaleX - newScaleX) / 2
+                  const newY = t.y + floorplan.naturalHeight * (t.scaleY - newScaleY) / 2
+                  const newTransform = { ...t, scaleX: newScaleX, scaleY: newScaleY, x: newX, y: newY }
+                  setFloorplan(prev => prev ? { ...prev, transform: newTransform } : null)
+                  saveFloorplanTransform(newTransform)
+                }}
+                className="px-1.5 py-1 text-xs text-gray-400 hover:text-white hover:bg-gray-700 transition-colors border-l border-gray-600"
+                title="Enlarge floor plan (+10%)"
+              >
+                <ZoomIn className="w-3 h-3" />
+              </button>
+            </div>
+            <div className="flex items-center gap-1" title="Floor plan opacity">
+              <Eye className="w-3 h-3 text-gray-500" />
+              <input
+                type="range"
+                min="0"
+                max="1"
+                step="0.05"
+                value={floorplan.transform.opacity}
+                onChange={(e) => {
+                  const opacity = Number(e.target.value)
+                  setFloorplan(prev => prev ? { ...prev, transform: { ...prev.transform, opacity } } : null)
+                  saveFloorplanTransform({ ...floorplan.transform, opacity })
+                }}
+                className="w-16 h-1 accent-orange-500"
+              />
+            </div>
+            <button
+              onClick={() => {
+                const newRotation = (floorplan.transform.rotation + 90) % 360
+                const newTransform = { ...floorplan.transform, rotation: newRotation }
+                setFloorplan(prev => prev ? { ...prev, transform: newTransform } : null)
+                saveFloorplanTransform(newTransform)
+              }}
+              className="p-1.5 rounded text-xs text-gray-400 hover:text-white hover:bg-gray-700 transition-colors"
+              title="Rotate floor plan 90°"
+            >
+              <RotateCw className="w-3.5 h-3.5" />
+            </button>
+            <button
+              onClick={() => {
+                if (window.confirm('Remove floor plan image?')) handleDeleteFloorplan()
+              }}
+              className="px-2 py-1 rounded text-xs flex items-center gap-1 bg-red-900/40 text-red-400 hover:bg-red-800/60 hover:text-red-300 transition-colors"
+              title="Delete floor plan image"
+            >
+              <Trash2 className="w-3 h-3" />
+              Delete
+            </button>
+        </>)}
+        {viewMode === 'floorplan' && !floorplan && (
+          <span className="text-xs text-gray-500 italic">No floor plan uploaded</span>
+        )}
+        
         {lidarMode && (
           <div className="relative">
             <button
@@ -745,6 +1111,10 @@ export default function PreviewPanel({
                 <label className="flex items-center gap-2 py-1 px-1 rounded hover:bg-gray-700 cursor-pointer text-xs">
                   <input type="checkbox" checked={layerVisibility.base} onChange={(e) => setLayerVisibility(prev => ({ ...prev, base: e.target.checked }))} className="rounded border-gray-600 bg-gray-700 text-blue-500 w-3 h-3" />
                   <span className="text-gray-300">Base Fixtures</span>
+                </label>
+                <label className="flex items-center gap-2 py-1 px-1 rounded hover:bg-gray-700 cursor-pointer text-xs">
+                  <input type="checkbox" checked={layerVisibility.floorplan} onChange={(e) => setLayerVisibility(prev => ({ ...prev, floorplan: e.target.checked }))} className="rounded border-gray-600 bg-gray-700 text-orange-500 w-3 h-3" />
+                  <span className="text-gray-300">Floor Plan Image</span>
                 </label>
                 <label className="flex items-center gap-2 py-1 px-1 rounded hover:bg-gray-700 cursor-pointer text-xs">
                   <input type="checkbox" checked={layerVisibility.roi} onChange={(e) => setLayerVisibility(prev => ({ ...prev, roi: e.target.checked }))} className="rounded border-gray-600 bg-gray-700 text-amber-500 w-3 h-3" />
@@ -850,8 +1220,8 @@ export default function PreviewPanel({
         )}
       </div>
       
-      {/* LiDAR Control Panel (shown when lidarMode is on) */}
-      {lidarMode && (
+      {/* LiDAR Control Panel (shown when lidarMode is on, hidden in floorplan view) */}
+      {lidarMode && viewMode !== 'floorplan' && (
         <div className="h-12 border-b border-border-dark flex items-center px-3 gap-3 bg-gray-800/50">
           {/* ROI Drawing Section */}
           <span className="text-xs text-gray-400">ROI:</span>
@@ -1036,6 +1406,153 @@ export default function PreviewPanel({
               Coverage: {simulationResult.coverage_percent.toFixed(1)}%
             </span>
           )}
+          
+          <div className="w-px h-5 bg-gray-600" />
+          
+          {/* Export for Algorithm Provider */}
+          <button
+            onClick={() => {
+              if (!lidarRoi || lidarRoi.length < 3 || lidarInstances.length === 0) return
+              
+              const effectiveScale = importData.unit_scale_to_m * scaleCorrection
+              
+              // Convert ROI to meters
+              const roiMeters = lidarRoi.map(v => ({
+                x: v.x * effectiveScale,
+                z: v.z * effectiveScale
+              }))
+              
+              // Calculate ROI SW corner (min X, min Z)
+              const roiSwX = Math.min(...roiMeters.map(v => v.x))
+              const roiSwZ = Math.min(...roiMeters.map(v => v.z))
+              const roiNeX = Math.max(...roiMeters.map(v => v.x))
+              const roiNeZ = Math.max(...roiMeters.map(v => v.z))
+              const venueWidth = roiNeX - roiSwX
+              const venueDepth = roiNeZ - roiSwZ
+              
+              // ROI-relative vertices
+              const roiVerticesRelative = roiMeters.map(v => ({
+                x: parseFloat((v.x - roiSwX).toFixed(3)),
+                z: parseFloat((v.z - roiSwZ).toFixed(3))
+              }))
+              
+              // Filter mapped fixtures inside ROI using point-in-polygon
+              const roiPolygon = roiMeters.map(v => ({ x: v.x, y: v.z }))
+              const fixturesInRoi = importData.fixtures
+                .filter(f => !!mappings[f.group_id]) // Only mapped fixtures
+                .filter(f => {
+                  const fx = f.pose2d.x * effectiveScale
+                  const fz = f.pose2d.y * effectiveScale
+                  return pointInPolygon(fx, fz, roiPolygon)
+                })
+                .map((f, idx) => {
+                  const mapping = mappings[f.group_id]
+                  const fx = f.pose2d.x * effectiveScale - roiSwX
+                  const fz = f.pose2d.y * effectiveScale - roiSwZ
+                  const wM = f.footprint.w * effectiveScale
+                  const dM = f.footprint.d * effectiveScale
+                  return {
+                    id: f.id,
+                    type: mapping?.type || 'unknown',
+                    name: `${mapping?.type || 'fixture'}-${String(idx + 1).padStart(3, '0')}`,
+                    position: {
+                      x: parseFloat(fx.toFixed(3)),
+                      y: 0,
+                      z: parseFloat(fz.toFixed(3))
+                    },
+                    rotation: { y_deg: parseFloat((f.pose2d.rot_deg || 0).toFixed(1)) },
+                    dimensions: {
+                      width_m: parseFloat(wM.toFixed(3)),
+                      depth_m: parseFloat(dM.toFixed(3))
+                    },
+                    layer: f.source?.layer || '',
+                    block: f.source?.block || ''
+                  }
+                })
+              
+              // LiDAR instances in ROI-relative coords
+              const lidarsExport = lidarInstances.map((inst, idx) => {
+                const model = lidarModels.find(m => m.id === inst.model_id)
+                return {
+                  lidarId: `lidar-${String(idx + 1).padStart(3, '0')}`,
+                  model: {
+                    name: model?.name || 'Unknown',
+                    hfov_deg: model?.hfov_deg || 360,
+                    vfov_deg: model?.vfov_deg || 30,
+                    range_m: model?.range_m || inst.range_m || 10,
+                    dome_mode: model?.dome_mode ?? true
+                  },
+                  extrinsics: {
+                    x_m: parseFloat((inst.x_m - roiSwX).toFixed(3)),
+                    y_m: parseFloat((inst.mount_y_m ?? inst.y_m ?? 3).toFixed(2)),
+                    z_m: parseFloat((inst.z_m - roiSwZ).toFixed(3)),
+                    yaw_deg: parseFloat((inst.yaw_deg || 0).toFixed(1)),
+                    pitch_deg: 0,
+                    roll_deg: 0
+                  }
+                }
+              })
+              
+              const exportConfig = {
+                exportedAt: new Date().toISOString(),
+                venueId: importData.import_id,
+                venueName: importData.filename?.replace(/\.[^.]+$/, '') || 'Unnamed Venue',
+                layoutVersionId: layoutVersionId || '',
+                coordinateFrame: {
+                  origin: 'ROI SW corner at floor level',
+                  roiOffset: { x: parseFloat(roiSwX.toFixed(3)), z: parseFloat(roiSwZ.toFixed(3)) },
+                  axis: 'X-East, Y-Up, Z-North',
+                  units: 'meters'
+                },
+                roiVertices: roiVerticesRelative,
+                venueBounds: {
+                  width: parseFloat(venueWidth.toFixed(3)),
+                  depth: parseFloat(venueDepth.toFixed(3)),
+                  minX: 0,
+                  maxX: parseFloat(venueWidth.toFixed(3)),
+                  minZ: 0,
+                  maxZ: parseFloat(venueDepth.toFixed(3)),
+                  floorY: 0,
+                  ceilingY: 4.5
+                },
+                fixtures: fixturesInRoi,
+                lidars: lidarsExport,
+                operationalParams: {
+                  groundPlaneY: 0,
+                  ceilingY: 4.5,
+                  minDetectionHeight: 0.3,
+                  maxDetectionHeight: 2.2,
+                  publishRateHz: 10
+                },
+                notes: {
+                  coordinateTransform: 'All coordinates are relative to ROI SW corner. Original DWG coordinates can be recovered by adding roiOffset.',
+                  fixtureFilter: 'Only mapped fixtures inside the ROI are included.',
+                  lidarIds: 'Auto-generated sequential IDs (offline handoff). Replace with commissioned IDs after edge pairing.'
+                }
+              }
+              
+              // Download as JSON
+              const blob = new Blob([JSON.stringify(exportConfig, null, 2)], { type: 'application/json' })
+              const url = URL.createObjectURL(blob)
+              const a = document.createElement('a')
+              a.href = url
+              a.download = `algo-config-${importData.filename?.replace(/\.[^.]+$/, '') || 'venue'}-${new Date().toISOString().split('T')[0]}.json`
+              document.body.appendChild(a)
+              a.click()
+              document.body.removeChild(a)
+              URL.revokeObjectURL(url)
+            }}
+            disabled={!lidarRoi || lidarRoi.length < 3 || lidarInstances.length === 0}
+            className="px-2 py-1 bg-indigo-600 hover:bg-indigo-500 disabled:bg-gray-600 text-white text-xs rounded flex items-center gap-1"
+            title={
+              !lidarRoi ? 'Draw ROI first' : 
+              lidarInstances.length === 0 ? 'Place LiDARs first' : 
+              'Export JSON config for algorithm provider'
+            }
+          >
+            <FileDown className="w-3 h-3" />
+            Export Config
+          </button>
           
           <div className="flex-1" />
           
@@ -1380,8 +1897,7 @@ export default function PreviewPanel({
                     if (!newModelName.trim()) return
                     setIsCreatingModel(true)
                     try {
-                      const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3001'
-                      
+                                            
                       if (editingModelId) {
                         // UPDATE existing model
                         const res = await fetch(`${API_BASE}/api/lidar/models/${editingModelId}`, {
@@ -1447,13 +1963,39 @@ export default function PreviewPanel({
       {/* Canvas */}
       <div
         ref={containerRef}
-        className={`flex-1 overflow-hidden relative ${activeTool === 'pan' ? 'cursor-grab active:cursor-grabbing' : (activeTool === 'rectangle' || activeTool === 'place_lidar' || activeTool === 'draw_roi') ? 'cursor-crosshair' : 'cursor-default'}`}
+        className={`flex-1 overflow-hidden relative ${activeTool === 'pan' ? 'cursor-grab active:cursor-grabbing' : (activeTool === 'rectangle' || activeTool === 'place_lidar' || activeTool === 'draw_roi' || activeTool === 'calibrate_floorplan' || activeTool === 'crop_floorplan') ? 'cursor-crosshair' : activeTool === 'move_floorplan' ? 'cursor-move' : 'cursor-default'}`}
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
         onMouseLeave={handleMouseUp}
         onWheel={handleWheel}
       >
+        {/* Empty state for Floor Plan / Overlay when no floor plan uploaded */}
+        {(viewMode === 'floorplan' && !floorplan) && (
+          <div className="absolute inset-0 flex items-center justify-center z-10 pointer-events-none">
+            <div className="text-center pointer-events-auto">
+              <ImageIcon className="w-12 h-12 text-gray-600 mx-auto mb-3" />
+              <p className="text-gray-400 text-sm mb-2">No floor plan uploaded</p>
+              <button onClick={() => floorplanInputRef.current?.click()} disabled={isUploadingFloorplan} className="px-4 py-2 rounded-lg text-sm bg-orange-600 hover:bg-orange-500 text-white transition-colors flex items-center gap-2 mx-auto">
+                <ImagePlus className="w-4 h-4" />
+                {isUploadingFloorplan ? 'Uploading...' : 'Upload Floor Plan Image'}
+              </button>
+              <p className="text-gray-600 text-xs mt-2">PNG, JPG, SVG, WebP supported</p>
+            </div>
+          </div>
+        )}
+        {(viewMode === 'overlay' && !floorplan) && (
+          <div className="absolute inset-0 flex items-center justify-center z-10 pointer-events-none">
+            <div className="text-center pointer-events-auto">
+              <Layers className="w-12 h-12 text-gray-600 mx-auto mb-3" />
+              <p className="text-gray-400 text-sm mb-2">Upload a floor plan to overlay on the DWG</p>
+              <button onClick={() => floorplanInputRef.current?.click()} disabled={isUploadingFloorplan} className="px-4 py-2 rounded-lg text-sm bg-orange-600 hover:bg-orange-500 text-white transition-colors flex items-center gap-2 mx-auto">
+                <ImagePlus className="w-4 h-4" />
+                {isUploadingFloorplan ? 'Uploading...' : 'Upload Floor Plan'}
+              </button>
+            </div>
+          </div>
+        )}
         <svg
           width={dimensions.width}
           height={dimensions.height}
@@ -1472,8 +2014,74 @@ export default function PreviewPanel({
             />
           ))}
 
+          {/* Floor Plan Image - in floorplan mode, render BEFORE fixtures (no clipping needed) */}
+          {viewMode === 'floorplan' && layerVisibility.floorplan && floorplan && (() => {
+            const t = floorplan.transform
+            const topLeft = toScreen(t.x, t.y + floorplan.naturalHeight * t.scaleY)
+            const bottomRight = toScreen(t.x + floorplan.naturalWidth * t.scaleX, t.y)
+            const imgW = Math.abs(bottomRight.x - topLeft.x)
+            const imgH = Math.abs(bottomRight.y - topLeft.y)
+            const cx = (topLeft.x + bottomRight.x) / 2
+            const cy = (topLeft.y + bottomRight.y) / 2
+            return (
+              <g>
+                <image
+                  href={floorplan.imageUrl}
+                  x={topLeft.x} y={topLeft.y} width={imgW} height={imgH}
+                  opacity={t.opacity}
+                  transform={t.rotation ? `rotate(${-t.rotation}, ${cx}, ${cy})` : undefined}
+                  preserveAspectRatio="none"
+                  style={{ pointerEvents: (activeTool === 'move_floorplan' || activeTool === 'calibrate_floorplan' || activeTool === 'crop_floorplan') ? 'auto' : 'none' }}
+                />
+                {/* Crop rectangle visualization in Floor Plan view (convert relative 0-1 to DXF) */}
+                {viewMode === 'floorplan' && floorplan.cropRect && (() => {
+                  const cr = floorplan.cropRect
+                  const fpW = floorplan.naturalWidth * t.scaleX
+                  const fpH = floorplan.naturalHeight * t.scaleY
+                  const dxfX = t.x + cr.x * fpW
+                  const dxfY = t.y + cr.y * fpH
+                  const dxfW = cr.w * fpW
+                  const dxfH = cr.h * fpH
+                  const cTL = toScreen(dxfX, dxfY + dxfH)
+                  const cBR = toScreen(dxfX + dxfW, dxfY)
+                  return <rect x={Math.min(cTL.x, cBR.x)} y={Math.min(cTL.y, cBR.y)} width={Math.abs(cBR.x - cTL.x)} height={Math.abs(cBR.y - cTL.y)} fill="none" stroke="#a855f7" strokeWidth={2} strokeDasharray="8 4" />
+                })()}
+                {/* Crop rectangle being drawn */}
+                {viewMode === 'floorplan' && activeTool === 'crop_floorplan' && fpCropStart && fpCropCurrent && (
+                  <rect
+                    x={Math.min(fpCropStart.x, fpCropCurrent.x)} y={Math.min(fpCropStart.y, fpCropCurrent.y)}
+                    width={Math.abs(fpCropCurrent.x - fpCropStart.x)} height={Math.abs(fpCropCurrent.y - fpCropStart.y)}
+                    fill="rgba(168, 85, 247, 0.15)" stroke="#a855f7" strokeWidth={2} strokeDasharray="6 3"
+                  />
+                )}
+              </g>
+            )
+          })()}
+
+          {/* Calibration line drawing */}
+          {activeTool === 'calibrate_floorplan' && calibrationPoints.length >= 1 && (
+            <>
+              {calibrationPoints.map((pt, i) => {
+                const sp = toScreen(pt.x, pt.y)
+                return (
+                  <circle key={`cal-${i}`} cx={sp.x} cy={sp.y} r={6} fill="#ef4444" stroke="white" strokeWidth={2} />
+                )
+              })}
+              {calibrationPoints.length === 2 && (
+                <line
+                  x1={toScreen(calibrationPoints[0].x, calibrationPoints[0].y).x}
+                  y1={toScreen(calibrationPoints[0].x, calibrationPoints[0].y).y}
+                  x2={toScreen(calibrationPoints[1].x, calibrationPoints[1].y).x}
+                  y2={toScreen(calibrationPoints[1].x, calibrationPoints[1].y).y}
+                  stroke="#ef4444" strokeWidth={2} strokeDasharray="6 3"
+                />
+              )}
+            </>
+          )}
+
           {/* Fixtures - sorted by area (largest first = behind, smallest last = on top) */}
-          {layerVisibility.base && [...importData.fixtures]
+          <g opacity={viewMode === 'overlay' ? 0.4 : 1}>
+          {(viewMode === 'dwg' || viewMode === 'overlay') && layerVisibility.base && [...importData.fixtures]
             .sort((a, b) => (b.footprint.w * b.footprint.d) - (a.footprint.w * a.footprint.d))
             .map(fixture => {
             const isSelected = selectedFixtureIds.has(fixture.id)
@@ -1585,6 +2193,52 @@ export default function PreviewPanel({
               </g>
             )
           })}
+          </g>
+
+          {/* Floor Plan Image - in overlay mode, render AFTER fixtures so it's visible on top */}
+          {viewMode === 'overlay' && layerVisibility.floorplan && floorplan && (() => {
+            const t = floorplan.transform
+            const topLeft = toScreen(t.x, t.y + floorplan.naturalHeight * t.scaleY)
+            const bottomRight = toScreen(t.x + floorplan.naturalWidth * t.scaleX, t.y)
+            const imgW = Math.abs(bottomRight.x - topLeft.x)
+            const imgH = Math.abs(bottomRight.y - topLeft.y)
+            const cx = (topLeft.x + bottomRight.x) / 2
+            const cy = (topLeft.y + bottomRight.y) / 2
+            const useCrop = floorplan.cropRect
+            const cropClipId = `fp-crop-overlay-${floorplan.id}`
+            return (
+              <g>
+                {useCrop && floorplan.cropRect && (
+                  <defs>
+                    <clipPath id={cropClipId}>
+                      {(() => {
+                        const cr = floorplan.cropRect
+                        const fpW = floorplan.naturalWidth * t.scaleX
+                        const fpH = floorplan.naturalHeight * t.scaleY
+                        const dxfX = t.x + cr.x * fpW
+                        const dxfY = t.y + cr.y * fpH
+                        const dxfW = cr.w * fpW
+                        const dxfH = cr.h * fpH
+                        const cTL = toScreen(dxfX, dxfY + dxfH)
+                        const cBR = toScreen(dxfX + dxfW, dxfY)
+                        return <rect x={Math.min(cTL.x, cBR.x)} y={Math.min(cTL.y, cBR.y)} width={Math.abs(cBR.x - cTL.x)} height={Math.abs(cBR.y - cTL.y)} />
+                      })()}
+                    </clipPath>
+                  </defs>
+                )}
+                <g clipPath={useCrop ? `url(#${cropClipId})` : undefined}>
+                  <image
+                    href={floorplan.imageUrl}
+                    x={topLeft.x} y={topLeft.y} width={imgW} height={imgH}
+                    opacity={t.opacity}
+                    transform={t.rotation ? `rotate(${-t.rotation}, ${cx}, ${cy})` : undefined}
+                    preserveAspectRatio="none"
+                    style={{ pointerEvents: (activeTool === 'move_floorplan' || activeTool === 'calibrate_floorplan') ? 'auto' : 'none' }}
+                  />
+                </g>
+              </g>
+            )
+          })()}
 
           {/* Selection Rectangle */}
           {selectionRect && (
@@ -1601,7 +2255,7 @@ export default function PreviewPanel({
           )}
 
           {/* LiDAR ROI Polygon - completed (stored in DXF units) */}
-          {lidarMode && layerVisibility.roi && lidarRoi && lidarRoi.length >= 3 && (
+          {viewMode !== 'floorplan' && lidarMode && layerVisibility.roi && lidarRoi && lidarRoi.length >= 3 && (
             <polygon
               points={lidarRoi.map(v => {
                 const pos = toScreen(v.x, v.z)
@@ -1614,7 +2268,7 @@ export default function PreviewPanel({
           )}
           
           {/* LiDAR ROI Polygon - drawing in progress (stored in DXF units) */}
-          {lidarMode && activeTool === 'draw_roi' && (
+          {viewMode !== 'floorplan' && lidarMode && activeTool === 'draw_roi' && (
             <>
               {/* Vertex markers */}
               {roiVertices.map((v, i) => {
@@ -1649,7 +2303,7 @@ export default function PreviewPanel({
           )}
 
           {/* LiDAR Coverage Heatmap */}
-          {lidarMode && simulationResult && simulationResult.heatmap.map((cell, i) => {
+          {viewMode !== 'floorplan' && lidarMode && simulationResult && simulationResult.heatmap.map((cell, i) => {
             // Skip based on layer visibility
             if (cell.overlap && !layerVisibility.overlapCells) return null
             if (!cell.overlap && !layerVisibility.coverageHeatmap) return null
@@ -1673,7 +2327,7 @@ export default function PreviewPanel({
           })}
 
           {/* LiDAR Instances */}
-          {lidarMode && lidarInstances.map((inst) => {
+          {viewMode !== 'floorplan' && lidarMode && lidarInstances.map((inst) => {
             const model = lidarModels.find(m => m.id === inst.model_id)
             const range = inst.range_m || model?.range_m || 10
             // Apply scale correction when converting meters back to DXF units
@@ -1744,21 +2398,135 @@ export default function PreviewPanel({
       </div>
 
       {/* Info Bar */}
-      <div className="h-8 border-t border-border-dark flex items-center px-3 text-xs text-gray-500 bg-panel-bg">
+      <div className="h-8 border-t border-border-dark flex items-center px-3 text-xs text-gray-500 bg-panel-bg gap-3">
         <span>
           {importData.units} • 
           {((importData.bounds.maxX - importData.bounds.minX) * importData.unit_scale_to_m).toFixed(1)}m × 
           {((importData.bounds.maxY - importData.bounds.minY) * importData.unit_scale_to_m).toFixed(1)}m
         </span>
+        {viewMode === 'floorplan' && floorplan && (
+          <span className="text-orange-400/70">
+            {floorplan.naturalWidth}×{floorplan.naturalHeight}px
+            {floorplan.cropRect && <span className="text-purple-400/70 ml-2">• Crop set</span>}
+            {floorplan.calibration && <span className="text-red-400/70 ml-2">• Calibrated</span>}
+          </span>
+        )}
         <div className="flex-1" />
         <span className="text-gray-400">
-          {selectedFixtureIds.size > 0 ? (
+          {viewMode === 'floorplan' && floorplan ? (
+            activeTool === 'crop_floorplan' ? 'Draw rectangle to select crop area for overlay' :
+            activeTool === 'move_floorplan' ? 'Drag to reposition floor plan' :
+            activeTool === 'calibrate_floorplan' ? 'Click two points on a known dimension' :
+            'Use tools to edit floor plan position, scale, and crop'
+          ) : viewMode === 'overlay' ? (
+            'Overlay: DWG fixtures + floor plan aligned together'
+          ) : selectedFixtureIds.size > 0 ? (
             <span className="text-highlight">{selectedFixtureIds.size} selected</span>
           ) : (
             'Click to select, Shift+click for multi, or use rectangle tool'
           )}
         </span>
       </div>
+
+      {/* Calibration Dialog */}
+      {showCalibrationDialog && calibrationPoints.length === 2 && floorplan && (
+        <div className="absolute inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-gray-800 rounded-lg p-4 w-80 shadow-xl border border-gray-700">
+            <h3 className="text-white font-medium text-sm mb-3">Calibrate Floor Plan Scale</h3>
+            <p className="text-gray-400 text-xs mb-3">
+              Enter the real-world length of the line you drew (in meters).
+              The floor plan will be rescaled so this distance matches.
+            </p>
+            <div className="flex items-center gap-2 mb-2">
+              <span className="text-gray-400 text-xs">Line length on DWG:</span>
+              <span className="text-white text-xs font-mono">
+                {(() => {
+                  const dx = calibrationPoints[1].x - calibrationPoints[0].x
+                  const dy = calibrationPoints[1].y - calibrationPoints[0].y
+                  const dxfLen = Math.sqrt(dx * dx + dy * dy)
+                  return `${(dxfLen * importData.unit_scale_to_m).toFixed(2)}m (${dxfLen.toFixed(0)} DXF)`
+                })()}
+              </span>
+            </div>
+            <div className="flex items-center gap-2 mb-4">
+              <label className="text-gray-400 text-xs">Real length (m):</label>
+              <input
+                type="number"
+                min="0.01"
+                step="0.01"
+                value={calibrationLength}
+                onChange={(e) => setCalibrationLength(e.target.value)}
+                className="flex-1 bg-gray-700 text-white text-sm rounded px-2 py-1.5 border border-gray-600"
+                placeholder="e.g. 5.0"
+                autoFocus
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    // Apply calibration
+                    const realMeters = parseFloat(calibrationLength)
+                    if (realMeters > 0) {
+                      const dx = calibrationPoints[1].x - calibrationPoints[0].x
+                      const dy = calibrationPoints[1].y - calibrationPoints[0].y
+                      const dxfLineLen = Math.sqrt(dx * dx + dy * dy)
+                      const imageLineLen = dxfLineLen / floorplan.transform.scaleX
+                      const newScale = (realMeters / importData.unit_scale_to_m) / imageLineLen
+                      const newTransform = { ...floorplan.transform, scaleX: newScale, scaleY: newScale }
+                      const newCalibration = {
+                        p1Screen: calibrationPoints[0],
+                        p2Screen: calibrationPoints[1],
+                        realWorldMeters: realMeters
+                      }
+                      setFloorplan(prev => prev ? { ...prev, transform: newTransform, calibration: newCalibration } : null)
+                      saveFloorplanTransform(newTransform, newCalibration)
+                      setShowCalibrationDialog(false)
+                      setCalibrationPoints([])
+                      setActiveTool('select')
+                    }
+                  }
+                }}
+              />
+            </div>
+            <div className="flex gap-2">
+              <button
+                onClick={() => {
+                  setShowCalibrationDialog(false)
+                  setCalibrationPoints([])
+                  setActiveTool('select')
+                }}
+                className="flex-1 px-3 py-2 bg-gray-700 hover:bg-gray-600 text-gray-300 text-sm rounded"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  const realMeters = parseFloat(calibrationLength)
+                  if (realMeters > 0) {
+                    const dx = calibrationPoints[1].x - calibrationPoints[0].x
+                    const dy = calibrationPoints[1].y - calibrationPoints[0].y
+                    const dxfLineLen = Math.sqrt(dx * dx + dy * dy)
+                    const imageLineLen = dxfLineLen / floorplan.transform.scaleX
+                    const newScale = (realMeters / importData.unit_scale_to_m) / imageLineLen
+                    const newTransform = { ...floorplan.transform, scaleX: newScale, scaleY: newScale }
+                    const newCalibration = {
+                      p1Screen: calibrationPoints[0],
+                      p2Screen: calibrationPoints[1],
+                      realWorldMeters: realMeters
+                    }
+                    setFloorplan(prev => prev ? { ...prev, transform: newTransform, calibration: newCalibration } : null)
+                    saveFloorplanTransform(newTransform, newCalibration)
+                    setShowCalibrationDialog(false)
+                    setCalibrationPoints([])
+                    setActiveTool('select')
+                  }
+                }}
+                disabled={!calibrationLength || parseFloat(calibrationLength) <= 0}
+                className="flex-1 px-3 py-2 bg-blue-600 hover:bg-blue-500 disabled:bg-gray-600 text-white text-sm rounded"
+              >
+                Apply
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* LiDAR Debug Panel */}
       {showDebugPanel && lidarRoi && lidarRoi.length >= 3 && (

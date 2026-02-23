@@ -1,3 +1,4 @@
+import { API_BASE } from '../config/api'
 /**
  * ReplayInsightContext
  * 
@@ -9,7 +10,7 @@
 import React, { createContext, useContext, useState, useCallback } from 'react';
 import { useVenue } from './VenueContext';
 
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3001';
+;
 
 // ─── Types ───
 

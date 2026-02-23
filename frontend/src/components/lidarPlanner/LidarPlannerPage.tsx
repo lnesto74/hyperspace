@@ -1,10 +1,10 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react'
+import { API_BASE } from '../../config/api'
 import { 
   Layers, Radio, Play, Wand2, Trash2, Plus, Settings, 
   ZoomIn, ZoomOut, Maximize2, Move, MousePointer2, Download
 } from 'lucide-react'
 
-const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:3001'
 
 interface LidarModel {
   id: string

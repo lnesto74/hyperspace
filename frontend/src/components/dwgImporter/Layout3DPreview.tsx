@@ -3,8 +3,8 @@ import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import { RotateCcw, Box, Grid3X3, Save, Download, Hand, Move3D, Layers, Eye, EyeOff } from 'lucide-react'
+import { API_BASE } from '../../config/api'
 
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3001'
 
 interface LayoutFixture {
   id: string
@@ -61,6 +61,7 @@ interface SimulationResult {
 
 interface Layout3DPreviewProps {
   layoutVersionId: string
+  importId?: string
   onClose?: () => void
   lidarInstances?: LidarInstance[]
   lidarModels?: LidarModel[]
@@ -83,7 +84,7 @@ const TYPE_COLORS: Record<string, number> = {
   default: 0x4b5563
 }
 
-export default function Layout3DPreview({ layoutVersionId, lidarInstances = [], lidarModels = [], scaleCorrection = 1.0, simulationResult = null }: Layout3DPreviewProps) {
+export default function Layout3DPreview({ layoutVersionId, importId, lidarInstances = [], lidarModels = [], scaleCorrection = 1.0, simulationResult = null }: Layout3DPreviewProps) {
   console.log('Layout3DPreview render - lidarInstances:', lidarInstances.length, 'lidarModels:', lidarModels.length)
   
   const containerRef = useRef<HTMLDivElement>(null)
@@ -114,7 +115,9 @@ export default function Layout3DPreview({ layoutVersionId, lidarInstances = [], 
   const [panMode, setPanMode] = useState(false)
   const [showLidarLayer, setShowLidarLayer] = useState(true)
   const [showFixturesLayer, setShowFixturesLayer] = useState(true)
+  const [showFloorplanLayer, setShowFloorplanLayer] = useState(true)
   const [showLayersPanel, setShowLayersPanel] = useState(false)
+  const floorplanMeshRef = useRef<THREE.Mesh | null>(null)
 
   // Toggle pan mode - swap left mouse button behavior
   const togglePanMode = useCallback(() => {
@@ -1055,6 +1058,101 @@ export default function Layout3DPreview({ layoutVersionId, lidarInstances = [], 
     }
   }, [showLidarLayer])
 
+  // Toggle floorplan layer visibility
+  useEffect(() => {
+    if (floorplanMeshRef.current) {
+      floorplanMeshRef.current.visible = showFloorplanLayer
+    }
+  }, [showFloorplanLayer])
+
+  // Load and render floor plan image as textured plane on the floor
+  useEffect(() => {
+    if (!sceneRef.current || !layoutData || !importId) return
+    const scene = sceneRef.current
+
+    // Remove existing floorplan mesh
+    if (floorplanMeshRef.current) {
+      scene.remove(floorplanMeshRef.current)
+      floorplanMeshRef.current.geometry.dispose()
+      if (floorplanMeshRef.current.material instanceof THREE.Material) {
+        floorplanMeshRef.current.material.dispose()
+      }
+      floorplanMeshRef.current = null
+    }
+
+    const loadFloorplanTexture = async () => {
+      try {
+        // Fetch floorplan metadata
+        const metaRes = await fetch(`${API_BASE}/api/dwg/import/${importId}/floorplan`)
+        if (!metaRes.ok) return
+        const metaData = await metaRes.json()
+        if (!metaData.floorplan) return
+
+        const fp = metaData.floorplan
+        const transform = fp.transform || { x: 0, y: 0, scaleX: 1, scaleY: 1, rotation: 0, opacity: 0.5 }
+
+        // Load the image as a texture
+        const textureLoader = new THREE.TextureLoader()
+        const imageUrl = `${API_BASE}/api/dwg/import/${importId}/floorplan/image`
+        
+        textureLoader.load(imageUrl, (texture) => {
+          const imgW = texture.image.width
+          const imgH = texture.image.height
+
+          // Calculate plane size in DXF units, then convert to scene meters
+          const { bounds, unit_scale_to_m } = layoutData
+          const effectiveScale = unit_scale_to_m * scaleCorrection
+          const centerX = (bounds.minX + bounds.maxX) / 2 * effectiveScale
+          const centerZ = (bounds.minY + bounds.maxY) / 2 * effectiveScale
+
+          // Image dimensions in DXF units
+          const dxfW = imgW * transform.scaleX
+          const dxfH = imgH * transform.scaleY
+
+          // Convert to meters (scene units)
+          const planeW = dxfW * effectiveScale
+          const planeD = dxfH * effectiveScale
+
+          // Image position: transform.x, transform.y are DXF coords of the image origin (bottom-left)
+          // Center of the image in DXF coords
+          const imgCenterDxfX = transform.x + dxfW / 2
+          const imgCenterDxfY = transform.y + dxfH / 2
+
+          // Convert to scene coords (centered like fixtures)
+          const sceneX = imgCenterDxfX * effectiveScale - centerX
+          const sceneZ = imgCenterDxfY * effectiveScale - centerZ
+
+          const geometry = new THREE.PlaneGeometry(planeW, planeD)
+          const material = new THREE.MeshBasicMaterial({
+            map: texture,
+            transparent: true,
+            opacity: transform.opacity,
+            side: THREE.DoubleSide,
+            depthWrite: false
+          })
+
+          const mesh = new THREE.Mesh(geometry, material)
+          mesh.name = 'FloorplanOverlay'
+          mesh.position.set(sceneX, 0.01, sceneZ)
+          mesh.rotation.x = -Math.PI / 2
+          if (transform.rotation) {
+            mesh.rotation.z = -transform.rotation * Math.PI / 180
+          }
+          mesh.renderOrder = 1
+          mesh.visible = showFloorplanLayer
+
+          scene.add(mesh)
+          floorplanMeshRef.current = mesh
+          console.log('[3D] Floor plan overlay loaded:', planeW.toFixed(1), 'x', planeD.toFixed(1), 'm at', sceneX.toFixed(1), sceneZ.toFixed(1))
+        })
+      } catch (err) {
+        console.error('[3D] Failed to load floor plan texture:', err)
+      }
+    }
+
+    loadFloorplanTexture()
+  }, [importId, layoutData, scaleCorrection, showFloorplanLayer])
+
   const resetCamera = useCallback(() => {
     if (!cameraRef.current || !controlsRef.current || !layoutData) return
     
@@ -1270,6 +1368,18 @@ export default function Layout3DPreview({ layoutVersionId, lidarInstances = [], 
                 <span className="text-sm text-gray-300 flex items-center gap-1.5">
                   {showLidarLayer ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5 text-gray-500" />}
                   LiDAR Devices
+                </span>
+              </label>
+              <label className="flex items-center gap-2 py-1.5 px-2 rounded hover:bg-gray-700 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={showFloorplanLayer}
+                  onChange={(e) => setShowFloorplanLayer(e.target.checked)}
+                  className="rounded border-gray-600 bg-gray-700 text-orange-500"
+                />
+                <span className="text-sm text-gray-300 flex items-center gap-1.5">
+                  {showFloorplanLayer ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5 text-gray-500" />}
+                  Floor Plan
                 </span>
               </label>
               <label className="flex items-center gap-2 py-1.5 px-2 rounded hover:bg-gray-700 cursor-pointer">

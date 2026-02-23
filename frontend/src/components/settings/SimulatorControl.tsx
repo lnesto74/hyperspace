@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { Play, Square, RefreshCw, Users, Clock, Gauge, AlertCircle, CheckCircle2, Wifi, WifiOff, MapPin, UserCheck, Coffee, AlertTriangle, ShoppingCart, ToggleLeft, ToggleRight } from 'lucide-react'
 import { QueueCircles, QueuedPerson } from './QueueCircles'
+import { API_BASE } from '../../config/api'
 
 interface SimulatorConfig {
   targetPeopleCount: number
@@ -67,7 +68,6 @@ interface SimulatorStatus {
   config?: SimulatorConfig
 }
 
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3001'
 
 export function SimulatorControl() {
   const [status, setStatus] = useState<SimulatorStatus | null>(null)

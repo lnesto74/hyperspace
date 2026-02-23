@@ -9,6 +9,7 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { useVenue } from '../../context/VenueContext'
+import { API_BASE } from '../../config/api'
 import {
   ArrowLeft,
   Plus,
@@ -106,7 +107,6 @@ function KpiTooltip({ kpiKey }: { kpiKey: string }) {
   )
 }
 
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3001'
 
 interface Campaign {
   id: string

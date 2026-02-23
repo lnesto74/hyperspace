@@ -31,13 +31,16 @@ import { EdgeCommissioningProvider } from './context/EdgeCommissioningContext'
 import DoohAnalyticsPage from './components/dooh/DoohAnalyticsPage'
 import DoohEffectivenessPage from './components/dooh/DoohEffectivenessPage'
 import { BusinessReportingPage } from './features/businessReporting'
-import LandingExperience from './components/landing/LandingExperience'
-import { BarChart3, Bell, Thermometer, Zap, LayoutGrid, ShoppingCart, Monitor, Activity, PieChart, Clapperboard } from 'lucide-react'
+import { ProfitRadarPage } from './features/profitRadar'
+import { ProfitRadarProvider } from './context/ProfitRadarContext'
+
+import { BarChart3, Bell, Thermometer, Zap, LayoutGrid, ShoppingCart, Monitor, Activity, PieChart, Clapperboard, Crosshair } from 'lucide-react'
 import { useState, useEffect, createContext, useContext } from 'react'
 import { useVenue } from './context/VenueContext'
+import { API_BASE } from './config/api'
 
 // App view mode context
-type ViewMode = 'main' | 'planogram' | 'dwgImporter' | 'lidarPlanner' | 'edgeCommissioning' | 'doohAnalytics' | 'doohEffectiveness' | 'businessReporting'
+type ViewMode = 'main' | 'planogram' | 'dwgImporter' | 'lidarPlanner' | 'edgeCommissioning' | 'doohAnalytics' | 'doohEffectiveness' | 'businessReporting' | 'profitRadar'
 const ViewModeContext = createContext<{ mode: ViewMode; setMode: (m: ViewMode) => void }>({ mode: 'main', setMode: () => {} })
 export const useViewMode = () => useContext(ViewModeContext)
 
@@ -91,8 +94,7 @@ function KPIOverlayToggle() {
     
     const fetchUnreadCount = async () => {
       try {
-        const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3001'
-        const res = await fetch(`${API_BASE}/api/venues/${venue.id}/ledger/unacknowledged-count`)
+                const res = await fetch(`${API_BASE}/api/venues/${venue.id}/ledger/unacknowledged-count`)
         if (res.ok) {
           const data = await res.json()
           setUnreadCount(data.count)
@@ -278,6 +280,15 @@ function KPIOverlayToggle() {
           <PieChart className="w-4 h-4" />
         </button>
         
+        {/* Profit Radar Button */}
+        <button
+          onClick={() => setMode('profitRadar')}
+          className="flex items-center justify-center w-10 h-10 rounded-lg shadow-lg transition-all bg-gray-800 hover:bg-emerald-600 text-gray-300 hover:text-white border border-gray-600 hover:border-emerald-500"
+          title="Profit Radar - Shopper Intent Insights"
+        >
+          <Crosshair className="w-4 h-4" />
+        </button>
+        
         {/* Replay Insights Button */}
         <button
           onClick={openStoryGrid}
@@ -389,10 +400,6 @@ function MainApp() {
   return (
     <ViewModeContext.Provider value={{ mode: viewMode, setMode: setViewMode }}>
       <PlanogramProvider>
-        {/* Landing Experience — entry screen before venue interaction */}
-        {showLanding && viewMode === 'main' && (
-          <LandingExperience onDismiss={handleDismissLanding} />
-        )}
         {/* DWG Importer View */}
         {viewMode === 'dwgImporter' && (
           <DwgImporterPage 
@@ -434,6 +441,10 @@ function MainApp() {
         {viewMode === 'businessReporting' && (
           <BusinessReportingPage onClose={() => setViewMode('main')} />
         )}
+        {/* Profit Radar View */}
+        {viewMode === 'profitRadar' && (
+          <ProfitRadarPage onClose={() => setViewMode('main')} />
+        )}
         {/* Planogram View */}
         <div style={{ display: viewMode === 'planogram' ? 'block' : 'none' }}>
           <PlanogramBuilder />
@@ -443,6 +454,8 @@ function MainApp() {
           <AppShell 
             onOpenDwgImporter={() => setViewMode('dwgImporter')}
             onOpenEdgeCommissioning={() => setViewMode('edgeCommissioning')}
+            showLanding={showLanding}
+            onDismissLanding={handleDismissLanding}
           />
           <KPIPopupWrapper />
           <KPIOverlayToggle />
@@ -463,7 +476,9 @@ function App() {
                 <DwgProvider>
                   <Narrator2Provider>
                     <ReplayInsightProvider>
-                      <MainApp />
+                      <ProfitRadarProvider>
+                        <MainApp />
+                      </ProfitRadarProvider>
                     </ReplayInsightProvider>
                   </Narrator2Provider>
                 </DwgProvider>

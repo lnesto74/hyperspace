@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
+import { API_BASE } from '../../config/api'
 import { 
   Radio, Check, X, AlertCircle, RefreshCw, Loader2, 
   ArrowRight, CheckCircle2, Cable, Wifi, Edit3
@@ -26,7 +27,6 @@ interface LidarCommissioningWizardProps {
 
 type WizardStep = 'intro' | 'waiting' | 'scanning' | 'found' | 'configuring' | 'rebooting' | 'verifying' | 'done' | 'complete'
 
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3001'
 const DEFAULT_LIDAR_IP = '192.168.1.200'
 const IP_START = 201
 

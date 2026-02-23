@@ -150,3 +150,80 @@ export interface RegionOfInterest {
   updatedAt: string;
   metadata?: RoiMetadata;
 }
+
+// --- Profit Radar types ---
+export const INTENT_AXIS_NAMES = [
+  'exploration', 'goal_directedness', 'urgency', 'commitment',
+  'hesitation', 'confusion', 'social_groupness', 'avoidance',
+  'waiting_queueing', 'engagement_with_POI', 'churn_exit_intent', 'friction'
+] as const;
+
+export type IntentAxisName = typeof INTENT_AXIS_NAMES[number];
+
+export type IntentAxes = Record<IntentAxisName, number>;
+
+export interface TrackAxesEvent {
+  venueId: string;
+  tracks: { trackKey: string; axes: IntentAxes; position: Vector3 }[];
+  timestamp: number;
+}
+
+export interface ZoneFieldEntry {
+  roiId: string;
+  roiName: string;
+  dominant: IntentAxisName;
+  dominantScore: number;
+  means: IntentAxes;
+  trackCount: number;
+  trackKeys: string[];
+}
+
+export interface BehaviorCluster {
+  id: string;
+  dominant: IntentAxisName;
+  dominantScore: number;
+  memberCount: number;
+  trackKeys: string[];
+  meanAxes: IntentAxes;
+  trajectory: {
+    avgStops: number;
+    avgDwellSec: number;
+    totalDurationSec: number;
+    zonesVisited: string[];
+    zoneStops: { zoneName: string; dwellSec: number }[];
+    journeyType: string;
+  };
+  anchorZoneId: string | null;
+  anchorZoneName: string | null;
+  anchorPosition: Vector3;
+}
+
+export interface ZoneFieldEvent {
+  venueId: string;
+  zones: ZoneFieldEntry[];
+  clusters: BehaviorCluster[];
+  timestamp: number;
+}
+
+export type InsightType = 'lost_sales' | 'underperforming_zone' | 'staff_misallocation' | 'layout_friction';
+export type InsightSeverity = 'high' | 'medium' | 'low';
+
+export interface ProfitRadarInsight {
+  id: string;
+  type: InsightType;
+  severity: InsightSeverity;
+  confidence: number;
+  title: string;
+  summary: string;
+  why: string;
+  suggestedFix: string;
+  impact: { min: number; max: number; currency: string };
+  dataBasis: Record<string, any>;
+  timestamp: number;
+}
+
+export interface ProfitRadarInsightsEvent {
+  venueId: string;
+  insights: ProfitRadarInsight[];
+  timestamp: number;
+}

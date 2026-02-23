@@ -1,13 +1,17 @@
 import { useState } from 'react'
-import { Eye, Grid3X3, Box, ArrowUp, Sun, X, Radio, History } from 'lucide-react'
+import { Eye, Grid3X3, Box, ArrowUp, Sun, X, Radio, History, Crosshair } from 'lucide-react'
 import Sidebar from './Sidebar'
 import RightPanel from './RightPanel'
 import MainViewport from '../venue/MainViewport'
+import type { CaptureScreenshotFn } from '../venue/MainViewport'
 import TimelineReplay from '../timeline/TimelineReplay'
+import LandingExperience from '../landing/LandingExperience'
 import { useVenue } from '../../context/VenueContext'
 import { useLidar } from '../../context/LidarContext'
 import { useDwg } from '../../context/DwgContext'
 import { useAutoSave } from '../../hooks/useAutoSave'
+import { useProfitRadar } from '../../context/ProfitRadarContext'
+import IntentFieldOverlay from '../../features/profitRadar/IntentFieldOverlay'
 
 export type SidebarTab = 'floorplan' | 'venueDwg' | 'venue' | 'objects' | 'lidars' | 'regions'
 export type CameraView = 'perspective' | 'top' | 'isometric' | 'front'
@@ -21,11 +25,14 @@ export interface LightingSettings {
   shadowsEnabled: boolean
 }
 
+export type TrackDisplayMode = 'cylinder' | 'pointcloud'
+
 export interface TrackingSettings {
   trailSeconds: number
   cylinderOpacity: number
   showSkuDebug: boolean
   autoShowSlotHighlight: boolean
+  trackDisplayMode: TrackDisplayMode
 }
 
 const defaultLighting: LightingSettings = {
@@ -42,14 +49,17 @@ const defaultTracking: TrackingSettings = {
   cylinderOpacity: 0.5,
   showSkuDebug: false,
   autoShowSlotHighlight: false,
+  trackDisplayMode: 'cylinder',
 }
 
 interface AppShellProps {
   onOpenDwgImporter?: () => void
   onOpenEdgeCommissioning?: () => void
+  showLanding?: boolean
+  onDismissLanding?: () => void
 }
 
-export default function AppShell({ onOpenDwgImporter, onOpenEdgeCommissioning }: AppShellProps) {
+export default function AppShell({ onOpenDwgImporter, onOpenEdgeCommissioning, showLanding = false, onDismissLanding }: AppShellProps) {
   const [activeTab, setActiveTab] = useState<SidebarTab>('floorplan')
   const [cameraView, setCameraView] = useState<CameraView>('perspective')
   const [showLightingPopup, setShowLightingPopup] = useState(false)
@@ -59,6 +69,7 @@ export default function AppShell({ onOpenDwgImporter, onOpenEdgeCommissioning }:
   const { venue, selectedObjectId, objects } = useVenue()
   const { selectedPlacementId, placements } = useLidar()
   const { dwgLayoutId: selectedDwgLayoutId } = useDwg()
+  const { intentFieldEnabled, setIntentFieldEnabled } = useProfitRadar()
   
   // Determine if we're in DWG venue mode
   const isDwgMode = activeTab === 'venueDwg' && selectedDwgLayoutId !== null
@@ -70,6 +81,9 @@ export default function AppShell({ onOpenDwgImporter, onOpenEdgeCommissioning }:
   // Auto-save venue, objects, and placements after changes
   useAutoSave()
   
+  // Screenshot capture function from MainViewport
+  const [captureScreenshot, setCaptureScreenshot] = useState<CaptureScreenshotFn | null>(null)
+
   // Timeline replay state
   const [showTimeline, setShowTimeline] = useState(false)
   const [replayTimestamp, setReplayTimestamp] = useState<number | null>(null)
@@ -103,7 +117,19 @@ export default function AppShell({ onOpenDwgImporter, onOpenEdgeCommissioning }:
           tracking={tracking}
           isReplayMode={isReplayMode}
           replayTimestamp={replayTimestamp}
+          onCaptureReady={(fn) => setCaptureScreenshot(() => fn)}
         />
+
+        {/* Intent Field Overlay (Profit Radar) */}
+        <IntentFieldOverlay />
+
+        {/* Landing Experience - renders inside viewport area, on top of 3D */}
+        {showLanding && onDismissLanding && (
+          <LandingExperience
+            onDismiss={onDismissLanding}
+            captureScreenshot={captureScreenshot}
+          />
+        )}
         
         {/* Lighting Popup */}
         {showLightingPopup && (
@@ -225,6 +251,31 @@ export default function AppShell({ onOpenDwgImporter, onOpenEdgeCommissioning }:
               </button>
             </div>
             <div className="p-4 space-y-4">
+              <div>
+                <label className="text-xs text-gray-400 block mb-1.5">Display Mode</label>
+                <div className="flex rounded-md overflow-hidden border border-border-dark">
+                  <button
+                    onClick={() => setTracking(prev => ({ ...prev, trackDisplayMode: 'cylinder' }))}
+                    className={`flex-1 py-1.5 text-xs font-medium transition-colors ${
+                      tracking.trackDisplayMode === 'cylinder'
+                        ? 'bg-highlight text-white'
+                        : 'bg-transparent text-gray-400 hover:text-white hover:bg-gray-700'
+                    }`}
+                  >
+                    Cylinder
+                  </button>
+                  <button
+                    onClick={() => setTracking(prev => ({ ...prev, trackDisplayMode: 'pointcloud' }))}
+                    className={`flex-1 py-1.5 text-xs font-medium transition-colors ${
+                      tracking.trackDisplayMode === 'pointcloud'
+                        ? 'bg-highlight text-white'
+                        : 'bg-transparent text-gray-400 hover:text-white hover:bg-gray-700'
+                    }`}
+                  >
+                    Point Cloud
+                  </button>
+                </div>
+              </div>
               <div>
                 <label className="text-xs text-gray-400 block mb-1">Trail Duration (seconds)</label>
                 <input
@@ -350,6 +401,17 @@ export default function AppShell({ onOpenDwgImporter, onOpenEdgeCommissioning }:
               title="Tracking Settings"
             >
               <Radio className="w-3.5 h-3.5" />
+            </button>
+            <button
+              onClick={() => setIntentFieldEnabled(!intentFieldEnabled)}
+              className={`p-1.5 rounded transition-colors ${
+                intentFieldEnabled 
+                  ? 'bg-emerald-600 text-white' 
+                  : 'text-gray-400 hover:text-white hover:bg-gray-700'
+              }`}
+              title="Intent Field (Profit Radar)"
+            >
+              <Crosshair className="w-3.5 h-3.5" />
             </button>
             <button
               onClick={() => setShowTimeline(!showTimeline)}

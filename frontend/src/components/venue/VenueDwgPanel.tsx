@@ -1,8 +1,8 @@
 import { useState, useEffect } from 'react'
 import { Map as MapIcon, RefreshCw, Check, AlertCircle, Loader2, Plus } from 'lucide-react'
 import { useVenue } from '../../context/VenueContext'
+import { API_BASE } from '../../config/api'
 
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3001'
 
 interface DwgImport {
   import_id: string

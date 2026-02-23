@@ -1,7 +1,7 @@
 import { useRef, useEffect, useCallback } from 'react'
 import * as THREE from 'three'
+import { API_BASE } from '../config/api'
 
-const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:3001'
 
 interface PlaylistItem {
   videoId: string

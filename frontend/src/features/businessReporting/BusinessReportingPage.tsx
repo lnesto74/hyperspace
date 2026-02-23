@@ -1,3 +1,4 @@
+import { API_BASE } from '../../config/api'
 import { useState, useEffect, useMemo } from 'react';
 import { 
   ArrowLeft, 
@@ -15,7 +16,7 @@ import ReportingKpiGrid from './components/ReportingKpiGrid';
 import ReportingInsightsPanel from './components/ReportingInsightsPanel';
 import DeadZonesViewport from './components/DeadZonesViewport';
 
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3001';
+;
 
 type TimeRange = '1h' | '24h' | '7d' | 'custom';
 

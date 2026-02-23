@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { X, Settings, Save, Building2, Users, Clock, Activity } from 'lucide-react'
+import { API_BASE } from '../../config/api'
 
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3001'
 
 interface VenueSettingsPanelProps {
   venueId: string

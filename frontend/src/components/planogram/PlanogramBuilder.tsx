@@ -6,6 +6,7 @@ import { useViewMode } from '../../App'
 import SkuLibraryPanel from './SkuLibraryPanel'
 import ShelfInspectorPanel from './ShelfInspectorPanel'
 import PlanogramViewport from './PlanogramViewport'
+import { API_BASE } from '../../config/api'
 
 export default function PlanogramBuilder() {
   const { venue } = useVenue()
@@ -43,8 +44,7 @@ export default function PlanogramBuilder() {
   }
   
   const handleExportPlanogram = async (id: string) => {
-    const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3001'
-    const res = await fetch(`${API_BASE}/api/planogram/planograms/${id}/export`)
+        const res = await fetch(`${API_BASE}/api/planogram/planograms/${id}/export`)
     const data = await res.json()
     
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })

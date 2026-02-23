@@ -4,8 +4,8 @@ import { useLidar } from '../../context/LidarContext'
 import { useTracking } from '../../context/TrackingContext'
 import { useVenue } from '../../context/VenueContext'
 import { LidarDevice } from '../../types'
+import { API_BASE } from '../../config/api'
 
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3001'
 
 interface Pairing {
   id: string

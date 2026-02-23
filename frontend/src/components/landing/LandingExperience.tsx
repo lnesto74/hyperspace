@@ -1,36 +1,21 @@
 /**
- * LandingExperience
- * 
- * Cinematic intro overlay shown when a venue is loaded.
- * Provides executive briefing with animated episode highlights.
- * Skippable, session-persisted preference.
- * 
- * Does NOT modify any existing component or context.
+ * LandingExperience — Viewport-native cinematic landing
+ * Renders inside the 3D viewport area (absolute, not fixed z-100).
+ * Phase 1: Welcome (venue select), Phase 2: Briefing (slideshow + histogram)
  */
-
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { ArrowRight, Zap, TrendingUp, TrendingDown, Clock, SkipForward, AlertTriangle, Users, MapPin } from 'lucide-react';
+import { ArrowRight, ChevronLeft, ChevronRight, Zap, TrendingUp, TrendingDown, Clock, SkipForward, AlertTriangle, Users, MapPin } from 'lucide-react';
 import { useVenue } from '../../context/VenueContext';
 import { useLidar } from '../../context/LidarContext';
 import type { LidarPlacement } from '../../types';
 import { useReplayInsight, NarrationPack } from '../../context/ReplayInsightContext';
-import NarrativeTimeline from './NarrativeTimeline';
+import type { CaptureScreenshotFn } from '../venue/MainViewport';
+import HistogramTimeline from './HistogramTimeline';
 import LandingNarrator from './LandingNarrator';
 
-// ─── Animation Stages ───
-type Stage = 'black' | 'grid' | 'venue' | 'headline' | 'episodes' | 'ready' | 'exit';
+type Stage = 'black' | 'fade' | 'venue' | 'headline' | 'episodes' | 'ready';
+const STAGE_TIMINGS: Record<Stage, number> = { black: 0, fade: 200, venue: 800, headline: 1600, episodes: 2400, ready: 3200 };
 
-const STAGE_TIMINGS: Record<Stage, number> = {
-  black: 0,
-  grid: 300,
-  venue: 1000,
-  headline: 1800,
-  episodes: 2800,
-  ready: 3800,
-  exit: 0, // manual
-};
-
-// ─── Episode type icons and colors ───
 const EPISODE_CONFIG: Record<string, { icon: typeof Zap; label: string }> = {
   QUEUE_BUILDUP_SPIKE: { icon: Users, label: 'Queue spike' },
   LANE_UNDERSUPPLY: { icon: AlertTriangle, label: 'Lane gap' },
@@ -45,633 +30,338 @@ const EPISODE_CONFIG: Record<string, { icon: typeof Zap; label: string }> = {
   ATTENTION_QUALITY_DROP: { icon: TrendingDown, label: 'Attention drop' },
 };
 
-// ─── Floating Particle ───
-function Particle({ delay, duration, x, size, opacity }: {
-  delay: number; duration: number; x: number; size: number; opacity: number;
-}) {
+function zoneCentroid(zones: NarrationPack['highlight_zones']): { x: number; z: number } {
+  if (!zones || zones.length === 0) return { x: 0, z: 0 };
+  let sx = 0, sz = 0, n = 0;
+  for (const z of zones) for (const v of z.vertices) { sx += v.x; sz += v.z; n++; }
+  return n > 0 ? { x: sx / n, z: sz / n } : { x: 0, z: 0 };
+}
+
+function Particle({ delay, duration, x, size, opacity }: { delay: number; duration: number; x: number; size: number; opacity: number }) {
+  return <div className="absolute rounded-full pointer-events-none" style={{ left: `${x}%`, bottom: '-5%', width: size, height: size, background: `radial-gradient(circle, rgba(59,130,246,${opacity}) 0%, transparent 70%)`, animation: `landing-float ${duration}s ${delay}s ease-out infinite` }} />;
+}
+
+function VenueListCard({ name, dimensions, onClick, index }: { name: string; dimensions: string; onClick: () => void; index: number }) {
   return (
-    <div
-      className="absolute rounded-full"
-      style={{
-        left: `${x}%`,
-        bottom: '-5%',
-        width: size,
-        height: size,
-        background: `radial-gradient(circle, rgba(59,130,246,${opacity}) 0%, transparent 70%)`,
-        animation: `landing-float ${duration}s ${delay}s ease-out infinite`,
-      }}
-    />
+    <button onClick={onClick} className="group relative overflow-hidden rounded-xl border border-gray-700/30 hover:border-blue-500/30 transition-all duration-500 hover:scale-[1.02] hover:shadow-xl text-left w-full" style={{ background: 'linear-gradient(135deg, rgba(59,130,246,0.04), rgba(17,24,39,0.95))', opacity: 0, animation: `landing-card-in 0.6s ${0.12 * index}s cubic-bezier(0.16, 1, 0.3, 1) forwards` }}>
+      <div className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity duration-500" style={{ background: 'radial-gradient(ellipse at center, rgba(59,130,246,0.08), transparent 70%)' }} />
+      <div className="relative p-4 flex items-center gap-4">
+        <div className="w-10 h-10 rounded-lg bg-blue-500/10 border border-blue-500/15 flex items-center justify-center shrink-0"><MapPin className="w-5 h-5 text-blue-400" /></div>
+        <div className="min-w-0 flex-1"><h4 className="text-sm font-medium text-white truncate">{name}</h4><p className="text-[11px] text-gray-500">{dimensions}</p></div>
+        <ArrowRight className="w-4 h-4 text-gray-600 group-hover:text-blue-400 transition-all shrink-0" />
+      </div>
+    </button>
   );
 }
 
-// ─── Scan Line ───
-function ScanLine() {
-  return (
-    <div
-      className="absolute left-0 right-0 h-px pointer-events-none"
-      style={{
-        background: 'linear-gradient(90deg, transparent, rgba(59,130,246,0.3), transparent)',
-        animation: 'landing-scan 4s ease-in-out infinite',
-      }}
-    />
-  );
-}
-
-// ─── Episode Card ───
-function EpisodeCard({ episode, index, onClick }: {
-  episode: NarrationPack; index: number; onClick: () => void;
-}) {
+function HeroSlide({ episode, screenshot, isActive, onClick }: { episode: NarrationPack; screenshot: string | null; isActive: boolean; onClick: () => void }) {
   const config = EPISODE_CONFIG[episode.episode_type] || { icon: Zap, label: episode.episode_type };
   const Icon = config.icon;
-
-  // Count KPI directions
-  const upCount = episode.kpis?.filter(k => k.direction === 'up').length || 0;
-  const downCount = episode.kpis?.filter(k => k.direction === 'down').length || 0;
-
   return (
     <button
       onClick={onClick}
-      className="group relative overflow-hidden rounded-xl border transition-all duration-500 hover:scale-[1.02] hover:shadow-2xl"
-      style={{
-        background: `linear-gradient(135deg, ${episode.color}08, ${episode.color}03, rgba(17,24,39,0.95))`,
-        borderColor: `${episode.color}25`,
-        opacity: 0,
-        animation: `landing-card-in 0.7s ${0.15 * index}s cubic-bezier(0.16, 1, 0.3, 1) forwards`,
-      }}
+      className={`absolute inset-0 rounded-2xl overflow-hidden transition-all duration-700 ease-out ${isActive ? 'opacity-100 scale-100 z-10' : 'opacity-0 scale-95 z-0 pointer-events-none'}`}
+      style={{ border: '1px solid rgba(255,255,255,0.08)' }}
     >
-      {/* Hover glow */}
-      <div
-        className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity duration-500"
-        style={{
-          background: `radial-gradient(ellipse at center, ${episode.color}15, transparent 70%)`,
-        }}
-      />
+      {/* Background layer — screenshot visible, lighter treatment */}
+      <div className="absolute inset-0">
+        {screenshot ? (
+          <img src={screenshot} alt="" className="w-full h-full object-cover" style={{ filter: 'brightness(0.6) saturate(1.3) contrast(1.1)' }} />
+        ) : (
+          <div className="w-full h-full" style={{ background: `linear-gradient(135deg, ${episode.color}18 0%, rgba(30,30,40,0.95) 50%, ${episode.color}10 100%)` }} />
+        )}
+        {/* Bottom gradient for text readability — only bottom half */}
+        <div className="absolute inset-0" style={{ background: 'linear-gradient(to top, rgba(10,10,15,0.95) 0%, rgba(10,10,15,0.7) 35%, rgba(10,10,15,0.15) 60%, transparent 100%)' }} />
+      </div>
+
+      {/* Subtle inner border glow */}
+      <div className="absolute inset-0 rounded-2xl pointer-events-none" style={{ boxShadow: 'inset 0 0 0 1px rgba(255,255,255,0.06), inset 0 1px 0 rgba(255,255,255,0.08)' }} />
 
       {/* Content */}
-      <div className="relative p-4 text-left">
-        {/* Top row: severity + time */}
-        <div className="flex items-center justify-between mb-2">
-          <div
-            className="flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-semibold uppercase tracking-wider"
-            style={{
-              color: episode.color,
-              backgroundColor: `${episode.color}15`,
-            }}
-          >
-            <Icon className="w-3 h-3" />
-            {config.label}
+      <div className="relative h-full flex flex-col justify-end p-8 text-left">
+        {/* Top badges */}
+        <div className="absolute top-6 left-8 right-8 flex items-center justify-between">
+          <div className="flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-semibold uppercase tracking-wider backdrop-blur-md" style={{ color: episode.color, backgroundColor: `${episode.color}25`, border: `1px solid ${episode.color}40` }}>
+            <Icon className="w-3.5 h-3.5" />{config.label}
           </div>
-          <span className="text-[10px] text-gray-500">{episode.time_label}</span>
+          <span className="text-xs text-gray-300 bg-black/40 backdrop-blur-md px-3 py-1 rounded-full border border-white/10">{episode.time_label}</span>
         </div>
 
         {/* Title */}
-        <h4 className="text-sm font-medium text-white leading-snug mb-2 line-clamp-2 group-hover:text-gray-100 transition-colors">
-          {episode.title}
-        </h4>
+        <h3 className="text-2xl font-bold text-white mb-3 leading-tight max-w-lg drop-shadow-lg">{episode.title}</h3>
+        <p className="text-sm text-gray-200 mb-4 max-w-lg line-clamp-2 leading-relaxed drop-shadow-md">{episode.business_summary}</p>
 
-        {/* KPI deltas */}
-        <div className="flex items-center gap-3">
-          {upCount > 0 && (
-            <div className="flex items-center gap-0.5 text-[10px] text-emerald-400">
-              <TrendingUp className="w-3 h-3" />
-              {upCount} ↑
+        {/* KPI chips */}
+        <div className="flex flex-wrap gap-2 mb-2">
+          {episode.kpis?.slice(0, 4).map((kpi) => (
+            <div key={kpi.id} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium backdrop-blur-md border" style={{
+              background: kpi.direction === 'up' ? 'rgba(239,68,68,0.2)' : kpi.direction === 'down' ? 'rgba(34,197,94,0.2)' : 'rgba(107,114,128,0.2)',
+              color: kpi.direction === 'up' ? '#fca5a5' : kpi.direction === 'down' ? '#86efac' : '#d1d5db',
+              borderColor: kpi.direction === 'up' ? 'rgba(239,68,68,0.25)' : kpi.direction === 'down' ? 'rgba(34,197,94,0.25)' : 'rgba(107,114,128,0.25)',
+            }}>
+              {kpi.direction === 'up' ? <TrendingUp className="w-3 h-3" /> : kpi.direction === 'down' ? <TrendingDown className="w-3 h-3" /> : null}
+              <span>{kpi.label}</span>
+              <span className="font-bold">{kpi.value}{kpi.unit === 'percent' ? '%' : kpi.unit === 'seconds' ? 's' : kpi.unit === 'per_minute' ? '/min' : ''}</span>
             </div>
-          )}
-          {downCount > 0 && (
-            <div className="flex items-center gap-0.5 text-[10px] text-red-400">
-              <TrendingDown className="w-3 h-3" />
-              {downCount} ↓
-            </div>
-          )}
-          <div className="flex-1" />
-          <ArrowRight className="w-3.5 h-3.5 text-gray-600 group-hover:text-gray-400 group-hover:translate-x-0.5 transition-all" />
+          ))}
         </div>
+        <div className="flex items-center gap-1.5 text-xs text-gray-400 mt-1"><span>Click to explore</span><ArrowRight className="w-3 h-3" /></div>
       </div>
-
-      {/* Bottom accent line */}
-      <div
-        className="h-0.5 w-0 group-hover:w-full transition-all duration-700"
-        style={{ backgroundColor: episode.color }}
-      />
     </button>
   );
 }
 
-// ─── Venue List Item ───
-function VenueListCard({ name, dimensions, onClick, index }: {
-  name: string; dimensions: string; onClick: () => void; index: number;
-}) {
-  return (
-    <button
-      onClick={onClick}
-      className="group relative overflow-hidden rounded-xl border border-gray-700/30 hover:border-blue-500/30 transition-all duration-500 hover:scale-[1.02] hover:shadow-xl hover:shadow-blue-500/5 text-left"
-      style={{
-        background: 'linear-gradient(135deg, rgba(59,130,246,0.04), rgba(17,24,39,0.95))',
-        opacity: 0,
-        animation: `landing-card-in 0.6s ${0.12 * index}s cubic-bezier(0.16, 1, 0.3, 1) forwards`,
-      }}
-    >
-      <div className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity duration-500"
-        style={{ background: 'radial-gradient(ellipse at center, rgba(59,130,246,0.08), transparent 70%)' }}
-      />
-      <div className="relative p-4 flex items-center gap-4">
-        <div className="w-10 h-10 rounded-lg bg-blue-500/10 border border-blue-500/15 flex items-center justify-center shrink-0 group-hover:bg-blue-500/15 transition-colors">
-          <MapPin className="w-5 h-5 text-blue-400" />
-        </div>
-        <div className="min-w-0 flex-1">
-          <h4 className="text-sm font-medium text-white truncate group-hover:text-blue-100 transition-colors">{name}</h4>
-          <p className="text-[11px] text-gray-500">{dimensions}</p>
-        </div>
-        <ArrowRight className="w-4 h-4 text-gray-600 group-hover:text-blue-400 group-hover:translate-x-0.5 transition-all shrink-0" />
-      </div>
-      <div className="h-0.5 w-0 group-hover:w-full transition-all duration-700 bg-blue-500/40" />
-    </button>
-  );
-}
+// ─── MAIN COMPONENT ───
+interface LandingExperienceProps { onDismiss: () => void; captureScreenshot?: CaptureScreenshotFn | null; }
 
-// ─── Main Component ───
-export default function LandingExperience({ onDismiss }: { onDismiss: () => void }) {
+export default function LandingExperience({ onDismiss, captureScreenshot }: LandingExperienceProps) {
   const { venue, venueList, fetchVenueList, loadVenue } = useVenue();
   const { episodes, fetchEpisodes, selectEpisode } = useReplayInsight();
   const { setPlacements } = useLidar();
   const [stage, setStage] = useState<Stage>('black');
   const [phase, setPhase] = useState<'welcome' | 'briefing'>('welcome');
   const [isExiting, setIsExiting] = useState(false);
+  const [slideIndex, setSlideIndex] = useState(0);
+  const [screenshots, setScreenshots] = useState<Map<string, string>>(new Map());
+  const [isPaused, setIsPaused] = useState(false);
   const stageTimerRef = useRef<ReturnType<typeof setTimeout>[]>([]);
-  const particlesRef = useRef(
-    Array.from({ length: 30 }, () => ({
-      delay: Math.random() * 6,
-      duration: 6 + Math.random() * 8,
-      x: Math.random() * 100,
-      size: 2 + Math.random() * 4,
-      opacity: 0.1 + Math.random() * 0.3,
-    }))
-  );
+  const autoAdvanceRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const particlesRef = useRef(Array.from({ length: 12 }, () => ({ delay: Math.random() * 6, duration: 8 + Math.random() * 10, x: Math.random() * 100, size: 2 + Math.random() * 3, opacity: 0.05 + Math.random() * 0.15 })));
+  const topEpisodes = useMemo(() => episodes.slice(0, 10), [episodes]);
+  const severityCounts = useMemo(() => { const c = { high: 0, medium: 0, low: 0 }; episodes.forEach(e => { c[e.severity] = (c[e.severity] || 0) + 1; }); return c; }, [episodes]);
+  const isAtLeast = useCallback((target: Stage) => { const order: Stage[] = ['black', 'fade', 'venue', 'headline', 'episodes', 'ready']; return order.indexOf(stage) >= order.indexOf(target); }, [stage]);
 
-  // Fetch venue list on mount
-  useEffect(() => {
-    fetchVenueList();
-  }, [fetchVenueList]);
+  useEffect(() => { fetchVenueList(); }, [fetchVenueList]);
 
-  // When venue loads, switch to briefing phase
   useEffect(() => {
     if (venue?.id && phase === 'welcome') {
       setPhase('briefing');
-      // Reset stage sequence for briefing
       stageTimerRef.current.forEach(clearTimeout);
       stageTimerRef.current = [];
       setStage('black');
-
-      const stages: Stage[] = ['black', 'grid', 'venue', 'headline', 'episodes', 'ready'];
-      let cumulative = 0;
-      stages.forEach((s) => {
-        cumulative += STAGE_TIMINGS[s];
-        const timer = setTimeout(() => setStage(s), cumulative);
-        stageTimerRef.current.push(timer);
-      });
-
-      // Fetch episodes for the briefing
+      const stages: Stage[] = ['black', 'fade', 'venue', 'headline', 'episodes', 'ready'];
+      let cum = 0;
+      stages.forEach(s => { cum += STAGE_TIMINGS[s]; stageTimerRef.current.push(setTimeout(() => setStage(s), cum)); });
       fetchEpisodes({ period: 'day', type: undefined });
     }
   }, [venue?.id, phase, fetchEpisodes]);
 
-  // Auto-advance stages (welcome phase)
   useEffect(() => {
-    const stages: Stage[] = ['black', 'grid', 'venue', 'ready'];
-    let cumulative = 0;
-
-    stages.forEach((s) => {
-      cumulative += STAGE_TIMINGS[s];
-      const timer = setTimeout(() => setStage(s), cumulative);
-      stageTimerRef.current.push(timer);
-    });
-
-    return () => {
-      stageTimerRef.current.forEach(clearTimeout);
-    };
+    const stages: Stage[] = ['black', 'fade', 'venue', 'ready'];
+    let cum = 0;
+    stages.forEach(s => { cum += STAGE_TIMINGS[s]; stageTimerRef.current.push(setTimeout(() => setStage(s), cum)); });
+    return () => { stageTimerRef.current.forEach(clearTimeout); };
   }, []);
 
-  // Exit transition
-  const handleExit = useCallback(() => {
-    setIsExiting(true);
-    setTimeout(() => onDismiss(), 600);
-  }, [onDismiss]);
+  // Capture contextual 3D screenshots — each episode gets its own framing and zone highlights
+  const [captureAttempt, setCaptureAttempt] = useState(0);
+  useEffect(() => {
+    if (!captureScreenshot || episodes.length === 0 || screenshots.size > 0) return;
+    if (captureAttempt >= 5) return;
+    const delay = captureAttempt === 0 ? 3000 : 2000;
+    console.log('[Landing] Screenshot attempt', captureAttempt + 1, '- delay', delay);
+    const timer = setTimeout(() => {
+      const m = new Map<string, string>();
+      const vcx = venue ? (venue.width || 10) / 2 : 5;
+      const vcz = venue ? (venue.depth || 10) / 2 : 5;
+      episodes.slice(0, 10).forEach((ep, idx) => {
+        // Build zone data for this episode's highlights
+        const zones = (ep.highlight_zones || [])
+          .filter(z => z.vertices && z.vertices.length >= 3)
+          .map(z => ({ vertices: z.vertices, color: z.color || ep.color }));
+        // Fallback centroid if no zones
+        const c = zoneCentroid(ep.highlight_zones);
+        const tX = (c.x === 0 && c.z === 0) ? vcx : c.x;
+        const tZ = (c.x === 0 && c.z === 0) ? vcz : c.z;
+        // Unique angle per episode for visual variety
+        const angle = (idx / Math.max(episodes.length, 1)) * Math.PI * 2;
+        // Extract frozen-moment track positions from episode data
+        const trackPositions: Array<{ x: number; z: number; color?: number }> = [];
+        if (ep.track_positions) {
+          const epMidTs = ((ep.replay_window?.start || 0) + (ep.replay_window?.end || 0)) / 2;
+          Object.values(ep.track_positions).forEach(positions => {
+            if (positions.length === 0) return;
+            // Find position closest to the episode midpoint
+            let closest = positions[0];
+            let minDist = Math.abs(positions[0].timestamp - epMidTs);
+            for (const p of positions) {
+              const d = Math.abs(p.timestamp - epMidTs);
+              if (d < minDist) { minDist = d; closest = p; }
+            }
+            trackPositions.push({ x: closest.x, z: closest.z, color: 0x3b82f6 });
+          });
+        }
+        const url = captureScreenshot({
+          targetX: tX,
+          targetZ: tZ,
+          height: 25,
+          fov: 55,
+          width: 800,
+          imageHeight: 450,
+          zones: zones.length > 0 ? zones : undefined,
+          angleOffset: angle,
+          trackPositions: trackPositions.length > 0 ? trackPositions : undefined,
+        });
+        if (url && url.length > 5000) m.set(ep.episode_id, url);
+      });
+      console.log('[Landing] Captured', m.size, 'screenshots (attempt', captureAttempt + 1, ')');
+      if (m.size > 0) {
+        setScreenshots(m);
+      } else {
+        setCaptureAttempt(prev => prev + 1);
+      }
+    }, delay);
+    return () => clearTimeout(timer);
+  }, [captureScreenshot, episodes, screenshots.size, venue, captureAttempt]);
 
-  // Skip — jump to ready
-  const handleSkip = useCallback(() => {
-    stageTimerRef.current.forEach(clearTimeout);
-    setStage('ready');
-  }, []);
+  // Auto-advance slideshow
+  useEffect(() => {
+    if (phase !== 'briefing' || !isAtLeast('episodes') || isPaused || topEpisodes.length <= 1) return;
+    autoAdvanceRef.current = setInterval(() => setSlideIndex(p => (p + 1) % topEpisodes.length), 6000);
+    return () => { if (autoAdvanceRef.current) clearInterval(autoAdvanceRef.current); };
+  }, [phase, isAtLeast, isPaused, topEpisodes.length]);
 
-  // Venue selection from landing
-  const handleSelectVenue = useCallback((venueId: string) => {
-    loadVenue(venueId, (loadedPlacements) => {
-      setPlacements(loadedPlacements as LidarPlacement[]);
-    });
-  }, [loadVenue, setPlacements]);
-
-  // Episode click
-  const handleEpisodeClick = useCallback((episodeId: string) => {
-    selectEpisode(episodeId);
-    handleExit();
-  }, [selectEpisode, handleExit]);
-
-  // Top episodes (max 6)
-  const topEpisodes = useMemo(() => episodes.slice(0, 6), [episodes]);
-
-  // Severity breakdown
-  const severityCounts = useMemo(() => {
-    const counts = { high: 0, medium: 0, low: 0 };
-    episodes.forEach(e => { counts[e.severity] = (counts[e.severity] || 0) + 1; });
-    return counts;
-  }, [episodes]);
-
-  const isAtLeast = (target: Stage) => {
-    const order: Stage[] = ['black', 'grid', 'venue', 'headline', 'episodes', 'ready'];
-    return order.indexOf(stage) >= order.indexOf(target);
-  };
+  const handleExit = useCallback(() => { setIsExiting(true); setTimeout(() => onDismiss(), 600); }, [onDismiss]);
+  const handleSkip = useCallback(() => { stageTimerRef.current.forEach(clearTimeout); setStage('ready'); }, []);
+  const handleSelectVenue = useCallback((id: string) => { loadVenue(id, (p) => { setPlacements(p as LidarPlacement[]); }); }, [loadVenue, setPlacements]);
+  const handleEpisodeClick = useCallback((id: string) => { selectEpisode(id); handleExit(); }, [selectEpisode, handleExit]);
+  const goToSlide = useCallback((i: number) => { setSlideIndex(i); setIsPaused(true); setTimeout(() => setIsPaused(false), 10000); }, []);
 
   return (
-    <div
-      className={`fixed inset-0 z-[100] overflow-hidden ${
-        isExiting ? 'opacity-0 scale-105' : 'opacity-100 scale-100'
-      }`}
-      style={{ transition: 'opacity 0.6s ease, transform 0.6s ease' }}
-    >
-      {/* ─── CSS Animations (injected once) ─── */}
+    <div className={`absolute inset-0 z-40 overflow-hidden ${isExiting ? 'opacity-0 scale-[1.02]' : 'opacity-100 scale-100'}`} style={{ transition: 'opacity 0.6s ease, transform 0.6s ease' }}>
       <style>{`
-        @keyframes landing-float {
-          0% { transform: translateY(0) scale(1); opacity: 0; }
-          10% { opacity: 1; }
-          90% { opacity: 1; }
-          100% { transform: translateY(-110vh) scale(0.5); opacity: 0; }
-        }
-        @keyframes landing-scan {
-          0% { top: -2px; opacity: 0; }
-          10% { opacity: 1; }
-          90% { opacity: 1; }
-          100% { top: 100%; opacity: 0; }
-        }
-        @keyframes landing-grid-in {
-          0% { opacity: 0; }
-          100% { opacity: 1; }
-        }
-        @keyframes landing-card-in {
-          0% { opacity: 0; transform: translateY(30px) scale(0.95); }
-          100% { opacity: 1; transform: translateY(0) scale(1); }
-        }
-        @keyframes landing-pulse-ring {
-          0% { transform: scale(0.8); opacity: 0; }
-          50% { opacity: 0.4; }
-          100% { transform: scale(2.5); opacity: 0; }
-        }
-        @keyframes landing-text-reveal {
-          0% { clip-path: inset(0 100% 0 0); }
-          100% { clip-path: inset(0 0 0 0); }
-        }
-        @keyframes landing-shimmer {
-          0% { background-position: -200% 0; }
-          100% { background-position: 200% 0; }
-        }
-        @keyframes landing-glow-pulse {
-          0%, 100% { opacity: 0.5; }
-          50% { opacity: 1; }
-        }
-        @keyframes landing-badge-pop {
-          0% { transform: scale(0) rotate(-10deg); opacity: 0; }
-          60% { transform: scale(1.15) rotate(2deg); }
-          100% { transform: scale(1) rotate(0deg); opacity: 1; }
-        }
-        @keyframes landing-line-draw {
-          0% { width: 0; }
-          100% { width: 100%; }
+        @keyframes landing-float { 0% { transform: translateY(0) scale(1); opacity: 0; } 10% { opacity: 1; } 90% { opacity: 1; } 100% { transform: translateY(-110vh) scale(0.5); opacity: 0; } }
+        @keyframes landing-card-in { 0% { opacity: 0; transform: translateY(30px) scale(0.95); } 100% { opacity: 1; transform: translateY(0) scale(1); } }
+        @keyframes landing-pulse-ring { 0% { transform: scale(0.8); opacity: 0; } 50% { opacity: 0.4; } 100% { transform: scale(2.5); opacity: 0; } }
+        @keyframes landing-shimmer { 0% { background-position: -200% 0; } 100% { background-position: 200% 0; } }
+        @keyframes landing-badge-pop { 0% { transform: scale(0) rotate(-10deg); opacity: 0; } 60% { transform: scale(1.15) rotate(2deg); } 100% { transform: scale(1) rotate(0deg); opacity: 1; } }
+        @keyframes landing-hue { from { filter: hue-rotate(0deg); } to { filter: hue-rotate(-360deg); } }
+        .gradient-text-animated {
+          font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+          font-weight: 100;
+          letter-spacing: 0.3em;
+          text-transform: uppercase;
+          color: #f35626;
+          background-image: linear-gradient(92deg, #f35626, #feab3a);
+          -webkit-background-clip: text;
+          background-clip: text;
+          -webkit-text-fill-color: transparent;
+          animation: landing-hue 10s infinite linear;
         }
       `}</style>
 
-      {/* ─── Background Layers ─── */}
+      {/* Background: dark + subtle glow, NO grid */}
       <div className="absolute inset-0 bg-gray-950" />
-
-      {/* Radial gradient center glow */}
-      <div
-        className="absolute inset-0 transition-opacity duration-[2000ms]"
-        style={{
-          background: 'radial-gradient(ellipse at 50% 40%, rgba(59,130,246,0.06) 0%, transparent 60%)',
-          opacity: isAtLeast('grid') ? 1 : 0,
-        }}
-      />
-
-      {/* Grid lines */}
-      <div
-        className="absolute inset-0 transition-opacity duration-[1500ms]"
-        style={{
-          opacity: isAtLeast('grid') ? 0.08 : 0,
-          backgroundImage: `
-            linear-gradient(rgba(59,130,246,0.3) 1px, transparent 1px),
-            linear-gradient(90deg, rgba(59,130,246,0.3) 1px, transparent 1px)
-          `,
-          backgroundSize: '60px 60px',
-          animation: isAtLeast('grid') ? 'landing-grid-in 2s ease' : 'none',
-        }}
-      />
-
-      {/* Floating particles */}
+      <div className="absolute inset-0 transition-opacity duration-[2000ms]" style={{ background: 'radial-gradient(ellipse at 50% 40%, rgba(59,130,246,0.05) 0%, transparent 60%)', opacity: isAtLeast('fade') ? 1 : 0 }} />
       <div className="absolute inset-0 overflow-hidden pointer-events-none">
-        {isAtLeast('grid') && particlesRef.current.map((p, i) => (
-          <Particle key={i} {...p} />
-        ))}
+        {isAtLeast('fade') && particlesRef.current.map((p, i) => <Particle key={i} {...p} />)}
       </div>
 
-      {/* Scan line */}
-      {isAtLeast('venue') && <ScanLine />}
-
-      {/* ─── Content ─── */}
       <div className="absolute inset-0 flex flex-col items-center justify-center px-8 overflow-y-auto">
-
-        {/* Skip button (top right) — only during intro animation */}
-        {phase === 'welcome' && (
-          <button
-            onClick={handleSkip}
-            className={`fixed top-6 right-6 z-10 flex items-center gap-1.5 px-3 py-1.5 text-xs text-gray-500 hover:text-gray-300 transition-all duration-300 ${
-              isAtLeast('grid') && !isAtLeast('ready') ? 'opacity-100' : 'opacity-0 pointer-events-none'
-            }`}
-          >
-            <SkipForward className="w-3 h-3" />
-            Skip intro
-          </button>
+        {/* Skip button */}
+        {!isAtLeast('ready') && isAtLeast('fade') && (
+          <button onClick={handleSkip} className="absolute top-4 right-4 z-20 flex items-center gap-1.5 px-3 py-1.5 text-xs text-gray-500 hover:text-gray-300 transition-all"><SkipForward className="w-3 h-3" />Skip</button>
         )}
 
-        {/* ════════════════════════════════════════════════
-            PHASE 1: WELCOME — No venue selected yet
-            ════════════════════════════════════════════════ */}
+        {/* ═══ PHASE 1: WELCOME ═══ */}
         {phase === 'welcome' && (
           <>
-            {/* ─── HYPERSPACE IDENTITY ─── */}
             <div className="text-center mb-10">
-              {/* Animated ring */}
-              <div
-                className="relative inline-flex items-center justify-center mb-6 transition-all duration-[1500ms]"
-                style={{
-                  opacity: isAtLeast('venue') ? 1 : 0,
-                  transform: isAtLeast('venue') ? 'scale(1)' : 'scale(0.5)',
-                }}
-              >
-                <div
-                  className="absolute w-20 h-20 rounded-full border border-blue-500/20"
-                  style={{ animation: 'landing-pulse-ring 3s ease-out infinite' }}
-                />
-                <div
-                  className="absolute w-20 h-20 rounded-full border border-blue-500/10"
-                  style={{ animation: 'landing-pulse-ring 3s 1s ease-out infinite' }}
-                />
-                <div className="w-14 h-14 rounded-full bg-blue-500/10 border border-blue-500/20 flex items-center justify-center">
-                  <Zap className="w-6 h-6 text-blue-400" />
-                </div>
+              <div className="relative inline-flex items-center justify-center mb-6 transition-all duration-[1500ms]" style={{ opacity: isAtLeast('venue') ? 1 : 0, transform: isAtLeast('venue') ? 'scale(1)' : 'scale(0.5)' }}>
+                <div className="absolute w-36 h-36 rounded-full border border-blue-500/20" style={{ animation: 'landing-pulse-ring 3s ease-out infinite' }} />
+                <div className="absolute w-36 h-36 rounded-full border border-blue-500/10" style={{ animation: 'landing-pulse-ring 3s 1s ease-out infinite' }} />
+                <img src="/hyperspace-logo.png" alt="Hyperspace" className="w-28 h-28 object-contain" onError={(e) => { (e.target as HTMLImageElement).src = '/hyperspace.svg'; }} />
               </div>
-
-              {/* Title */}
-              <div
-                className="transition-all duration-[1200ms]"
-                style={{
-                  opacity: isAtLeast('venue') ? 1 : 0,
-                  transform: isAtLeast('venue') ? 'translateY(0)' : 'translateY(20px)',
-                }}
-              >
-                <h1 className="text-xs font-bold tracking-[0.3em] text-gray-500 uppercase mb-3">
-                  Hyperspace
-                </h1>
-                <h2 className="text-2xl font-semibold text-white mb-2">
-                  Welcome back
-                </h2>
-                <p className="text-sm text-gray-500">
-                  {new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}
-                </p>
+              <div className="transition-all duration-[1200ms]" style={{ opacity: isAtLeast('venue') ? 1 : 0, transform: isAtLeast('venue') ? 'translateY(0)' : 'translateY(20px)' }}>
+                <h1 className="gradient-text-animated text-2xl mb-3">Hyperspace</h1>
+                <h2 className="text-2xl font-semibold text-white mb-2">Welcome back</h2>
+                <p className="text-sm text-gray-500">{new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}</p>
               </div>
             </div>
-
-            {/* ─── VENUE LIST ─── */}
-            <div
-              className="w-full max-w-md transition-all duration-[1000ms]"
-              style={{
-                opacity: isAtLeast('ready') ? 1 : 0,
-                transform: isAtLeast('ready') ? 'translateY(0)' : 'translateY(20px)',
-              }}
-            >
-              {/* Section label */}
-              <div className="flex items-center gap-3 mb-4">
-                <div
-                  className="h-px bg-gradient-to-r from-transparent via-gray-700 to-transparent"
-                  style={{ flex: 1 }}
-                />
-                <span className="text-[10px] text-gray-500 uppercase tracking-widest">Select a venue</span>
-                <div
-                  className="h-px bg-gradient-to-r from-transparent via-gray-700 to-transparent"
-                  style={{ flex: 1 }}
-                />
-              </div>
-
-              {/* Venue cards */}
+            <div className="w-full max-w-md transition-all duration-[1000ms]" style={{ opacity: isAtLeast('ready') ? 1 : 0, transform: isAtLeast('ready') ? 'translateY(0)' : 'translateY(20px)' }}>
+              <div className="flex items-center gap-3 mb-4"><div className="h-px bg-gradient-to-r from-transparent via-gray-700 to-transparent flex-1" /><span className="text-[10px] text-gray-500 uppercase tracking-widest">Select a venue</span><div className="h-px bg-gradient-to-r from-transparent via-gray-700 to-transparent flex-1" /></div>
               <div className="space-y-2 max-h-[40vh] overflow-y-auto pr-1">
-                {venueList.length > 0 ? (
-                  venueList.map((v, i) => (
-                    <VenueListCard
-                      key={v.id}
-                      name={v.name}
-                      dimensions={`${v.width}m × ${v.depth}m`}
-                      onClick={() => handleSelectVenue(v.id)}
-                      index={i}
-                    />
-                  ))
-                ) : (
-                  <div className="text-center py-8">
-                    <p className="text-sm text-gray-500">No venues available</p>
-                    <p className="text-xs text-gray-600 mt-1">Create a venue from the sidebar to get started</p>
-                  </div>
-                )}
+                {venueList.length > 0 ? venueList.map((v, i) => <VenueListCard key={v.id} name={v.name} dimensions={`${v.width}m × ${v.depth}m`} onClick={() => handleSelectVenue(v.id)} index={i} />) : <div className="text-center py-8"><p className="text-sm text-gray-500">No venues available</p></div>}
               </div>
-
-              {/* Skip to workspace link */}
-              <div className="mt-6 text-center">
-                <button
-                  onClick={handleExit}
-                  className="text-xs text-gray-600 hover:text-gray-400 transition-colors"
-                >
-                  Skip to workspace →
-                </button>
-              </div>
+              <div className="mt-6 text-center"><button onClick={handleExit} className="text-xs text-gray-600 hover:text-gray-400 transition-colors">Skip to workspace →</button></div>
             </div>
           </>
         )}
 
-        {/* ════════════════════════════════════════════════
-            PHASE 2: BRIEFING — Venue loaded, show episodes
-            ════════════════════════════════════════════════ */}
+        {/* ═══ PHASE 2: BRIEFING ═══ */}
         {phase === 'briefing' && venue && (
-          <>
-            {/* Skip briefing button */}
-            <button
-              onClick={handleSkip}
-              className={`fixed top-6 right-6 z-10 flex items-center gap-1.5 px-3 py-1.5 text-xs text-gray-500 hover:text-gray-300 transition-all duration-300 ${
-                isAtLeast('grid') && !isAtLeast('ready') ? 'opacity-100' : 'opacity-0 pointer-events-none'
-              }`}
-            >
-              <SkipForward className="w-3 h-3" />
-              Skip briefing
-            </button>
-
-            {/* ─── VENUE IDENTITY BLOCK ─── */}
-            <div className="text-center mb-12">
-              <div
-                className="relative inline-flex items-center justify-center mb-6 transition-all duration-[1500ms]"
-                style={{
-                  opacity: isAtLeast('venue') ? 1 : 0,
-                  transform: isAtLeast('venue') ? 'scale(1)' : 'scale(0.5)',
-                }}
-              >
-                <div
-                  className="absolute w-20 h-20 rounded-full border border-blue-500/20"
-                  style={{ animation: 'landing-pulse-ring 3s ease-out infinite' }}
-                />
-                <div
-                  className="absolute w-20 h-20 rounded-full border border-blue-500/10"
-                  style={{ animation: 'landing-pulse-ring 3s 1s ease-out infinite' }}
-                />
-                <div className="w-14 h-14 rounded-full bg-blue-500/10 border border-blue-500/20 flex items-center justify-center">
-                  <Zap className="w-6 h-6 text-blue-400" />
-                </div>
-              </div>
-
-              <div
-                className="transition-all duration-[1200ms]"
-                style={{
-                  opacity: isAtLeast('venue') ? 1 : 0,
-                  transform: isAtLeast('venue') ? 'translateY(0)' : 'translateY(20px)',
-                }}
-              >
-                <h1 className="text-xs font-bold tracking-[0.3em] text-gray-500 uppercase mb-2">
-                  Hyperspace
-                </h1>
-                <h2 className="text-2xl font-semibold text-white mb-1">
-                  {venue.name}
-                </h2>
-                <p className="text-sm text-gray-500">
-                  Daily Brief — {new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })}
-                </p>
-              </div>
-
-              {/* Episode count badge */}
+          <div className="w-full max-w-4xl flex flex-col items-center gap-6">
+            {/* Header */}
+            <div className="text-center transition-all duration-[1200ms]" style={{ opacity: isAtLeast('venue') ? 1 : 0, transform: isAtLeast('venue') ? 'translateY(0)' : 'translateY(20px)' }}>
+              <img src="/hyperspace-logo.png" alt="" className="w-16 h-16 mx-auto mb-2 object-contain" onError={(e) => { (e.target as HTMLImageElement).src = '/hyperspace.svg'; }} />
+              <h1 className="gradient-text-animated text-xl mb-8">Hyperspace</h1>
+              <h2 className="text-xl font-semibold text-white mb-0.5">{venue.name}</h2>
+              <p className="text-xs text-gray-500">Daily Brief — {new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })}</p>
               {isAtLeast('headline') && episodes.length > 0 && (
-                <div className="mt-4 inline-flex items-center gap-3">
-                  <div
-                    className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-gray-800/80 border border-gray-700/50 text-xs"
-                    style={{ animation: 'landing-badge-pop 0.5s cubic-bezier(0.16, 1, 0.3, 1) forwards' }}
-                  >
-                    <span className="text-white font-medium">{episodes.length}</span>
-                    <span className="text-gray-400">moments detected</span>
+                <div className="mt-3 inline-flex items-center gap-3">
+                  <div className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-gray-800/80 border border-gray-700/50 text-xs" style={{ animation: 'landing-badge-pop 0.5s cubic-bezier(0.16, 1, 0.3, 1) forwards' }}>
+                    <span className="text-white font-medium">{episodes.length}</span><span className="text-gray-400">moments detected</span>
                   </div>
-                  {severityCounts.high > 0 && (
-                    <div
-                      className="flex items-center gap-1 px-2 py-1 rounded-full bg-red-500/10 border border-red-500/20 text-[10px] text-red-400 font-medium"
-                      style={{ opacity: 0, animation: 'landing-badge-pop 0.5s 0.2s cubic-bezier(0.16, 1, 0.3, 1) forwards' }}
-                    >
-                      <AlertTriangle className="w-3 h-3" />
-                      {severityCounts.high} high severity
+                  {severityCounts.high > 0 && <div className="flex items-center gap-1 px-2 py-1 rounded-full bg-red-500/10 border border-red-500/20 text-[10px] text-red-400 font-medium" style={{ opacity: 0, animation: 'landing-badge-pop 0.5s 0.2s cubic-bezier(0.16, 1, 0.3, 1) forwards' }}><AlertTriangle className="w-3 h-3" />{severityCounts.high} high severity</div>}
+                </div>
+              )}
+            </div>
+
+            {/* AI Headline */}
+            <div className="max-w-2xl text-center transition-all duration-[1000ms]" style={{ opacity: isAtLeast('headline') ? 1 : 0, transform: isAtLeast('headline') ? 'translateY(0)' : 'translateY(15px)' }}>
+              {isAtLeast('headline') && <LandingNarrator episodes={topEpisodes} />}
+            </div>
+
+            {/* Episode Slideshow */}
+            {isAtLeast('episodes') && topEpisodes.length > 0 && (
+              <div className="w-full" style={{ opacity: 0, animation: 'landing-card-in 0.8s 0.2s cubic-bezier(0.16, 1, 0.3, 1) forwards' }}>
+                <div className="flex items-center gap-3" onMouseEnter={() => setIsPaused(true)} onMouseLeave={() => setIsPaused(false)}>
+                  {/* Left arrow — outside card */}
+                  {topEpisodes.length > 1 && (
+                    <button onClick={() => goToSlide((slideIndex - 1 + topEpisodes.length) % topEpisodes.length)} className="shrink-0 w-10 h-10 rounded-full bg-gray-800/60 backdrop-blur-sm border border-gray-700/30 flex items-center justify-center text-gray-400 hover:text-white hover:bg-gray-700/80 transition-all"><ChevronLeft className="w-5 h-5" /></button>
+                  )}
+                  {/* Card */}
+                  <div className="relative flex-1 min-w-0 aspect-[16/8] rounded-2xl overflow-hidden">
+                    {topEpisodes.map((ep, i) => (
+                      <HeroSlide key={ep.episode_id} episode={ep} screenshot={screenshots.get(ep.episode_id) || null} isActive={i === slideIndex} onClick={() => handleEpisodeClick(ep.episode_id)} />
+                    ))}
+                    {/* Dot indicators */}
+                    <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-20 flex gap-1.5">
+                      {topEpisodes.map((_, i) => (
+                        <button key={i} onClick={(e) => { e.stopPropagation(); goToSlide(i); }} className={`rounded-full transition-all duration-300 ${i === slideIndex ? 'w-6 h-2 bg-white' : 'w-2 h-2 bg-gray-500/60 hover:bg-gray-400/60'}`} />
+                      ))}
                     </div>
+                  </div>
+                  {/* Right arrow — outside card */}
+                  {topEpisodes.length > 1 && (
+                    <button onClick={() => goToSlide((slideIndex + 1) % topEpisodes.length)} className="shrink-0 w-10 h-10 rounded-full bg-gray-800/60 backdrop-blur-sm border border-gray-700/30 flex items-center justify-center text-gray-400 hover:text-white hover:bg-gray-700/80 transition-all"><ChevronRight className="w-5 h-5" /></button>
                   )}
                 </div>
-              )}
-            </div>
-
-            {/* ─── AI HEADLINE ─── */}
-            <div
-              className="max-w-2xl text-center mb-10 transition-all duration-[1000ms]"
-              style={{
-                opacity: isAtLeast('headline') ? 1 : 0,
-                transform: isAtLeast('headline') ? 'translateY(0)' : 'translateY(15px)',
-              }}
-            >
-              {isAtLeast('headline') && (
-                <LandingNarrator episodes={topEpisodes} />
-              )}
-            </div>
-
-            {/* ─── EPISODE CARDS ─── */}
-            <div
-              className="w-full max-w-4xl transition-all duration-[1000ms]"
-              style={{ opacity: isAtLeast('episodes') ? 1 : 0 }}
-            >
-              {topEpisodes.length > 0 && isAtLeast('episodes') && (
-                <>
-                  <div className="flex items-center gap-3 mb-4">
-                    <div className="h-px bg-gradient-to-r from-transparent via-gray-700 to-transparent" style={{ flex: 1, animation: 'landing-line-draw 1s ease forwards' }} />
-                    <span className="text-[10px] text-gray-500 uppercase tracking-widest">Key Moments</span>
-                    <div className="h-px bg-gradient-to-r from-transparent via-gray-700 to-transparent" style={{ flex: 1, animation: 'landing-line-draw 1s ease forwards' }} />
-                  </div>
-
-                  <div className="grid grid-cols-3 gap-3">
-                    {topEpisodes.slice(0, 6).map((ep, i) => (
-                      <EpisodeCard
-                        key={ep.episode_id}
-                        episode={ep}
-                        index={i}
-                        onClick={() => handleEpisodeClick(ep.episode_id)}
-                      />
-                    ))}
-                  </div>
-                </>
-              )}
-
-              {episodes.length === 0 && isAtLeast('episodes') && (
-                <div className="text-center py-8">
-                  <p className="text-sm text-gray-500">No episodes detected today yet.</p>
-                  <p className="text-xs text-gray-600 mt-1">Episodes will appear as trajectory data flows in.</p>
-                </div>
-              )}
-            </div>
-
-            {/* ─── NARRATIVE TIMELINE ─── */}
-            {isAtLeast('episodes') && topEpisodes.length > 0 && (
-              <div
-                className="w-full max-w-4xl mt-6"
-                style={{ opacity: 0, animation: 'landing-card-in 0.8s 0.5s cubic-bezier(0.16, 1, 0.3, 1) forwards' }}
-              >
-                <NarrativeTimeline episodes={topEpisodes} onEpisodeClick={handleEpisodeClick} />
               </div>
             )}
 
-            {/* ─── ENTER WORKSPACE BUTTON ─── */}
-            <div
-              className="mt-10 transition-all duration-700"
-              style={{
-                opacity: isAtLeast('ready') ? 1 : 0,
-                transform: isAtLeast('ready') ? 'translateY(0)' : 'translateY(20px)',
-              }}
-            >
-              <button
-                onClick={handleExit}
-                className="group relative flex items-center gap-3 px-8 py-3 rounded-xl text-sm font-medium text-white overflow-hidden transition-all duration-300 hover:shadow-lg hover:shadow-blue-500/10"
-                style={{
-                  background: 'linear-gradient(135deg, rgba(59,130,246,0.15), rgba(59,130,246,0.05))',
-                  border: '1px solid rgba(59,130,246,0.2)',
-                }}
-              >
-                <div
-                  className="absolute inset-0 pointer-events-none"
-                  style={{
-                    background: 'linear-gradient(90deg, transparent, rgba(59,130,246,0.1), transparent)',
-                    backgroundSize: '200% 100%',
-                    animation: 'landing-shimmer 3s ease-in-out infinite',
-                  }}
-                />
+            {/* Histogram Timeline */}
+            {isAtLeast('episodes') && topEpisodes.length > 0 && (
+              <div className="w-full" style={{ opacity: 0, animation: 'landing-card-in 0.8s 0.5s cubic-bezier(0.16, 1, 0.3, 1) forwards' }}>
+                <HistogramTimeline episodes={topEpisodes} activeIndex={slideIndex} onBarClick={goToSlide} />
+              </div>
+            )}
+
+            {episodes.length === 0 && isAtLeast('episodes') && (
+              <div className="text-center py-8"><p className="text-sm text-gray-500">No episodes detected today yet.</p><p className="text-xs text-gray-600 mt-1">Episodes will appear as trajectory data flows in.</p></div>
+            )}
+
+            {/* Enter Workspace */}
+            <div className="transition-all duration-700" style={{ opacity: isAtLeast('ready') ? 1 : 0, transform: isAtLeast('ready') ? 'translateY(0)' : 'translateY(20px)' }}>
+              <button onClick={handleExit} className="group relative flex items-center gap-3 px-8 py-3 rounded-xl text-sm font-medium text-white overflow-hidden transition-all duration-300 hover:shadow-lg hover:shadow-blue-500/10" style={{ background: 'linear-gradient(135deg, rgba(59,130,246,0.15), rgba(59,130,246,0.05))', border: '1px solid rgba(59,130,246,0.2)' }}>
+                <div className="absolute inset-0 pointer-events-none" style={{ background: 'linear-gradient(90deg, transparent, rgba(59,130,246,0.1), transparent)', backgroundSize: '200% 100%', animation: 'landing-shimmer 3s ease-in-out infinite' }} />
                 <span className="relative">Enter Workspace</span>
                 <ArrowRight className="relative w-4 h-4 group-hover:translate-x-1 transition-transform" />
               </button>
             </div>
-          </>
+          </div>
         )}
       </div>
-
-      {/* Bottom fade */}
-      <div className="absolute bottom-0 left-0 right-0 h-24 bg-gradient-to-t from-gray-950 to-transparent pointer-events-none" />
     </div>
   );
 }

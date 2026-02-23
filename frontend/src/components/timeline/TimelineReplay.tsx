@@ -3,8 +3,8 @@ import { Play, Pause, SkipBack, SkipForward, Clock, ChevronDown, MapPin, Refresh
 import { useTracking } from '../../context/TrackingContext'
 import { TrackWithTrail } from '../../types'
 import TimelineInsightMarkers from '../replay-insight/TimelineInsightMarkers'
+import { API_BASE } from '../../config/api'
 
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3001'
 
 interface TimelineReplayProps {
   venueId: string

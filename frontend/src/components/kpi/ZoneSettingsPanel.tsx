@@ -1,10 +1,10 @@
 import { useState, useEffect, useCallback } from 'react'
+import { API_BASE } from '../../config/api'
 import { 
   X, Settings, Save, Plus, Trash2, Bell, BellOff, 
   AlertTriangle, Users, Clock, TrendingUp, Activity
 } from 'lucide-react'
 
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3001'
 
 interface ZoneSettings {
   dwellThresholdSec: number

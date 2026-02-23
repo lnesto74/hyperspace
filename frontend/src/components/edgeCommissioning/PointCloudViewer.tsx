@@ -5,6 +5,7 @@ import {
 } from 'lucide-react'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
+import { API_BASE } from '../../config/api'
 
 interface PointCloudViewerProps {
   tailscaleIp: string
@@ -13,7 +14,6 @@ interface PointCloudViewerProps {
   onClose: () => void
 }
 
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3001'
 const WS_BASE = API_BASE.replace('http://', 'ws://').replace('https://', 'wss://')
 
 export default function PointCloudViewer({

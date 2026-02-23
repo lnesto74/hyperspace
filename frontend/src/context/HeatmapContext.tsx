@@ -1,6 +1,6 @@
 import { createContext, useContext, useState, useCallback, useEffect, ReactNode } from 'react'
+import { API_BASE } from '../config/api'
 
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3001'
 const STORAGE_KEY = 'hyperspace-heatmap-settings'
 
 interface HeatmapSettings {
