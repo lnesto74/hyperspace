@@ -20,11 +20,11 @@ export function initDatabase() {
   // Development: DELETE journal for simpler debugging
   if (process.env.NODE_ENV === 'production') {
     db.pragma('journal_mode = WAL');
-    db.pragma('synchronous = NORMAL');
-    db.pragma('cache_size = -64000');      // 64MB page cache
-    db.pragma('mmap_size = 268435456');    // 256MB memory-mapped I/O
-    db.pragma('wal_autocheckpoint = 1000'); // Checkpoint every 1000 pages (~4MB)
-    console.log('📦 SQLite: WAL mode (production) with auto-checkpoint');
+    db.pragma('synchronous = FULL');       // FULL sync prevents corruption on container restart
+    db.pragma('cache_size = -16000');      // 16MB page cache (safe for Docker)
+    db.pragma('mmap_size = 0');            // Disable mmap - dangerous on Docker overlay2
+    db.pragma('wal_autocheckpoint = 100'); // Checkpoint every 100 pages (~400KB) to keep WAL small
+    console.log('📦 SQLite: WAL mode (production) with FULL sync, no mmap');
     
     // Initial checkpoint to clear any existing WAL
     try {
