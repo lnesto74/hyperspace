@@ -824,6 +824,12 @@ export default function createDwgImportRoutes(db) {
       // Generate layout JSON
       const layoutJson = generateLayoutJson(importData, mapping);
       
+      // Find existing layout version for this import (to migrate data from)
+      const existingLayout = db.prepare(
+        'SELECT id FROM dwg_layout_versions WHERE import_id = ? ORDER BY created_at DESC LIMIT 1'
+      ).get(req.params.import_id);
+      const oldLayoutId = existingLayout?.id || null;
+      
       // Create layout version
       const layoutVersionId = uuidv4();
       const now = new Date().toISOString();
@@ -842,11 +848,30 @@ export default function createDwgImportRoutes(db) {
         now
       );
       
+      // Migrate LiDAR instances from old layout version to new one
+      if (oldLayoutId) {
+        const migratedLidars = db.prepare(
+          'UPDATE lidar_instances SET layout_version_id = ? WHERE layout_version_id = ?'
+        ).run(layoutVersionId, oldLayoutId);
+        if (migratedLidars.changes > 0) {
+          console.log(`📦 Migrated ${migratedLidars.changes} LiDAR instances to new layout version`);
+        }
+        
+        // Migrate ROIs from old layout version to new one
+        const migratedRois = db.prepare(
+          'UPDATE regions_of_interest SET dwg_layout_id = ? WHERE dwg_layout_id = ?'
+        ).run(layoutVersionId, oldLayoutId);
+        if (migratedRois.changes > 0) {
+          console.log(`📦 Migrated ${migratedRois.changes} ROIs to new layout version`);
+        }
+      }
+      
       // Update import status
       db.prepare('UPDATE dwg_imports SET status = ?, updated_at = ? WHERE id = ?').run('generated', now, req.params.import_id);
       
       res.json({
         layout_version_id: layoutVersionId,
+        previous_layout_id: oldLayoutId,
         layout: layoutJson
       });
       
@@ -893,7 +918,10 @@ export default function createDwgImportRoutes(db) {
         is_active: !!layout.is_active,
         created_at: layout.created_at,
         layout: layoutData,
-        mapping: mapping ? JSON.parse(mapping.mapping_json || '{}') : {}
+        mapping: mapping ? JSON.parse(mapping.mapping_json || '{}') : {},
+        camera_view: layout.camera_view_json ? JSON.parse(layout.camera_view_json) : null,
+        camera_view_2d: layout.camera_view_2d_json ? JSON.parse(layout.camera_view_2d_json) : null,
+        lidar_roi: layout.lidar_roi_json ? JSON.parse(layout.lidar_roi_json) : null,
       });
       
     } catch (err) {
@@ -902,6 +930,42 @@ export default function createDwgImportRoutes(db) {
     }
   });
   
+  /**
+   * PATCH /api/dwg/layout/:layout_version_id/view - Save camera view / LiDAR ROI to DB
+   */
+  router.patch('/layout/:layout_version_id/view', (req, res) => {
+    try {
+      const { camera_view, camera_view_2d, lidar_roi } = req.body;
+      const updates = [];
+      const params = [];
+      
+      if (camera_view !== undefined) {
+        updates.push('camera_view_json = ?');
+        params.push(camera_view ? JSON.stringify(camera_view) : null);
+      }
+      if (camera_view_2d !== undefined) {
+        updates.push('camera_view_2d_json = ?');
+        params.push(camera_view_2d ? JSON.stringify(camera_view_2d) : null);
+      }
+      if (lidar_roi !== undefined) {
+        updates.push('lidar_roi_json = ?');
+        params.push(lidar_roi ? JSON.stringify(lidar_roi) : null);
+      }
+      
+      if (updates.length === 0) {
+        return res.status(400).json({ error: 'No view data provided' });
+      }
+      
+      params.push(req.params.layout_version_id);
+      db.prepare(`UPDATE dwg_layout_versions SET ${updates.join(', ')} WHERE id = ?`).run(...params);
+      
+      res.json({ success: true });
+    } catch (err) {
+      console.error('Save view error:', err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   /**
    * GET /api/dwg/import/:import_id/layouts - List layouts for an import
    */

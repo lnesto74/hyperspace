@@ -143,14 +143,36 @@ export default function Layout3DPreview({ layoutVersionId, importId, lidarInstan
     }
   }, [panMode])
 
-  // Check if saved camera view exists
+  // DB-persisted camera view ref (loaded from API)
+  const dbCameraViewRef = useRef<{ position: { x: number; y: number; z: number }; target: { x: number; y: number; z: number } } | null>(null)
+
+  // Check if saved camera view exists (from DB first, then localStorage fallback)
   useEffect(() => {
-    const savedView = localStorage.getItem(`dwg-camera-view-${layoutVersionId}`)
-    setHasSavedView(!!savedView)
+    const checkSavedView = async () => {
+      try {
+        const res = await fetch(`${API_BASE}/api/dwg/layout/${layoutVersionId}`)
+        if (res.ok) {
+          const data = await res.json()
+          if (data.camera_view) {
+            dbCameraViewRef.current = data.camera_view
+            setHasSavedView(true)
+            return
+          }
+        }
+      } catch (e) {
+        // API unavailable, fall through to localStorage
+      }
+      const savedView = localStorage.getItem(`dwg-camera-view-${layoutVersionId}`)
+      if (savedView) {
+        dbCameraViewRef.current = JSON.parse(savedView)
+      }
+      setHasSavedView(!!savedView)
+    }
+    checkSavedView()
   }, [layoutVersionId])
 
-  // Save current camera view
-  const saveCameraView = useCallback(() => {
+  // Save current camera view (to DB + localStorage)
+  const saveCameraView = useCallback(async () => {
     if (!cameraRef.current || !controlsRef.current) {
       console.error('Cannot save view: camera or controls not initialized')
       return
@@ -169,37 +191,44 @@ export default function Layout3DPreview({ layoutVersionId, importId, lidarInstan
       }
     }
     
-    const storageKey = `dwg-camera-view-${layoutVersionId}`
-    console.log('Saving camera view to:', storageKey)
-    console.log('Position:', viewData.position)
-    console.log('Target:', viewData.target)
+    // Save to localStorage as immediate fallback
+    localStorage.setItem(`dwg-camera-view-${layoutVersionId}`, JSON.stringify(viewData))
+    dbCameraViewRef.current = viewData
     
-    localStorage.setItem(storageKey, JSON.stringify(viewData))
-    
-    // Verify it was saved
-    const verification = localStorage.getItem(storageKey)
-    console.log('Verification - saved data:', verification ? 'OK' : 'FAILED')
+    // Save to DB for persistence across cache clears
+    try {
+      await fetch(`${API_BASE}/api/dwg/layout/${layoutVersionId}/view`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ camera_view: viewData })
+      })
+      console.log('Camera view saved to DB')
+    } catch (e) {
+      console.warn('Failed to save camera view to DB:', e)
+    }
     
     setHasSavedView(true)
     setJustSaved(true)
-    // Reset justSaved after 1.5 seconds
     setTimeout(() => setJustSaved(false), 1500)
   }, [layoutVersionId])
 
-  // Load saved camera view
+  // Load saved camera view (from DB ref first, then localStorage)
   const loadSavedCameraView = useCallback(() => {
     if (!cameraRef.current || !controlsRef.current) {
       console.log('Cannot load view: camera or controls not initialized')
       return false
     }
     
-    const storageKey = `dwg-camera-view-${layoutVersionId}`
-    const saved = localStorage.getItem(storageKey)
-    console.log('Loading camera view from:', storageKey, 'found:', !!saved)
-    if (!saved) return false
+    // Try DB-loaded view first
+    let viewData = dbCameraViewRef.current
+    if (!viewData) {
+      const saved = localStorage.getItem(`dwg-camera-view-${layoutVersionId}`)
+      if (!saved) return false
+      try { viewData = JSON.parse(saved) } catch { return false }
+    }
+    if (!viewData) return false
     
     try {
-      const viewData = JSON.parse(saved)
       cameraRef.current.position.set(viewData.position.x, viewData.position.y, viewData.position.z)
       controlsRef.current.target.set(viewData.target.x, viewData.target.y, viewData.target.z)
       controlsRef.current.update()

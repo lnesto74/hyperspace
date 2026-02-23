@@ -703,6 +703,25 @@ export default function DwgImporterPage({ onClose, onLayoutGenerated }: DwgImpor
       }
       
       const result = await res.json()
+      
+      // Migrate localStorage keys from old layout ID to new one
+      if (result.previous_layout_id && result.previous_layout_id !== result.layout_version_id) {
+        const keysToMigrate = [
+          'dwg-camera-view-',
+          'dwg-lidar-roi-by-layout-',
+          'dwg-selected-lidar-model-',
+        ]
+        for (const prefix of keysToMigrate) {
+          const oldKey = `${prefix}${result.previous_layout_id}`
+          const newKey = `${prefix}${result.layout_version_id}`
+          const saved = localStorage.getItem(oldKey)
+          if (saved) {
+            localStorage.setItem(newKey, saved)
+            localStorage.removeItem(oldKey)
+          }
+        }
+      }
+      
       setGeneratedLayoutId(result.layout_version_id)
       onLayoutGenerated?.(result.layout_version_id)
       

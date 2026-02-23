@@ -869,6 +869,27 @@ export function initDatabase() {
     // Table may not exist yet, that's fine
   }
 
+  // Migration: Add camera_view_json and lidar_roi_json to dwg_layout_versions (persist views to DB)
+  try {
+    const layoutVersionColumns = db.prepare("PRAGMA table_info(dwg_layout_versions)").all();
+    const layoutVersionColumnNames = layoutVersionColumns.map(c => c.name);
+    
+    if (layoutVersionColumnNames.length > 0 && !layoutVersionColumnNames.includes('camera_view_json')) {
+      db.exec("ALTER TABLE dwg_layout_versions ADD COLUMN camera_view_json TEXT DEFAULT NULL");
+      console.log('📦 Migration: Added camera_view_json column to dwg_layout_versions');
+    }
+    if (layoutVersionColumnNames.length > 0 && !layoutVersionColumnNames.includes('camera_view_2d_json')) {
+      db.exec("ALTER TABLE dwg_layout_versions ADD COLUMN camera_view_2d_json TEXT DEFAULT NULL");
+      console.log('📦 Migration: Added camera_view_2d_json column to dwg_layout_versions');
+    }
+    if (layoutVersionColumnNames.length > 0 && !layoutVersionColumnNames.includes('lidar_roi_json')) {
+      db.exec("ALTER TABLE dwg_layout_versions ADD COLUMN lidar_roi_json TEXT DEFAULT NULL");
+      console.log('📦 Migration: Added lidar_roi_json column to dwg_layout_versions');
+    }
+  } catch (migrationErr) {
+    // Table may not exist yet, that's fine
+  }
+
   // Migration: Add deleted_fixture_ids_json column to dwg_imports
   try {
     const dwgImportColumns = db.prepare("PRAGMA table_info(dwg_imports)").all();
