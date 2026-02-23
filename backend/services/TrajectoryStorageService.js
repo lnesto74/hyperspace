@@ -958,12 +958,8 @@ export class TrajectoryStorageService extends EventEmitter {
         console.log(`🧹 Cleanup: ${posResult.changes} positions, ${occResult.changes} occupancy, ${ledgerResult.changes} ledger, ${staleSessions} stale sessions, ${staleQueues} stale queues`);
       }
       
-      // Run VACUUM periodically to reclaim space (every ~4 hours based on 15min interval)
-      if (Math.random() < 0.0625) { // ~1/16 chance = every ~4 hours
-        console.log('🧹 Running database VACUUM...');
-        this.db.exec('VACUUM');
-        console.log('🧹 VACUUM complete');
-      }
+      // WAL checkpoint keeps DB size manageable — no VACUUM needed
+      // (VACUUM blocks the entire DB connection and can cause health check timeouts)
     } catch (err) {
       console.error('Failed to cleanup old data:', err);
     }
