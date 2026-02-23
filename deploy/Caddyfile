@@ -1,10 +1,7 @@
 # Hyperspace Production Caddyfile
-# Replace {$DOMAIN} with your actual domain (e.g., app.hyperspace.io)
-# If no domain, use :80 for IP-only access
+# For IP-only HTTP access (no domain/HTTPS)
 
-# For IP-only access (no domain), use :80 to serve HTTP
-# For domain with HTTPS, set DOMAIN env var (e.g., DOMAIN=app.hyperspace.io)
-{$DOMAIN::80} {
+:80 {
     # Frontend - static files
     handle {
         reverse_proxy frontend:4173
