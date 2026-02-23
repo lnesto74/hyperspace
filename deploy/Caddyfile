@@ -1,0 +1,56 @@
+# Hyperspace Production Caddyfile
+# Replace {$DOMAIN} with your actual domain (e.g., app.hyperspace.io)
+# If no domain, use :80 for IP-only access
+
+# For IP-only access (no domain), use :80 to serve HTTP
+# For domain with HTTPS, set DOMAIN env var (e.g., DOMAIN=app.hyperspace.io)
+{$DOMAIN::80} {
+    # Frontend - static files
+    handle {
+        reverse_proxy frontend:4173
+    }
+
+    # Backend API
+    handle /api/* {
+        reverse_proxy backend:3001
+    }
+
+    # Socket.IO - WebSocket upgrade support
+    handle /socket.io/* {
+        reverse_proxy backend:3001 {
+            transport http {
+                versions 1.1 2
+            }
+        }
+    }
+
+    # WebSocket for point cloud data
+    handle /ws/* {
+        reverse_proxy backend:3001 {
+            transport http {
+                versions 1.1 2
+            }
+        }
+    }
+
+    # Uploaded files (logos, DOOH videos, floor plans)
+    handle /uploads/* {
+        reverse_proxy backend:3001
+    }
+
+    # Compression for performance
+    encode gzip zstd
+
+    # Security headers
+    header {
+        X-Content-Type-Options nosniff
+        X-Frame-Options SAMEORIGIN
+        Referrer-Policy strict-origin-when-cross-origin
+    }
+
+    # Logging
+    log {
+        output file /var/log/caddy/access.log
+        format json
+    }
+}
