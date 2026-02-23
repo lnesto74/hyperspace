@@ -870,7 +870,22 @@ app.get('/api/profit-radar/insights', (req, res) => {
 setupPointCloudWebSocket(httpServer);
 
 // Start server
-httpServer.listen(PORT, () => {
+httpServer.listen(PORT, async () => {
+  // Auto-configure edge simulator backendUrl so SimV2 can fetch zone data
+  if (process.env.BACKEND_PUBLIC_URL && EDGE_SERVER_URL) {
+    try {
+      const configRes = await fetch(`${EDGE_SERVER_URL}/api/config`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ backendUrl: process.env.BACKEND_PUBLIC_URL }),
+      });
+      const configData = await configRes.json();
+      console.log(`🔗 Edge simulator backendUrl set to ${process.env.BACKEND_PUBLIC_URL}`);
+    } catch (err) {
+      console.warn('⚠️ Could not auto-configure edge simulator:', err.message);
+    }
+  }
+
   console.log(`
 ╔══════════════════════════════════════════════════════╗
 ║                                                      ║
