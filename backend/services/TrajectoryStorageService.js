@@ -266,6 +266,7 @@ export class TrajectoryStorageService extends EventEmitter {
       CREATE INDEX IF NOT EXISTS idx_zone_occupancy_roi_time ON zone_occupancy(roi_id, timestamp);
       CREATE INDEX IF NOT EXISTS idx_track_positions_venue_time ON track_positions(venue_id, timestamp);
       CREATE INDEX IF NOT EXISTS idx_track_positions_track ON track_positions(track_key, timestamp);
+      CREATE INDEX IF NOT EXISTS idx_track_positions_venue_track_time ON track_positions(venue_id, track_key, timestamp);
       CREATE INDEX IF NOT EXISTS idx_zone_kpi_daily_roi_date ON zone_kpi_daily(roi_id, date);
       CREATE INDEX IF NOT EXISTS idx_zone_settings_roi ON zone_settings(roi_id);
       CREATE INDEX IF NOT EXISTS idx_zone_alert_rules_roi ON zone_alert_rules(roi_id);
@@ -1519,25 +1520,29 @@ export class TrajectoryStorageService extends EventEmitter {
    * Record occupancy snapshot for ROIs and evaluate alert rules
    */
   recordOccupancy(venueId, rois, tracks) {
-    const now = Date.now();
-    
-    const insertStmt = this.db.prepare(`
-      INSERT INTO zone_occupancy (venue_id, roi_id, timestamp, occupancy_count)
-      VALUES (?, ?, ?, ?)
-    `);
-    
-    for (const roi of rois) {
-      let count = 0;
-      for (const track of tracks.values()) {
-        if (this.isPointInPolygon(track.venuePosition, roi.vertices)) {
-          count++;
+    try {
+      const now = Date.now();
+      
+      const insertStmt = this.db.prepare(`
+        INSERT INTO zone_occupancy (venue_id, roi_id, timestamp, occupancy_count)
+        VALUES (?, ?, ?, ?)
+      `);
+      
+      for (const roi of rois) {
+        let count = 0;
+        for (const track of tracks.values()) {
+          if (this.isPointInPolygon(track.venuePosition, roi.vertices)) {
+            count++;
+          }
         }
+        
+        insertStmt.run(venueId, roi.id, now, count);
+        
+        // Evaluate alert rules for this ROI
+        this.evaluateAlertRules(venueId, roi.id, roi.name, { occupancy: count });
       }
-      
-      insertStmt.run(venueId, roi.id, now, count);
-      
-      // Evaluate alert rules for this ROI
-      this.evaluateAlertRules(venueId, roi.id, roi.name, { occupancy: count });
+    } catch (err) {
+      console.error('Failed to record occupancy:', err.message);
     }
   }
 

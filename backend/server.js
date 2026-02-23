@@ -38,6 +38,7 @@ import algorithmProvidersRoutes from './routes/algorithmProviders.js';
 import { seedProviders } from './data/algorithmProviders.js';
 import createReplayInsightRoutes from './routes/replayInsight.js';
 import { EpisodeDetectorOrchestrator } from './services/replay-insight/index.js';
+import { IntentScorer, ZoneAggregator, BehaviorClusterer, ProfitRadarEngine } from './services/profit-radar/index.js';
 
 const PORT = process.env.PORT || 3001;
 const MOCK_LIDAR = process.env.MOCK_LIDAR === 'true';
@@ -51,7 +52,9 @@ app.use(express.json());
 // Serve static files from uploads directory (for DOOH videos)
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
+const UPLOADS_DIR = process.env.UPLOADS_DIR || path.join(__dirname, '../uploads');
+const MODELS_DIR = process.env.MODELS_DIR || path.join(__dirname, 'models');
+app.use('/uploads', express.static(UPLOADS_DIR));
 
 // Initialize HTTP server and Socket.IO
 const httpServer = createServer(app);
@@ -78,6 +81,13 @@ const trajectoryStorage = new TrajectoryStorageService(db);
 const kpiCalculator = new KPICalculator(db);
 trajectoryStorage.start();
 console.log('📊 KPI tracking services initialized');
+
+// Initialize Profit Radar services (additive — no impact on existing functionality)
+const intentScorer = new IntentScorer(trackAggregator);
+const zoneAggregator = new ZoneAggregator(intentScorer);
+const behaviorClusterer = new BehaviorClusterer(intentScorer);
+const profitRadarEngine = new ProfitRadarEngine(zoneAggregator, behaviorClusterer);
+console.log('📡 Profit Radar services initialized');
 
 // Pre-load zone links and open lanes for all venues at startup
 const venues = db.prepare('SELECT DISTINCT id FROM venues').all();
@@ -199,6 +209,15 @@ trackingNamespace.on('connection', (socket) => {
     // Start track aggregator
     trackAggregator.start(venueId);
     
+    // Start Profit Radar pipeline (additive)
+    const profitRois = db.prepare('SELECT id, name, vertices, color FROM regions_of_interest WHERE venue_id = ?').all(venueId);
+    zoneAggregator.setRois(profitRois);
+    behaviorClusterer.setRois(profitRois);
+    intentScorer.start();
+    zoneAggregator.start();
+    behaviorClusterer.start();
+    profitRadarEngine.start();
+    
     // Start mock generator if enabled
     if (mockGenerator && !mockGenerator.isRunning()) {
       mockGenerator.start(venueId);
@@ -218,7 +237,7 @@ trackingNamespace.on('connection', (socket) => {
 // Serve static model files (for GLTF textures)
 // Custom middleware to handle texture paths - fallback if textures/ subfolder doesn't exist
 app.use('/api/models-static', (req, res, next) => {
-  const requestedPath = path.join(__dirname, 'models', req.path);
+  const requestedPath = path.join(MODELS_DIR, req.path);
   
   // If file exists at requested path, serve it
   if (fs.existsSync(requestedPath)) {
@@ -227,14 +246,14 @@ app.use('/api/models-static', (req, res, next) => {
   
   // Fallback: if path contains "textures/", try without it
   if (req.path.includes('/textures/')) {
-    const fallbackPath = path.join(__dirname, 'models', req.path.replace('/textures/', '/'));
+    const fallbackPath = path.join(MODELS_DIR, req.path.replace('/textures/', '/'));
     if (fs.existsSync(fallbackPath)) {
       return res.sendFile(fallbackPath);
     }
   }
   
   next();
-}, express.static(path.join(__dirname, 'models')));
+}, express.static(MODELS_DIR));
 
 // Mount routes
 app.use('/api/discovery', discoveryRoutes(tailscaleService, mockGenerator));
@@ -280,7 +299,7 @@ replayInsightOrchestrator.start();
 app.use('/api/replay-insights', createReplayInsightRoutes(replayInsightOrchestrator));
 
 // Serve uploaded logos
-app.use('/api/uploads/logos', express.static(path.join(__dirname, 'uploads', 'logos')));
+app.use('/api/uploads/logos', express.static(path.join(UPLOADS_DIR, 'logos')));
 
 // Health check
 app.get('/api/health', (req, res) => {
@@ -813,6 +832,40 @@ app.get('/api/venues/:venueId/checkout/kpi-snapshot', (req, res) => {
   }
 });
 
+// --- Profit Radar socket events (additive, no impact on existing) ---
+setInterval(() => {
+  const venueId = trackAggregator.venueId;
+  if (!venueId) return;
+  const axes = intentScorer.getAxesArray();
+  if (axes.length > 0) {
+    io.of('/tracking').to(`venue:${venueId}`).emit('semantics:trackAxes', { venueId, tracks: axes, timestamp: Date.now() });
+  }
+}, 1000); // 1Hz
+
+setInterval(() => {
+  const venueId = trackAggregator.venueId;
+  if (!venueId) return;
+  const zoneField = zoneAggregator.getZoneFieldArray();
+  const clusters = behaviorClusterer.getClusters();
+  if (zoneField.length > 0 || clusters.length > 0) {
+    io.of('/tracking').to(`venue:${venueId}`).emit('semantics:zoneField', { venueId, zones: zoneField, clusters, timestamp: Date.now() });
+  }
+}, 2000); // 0.5Hz
+
+setInterval(() => {
+  const venueId = trackAggregator.venueId;
+  if (!venueId) return;
+  const insights = profitRadarEngine.getInsights();
+  if (insights.length > 0) {
+    io.of('/tracking').to(`venue:${venueId}`).emit('profitRadar:insights', { venueId, insights, timestamp: Date.now() });
+  }
+}, 30000); // 30s
+
+// Profit Radar REST endpoint (for initial load / polling fallback)
+app.get('/api/profit-radar/insights', (req, res) => {
+  res.json({ insights: profitRadarEngine.getInsights(), zones: zoneAggregator.getZoneFieldArray(), clusters: behaviorClusterer.getClusters() });
+});
+
 // Setup point cloud WebSocket proxy
 setupPointCloudWebSocket(httpServer);
 
@@ -844,6 +897,14 @@ httpServer.listen(PORT, () => {
 });
 
 // Graceful shutdown
+// Prevent uncaught errors from crashing the backend
+process.on('uncaughtException', (err) => {
+  console.error('⚠️ Uncaught exception (process kept alive):', err.message);
+});
+process.on('unhandledRejection', (reason) => {
+  console.error('⚠️ Unhandled rejection (process kept alive):', reason);
+});
+
 process.on('SIGINT', () => {
   console.log('\n🛑 Shutting down...');
   tailscaleService.stopPolling();
@@ -851,6 +912,10 @@ process.on('SIGINT', () => {
   if (mockGenerator) mockGenerator.stop();
   // if (mqttService) mqttService.disconnect();
   trackAggregator.stop();
+  intentScorer.stop();
+  zoneAggregator.stop();
+  behaviorClusterer.stop();
+  profitRadarEngine.stop();
   trajectoryStorage.stop();
   db.close();
   process.exit(0);
