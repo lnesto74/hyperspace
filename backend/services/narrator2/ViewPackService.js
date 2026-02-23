@@ -398,7 +398,7 @@ async function getVenueThresholds(venueId) {
     const { fileURLToPath } = await import('url');
     const __filename = fileURLToPath(import.meta.url);
     const __dirname = path.dirname(__filename);
-    const dbPath = path.join(__dirname, '../../database/hyperspace.db');
+    const dbPath = process.env.DB_PATH || path.join(__dirname, '../../database/hyperspace.db');
     const db = new Database(dbPath, { readonly: true });
     
     const rows = db.prepare(`

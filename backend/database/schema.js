@@ -15,8 +15,19 @@ export function initDatabase() {
   
   // Disable foreign keys temporarily to debug persistence issue
   db.pragma('foreign_keys = OFF');
-  db.pragma('journal_mode = DELETE');
-  db.pragma('synchronous = FULL');
+  
+  // Production: WAL mode for better concurrent read/write + NVMe-optimized settings
+  // Development: DELETE journal for simpler debugging
+  if (process.env.NODE_ENV === 'production') {
+    db.pragma('journal_mode = WAL');
+    db.pragma('synchronous = NORMAL');
+    db.pragma('cache_size = -64000');      // 64MB page cache
+    db.pragma('mmap_size = 268435456');    // 256MB memory-mapped I/O
+    console.log('📦 SQLite: WAL mode (production)');
+  } else {
+    db.pragma('journal_mode = DELETE');
+    db.pragma('synchronous = FULL');
+  }
 
   // Create tables
   db.exec(`
@@ -228,6 +239,23 @@ export function initDatabase() {
       FOREIGN KEY (venue_id) REFERENCES venues(id) ON DELETE SET NULL
     );
 
+    -- Floor plan image overlays for DWG imports
+    CREATE TABLE IF NOT EXISTS dwg_floorplan_images (
+      id TEXT PRIMARY KEY,
+      import_id TEXT NOT NULL,
+      original_filename TEXT NOT NULL,
+      file_path TEXT NOT NULL,
+      mime_type TEXT NOT NULL DEFAULT 'image/png',
+      image_width INTEGER,
+      image_height INTEGER,
+      transform_json TEXT NOT NULL DEFAULT '{"x":0,"y":0,"scaleX":1,"scaleY":1,"rotation":0,"opacity":0.5}',
+      calibration_json TEXT DEFAULT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (import_id) REFERENCES dwg_imports(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_dwg_floorplan_images_import_id ON dwg_floorplan_images(import_id);
     CREATE INDEX IF NOT EXISTS idx_dwg_imports_venue_id ON dwg_imports(venue_id);
     CREATE INDEX IF NOT EXISTS idx_dwg_groups_import_id ON dwg_groups(import_id);
     CREATE INDEX IF NOT EXISTS idx_dwg_mappings_import_id ON dwg_mappings(import_id);
@@ -437,6 +465,8 @@ export function initDatabase() {
     CREATE INDEX IF NOT EXISTS idx_dooh_kpi_buckets_venue_id ON dooh_kpi_buckets(venue_id);
     CREATE INDEX IF NOT EXISTS idx_dooh_kpi_buckets_screen_id ON dooh_kpi_buckets(screen_id);
     CREATE INDEX IF NOT EXISTS idx_dooh_kpi_buckets_bucket_start_ts ON dooh_kpi_buckets(bucket_start_ts);
+    CREATE INDEX IF NOT EXISTS idx_dooh_kpi_buckets_screen_time ON dooh_kpi_buckets(screen_id, bucket_start_ts);
+    CREATE INDEX IF NOT EXISTS idx_dooh_exposure_events_venue_time ON dooh_exposure_events(venue_id, start_ts);
 
     -- ============================================
     -- PEBLE™ DOOH Attribution Engine Tables
@@ -816,6 +846,23 @@ export function initDatabase() {
     if (deployHistoryColumnNames.length > 0 && !deployHistoryColumnNames.includes('her_response_json')) {
       db.exec("ALTER TABLE edge_deploy_history ADD COLUMN her_response_json TEXT DEFAULT NULL");
       console.log('📦 Migration: Added her_response_json column to edge_deploy_history');
+    }
+  } catch (migrationErr) {
+    // Table may not exist yet, that's fine
+  }
+
+  // Migration: Add deleted_fixture_ids_json column to dwg_imports
+  try {
+    const dwgImportColumns = db.prepare("PRAGMA table_info(dwg_imports)").all();
+    const dwgImportColumnNames = dwgImportColumns.map(c => c.name);
+    
+    if (dwgImportColumnNames.length > 0 && !dwgImportColumnNames.includes('deleted_fixture_ids_json')) {
+      db.exec("ALTER TABLE dwg_imports ADD COLUMN deleted_fixture_ids_json TEXT DEFAULT '[]'");
+      console.log('📦 Migration: Added deleted_fixture_ids_json column to dwg_imports');
+    }
+    if (dwgImportColumnNames.length > 0 && !dwgImportColumnNames.includes('custom_names_json')) {
+      db.exec("ALTER TABLE dwg_imports ADD COLUMN custom_names_json TEXT DEFAULT '{}'");
+      console.log('📦 Migration: Added custom_names_json column to dwg_imports');
     }
   } catch (migrationErr) {
     // Table may not exist yet, that's fine

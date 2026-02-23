@@ -1,0 +1,134 @@
+# Hyperspace Production - Docker Compose
+# Usage: docker compose -f docker-compose.prod.yml --env-file .env up -d
+
+services:
+  # ============================================
+  # Caddy - Reverse Proxy + Auto HTTPS
+  # ============================================
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"   # HTTP/3 (QUIC)
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+      - /var/log/caddy:/var/log/caddy
+    environment:
+      - DOMAIN=${DOMAIN:-localhost}
+    depends_on:
+      backend:
+        condition: service_healthy
+      frontend:
+        condition: service_started
+    networks:
+      - hyperspace
+
+  # ============================================
+  # Mosquitto MQTT Broker
+  # Exposed on host:1883 for Tailscale edge devices
+  # ============================================
+  mosquitto:
+    image: eclipse-mosquitto:2
+    restart: unless-stopped
+    ports:
+      - "1883:1883"     # Accessible via Tailscale IP for edge devices
+    volumes:
+      - ./deploy/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+    networks:
+      - hyperspace
+
+  # ============================================
+  # Backend - Express + Socket.IO + SQLite
+  # ============================================
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      - PORT=3001
+      - NODE_ENV=production
+      - DB_PATH=/data/db/hyperspace.db
+      - MOCK_LIDAR=${MOCK_LIDAR:-false}
+      - MQTT_ENABLED=${MQTT_ENABLED:-true}
+      - MQTT_BROKER_URL=mqtt://mosquitto:1883
+      - LIDAR_PORT=${LIDAR_PORT:-17161}
+      - TAILSCALE_POLL_INTERVAL=${TAILSCALE_POLL_INTERVAL:-30000}
+      - SHOW_ALL_TAILSCALE_DEVICES=${SHOW_ALL_TAILSCALE_DEVICES:-true}
+      - EDGE_SERVER_URL=${EDGE_SERVER_URL:-http://100.78.174.103:8080}
+      - FEATURE_DWG_IMPORTER=${FEATURE_DWG_IMPORTER:-true}
+      - FEATURE_LIDAR_PLANNER=${FEATURE_LIDAR_PLANNER:-true}
+      - FEATURE_DOOH_KPIS=${FEATURE_DOOH_KPIS:-true}
+      - FEATURE_DOOH_ATTRIBUTION=${FEATURE_DOOH_ATTRIBUTION:-true}
+      - FEATURE_BUSINESS_REPORTING=${FEATURE_BUSINESS_REPORTING:-true}
+      - FEATURE_NARRATOR2_OPENAI=${FEATURE_NARRATOR2_OPENAI:-true}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o}
+      - RESEND_API_KEY=${RESEND_API_KEY}
+      - RESEND_FROM_EMAIL=${RESEND_FROM_EMAIL}
+      - LEAD_NOTIFICATION_EMAIL=${LEAD_NOTIFICATION_EMAIL}
+      - UPLOADS_DIR=/data/uploads
+      - MODELS_DIR=/data/models
+      - REPLAY_DB_PATH=/data/db/replay_insight.db
+    volumes:
+      # Persistent data volumes (survive container rebuilds)
+      - hyperspace_db:/data/db
+      - hyperspace_uploads:/data/uploads
+      - hyperspace_models:/data/models
+      # Mount host's Tailscale socket so backend can run `tailscale status`
+      - /var/run/tailscale:/var/run/tailscale:ro
+    # Access host's Tailscale for device discovery (tailscale status --json)
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      mosquitto:
+        condition: service_started
+    networks:
+      - hyperspace
+
+  # ============================================
+  # Frontend - Static React build served by `serve`
+  # ============================================
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    networks:
+      - hyperspace
+
+# ============================================
+# Persistent Volumes
+# ============================================
+volumes:
+  hyperspace_db:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /data/hyperspace/db
+  hyperspace_uploads:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /data/hyperspace/uploads
+  hyperspace_models:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /data/hyperspace/models
+  caddy_data:
+  caddy_config:
+
+# ============================================
+# Network
+# ============================================
+networks:
+  hyperspace:
+    driver: bridge

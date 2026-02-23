@@ -196,9 +196,23 @@ export default function DwgImporterPage({ onClose, onLayoutGenerated }: DwgImpor
     }
   }, [generatedLayoutId])
   
-  const handleUpdateGroupName = useCallback((groupId: string, name: string) => {
-    setCustomNames(prev => ({ ...prev, [groupId]: name }))
-  }, [])
+  const handleUpdateGroupName = useCallback(async (groupId: string, name: string) => {
+    const newCustomNames = { ...customNames, [groupId]: name }
+    setCustomNames(newCustomNames)
+    
+    // Persist to database
+    if (importData?.import_id) {
+      try {
+        await fetch(`${API_BASE}/api/dwg/import/${importData.import_id}/deleted-fixtures`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ custom_names: newCustomNames })
+        })
+      } catch (e) {
+        console.error('Failed to save custom names:', e)
+      }
+    }
+  }, [customNames, importData?.import_id])
 
   // Check feature flag and DWG support
   useEffect(() => {
@@ -477,18 +491,20 @@ export default function DwgImporterPage({ onClose, onLayoutGenerated }: DwgImpor
       
       const data = await detailRes.json()
       
-      // Load persisted deleted fixture IDs (if re-uploading same file)
-      const storageKey = `dwg-deleted-fixtures-${summary.import_id}`
-      const savedDeleted = localStorage.getItem(storageKey)
+      // Load persisted deleted fixture IDs from database
       let deletedIds = new Set<string>()
-      if (savedDeleted) {
-        try {
-          deletedIds = new Set(JSON.parse(savedDeleted))
+      let loadedCustomNames: Record<string, string> = {}
+      try {
+        const deletedRes = await fetch(`${API_BASE}/api/dwg/import/${summary.import_id}/deleted-fixtures`)
+        if (deletedRes.ok) {
+          const deletedData = await deletedRes.json()
+          deletedIds = new Set(deletedData.deleted_fixture_ids || [])
+          loadedCustomNames = deletedData.custom_names || {}
           setDeletedFixtureIds(deletedIds)
-        } catch (e) {
-          console.error('Failed to parse deleted fixtures:', e)
+          setCustomNames(loadedCustomNames)
         }
-      } else {
+      } catch (e) {
+        console.error('Failed to load deleted fixtures:', e)
         setDeletedFixtureIds(new Set())
       }
       
@@ -529,18 +545,20 @@ export default function DwgImporterPage({ onClose, onLayoutGenerated }: DwgImpor
       
       const data = await detailRes.json()
       
-      // Load persisted deleted fixture IDs
-      const storageKey = `dwg-deleted-fixtures-${importId}`
-      const savedDeleted = localStorage.getItem(storageKey)
+      // Load persisted deleted fixture IDs from database
       let deletedIds = new Set<string>()
-      if (savedDeleted) {
-        try {
-          deletedIds = new Set(JSON.parse(savedDeleted))
+      let loadedCustomNames: Record<string, string> = {}
+      try {
+        const deletedRes = await fetch(`${API_BASE}/api/dwg/import/${importId}/deleted-fixtures`)
+        if (deletedRes.ok) {
+          const deletedData = await deletedRes.json()
+          deletedIds = new Set(deletedData.deleted_fixture_ids || [])
+          loadedCustomNames = deletedData.custom_names || {}
           setDeletedFixtureIds(deletedIds)
-        } catch (e) {
-          console.error('Failed to parse deleted fixtures:', e)
+          setCustomNames(loadedCustomNames)
         }
-      } else {
+      } catch (e) {
+        console.error('Failed to load deleted fixtures:', e)
         setDeletedFixtureIds(new Set())
       }
       
@@ -595,7 +613,7 @@ export default function DwgImporterPage({ onClose, onLayoutGenerated }: DwgImpor
   }, [])
 
   // Delete selected fixtures from the import data
-  const handleDeleteFixtures = useCallback((fixtureIds: string[]) => {
+  const handleDeleteFixtures = useCallback(async (fixtureIds: string[]) => {
     if (!importData) return
     
     const idsToDelete = new Set(fixtureIds)
@@ -604,9 +622,16 @@ export default function DwgImporterPage({ onClose, onLayoutGenerated }: DwgImpor
     const newDeletedIds = new Set([...deletedFixtureIds, ...fixtureIds])
     setDeletedFixtureIds(newDeletedIds)
     
-    // Persist to localStorage
-    const storageKey = `dwg-deleted-fixtures-${importData.import_id}`
-    localStorage.setItem(storageKey, JSON.stringify([...newDeletedIds]))
+    // Persist to database
+    try {
+      await fetch(`${API_BASE}/api/dwg/import/${importData.import_id}/deleted-fixtures`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ deleted_fixture_ids: [...newDeletedIds] })
+      })
+    } catch (e) {
+      console.error('Failed to save deleted fixtures:', e)
+    }
     
     // Filter out deleted fixtures
     const remainingFixtures = importData.fixtures.filter(f => !idsToDelete.has(f.id))
@@ -878,6 +903,7 @@ export default function DwgImporterPage({ onClose, onLayoutGenerated }: DwgImpor
               {show3DPreview && generatedLayoutId ? (
                 <Layout3DPreview 
                   layoutVersionId={generatedLayoutId}
+                  importId={importData?.import_id}
                   lidarInstances={lidarInstances}
                   lidarModels={lidarModels}
                   scaleCorrection={scaleCorrection}

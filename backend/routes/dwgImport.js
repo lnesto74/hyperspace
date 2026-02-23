@@ -11,10 +11,36 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 // Ensure uploads directory exists
-const uploadDir = path.join(__dirname, '..', 'uploads', 'dwg');
+const UPLOADS_BASE = process.env.UPLOADS_DIR || path.join(__dirname, '..', 'uploads');
+const uploadDir = path.join(UPLOADS_BASE, 'dwg');
 if (!fs.existsSync(uploadDir)) {
   fs.mkdirSync(uploadDir, { recursive: true });
 }
+
+// Ensure floorplan uploads directory exists
+const floorplanUploadDir = path.join(UPLOADS_BASE, 'floorplans');
+if (!fs.existsSync(floorplanUploadDir)) {
+  fs.mkdirSync(floorplanUploadDir, { recursive: true });
+}
+
+// Configure multer for floorplan image uploads
+const floorplanStorage = multer.diskStorage({
+  destination: (req, file, cb) => cb(null, floorplanUploadDir),
+  filename: (req, file, cb) => cb(null, `${Date.now()}-${file.originalname.replace(/\s+/g, '_')}`)
+});
+
+const floorplanUpload = multer({
+  storage: floorplanStorage,
+  fileFilter: (req, file, cb) => {
+    const ext = path.extname(file.originalname).toLowerCase();
+    if (['.png', '.jpg', '.jpeg', '.gif', '.bmp', '.webp', '.svg'].includes(ext)) {
+      cb(null, true);
+    } else {
+      cb(new Error('Only image files (PNG, JPG, GIF, BMP, WebP, SVG) are allowed'));
+    }
+  },
+  limits: { fileSize: 50 * 1024 * 1024 } // 50MB limit
+});
 
 /**
  * Check if a command exists on the system
@@ -993,6 +1019,62 @@ export default function createDwgImportRoutes(db) {
   });
   
   /**
+   * GET /api/dwg/import/:import_id/deleted-fixtures - Get deleted fixture IDs
+   */
+  router.get('/import/:import_id/deleted-fixtures', (req, res) => {
+    try {
+      const row = db.prepare('SELECT deleted_fixture_ids_json, custom_names_json FROM dwg_imports WHERE id = ?').get(req.params.import_id);
+      if (!row) {
+        return res.status(404).json({ error: 'Import not found' });
+      }
+      res.json({
+        deleted_fixture_ids: JSON.parse(row.deleted_fixture_ids_json || '[]'),
+        custom_names: JSON.parse(row.custom_names_json || '{}')
+      });
+    } catch (err) {
+      console.error('Get deleted fixtures error:', err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  /**
+   * PUT /api/dwg/import/:import_id/deleted-fixtures - Save deleted fixture IDs
+   */
+  router.put('/import/:import_id/deleted-fixtures', (req, res) => {
+    try {
+      const { deleted_fixture_ids, custom_names } = req.body;
+      
+      const updates = [];
+      const params = [];
+      
+      if (deleted_fixture_ids !== undefined) {
+        updates.push('deleted_fixture_ids_json = ?');
+        params.push(JSON.stringify(deleted_fixture_ids));
+      }
+      if (custom_names !== undefined) {
+        updates.push('custom_names_json = ?');
+        params.push(JSON.stringify(custom_names));
+      }
+      
+      if (updates.length === 0) {
+        return res.status(400).json({ error: 'No data to update' });
+      }
+      
+      params.push(req.params.import_id);
+      const result = db.prepare(`UPDATE dwg_imports SET ${updates.join(', ')} WHERE id = ?`).run(...params);
+      
+      if (result.changes === 0) {
+        return res.status(404).json({ error: 'Import not found' });
+      }
+      
+      res.json({ success: true });
+    } catch (err) {
+      console.error('Save deleted fixtures error:', err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  /**
    * DELETE /api/dwg/layout/:layout_version_id - Delete layout version
    */
   router.delete('/layout/:layout_version_id', (req, res) => {
@@ -1437,6 +1519,205 @@ export default function createDwgImportRoutes(db) {
       
     } catch (err) {
       console.error('DWG venue bootstrap error:', err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // ============ FLOOR PLAN IMAGE OVERLAY ENDPOINTS ============
+
+  /**
+   * POST /api/dwg/import/:import_id/floorplan - Upload a floor plan image
+   */
+  router.post('/import/:import_id/floorplan', floorplanUpload.single('image'), (req, res) => {
+    try {
+      if (!req.file) {
+        return res.status(400).json({ error: 'No image file uploaded' });
+      }
+
+      const { import_id } = req.params;
+
+      // Verify import exists
+      const imp = db.prepare('SELECT id FROM dwg_imports WHERE id = ?').get(import_id);
+      if (!imp) {
+        // Clean up uploaded file
+        fs.unlinkSync(req.file.path);
+        return res.status(404).json({ error: 'Import not found' });
+      }
+
+      // Delete any existing floorplan for this import (one-to-one)
+      const existing = db.prepare('SELECT file_path FROM dwg_floorplan_images WHERE import_id = ?').get(import_id);
+      if (existing) {
+        try { fs.unlinkSync(existing.file_path); } catch (e) { /* ignore */ }
+        db.prepare('DELETE FROM dwg_floorplan_images WHERE import_id = ?').run(import_id);
+      }
+
+      const id = uuidv4();
+      const now = new Date().toISOString();
+      const ext = path.extname(req.file.originalname).toLowerCase();
+      const mimeMap = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.bmp': 'image/bmp', '.webp': 'image/webp', '.svg': 'image/svg+xml' };
+
+      db.prepare(`
+        INSERT INTO dwg_floorplan_images (id, import_id, original_filename, file_path, mime_type, transform_json, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        id,
+        import_id,
+        req.file.originalname,
+        req.file.path,
+        mimeMap[ext] || 'image/png',
+        JSON.stringify({ x: 0, y: 0, scaleX: 1, scaleY: 1, rotation: 0, opacity: 0.5 }),
+        now,
+        now
+      );
+
+      res.json({
+        id,
+        import_id,
+        original_filename: req.file.originalname,
+        mime_type: mimeMap[ext] || 'image/png',
+        transform: { x: 0, y: 0, scaleX: 1, scaleY: 1, rotation: 0, opacity: 0.5 },
+        calibration: null,
+        created_at: now
+      });
+    } catch (err) {
+      console.error('Floorplan upload error:', err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  /**
+   * GET /api/dwg/import/:import_id/floorplan - Get floorplan metadata for an import
+   */
+  router.get('/import/:import_id/floorplan', (req, res) => {
+    try {
+      const row = db.prepare('SELECT * FROM dwg_floorplan_images WHERE import_id = ? ORDER BY created_at DESC LIMIT 1').get(req.params.import_id);
+      if (!row) {
+        return res.json({ floorplan: null });
+      }
+
+      const transformData = JSON.parse(row.transform_json);
+      const { cropRect, ...transform } = transformData;
+      res.json({
+        floorplan: {
+          id: row.id,
+          import_id: row.import_id,
+          original_filename: row.original_filename,
+          mime_type: row.mime_type,
+          image_width: row.image_width,
+          image_height: row.image_height,
+          transform,
+          calibration: row.calibration_json ? JSON.parse(row.calibration_json) : null,
+          cropRect: cropRect || null,
+          created_at: row.created_at,
+          updated_at: row.updated_at
+        }
+      });
+    } catch (err) {
+      console.error('Floorplan fetch error:', err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  /**
+   * GET /api/dwg/import/:import_id/floorplan/image - Serve the actual image file
+   */
+  router.get('/import/:import_id/floorplan/image', (req, res) => {
+    try {
+      const row = db.prepare('SELECT file_path, mime_type FROM dwg_floorplan_images WHERE import_id = ? ORDER BY created_at DESC LIMIT 1').get(req.params.import_id);
+      if (!row || !fs.existsSync(row.file_path)) {
+        return res.status(404).json({ error: 'Floorplan image not found' });
+      }
+
+      res.setHeader('Content-Type', row.mime_type);
+      res.sendFile(path.resolve(row.file_path));
+    } catch (err) {
+      console.error('Floorplan image serve error:', err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  /**
+   * PUT /api/dwg/import/:import_id/floorplan/transform - Update transform (position, scale, rotation, opacity)
+   */
+  router.put('/import/:import_id/floorplan/transform', (req, res) => {
+    try {
+      const { transform, calibration, cropRect } = req.body;
+      const now = new Date().toISOString();
+
+      const row = db.prepare('SELECT id, transform_json FROM dwg_floorplan_images WHERE import_id = ?').get(req.params.import_id);
+      if (!row) {
+        return res.status(404).json({ error: 'No floorplan found for this import' });
+      }
+
+      const updates = [];
+      const params = [];
+
+      if (transform !== undefined) {
+        // Merge cropRect into the transform JSON if provided
+        const transformData = { ...transform };
+        if (cropRect !== undefined) {
+          transformData.cropRect = cropRect;
+        } else {
+          // Preserve existing cropRect if not explicitly changed
+          try {
+            const existing = JSON.parse(row.transform_json || '{}');
+            if (existing.cropRect) transformData.cropRect = existing.cropRect;
+          } catch {}
+        }
+        updates.push('transform_json = ?');
+        params.push(JSON.stringify(transformData));
+      } else if (cropRect !== undefined) {
+        // Only cropRect changed, merge into existing transform
+        try {
+          const existing = JSON.parse(row.transform_json || '{}');
+          existing.cropRect = cropRect;
+          updates.push('transform_json = ?');
+          params.push(JSON.stringify(existing));
+        } catch {
+          updates.push('transform_json = ?');
+          params.push(JSON.stringify({ cropRect }));
+        }
+      }
+      if (calibration !== undefined) {
+        updates.push('calibration_json = ?');
+        params.push(calibration ? JSON.stringify(calibration) : null);
+      }
+
+      if (updates.length === 0) {
+        return res.status(400).json({ error: 'No fields to update' });
+      }
+
+      updates.push('updated_at = ?');
+      params.push(now);
+      params.push(row.id);
+
+      db.prepare(`UPDATE dwg_floorplan_images SET ${updates.join(', ')} WHERE id = ?`).run(...params);
+
+      res.json({ success: true, updated_at: now });
+    } catch (err) {
+      console.error('Floorplan transform update error:', err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  /**
+   * DELETE /api/dwg/import/:import_id/floorplan - Delete floorplan image
+   */
+  router.delete('/import/:import_id/floorplan', (req, res) => {
+    try {
+      const row = db.prepare('SELECT id, file_path FROM dwg_floorplan_images WHERE import_id = ?').get(req.params.import_id);
+      if (!row) {
+        return res.status(404).json({ error: 'No floorplan found' });
+      }
+
+      // Delete file from disk
+      try { fs.unlinkSync(row.file_path); } catch (e) { /* ignore */ }
+
+      db.prepare('DELETE FROM dwg_floorplan_images WHERE id = ?').run(row.id);
+
+      res.json({ success: true });
+    } catch (err) {
+      console.error('Floorplan delete error:', err);
       res.status(500).json({ error: err.message });
     }
   });

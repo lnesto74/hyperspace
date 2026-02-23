@@ -33,7 +33,7 @@ import { DoohEpisodeDetector } from './detectors/DoohEpisodeDetector.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const MAIN_DB_PATH = path.join(__dirname, '../../database/hyperspace.db');
+const MAIN_DB_PATH = process.env.DB_PATH || path.join(__dirname, '../../database/hyperspace.db');
 
 // Detection intervals
 const DETECTION_INTERVAL_MS = 5 * 60 * 1000;   // Run detection every 5 minutes

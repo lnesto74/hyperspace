@@ -20,7 +20,6 @@
     "uuid": "^9.0.1"
   },
   "devDependencies": {
-    "@rollup/rollup-darwin-arm64": "^4.57.1",
     "@types/react": "^18.2.43",
     "@types/react-dom": "^18.2.17",
     "@types/three": "^0.160.0",

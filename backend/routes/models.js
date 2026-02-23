@@ -6,7 +6,7 @@ import { fileURLToPath } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const MODELS_DIR = path.join(__dirname, '../models');
+const MODELS_DIR = process.env.MODELS_DIR || path.join(__dirname, '../models');
 
 // Ensure models directory exists
 if (!fs.existsSync(MODELS_DIR)) {

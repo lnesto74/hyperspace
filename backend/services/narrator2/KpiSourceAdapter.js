@@ -16,7 +16,7 @@ const __dirname = path.dirname(__filename);
 let db = null;
 function getDb() {
   if (!db) {
-    const dbPath = path.join(__dirname, '../../database/hyperspace.db');
+    const dbPath = process.env.DB_PATH || path.join(__dirname, '../../database/hyperspace.db');
     db = new Database(dbPath);
     db.pragma('journal_mode = WAL');
   }
