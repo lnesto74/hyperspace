@@ -84,6 +84,8 @@ services:
     # Access host's Tailscale for device discovery (tailscale status --json)
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    ports:
+      - "3001:3001"     # Exposed for edge simulator access via Tailscale
     depends_on:
       mosquitto:
         condition: service_started
