@@ -23,7 +23,25 @@ export function initDatabase() {
     db.pragma('synchronous = NORMAL');
     db.pragma('cache_size = -64000');      // 64MB page cache
     db.pragma('mmap_size = 268435456');    // 256MB memory-mapped I/O
-    console.log('📦 SQLite: WAL mode (production)');
+    db.pragma('wal_autocheckpoint = 1000'); // Checkpoint every 1000 pages (~4MB)
+    console.log('📦 SQLite: WAL mode (production) with auto-checkpoint');
+    
+    // Initial checkpoint to clear any existing WAL
+    try {
+      const result = db.pragma('wal_checkpoint(TRUNCATE)');
+      console.log('📦 SQLite: Initial WAL checkpoint:', result);
+    } catch (e) {
+      console.warn('📦 SQLite: Initial checkpoint failed (OK if fresh DB):', e.message);
+    }
+    
+    // Periodic WAL checkpoint every 5 minutes to prevent WAL bloat
+    setInterval(() => {
+      try {
+        db.pragma('wal_checkpoint(PASSIVE)');
+      } catch (e) {
+        console.warn('📦 SQLite: Periodic checkpoint failed:', e.message);
+      }
+    }, 5 * 60 * 1000);
   } else {
     db.pragma('journal_mode = DELETE');
     db.pragma('synchronous = FULL');
