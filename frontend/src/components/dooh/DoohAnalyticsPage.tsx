@@ -194,9 +194,10 @@ export default function DoohAnalyticsPage({ onClose }: { onClose: () => void }) 
   const [activeTab, setActiveTab] = useState<AnalyticsTab>('overview')
   const [isSaving, setIsSaving] = useState(false)
   const [saveSuccess, setSaveSuccess] = useState(false)
-  const [consolidation, setConsolidation] = useState<'hour' | 'day' | 'week' | 'month'>('hour')
   const [videoKpis, setVideoKpis] = useState<VideoKpi[]>([])
   const [isLoadingVideoKpis, setIsLoadingVideoKpis] = useState(false)
+  const [lastComputedAt, setLastComputedAt] = useState<Record<string, number>>({})
+  const CACHE_TTL_MS = 5 * 60 * 1000 // 5 minutes
 
   // Time range for KPIs
   const [timeRange, setTimeRange] = useState<'1h' | '24h' | '7d' | 'custom'>('24h')
@@ -261,37 +262,40 @@ export default function DoohAnalyticsPage({ onClose }: { onClose: () => void }) 
     }
   }, [venue?.id])
 
-  // Cache key for localStorage
-  const getCacheKey = (screenId: string) => `dooh_kpis_${screenId}`
-  const getVideoKpiCacheKey = (screenId: string) => `dooh_video_kpis_${screenId}`
+  // Cache key for localStorage (includes time range so different ranges have separate caches)
+  const getCacheKey = (screenId: string, range?: string) => `dooh_kpis_${screenId}_${range || timeRange}`
+  const getVideoKpiCacheKey = (screenId: string, range?: string) => `dooh_video_kpis_${screenId}_${range || timeRange}`
 
   // Load cached KPIs from localStorage
-  const loadCachedKpis = useCallback((screenId: string) => {
+  const loadCachedKpis = useCallback((screenId: string, range?: string) => {
     try {
-      const cached = localStorage.getItem(getCacheKey(screenId))
+      const cached = localStorage.getItem(getCacheKey(screenId, range))
       if (cached) {
         const { buckets, timestamp } = JSON.parse(cached)
-        console.log('📦 Loaded cached KPIs for screen', screenId, 'from', new Date(timestamp).toLocaleTimeString())
-        return buckets
+        const ageMs = Date.now() - timestamp
+        console.log('📦 Loaded cached KPIs for screen', screenId, `(${range || timeRange})`, 'age:', Math.round(ageMs / 1000) + 's')
+        return { buckets, timestamp, fresh: ageMs < CACHE_TTL_MS }
       }
     } catch (err) {
       console.error('Failed to load cached KPIs:', err)
     }
     return null
-  }, [])
+  }, [timeRange])
 
   // Save KPIs to localStorage cache
   const saveCachedKpis = useCallback((screenId: string, buckets: DoohKpiBucket[]) => {
     try {
+      const now = Date.now()
       localStorage.setItem(getCacheKey(screenId), JSON.stringify({
         buckets,
-        timestamp: Date.now()
+        timestamp: now
       }))
-      console.log('💾 Cached KPIs for screen', screenId)
+      setLastComputedAt(prev => ({ ...prev, [`${screenId}_${timeRange}`]: now }))
+      console.log('💾 Cached KPIs for screen', screenId, `(${timeRange})`)
     } catch (err) {
       console.error('Failed to cache KPIs:', err)
     }
-  }, [])
+  }, [timeRange])
 
   // Load cached video KPIs from localStorage
   const loadCachedVideoKpis = useCallback((screenId: string): VideoKpi[] | null => {
@@ -306,7 +310,7 @@ export default function DoohAnalyticsPage({ onClose }: { onClose: () => void }) 
       console.error('Failed to load cached video KPIs:', err)
     }
     return null
-  }, [])
+  }, [timeRange])
 
   // Save video KPIs to localStorage cache
   const saveCachedVideoKpis = useCallback((screenId: string, kpis: VideoKpi[]) => {
@@ -319,7 +323,7 @@ export default function DoohAnalyticsPage({ onClose }: { onClose: () => void }) 
     } catch (err) {
       console.error('Failed to cache video KPIs:', err)
     }
-  }, [])
+  }, [timeRange])
 
   // Load KPIs for selected screen (from API)
   const loadKpis = useCallback(async () => {
@@ -372,7 +376,7 @@ export default function DoohAnalyticsPage({ onClose }: { onClose: () => void }) 
     }
   }, [selectedScreen, getTimeRange, loadCachedVideoKpis, saveCachedVideoKpis])
 
-  // Run KPI computation
+  // Run KPI computation (called by Compute button and Refresh button)
   const runComputation = async () => {
     if (!venue?.id) return
     setIsRunning(true)
@@ -395,9 +399,10 @@ export default function DoohAnalyticsPage({ onClose }: { onClose: () => void }) 
       }
       const result = await res.json()
       setRunResult(result)
-      // Reload KPIs after computation
+      // Reload KPIs + video KPIs after computation
       if (selectedScreen) {
         await loadKpis()
+        await loadVideoKpis()
       }
     } catch (err: any) {
       setError(err.message)
@@ -527,51 +532,40 @@ export default function DoohAnalyticsPage({ onClose }: { onClose: () => void }) 
     loadAvailableDisplays()
   }, [loadScreens, loadAvailableDisplays])
 
-  // Load cached KPIs immediately when screen is selected (no auto-compute)
+  // Smart load: when screen or time range changes, load from cache or fetch from DB
   useEffect(() => {
     if (!selectedScreen) return
 
-    // Load cached data immediately for instant display
+    // Check local cache first
     const cached = loadCachedKpis(selectedScreen.id)
     if (cached) {
-      setKpiBuckets(cached)
+      setKpiBuckets(cached.buckets)
+      console.log(`📦 DOOH: Using cached KPIs for ${timeRange} (fresh: ${cached.fresh})`)
     } else {
-      // No cache - show empty state, user must click Compute
       setKpiBuckets([])
     }
-  }, [selectedScreen?.id, loadCachedKpis])
 
-  // Auto-compute + reload KPIs when time range changes (so 1h/24h/7d actually show different data)
-  useEffect(() => {
-    if (!selectedScreen || !venue?.id) return
-    // Re-run computation for the new time range, then reload KPIs
-    const autoCompute = async () => {
-      setIsRunning(true)
-      const { startTs, endTs } = getTimeRange()
-      console.log(`🔄 DOOH: Time range changed to ${timeRange}, computing ${startTs}..${endTs}`)
-      try {
-        const res = await fetch(`${API_BASE}/api/dooh/run`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ venueId: venue.id, startTs, endTs, screenIds: [selectedScreen.id] }),
-        })
-        if (res.ok) {
-          const result = await res.json()
-          setRunResult(result)
-        }
-      } catch (err) {
-        console.error('Auto-compute on time range change failed:', err)
-      } finally {
-        setIsRunning(false)
+    // Always fetch from DB to get latest data (lightweight, no recompute)
+    loadKpis()
+    loadVideoKpis()
+  }, [selectedScreen?.id, timeRange, customStartTs, customEndTs])
+
+  // Auto-derive chart grouping from time range (no separate selector needed)
+  const consolidation = useMemo(() => {
+    switch (timeRange) {
+      case '1h': return 'hour' as const
+      case '24h': return 'hour' as const
+      case '7d': return 'day' as const
+      case 'custom': {
+        const rangeMs = customEndTs - customStartTs
+        if (rangeMs <= 2 * 60 * 60 * 1000) return 'hour' as const
+        if (rangeMs <= 7 * 24 * 60 * 60 * 1000) return 'day' as const
+        return 'week' as const
       }
-      // Reload KPIs and video KPIs after computation
-      await loadKpis()
-      if (activeTab === 'video') await loadVideoKpis()
     }
-    autoCompute()
   }, [timeRange, customStartTs, customEndTs])
 
-  // Consolidate buckets by period (hour/day/week/month)
+  // Consolidate buckets by period
   const consolidatedBuckets = useMemo(() => {
     if (!kpiBuckets.length) return []
     
@@ -585,7 +579,6 @@ export default function DoohAnalyticsPage({ onClose }: { onClose: () => void }) 
           startOfWeek.setDate(d.getDate() - d.getDay())
           return `Week of ${startOfWeek.toLocaleDateString()}`
         }
-        case 'month': return `${d.toLocaleString('default', { month: 'short' })} ${d.getFullYear()}`
       }
     }
     
@@ -615,20 +608,31 @@ export default function DoohAnalyticsPage({ onClose }: { onClose: () => void }) 
     })).sort((a, b) => a.bucketStartTs - b.bucketStartTs)
   }, [kpiBuckets, consolidation])
 
-  // Calculate summary stats from consolidated buckets so they update on period change
+  // Calculate summary stats from raw kpiBuckets (totals always reflect the full time range)
   const summaryStats = useMemo(() => {
-    const src = consolidatedBuckets.length > 0 ? consolidatedBuckets : kpiBuckets
     return {
-      totalImpressions: src.reduce((sum, b) => sum + b.impressions, 0),
-      qualifiedImpressions: src.reduce((sum, b) => sum + b.qualifiedImpressions, 0),
-      premiumImpressions: src.reduce((sum, b) => sum + b.premiumImpressions, 0),
-      avgAqs: src.length > 0
-        ? src.reduce((sum, b) => sum + (b.avgAqs || 0), 0) / src.length
+      totalImpressions: kpiBuckets.reduce((sum, b) => sum + b.impressions, 0),
+      qualifiedImpressions: kpiBuckets.reduce((sum, b) => sum + b.qualifiedImpressions, 0),
+      premiumImpressions: kpiBuckets.reduce((sum, b) => sum + b.premiumImpressions, 0),
+      avgAqs: kpiBuckets.length > 0
+        ? kpiBuckets.reduce((sum, b) => sum + (b.avgAqs || 0), 0) / kpiBuckets.length
         : 0,
-      totalAttention: src.reduce((sum, b) => sum + (b.totalAttentionS || 0), 0),
-      uniqueVisitors: src.reduce((sum, b) => sum + (b.uniqueVisitors || 0), 0),
+      totalAttention: kpiBuckets.reduce((sum, b) => sum + (b.totalAttentionS || 0), 0),
+      uniqueVisitors: kpiBuckets.reduce((sum, b) => sum + (b.uniqueVisitors || 0), 0),
     }
-  }, [consolidatedBuckets, kpiBuckets])
+  }, [kpiBuckets])
+
+  // Cache freshness helper
+  const cacheAge = useMemo(() => {
+    if (!selectedScreen) return null
+    const key = `${selectedScreen.id}_${timeRange}`
+    const ts = lastComputedAt[key]
+    if (!ts) return null
+    const ageSec = Math.round((Date.now() - ts) / 1000)
+    if (ageSec < 60) return `${ageSec}s ago`
+    if (ageSec < 3600) return `${Math.round(ageSec / 60)}m ago`
+    return `${Math.round(ageSec / 3600)}h ago`
+  }, [selectedScreen, timeRange, lastComputedAt])
 
   return (
     <div className="fixed inset-0 bg-gray-900 z-50 flex flex-col">
@@ -641,7 +645,7 @@ export default function DoohAnalyticsPage({ onClose }: { onClose: () => void }) 
         </span>
         <div className="flex-1" />
         
-        {/* Time Range Selector */}
+        {/* Time Range Selector + Refresh */}
         <div className="flex items-center gap-2">
           <Calendar className="w-4 h-4 text-gray-400" />
           <select
@@ -654,6 +658,18 @@ export default function DoohAnalyticsPage({ onClose }: { onClose: () => void }) 
             <option value="7d">Last 7 days</option>
             <option value="custom">Custom</option>
           </select>
+          {cacheAge && (
+            <span className="text-xs text-gray-500">{cacheAge}</span>
+          )}
+          <button
+            onClick={runComputation}
+            disabled={isRunning}
+            className="flex items-center gap-1 px-2 py-1 text-xs bg-gray-700 hover:bg-gray-600 text-gray-300 rounded transition-colors disabled:opacity-50"
+            title="Recompute KPIs for this time range"
+          >
+            <RefreshCw className={`w-3 h-3 ${isRunning ? 'animate-spin' : ''}`} />
+            {isRunning ? 'Computing...' : 'Refresh'}
+          </button>
         </div>
         
         <button
@@ -941,10 +957,7 @@ export default function DoohAnalyticsPage({ onClose }: { onClose: () => void }) 
                   {(['overview', 'timeseries', 'attention', 'video'] as AnalyticsTab[]).map(tab => (
                     <button
                       key={tab}
-                      onClick={() => {
-                        setActiveTab(tab)
-                        if (tab === 'video') loadVideoKpis()
-                      }}
+                      onClick={() => setActiveTab(tab)}
                       className={`px-4 py-2 rounded text-sm font-medium transition-colors ${
                         activeTab === tab ? 'bg-purple-600 text-white' : 'text-gray-400 hover:text-white hover:bg-gray-700'
                       }`}
@@ -954,22 +967,12 @@ export default function DoohAnalyticsPage({ onClose }: { onClose: () => void }) 
                   ))}
                 </div>
                 
-                {/* Consolidation Period */}
+                {/* Cache / Range Info */}
                 <div className="flex items-center gap-2">
-                  <span className="text-xs text-gray-500">Group by:</span>
-                  <div className="flex gap-1 bg-gray-800 rounded-lg p-1">
-                    {(['hour', 'day', 'week', 'month'] as const).map(period => (
-                      <button
-                        key={period}
-                        onClick={() => setConsolidation(period)}
-                        className={`px-3 py-1 rounded text-xs font-medium transition-colors ${
-                          consolidation === period ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-white hover:bg-gray-700'
-                        }`}
-                      >
-                        {period.charAt(0).toUpperCase() + period.slice(1)}
-                      </button>
-                    ))}
-                  </div>
+                  <span className="text-xs text-gray-500">
+                    {kpiBuckets.length > 0 ? `${kpiBuckets.length} buckets` : 'No data'}
+                    {kpiBuckets.length > 0 && ` · grouped by ${consolidation}`}
+                  </span>
                 </div>
               </div>
 
