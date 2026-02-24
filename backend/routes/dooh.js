@@ -401,6 +401,16 @@ router.post('/run', async (req, res) => {
       return res.status(400).json({ error: 'venueId, startTs, and endTs are required' });
     }
 
+    // Cap time range to 1 hour to prevent OOM (200 tracks * 1Hz * 3600s = 720K rows)
+    const MAX_RANGE_MS = 60 * 60 * 1000; // 1 hour
+    let effectiveStartTs = startTs;
+    if (endTs - startTs > MAX_RANGE_MS) {
+      effectiveStartTs = endTs - MAX_RANGE_MS;
+      console.log(`⚠️ DOOH: Capped time range from ${Math.round((endTs - startTs) / 60000)}min to 60min`);
+    }
+
+    console.log(`🔍 DOOH run: venue=${venueId}, range=${Math.round((endTs - effectiveStartTs) / 60000)}min`);
+
     const engine = new DoohKpiEngine(db);
     const contextResolver = new ContextResolver(db);
     const aggregator = new DoohKpiAggregator(db);
@@ -416,7 +426,9 @@ router.post('/run', async (req, res) => {
     }
 
     // Run exposure detection (returns events with .samples attached)
-    const result = await engine.run(venueId, startTs, endTs, screenIds);
+    console.log(`🔍 DOOH: ${filteredScreens.length} screens, running exposure detection...`);
+    const result = await engine.run(venueId, effectiveStartTs, endTs, screenIds);
+    console.log(`🔍 DOOH: Exposure detection done: ${result.tracks} tracks, ${result.events} events`);
 
     // --- Context resolution: batch approach ---
     // Load ROIs once
@@ -431,7 +443,9 @@ router.post('/run', async (req, res) => {
       FROM track_positions
       WHERE venue_id = ? AND timestamp >= ? AND timestamp <= ?
       ORDER BY track_key, timestamp
-    `).all(venueId, startTs - 30000, endTs + 30000);
+      LIMIT 500000
+    `).all(venueId, effectiveStartTs - 30000, endTs + 30000);
+    console.log(`🔍 DOOH: Loaded ${allPositions.length} positions for context resolution`);
 
     // Index positions by track_key for O(1) lookup (compute speed in JS)
     const positionsByTrack = new Map();
@@ -449,7 +463,8 @@ router.post('/run', async (req, res) => {
     const storedEvents = db.prepare(`
       SELECT * FROM dooh_exposure_events
       WHERE venue_id = ? AND start_ts >= ? AND start_ts <= ?
-    `).all(venueId, startTs, endTs);
+    `).all(venueId, effectiveStartTs, endTs);
+    console.log(`🔍 DOOH: ${storedEvents.length} events to resolve context for`);
 
     // Batch resolve context using in-memory position data
     const updateStmt = db.prepare(
@@ -510,9 +525,10 @@ router.post('/run', async (req, res) => {
     // --- Aggregation: batch approach ---
     let totalBuckets = 0;
     for (const screen of filteredScreens) {
-      const buckets = aggregator.aggregateForScreen(venueId, screen.id, startTs, endTs);
+      const buckets = aggregator.aggregateForScreen(venueId, screen.id, effectiveStartTs, endTs);
       totalBuckets += buckets.length;
     }
+    console.log(`✅ DOOH: Computation complete: ${result.events} events, ${totalBuckets} buckets`);
 
     res.json({
       success: true,

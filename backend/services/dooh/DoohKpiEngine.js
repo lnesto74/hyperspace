@@ -172,6 +172,7 @@ export class DoohKpiEngine {
       FROM track_positions
       WHERE venue_id = ? AND timestamp >= ? AND timestamp <= ?
       ORDER BY track_key, timestamp
+      LIMIT 500000
     `).all(venueId, startTs, endTs);
 
     // Group by track_key (compute speed in JS to avoid SQLite SQRT dependency)
