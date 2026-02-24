@@ -94,6 +94,7 @@ interface ReplayInsightContextValue {
   recipes: StoryRecipe[];
   activePlaylist: PlaylistItem[];
   activePlaylistIndex: number;
+  activeRecipeId: string | null;
   isStoryGridOpen: boolean;
 
   // Actions
@@ -129,6 +130,7 @@ export function ReplayInsightProvider({ children }: { children: React.ReactNode 
   const [activePlaylist, setActivePlaylist] = useState<PlaylistItem[]>([]);
   const [activePlaylistIndex, setActivePlaylistIndex] = useState(0);
   const [isStoryGridOpen, setIsStoryGridOpen] = useState(false);
+  const [activeRecipeId, setActiveRecipeId] = useState<string | null>(null);
 
   // ─── Fetch episodes ───
   const fetchEpisodes = useCallback(async (options: { period?: string; type?: string } = {}) => {
@@ -223,6 +225,7 @@ export function ReplayInsightProvider({ children }: { children: React.ReactNode 
   // ─── Story Grid ───
   const openStoryGrid = useCallback(() => {
     setIsStoryGridOpen(true);
+    setActiveRecipeId(null);
     if (venue?.id && episodes.length === 0) {
       fetchEpisodes();
     }
@@ -253,14 +256,17 @@ export function ReplayInsightProvider({ children }: { children: React.ReactNode 
       const res = await fetch(`${API_BASE}/api/replay-insights/recipes/${recipeId}?${params}`);
       if (res.ok) {
         const data = await res.json();
-        setActivePlaylist(data.playlist || []);
+        const playlist = data.playlist || [];
+        setActivePlaylist(playlist);
         setActivePlaylistIndex(0);
-        setIsStoryGridOpen(false);
+        setActiveRecipeId(recipeId);
 
-        // Auto-select first episode
-        if (data.playlist?.length > 0) {
-          setSelectedEpisode(data.playlist[0].narration_pack);
-          setIsPanelOpen(true);
+        // Update the episode grid with the recipe's episodes (keep modal open)
+        if (playlist.length > 0) {
+          const recipeEpisodes = playlist
+            .map((item: PlaylistItem) => item.narration_pack)
+            .filter(Boolean);
+          setEpisodes(recipeEpisodes);
         }
       }
     } catch (err) {
@@ -302,6 +308,7 @@ export function ReplayInsightProvider({ children }: { children: React.ReactNode 
     recipes,
     activePlaylist,
     activePlaylistIndex,
+    activeRecipeId,
     isStoryGridOpen,
     fetchEpisodes,
     fetchTimelineMarkers,

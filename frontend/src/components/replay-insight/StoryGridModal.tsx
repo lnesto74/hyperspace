@@ -69,6 +69,7 @@ export default function StoryGridModal() {
     fetchRecipes,
     executeRecipe,
     isLoading,
+    activeRecipeId,
   } = useReplayInsight();
 
   // Fetch data on open
@@ -124,7 +125,11 @@ export default function StoryGridModal() {
                     key={recipe.id}
                     onClick={() => executeRecipe(recipe.id)}
                     disabled={isLoading}
-                    className="shrink-0 flex items-center gap-2 px-4 py-2.5 bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded-lg transition-colors disabled:opacity-50"
+                    className={`shrink-0 flex items-center gap-2 px-4 py-2.5 rounded-lg transition-colors disabled:opacity-50 ${
+                      activeRecipeId === recipe.id
+                        ? 'bg-blue-600/20 border border-blue-500/50 ring-1 ring-blue-500/30'
+                        : 'bg-gray-800 hover:bg-gray-700 border border-gray-700'
+                    }`}
                   >
                     <Play className="w-3.5 h-3.5 text-blue-400" />
                     <div className="text-left">
