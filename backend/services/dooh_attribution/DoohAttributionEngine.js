@@ -695,31 +695,37 @@ export class DoohAttributionEngine {
 
     if (exposureEvents.length === 0) {
       console.log(`⚠️ No exposure events found - nothing to analyze`);
-      return { attributionEvents: [], kpis: null };
+      return { attributionEvents: 0, controlMatches: 0, converted: 0, conversionRate: 0, totalTimeS: 0 };
     }
 
-    // OPTIMIZATION: Batch load ALL positions for the time range
-    const paddedStart = startTs - bucketMs;
-    const paddedEnd = endTs + actionWindowMs + bucketMs;
-    const allPositions = this.batchLoadPositions(venueId, paddedStart, paddedEnd);
-
-    // OPTIMIZATION: Pre-build exposed tracks set
+    // Pre-build exposed tracks set (lightweight)
     const exposedTracksSet = new Set(exposureEvents.map(e => e.trackKey));
     console.log(`🚶 Unique exposed tracks: ${exposedTracksSet.size}`);
 
-    const attributionEvents = [];
-    const controlMatches = [];
-    let processed = 0;
-    const logInterval = Math.max(1, Math.floor(exposureEvents.length / 10));
+    // CHUNKED PROCESSING: 1-hour windows to avoid OOM on large time ranges
+    const CHUNK_MS = 60 * 60 * 1000;
+    const totalChunks = Math.ceil((endTs - startTs) / CHUNK_MS);
+    const allAttributionEvents = [];
+    const allControlMatches = [];
+    let totalAttributionEvents = 0;
+    let totalControlMatches = 0;
+    let chunkIdx = 0;
 
-    for (const exposure of exposureEvents) {
-      processed++;
-      if (processed % logInterval === 0 || processed === exposureEvents.length) {
-        const pct = ((processed / exposureEvents.length) * 100).toFixed(0);
-        const elapsed = ((Date.now() - runStart) / 1000).toFixed(1);
-        console.log(`⏳ [PEBLE] Progress: ${processed}/${exposureEvents.length} (${pct}%) - ${elapsed}s elapsed`);
-      }
+    for (let chunkStart = startTs; chunkStart < endTs; chunkStart += CHUNK_MS) {
+      chunkIdx++;
+      const chunkEnd = Math.min(chunkStart + CHUNK_MS, endTs);
+      const chunkExposures = exposureEvents.filter(e => e.endTs >= chunkStart && e.endTs < chunkEnd);
+      if (chunkExposures.length === 0) continue;
 
+      console.log(`📦 [PEBLE] Chunk ${chunkIdx}/${totalChunks}: ${chunkExposures.length} exposures`);
+
+      // Load positions ONLY for this chunk window (with padding)
+      this.positionCache.clear();
+      const paddedStart = chunkStart - bucketMs;
+      const paddedEnd = chunkEnd + actionWindowMs + bucketMs;
+      const allPositions = this.batchLoadPositions(venueId, paddedStart, paddedEnd);
+
+    for (const exposure of chunkExposures) {
       const screen = this.getScreen(exposure.screenId);
       if (!screen) continue;
 
@@ -839,7 +845,7 @@ export class DoohAttributionEngine {
       }
 
       const attributionEventId = uuidv4();
-      attributionEvents.push({
+      allAttributionEvents.push({
         id: attributionEventId,
         venueId,
         campaignId,
@@ -860,35 +866,46 @@ export class DoohAttributionEngine {
 
       // Link controls to this event
       for (const ctrl of matchedControls) {
-        controlMatches.push({
+        allControlMatches.push({
           ...ctrl,
           attributionEventId,
         });
       }
-    }
+    } // end exposure loop
 
-    // Persist results
-    console.log(`💾 [PEBLE] Storing ${attributionEvents.length} attribution events...`);
-    this.storeAttributionEvents(attributionEvents);
-    this.storeControlMatches(controlMatches);
+      // Persist this chunk's results immediately to free memory
+      const chunkAttrCount = allAttributionEvents.length - totalAttributionEvents;
+      const chunkCtrlCount = allControlMatches.length - totalControlMatches;
+      if (chunkAttrCount > 0) {
+        this.storeAttributionEvents(allAttributionEvents.slice(totalAttributionEvents));
+        this.storeControlMatches(allControlMatches.slice(totalControlMatches));
+      }
+      totalAttributionEvents = allAttributionEvents.length;
+      totalControlMatches = allControlMatches.length;
+
+      // Free position cache before next chunk
+      this.positionCache.clear();
+      const elapsed = ((Date.now() - runStart) / 1000).toFixed(1);
+      console.log(`✅ [PEBLE] Chunk ${chunkIdx}/${totalChunks} done (${chunkAttrCount} events, ${elapsed}s elapsed)`);
+    } // end chunk loop
 
     const totalTime = ((Date.now() - runStart) / 1000).toFixed(1);
-    const convertedCount = attributionEvents.filter(e => e.converted).length;
+    const convertedCount = allAttributionEvents.filter(e => e.converted).length;
     const conversionRate = exposureEvents.length > 0 ? ((convertedCount / exposureEvents.length) * 100).toFixed(1) : 0;
 
     console.log(`\n✅ [PEBLE] Attribution analysis complete!`);
     console.log(`📊 Results:`);
     console.log(`   - Exposure events: ${exposureEvents.length}`);
-    console.log(`   - Attribution events: ${attributionEvents.length}`);
-    console.log(`   - Control matches: ${controlMatches.length}`);
+    console.log(`   - Attribution events: ${allAttributionEvents.length}`);
+    console.log(`   - Control matches: ${allControlMatches.length}`);
     console.log(`   - Conversions: ${convertedCount} (${conversionRate}%)`);
     console.log(`   - Total time: ${totalTime}s\n`);
 
     return {
       campaign: campaign.name,
       exposureEvents: exposureEvents.length,
-      attributionEvents: attributionEvents.length,
-      controlMatches: controlMatches.length,
+      attributionEvents: allAttributionEvents.length,
+      controlMatches: allControlMatches.length,
       converted: convertedCount,
       conversionRate: parseFloat(conversionRate),
       totalTimeS: parseFloat(totalTime),
