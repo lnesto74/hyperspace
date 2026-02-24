@@ -401,21 +401,14 @@ router.post('/run', async (req, res) => {
       return res.status(400).json({ error: 'venueId, startTs, and endTs are required' });
     }
 
-    // Cap time range to 1 hour to prevent OOM (200 tracks * 1Hz * 3600s = 720K rows)
-    const MAX_RANGE_MS = 60 * 60 * 1000; // 1 hour
-    let effectiveStartTs = startTs;
-    if (endTs - startTs > MAX_RANGE_MS) {
-      effectiveStartTs = endTs - MAX_RANGE_MS;
-      console.log(`⚠️ DOOH: Capped time range from ${Math.round((endTs - startTs) / 60000)}min to 60min`);
-    }
-
-    console.log(`🔍 DOOH run: venue=${venueId}, range=${Math.round((endTs - effectiveStartTs) / 60000)}min`);
+    const totalRangeMin = Math.round((endTs - startTs) / 60000);
+    console.log(`🔍 DOOH run: venue=${venueId}, range=${totalRangeMin}min`);
 
     const engine = new DoohKpiEngine(db);
     const contextResolver = new ContextResolver(db);
     const aggregator = new DoohKpiAggregator(db);
 
-    // Get screens up-front (used for params and aggregation)
+    // Get screens up-front
     const screens = engine.getScreensForVenue(venueId);
     const filteredScreens = screenIds
       ? screens.filter(s => screenIds.includes(s.id))
@@ -425,48 +418,31 @@ router.post('/run', async (req, res) => {
       return res.json({ success: true, screens: 0, tracks: 0, events: 0, buckets: 0 });
     }
 
-    // Run exposure detection (returns events with .samples attached)
-    console.log(`🔍 DOOH: ${filteredScreens.length} screens, running exposure detection...`);
-    const result = await engine.run(venueId, effectiveStartTs, endTs, screenIds);
-    console.log(`🔍 DOOH: Exposure detection done: ${result.tracks} tracks, ${result.events} events`);
+    // --- CHUNKED EXPOSURE DETECTION ---
+    // Process in 15-minute chunks to stay memory-safe
+    const CHUNK_MS = 15 * 60 * 1000; // 15 minutes
+    let totalTracks = 0;
+    let totalEvents = 0;
+    let chunkIdx = 0;
+    const numChunks = Math.ceil((endTs - startTs) / CHUNK_MS);
 
-    // --- Context resolution: batch approach ---
-    // Load ROIs once
+    console.log(`🔍 DOOH: ${filteredScreens.length} screens, ${numChunks} chunks of 15min`);
+
+    for (let chunkStart = startTs; chunkStart < endTs; chunkStart += CHUNK_MS) {
+      const chunkEnd = Math.min(chunkStart + CHUNK_MS, endTs);
+      chunkIdx++;
+      const result = await engine.run(venueId, chunkStart, chunkEnd, screenIds);
+      totalTracks += result.tracks;
+      totalEvents += result.events;
+      if (chunkIdx % 4 === 0 || chunkIdx === numChunks) {
+        console.log(`🔍 DOOH: Chunk ${chunkIdx}/${numChunks} done (+${result.events} events)`);
+      }
+    }
+    console.log(`🔍 DOOH: Exposure detection done: ${totalTracks} track-chunks, ${totalEvents} events total`);
+
+    // --- CHUNKED CONTEXT RESOLUTION ---
     const rois = contextResolver.loadRois(venueId);
     const screenParamsMap = new Map(filteredScreens.map(s => [s.id, s.params]));
-
-    // Re-read stored events (they lost .samples after storeExposureEvents)
-    // Instead of per-event queries, do ONE bulk query for all track positions in range
-    const allPositions = db.prepare(`
-      SELECT track_key, timestamp, position_x as x, position_z as z,
-             velocity_x as vx, velocity_z as vz
-      FROM track_positions
-      WHERE venue_id = ? AND timestamp >= ? AND timestamp <= ?
-      ORDER BY track_key, timestamp
-      LIMIT 500000
-    `).all(venueId, effectiveStartTs - 30000, endTs + 30000);
-    console.log(`🔍 DOOH: Loaded ${allPositions.length} positions for context resolution`);
-
-    // Index positions by track_key for O(1) lookup (compute speed in JS)
-    const positionsByTrack = new Map();
-    for (const p of allPositions) {
-      if (!positionsByTrack.has(p.track_key)) {
-        positionsByTrack.set(p.track_key, []);
-      }
-      const vx = p.vx || 0;
-      const vz = p.vz || 0;
-      p.speed = Math.sqrt(vx * vx + vz * vz);
-      positionsByTrack.get(p.track_key).push(p);
-    }
-
-    // Load all stored events in one query
-    const storedEvents = db.prepare(`
-      SELECT * FROM dooh_exposure_events
-      WHERE venue_id = ? AND start_ts >= ? AND start_ts <= ?
-    `).all(venueId, effectiveStartTs, endTs);
-    console.log(`🔍 DOOH: ${storedEvents.length} events to resolve context for`);
-
-    // Batch resolve context using in-memory position data
     const updateStmt = db.prepare(
       `UPDATE dooh_exposure_events SET context_json = ? WHERE id = ?`
     );
@@ -476,65 +452,97 @@ router.post('/run', async (req, res) => {
       }
     });
 
-    const contextUpdates = [];
-    for (const event of storedEvents) {
-      const trackPositions = positionsByTrack.get(event.track_key) || [];
-      // Slice samples for this event's time window from the in-memory array
-      const samples = trackPositions.filter(
-        p => p.timestamp >= event.start_ts && p.timestamp <= event.end_ts
-      );
-      const params = screenParamsMap.get(event.screen_id) || DEFAULT_PARAMS;
-      const priorityList = params.context_priority_json || ['queue', 'checkout', 'promo', 'aisle', 'entrance', 'exit', 'other'];
-      const prePostWindowMs = (params.pre_post_window_s || 30) * 1000;
+    let totalContextResolved = 0;
+    // Process context in the same 15-min chunks
+    for (let chunkStart = startTs; chunkStart < endTs; chunkStart += CHUNK_MS) {
+      const chunkEnd = Math.min(chunkStart + CHUNK_MS, endTs);
+      const prePostMs = 30000; // 30s pre/post window
 
-      // Dominant ROI during exposure
-      const dominantRoi = contextResolver.findDominantRoi(samples, rois, priorityList);
-      const phase = dominantRoi
-        ? (function() { const n = dominantRoi.name.toLowerCase(); for (const ph of priorityList) { if (n.includes(ph)) return ph; } return 'other'; })()
-        : 'other';
+      // Load positions for this chunk + pre/post buffer
+      const chunkPositions = db.prepare(`
+        SELECT track_key, timestamp, position_x as x, position_z as z,
+               velocity_x as vx, velocity_z as vz
+        FROM track_positions
+        WHERE venue_id = ? AND timestamp >= ? AND timestamp <= ?
+        ORDER BY track_key, timestamp
+      `).all(venueId, chunkStart - prePostMs, chunkEnd + prePostMs);
 
-      // Pre/post from in-memory data (no DB round-trips)
-      const preSamples = trackPositions.filter(
-        p => p.timestamp >= event.start_ts - prePostWindowMs && p.timestamp < event.start_ts
-      );
-      const preRoi = contextResolver.findDominantRoi(preSamples, rois, priorityList);
-      const preZone = preRoi ? preRoi.name.toLowerCase() : null;
+      // Index by track_key
+      const positionsByTrack = new Map();
+      for (const p of chunkPositions) {
+        if (!positionsByTrack.has(p.track_key)) {
+          positionsByTrack.set(p.track_key, []);
+        }
+        const vx = p.vx || 0;
+        const vz = p.vz || 0;
+        p.speed = Math.sqrt(vx * vx + vz * vz);
+        positionsByTrack.get(p.track_key).push(p);
+      }
 
-      const postSamples = trackPositions.filter(
-        p => p.timestamp > event.end_ts && p.timestamp <= event.end_ts + prePostWindowMs
-      );
-      const postRoi = contextResolver.findDominantRoi(postSamples, rois, priorityList);
-      const postZone = postRoi ? postRoi.name.toLowerCase() : null;
+      // Load events for this chunk
+      const chunkEvents = db.prepare(`
+        SELECT * FROM dooh_exposure_events
+        WHERE venue_id = ? AND start_ts >= ? AND start_ts < ?
+      `).all(venueId, chunkStart, chunkEnd);
 
-      const samplesInRoi = dominantRoi
-        ? samples.filter(s => pointInPolygon(s.x, s.z, dominantRoi.vertices)).length
-        : 0;
-      const confidence = samples.length > 0 ? Math.round((samplesInRoi / samples.length) * 100) / 100 : 0;
+      const contextUpdates = [];
+      for (const event of chunkEvents) {
+        const trackPositions = positionsByTrack.get(event.track_key) || [];
+        const samples = trackPositions.filter(
+          p => p.timestamp >= event.start_ts && p.timestamp <= event.end_ts
+        );
+        const params = screenParamsMap.get(event.screen_id) || DEFAULT_PARAMS;
+        const priorityList = params.context_priority_json || ['queue', 'checkout', 'promo', 'aisle', 'entrance', 'exit', 'other'];
+        const prePostWindowMs = (params.pre_post_window_s || 30) * 1000;
 
-      contextUpdates.push({
-        id: event.id,
-        contextJson: { phase, preZone, postZone, dominantZone: dominantRoi?.name || null, confidence },
-      });
+        const dominantRoi = contextResolver.findDominantRoi(samples, rois, priorityList);
+        const phase = dominantRoi
+          ? (function() { const n = dominantRoi.name.toLowerCase(); for (const ph of priorityList) { if (n.includes(ph)) return ph; } return 'other'; })()
+          : 'other';
+
+        const preSamples = trackPositions.filter(
+          p => p.timestamp >= event.start_ts - prePostWindowMs && p.timestamp < event.start_ts
+        );
+        const preRoi = contextResolver.findDominantRoi(preSamples, rois, priorityList);
+        const preZone = preRoi ? preRoi.name.toLowerCase() : null;
+
+        const postSamples = trackPositions.filter(
+          p => p.timestamp > event.end_ts && p.timestamp <= event.end_ts + prePostWindowMs
+        );
+        const postRoi = contextResolver.findDominantRoi(postSamples, rois, priorityList);
+        const postZone = postRoi ? postRoi.name.toLowerCase() : null;
+
+        const samplesInRoi = dominantRoi
+          ? samples.filter(s => pointInPolygon(s.x, s.z, dominantRoi.vertices)).length
+          : 0;
+        const confidence = samples.length > 0 ? Math.round((samplesInRoi / samples.length) * 100) / 100 : 0;
+
+        contextUpdates.push({
+          id: event.id,
+          contextJson: { phase, preZone, postZone, dominantZone: dominantRoi?.name || null, confidence },
+        });
+      }
+
+      if (contextUpdates.length > 0) {
+        batchUpdateContext(contextUpdates);
+        totalContextResolved += contextUpdates.length;
+      }
     }
+    console.log(`🔍 DOOH: Context resolved for ${totalContextResolved} events`);
 
-    // Single transaction for all context updates
-    if (contextUpdates.length > 0) {
-      batchUpdateContext(contextUpdates);
-    }
-
-    // --- Aggregation: batch approach ---
+    // --- Aggregation over full range ---
     let totalBuckets = 0;
     for (const screen of filteredScreens) {
-      const buckets = aggregator.aggregateForScreen(venueId, screen.id, effectiveStartTs, endTs);
+      const buckets = aggregator.aggregateForScreen(venueId, screen.id, startTs, endTs);
       totalBuckets += buckets.length;
     }
-    console.log(`✅ DOOH: Computation complete: ${result.events} events, ${totalBuckets} buckets`);
+    console.log(`✅ DOOH: Computation complete: ${totalEvents} events, ${totalBuckets} buckets, range=${totalRangeMin}min`);
 
     res.json({
       success: true,
-      screens: result.screens,
-      tracks: result.tracks,
-      events: result.events,
+      screens: filteredScreens.length,
+      tracks: totalTracks,
+      events: totalEvents,
       buckets: totalBuckets,
     });
   } catch (err) {
