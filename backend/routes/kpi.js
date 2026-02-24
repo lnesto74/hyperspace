@@ -946,7 +946,7 @@ export default function createKpiRoutes(db, kpiCalculator, trajectoryStorage) {
       const shelvesWithPlanograms = db.prepare(`
         SELECT 
           vo.id, vo.name, vo.position_x, vo.position_z, vo.rotation_y, vo.scale_x, vo.scale_y, vo.scale_z,
-          sp.id as planogram_config_id, sp.planogram_id, sp.slot_width_m, sp.num_levels, sp.slots_json
+          sp.id as planogram_config_id, sp.planogram_id, sp.slot_width_m, sp.num_levels, sp.slots_json, sp.slot_facings
         FROM venue_objects vo
         JOIN shelf_planograms sp ON vo.id = sp.shelf_id
         WHERE vo.venue_id = ? AND vo.type = 'shelf'

@@ -65,6 +65,8 @@ export default function SkuDebugOverlay({ enabled, containerRef, cameraRef, onHo
   const detectionCacheRef = useRef<Map<string, { timestamp: number; skus: DetectedSku[] }>>(new Map())
   const dwellTimersRef = useRef<Map<string, number>>(new Map())
   const lastSeenTimesRef = useRef<Map<string, number>>(new Map())
+  const tracksRef = useRef(tracks)
+  tracksRef.current = tracks
   
   // Detect SKUs for each tracked person
   const detectSkusForTrack = useCallback(async (trackKey: string, position: { x: number; z: number }) => {
@@ -98,26 +100,37 @@ export default function SkuDebugOverlay({ enabled, containerRef, cameraRef, onHo
           skus: data.detectedSkus || [],
         })
         return data.detectedSkus || []
+      } else {
+        console.warn(`[SKU Debug FE] API returned ${res.status}:`, await res.text().catch(() => ''))
       }
     } catch (err) {
-      // Silent fail
+      console.warn('[SKU Debug FE] API error:', err)
     }
     return []
   }, [venue?.id])
   
-  // Update detections when tracks change
+  // Update detections on a stable interval (reads tracks from ref to avoid re-firing on every WebSocket frame)
   useEffect(() => {
     if (!enabled || !venue?.id) {
       setTrackDetections(new Map())
+      console.log('[SKU Debug FE] Disabled or no venue')
       return
     }
     
+    console.log('[SKU Debug FE] ✓ SKU Detection ENABLED for venue', venue.id)
+    let cancelled = false
+    
     const updateDetections = async () => {
+      if (cancelled) return
+      const currentTracks = tracksRef.current
+      if (currentTracks.size === 0) return
+      
       const newDetections = new Map<string, TrackSkuDetection>()
       const now = Date.now()
       
-      // First, process all current tracks
-      for (const [trackKey, track] of tracks) {
+      // Process all current tracks
+      for (const [trackKey, track] of currentTracks) {
+        if (cancelled) return
         const position = { x: track.venuePosition.x, z: track.venuePosition.z }
         const skus = await detectSkusForTrack(trackKey, position)
         
@@ -142,6 +155,8 @@ export default function SkuDebugOverlay({ enabled, containerRef, cameraRef, onHo
           })
         }
       }
+      
+      if (cancelled) return
       
       // Keep stale detections for persistence period
       setTrackDetections(prev => {
@@ -173,8 +188,11 @@ export default function SkuDebugOverlay({ enabled, containerRef, cameraRef, onHo
     
     updateDetections()
     const interval = setInterval(updateDetections, 500)
-    return () => clearInterval(interval)
-  }, [enabled, venue?.id, tracks, detectSkusForTrack])
+    return () => {
+      cancelled = true
+      clearInterval(interval)
+    }
+  }, [enabled, venue?.id, detectSkusForTrack])
   
   // Convert 3D position to screen position
   const worldToScreen = useCallback((worldPos: { x: number; z: number }) => {
