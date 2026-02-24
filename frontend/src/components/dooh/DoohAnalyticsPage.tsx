@@ -541,10 +541,34 @@ export default function DoohAnalyticsPage({ onClose }: { onClose: () => void }) 
     }
   }, [selectedScreen?.id, loadCachedKpis])
 
-  // Reload KPIs from API when time range changes (so 1h/24h/7d actually updates)
+  // Auto-compute + reload KPIs when time range changes (so 1h/24h/7d actually show different data)
   useEffect(() => {
-    if (!selectedScreen) return
-    loadKpis()
+    if (!selectedScreen || !venue?.id) return
+    // Re-run computation for the new time range, then reload KPIs
+    const autoCompute = async () => {
+      setIsRunning(true)
+      const { startTs, endTs } = getTimeRange()
+      console.log(`🔄 DOOH: Time range changed to ${timeRange}, computing ${startTs}..${endTs}`)
+      try {
+        const res = await fetch(`${API_BASE}/api/dooh/run`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ venueId: venue.id, startTs, endTs, screenIds: [selectedScreen.id] }),
+        })
+        if (res.ok) {
+          const result = await res.json()
+          setRunResult(result)
+        }
+      } catch (err) {
+        console.error('Auto-compute on time range change failed:', err)
+      } finally {
+        setIsRunning(false)
+      }
+      // Reload KPIs and video KPIs after computation
+      await loadKpis()
+      if (activeTab === 'video') await loadVideoKpis()
+    }
+    autoCompute()
   }, [timeRange, customStartTs, customEndTs])
 
   // Consolidate buckets by period (hour/day/week/month)
