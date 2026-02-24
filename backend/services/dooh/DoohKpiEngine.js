@@ -167,23 +167,26 @@ export class DoohKpiEngine {
         timestamp,
         position_x as x,
         position_z as z,
-        SQRT(velocity_x * velocity_x + velocity_z * velocity_z) as speed
+        velocity_x as vx,
+        velocity_z as vz
       FROM track_positions
       WHERE venue_id = ? AND timestamp >= ? AND timestamp <= ?
       ORDER BY track_key, timestamp
     `).all(venueId, startTs, endTs);
 
-    // Group by track_key
+    // Group by track_key (compute speed in JS to avoid SQLite SQRT dependency)
     const tracks = new Map();
     for (const row of rows) {
       if (!tracks.has(row.track_key)) {
         tracks.set(row.track_key, []);
       }
+      const vx = row.vx || 0;
+      const vz = row.vz || 0;
       tracks.get(row.track_key).push({
         timestamp: row.timestamp,
         x: row.x,
         z: row.z,
-        speed: row.speed || 0,
+        speed: Math.sqrt(vx * vx + vz * vz),
       });
     }
 

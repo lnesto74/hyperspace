@@ -319,29 +319,39 @@ export class KPICalculator {
    * Get velocity metrics
    */
   getVelocityMetrics(roiId, startTime, endTime) {
-    const result = this.db.prepare(`
-      SELECT 
-        AVG(SQRT(velocity_x * velocity_x + velocity_z * velocity_z)) as avg_velocity,
-        AVG(CASE WHEN SQRT(velocity_x * velocity_x + velocity_z * velocity_z) > 0.1 
-            THEN SQRT(velocity_x * velocity_x + velocity_z * velocity_z) END) as avg_velocity_motion,
-        SUM(CASE WHEN SQRT(velocity_x * velocity_x + velocity_z * velocity_z) <= 0.1 THEN 1 ELSE 0 END) as at_rest_samples,
-        SUM(CASE WHEN SQRT(velocity_x * velocity_x + velocity_z * velocity_z) > 0.1 THEN 1 ELSE 0 END) as in_motion_samples,
-        COUNT(*) as total_samples
+    // Fetch raw velocity components and compute speed in JS (avoids SQRT dependency in SQLite)
+    const rows = this.db.prepare(`
+      SELECT velocity_x, velocity_z
       FROM track_positions
       WHERE roi_id = ? AND timestamp >= ? AND timestamp < ?
-    `).get(roiId, startTime, endTime);
+    `).all(roiId, startTime, endTime);
     
-    const totalSamples = result?.total_samples || 0;
-    const atRestSamples = result?.at_rest_samples || 0;
-    const inMotionSamples = result?.in_motion_samples || 0;
+    const totalSamples = rows.length;
+    if (totalSamples === 0) {
+      return { avgVelocity: 0, avgVelocityInMotion: 0, atRestTotalTime: 0, inMotionTotalTime: 0, percentAtRest: 0, percentInMotion: 0 };
+    }
+
+    let sumSpeed = 0, sumSpeedMotion = 0, atRestSamples = 0, inMotionSamples = 0;
+    for (const row of rows) {
+      const vx = row.velocity_x || 0;
+      const vz = row.velocity_z || 0;
+      const speed = Math.sqrt(vx * vx + vz * vz);
+      sumSpeed += speed;
+      if (speed > 0.1) {
+        sumSpeedMotion += speed;
+        inMotionSamples++;
+      } else {
+        atRestSamples++;
+      }
+    }
     
     return {
-      avgVelocity: result?.avg_velocity ? Math.round(result.avg_velocity * 100) / 100 : 0,
-      avgVelocityInMotion: result?.avg_velocity_motion ? Math.round(result.avg_velocity_motion * 100) / 100 : 0,
-      atRestTotalTime: atRestSamples / 60, // Assuming 1 sample per second, convert to minutes
+      avgVelocity: Math.round((sumSpeed / totalSamples) * 100) / 100,
+      avgVelocityInMotion: inMotionSamples > 0 ? Math.round((sumSpeedMotion / inMotionSamples) * 100) / 100 : 0,
+      atRestTotalTime: atRestSamples / 60,
       inMotionTotalTime: inMotionSamples / 60,
-      percentAtRest: totalSamples > 0 ? Math.round((atRestSamples / totalSamples) * 100) : 0,
-      percentInMotion: totalSamples > 0 ? Math.round((inMotionSamples / totalSamples) * 100) : 0,
+      percentAtRest: Math.round((atRestSamples / totalSamples) * 100),
+      percentInMotion: Math.round((inMotionSamples / totalSamples) * 100),
     };
   }
 

@@ -13,7 +13,7 @@
 
 import { Router } from 'express';
 import { v4 as uuidv4 } from 'uuid';
-import { DoohKpiEngine, DEFAULT_PARAMS } from '../services/dooh/DoohKpiEngine.js';
+import { DoohKpiEngine, DEFAULT_PARAMS, pointInPolygon } from '../services/dooh/DoohKpiEngine.js';
 import { ContextResolver } from '../services/dooh/ContextResolver.js';
 import { DoohKpiAggregator } from '../services/dooh/DoohKpiAggregator.js';
 import multer from 'multer';
@@ -25,7 +25,8 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 // Configure multer for video uploads
-const VIDEOS_DIR = path.join(__dirname, '../../uploads/dooh-videos');
+const UPLOADS_BASE = process.env.UPLOADS_DIR || path.join(__dirname, '../../uploads');
+const VIDEOS_DIR = path.join(UPLOADS_BASE, 'dooh-videos');
 if (!fs.existsSync(VIDEOS_DIR)) {
   fs.mkdirSync(VIDEOS_DIR, { recursive: true });
 }
@@ -404,37 +405,109 @@ router.post('/run', async (req, res) => {
     const contextResolver = new ContextResolver(db);
     const aggregator = new DoohKpiAggregator(db);
 
-    // Run exposure detection
+    // Get screens up-front (used for params and aggregation)
+    const screens = engine.getScreensForVenue(venueId);
+    const filteredScreens = screenIds
+      ? screens.filter(s => screenIds.includes(s.id))
+      : screens;
+
+    if (filteredScreens.length === 0) {
+      return res.json({ success: true, screens: 0, tracks: 0, events: 0, buckets: 0 });
+    }
+
+    // Run exposure detection (returns events with .samples attached)
     const result = await engine.run(venueId, startTs, endTs, screenIds);
 
-    // Resolve context for events
-    const events = db.prepare(`
+    // --- Context resolution: batch approach ---
+    // Load ROIs once
+    const rois = contextResolver.loadRois(venueId);
+    const screenParamsMap = new Map(filteredScreens.map(s => [s.id, s.params]));
+
+    // Re-read stored events (they lost .samples after storeExposureEvents)
+    // Instead of per-event queries, do ONE bulk query for all track positions in range
+    const allPositions = db.prepare(`
+      SELECT track_key, timestamp, position_x as x, position_z as z,
+             velocity_x as vx, velocity_z as vz
+      FROM track_positions
+      WHERE venue_id = ? AND timestamp >= ? AND timestamp <= ?
+      ORDER BY track_key, timestamp
+    `).all(venueId, startTs - 30000, endTs + 30000);
+
+    // Index positions by track_key for O(1) lookup (compute speed in JS)
+    const positionsByTrack = new Map();
+    for (const p of allPositions) {
+      if (!positionsByTrack.has(p.track_key)) {
+        positionsByTrack.set(p.track_key, []);
+      }
+      const vx = p.vx || 0;
+      const vz = p.vz || 0;
+      p.speed = Math.sqrt(vx * vx + vz * vz);
+      positionsByTrack.get(p.track_key).push(p);
+    }
+
+    // Load all stored events in one query
+    const storedEvents = db.prepare(`
       SELECT * FROM dooh_exposure_events
       WHERE venue_id = ? AND start_ts >= ? AND start_ts <= ?
     `).all(venueId, startTs, endTs);
 
-    for (const event of events) {
-      // Get samples for context resolution
-      const samples = db.prepare(`
-        SELECT timestamp, x, z, speed FROM trajectory_samples
-        WHERE venue_id = ? AND track_key = ? AND timestamp >= ? AND timestamp <= ?
-      `).all(venueId, event.track_key, event.start_ts, event.end_ts);
+    // Batch resolve context using in-memory position data
+    const updateStmt = db.prepare(
+      `UPDATE dooh_exposure_events SET context_json = ? WHERE id = ?`
+    );
+    const batchUpdateContext = db.transaction((updates) => {
+      for (const { id, contextJson } of updates) {
+        updateStmt.run(JSON.stringify(contextJson), id);
+      }
+    });
 
-      const eventWithSamples = { ...event, samples };
-      const params = engine.getScreensForVenue(venueId)
-        .find(s => s.id === event.screen_id)?.params || DEFAULT_PARAMS;
+    const contextUpdates = [];
+    for (const event of storedEvents) {
+      const trackPositions = positionsByTrack.get(event.track_key) || [];
+      // Slice samples for this event's time window from the in-memory array
+      const samples = trackPositions.filter(
+        p => p.timestamp >= event.start_ts && p.timestamp <= event.end_ts
+      );
+      const params = screenParamsMap.get(event.screen_id) || DEFAULT_PARAMS;
+      const priorityList = params.context_priority_json || ['queue', 'checkout', 'promo', 'aisle', 'entrance', 'exit', 'other'];
+      const prePostWindowMs = (params.pre_post_window_s || 30) * 1000;
 
-      const rois = contextResolver.loadRois(venueId);
-      const context = contextResolver.resolveContext(eventWithSamples, rois, params);
-      contextResolver.updateEventContext(event.id, context);
+      // Dominant ROI during exposure
+      const dominantRoi = contextResolver.findDominantRoi(samples, rois, priorityList);
+      const phase = dominantRoi
+        ? (function() { const n = dominantRoi.name.toLowerCase(); for (const ph of priorityList) { if (n.includes(ph)) return ph; } return 'other'; })()
+        : 'other';
+
+      // Pre/post from in-memory data (no DB round-trips)
+      const preSamples = trackPositions.filter(
+        p => p.timestamp >= event.start_ts - prePostWindowMs && p.timestamp < event.start_ts
+      );
+      const preRoi = contextResolver.findDominantRoi(preSamples, rois, priorityList);
+      const preZone = preRoi ? preRoi.name.toLowerCase() : null;
+
+      const postSamples = trackPositions.filter(
+        p => p.timestamp > event.end_ts && p.timestamp <= event.end_ts + prePostWindowMs
+      );
+      const postRoi = contextResolver.findDominantRoi(postSamples, rois, priorityList);
+      const postZone = postRoi ? postRoi.name.toLowerCase() : null;
+
+      const samplesInRoi = dominantRoi
+        ? samples.filter(s => pointInPolygon(s.x, s.z, dominantRoi.vertices)).length
+        : 0;
+      const confidence = samples.length > 0 ? Math.round((samplesInRoi / samples.length) * 100) / 100 : 0;
+
+      contextUpdates.push({
+        id: event.id,
+        contextJson: { phase, preZone, postZone, dominantZone: dominantRoi?.name || null, confidence },
+      });
     }
 
-    // Aggregate buckets
-    const screens = engine.getScreensForVenue(venueId);
-    const filteredScreens = screenIds 
-      ? screens.filter(s => screenIds.includes(s.id))
-      : screens;
+    // Single transaction for all context updates
+    if (contextUpdates.length > 0) {
+      batchUpdateContext(contextUpdates);
+    }
 
+    // --- Aggregation: batch approach ---
     let totalBuckets = 0;
     for (const screen of filteredScreens) {
       const buckets = aggregator.aggregateForScreen(venueId, screen.id, startTs, endTs);
@@ -449,8 +522,8 @@ router.post('/run', async (req, res) => {
       buckets: totalBuckets,
     });
   } catch (err) {
-    console.error('❌ Failed to run DOOH KPI computation:', err.message);
-    res.status(500).json({ error: 'Failed to run computation', message: err.message });
+    console.error('❌ Failed to run DOOH KPI computation:', err.message, err.stack);
+    res.status(500).json({ error: 'Failed to run computation', message: err.message, stack: err.stack });
   }
 });
 

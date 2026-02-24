@@ -389,7 +389,10 @@ export default function DoohAnalyticsPage({ onClose }: { onClose: () => void }) 
           screenIds: selectedScreen ? [selectedScreen.id] : null,
         }),
       })
-      if (!res.ok) throw new Error('Computation failed')
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}))
+        throw new Error(errData.message || errData.error || `Computation failed (${res.status})`)
+      }
       const result = await res.json()
       setRunResult(result)
       // Reload KPIs after computation
