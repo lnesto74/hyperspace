@@ -195,29 +195,103 @@ export class DoohKpiAggregator {
 
   /**
    * Aggregate all buckets for a screen and time range
+   * Optimized: loads all events in ONE query, then buckets in-memory
    */
   aggregateForScreen(venueId, screenId, startTs, endTs, bucketMinutes = 15) {
     const params = this.getScreenParams(screenId);
     const effectiveBucketMinutes = params?.report_interval_minutes || bucketMinutes;
     const bucketMs = effectiveBucketMinutes * 60 * 1000;
+    const visitorResetMinutes = params?.visitor_reset_minutes || 45;
 
     // Align to bucket boundaries
     const alignedStart = Math.floor(startTs / bucketMs) * bucketMs;
     const alignedEnd = Math.ceil(endTs / bucketMs) * bucketMs;
 
+    // ONE query for all events in the full range
+    const allEvents = this.db.prepare(`
+      SELECT * FROM dooh_exposure_events
+      WHERE screen_id = ? AND start_ts >= ? AND start_ts < ?
+      ORDER BY start_ts
+    `).all(screenId, alignedStart, alignedEnd);
+
+    // Group events into buckets in-memory
+    const eventsByBucket = new Map();
+    for (const event of allEvents) {
+      const bucketKey = Math.floor(event.start_ts / bucketMs) * bucketMs;
+      if (!eventsByBucket.has(bucketKey)) {
+        eventsByBucket.set(bucketKey, []);
+      }
+      eventsByBucket.get(bucketKey).push(event);
+    }
+
+    // Process each bucket from in-memory data
     const buckets = [];
     let current = alignedStart;
 
     while (current < alignedEnd) {
-      const bucket = this.aggregateBucket(screenId, current, effectiveBucketMinutes, params);
-      if (bucket) {
-        this.storeBucket(venueId, bucket);
-        buckets.push(bucket);
+      const events = eventsByBucket.get(current);
+      if (events && events.length > 0) {
+        const bucket = this._aggregateEventsIntoBucket(screenId, current, effectiveBucketMinutes, events, visitorResetMinutes);
+        if (bucket) buckets.push(bucket);
       }
       current += bucketMs;
     }
 
+    // Store all buckets in a single transaction
+    if (buckets.length > 0) {
+      const storeMany = this.db.transaction((items) => {
+        for (const bucket of items) {
+          this.storeBucket(venueId, bucket);
+        }
+      });
+      storeMany(buckets);
+    }
+
     return buckets;
+  }
+
+  /**
+   * Aggregate a bucket from pre-loaded events (no DB queries)
+   */
+  _aggregateEventsIntoBucket(screenId, bucketStartTs, bucketMinutes, events, visitorResetMinutes) {
+    const impressions = events.length;
+    const qualifiedEvents = events.filter(e => e.tier === 'qualified' || e.tier === 'premium');
+    const premiumEvents = events.filter(e => e.tier === 'premium');
+
+    const qualifiedImpressions = qualifiedEvents.length;
+    const premiumImpressions = premiumEvents.length;
+
+    const aqsValues = events.map(e => e.aqs);
+    const avgAqs = aqsValues.length > 0
+      ? aqsValues.reduce((a, b) => a + b, 0) / aqsValues.length
+      : null;
+    const p75Aqs = percentile(aqsValues, 75);
+
+    const totalAttentionS = qualifiedEvents.reduce((sum, e) => sum + (e.effective_dwell_s || 0), 0);
+    const avgAttentionS = qualifiedImpressions > 0 ? totalAttentionS / qualifiedImpressions : null;
+
+    const uniqueVisitors = this.computeUniqueVisitors(events, visitorResetMinutes);
+    const freqAvg = this.computeFrequencyAvg(events, uniqueVisitors);
+    const contextBreakdown = this.computeContextBreakdown(events);
+
+    const bucketId = `${screenId}_${bucketStartTs}_${bucketMinutes}`;
+
+    return {
+      id: bucketId,
+      screenId,
+      bucketStartTs,
+      bucketMinutes,
+      impressions,
+      qualifiedImpressions,
+      premiumImpressions,
+      uniqueVisitors,
+      avgAqs,
+      p75Aqs,
+      totalAttentionS,
+      avgAttentionS,
+      freqAvg,
+      contextBreakdown,
+    };
   }
 
   /**

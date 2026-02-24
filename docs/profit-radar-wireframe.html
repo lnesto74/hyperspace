@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Profit Radar — Wireframe</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+body{background:#0f1117;color:#e2e4ed;font-family:Inter,system-ui,sans-serif}
+.c{background:#1a1d27;border:1px solid #2e3348;border-radius:14px}
+.c2{background:#232736;border:1px solid #2e3348;border-radius:12px}
+.glow{animation:p 3s ease-in-out infinite}
+@keyframes p{0%,100%{opacity:.35}50%{opacity:.6}}
+[id]{scroll-margin-top:64px}
+</style>
+</head>
+<body>
+<nav class="fixed top-0 inset-x-0 z-50 bg-[#0f1117]/90 backdrop-blur border-b border-[#2e3348] flex gap-1 px-6 py-2.5 overflow-x-auto">
+<span class="font-bold text-indigo-400 text-sm mr-4">Profit Radar Spec</span>
+<a class="text-[#8b8fa3] text-xs px-3 py-1 rounded hover:bg-[#232736] hover:text-white no-underline" href="#overview">Overview</a>
+<a class="text-[#8b8fa3] text-xs px-3 py-1 rounded hover:bg-[#232736] hover:text-white no-underline" href="#arch">Architecture</a>
+<a class="text-[#8b8fa3] text-xs px-3 py-1 rounded hover:bg-[#232736] hover:text-white no-underline" href="#axes">12 Axes</a>
+<a class="text-[#8b8fa3] text-xs px-3 py-1 rounded hover:bg-[#232736] hover:text-white no-underline" href="#page">Radar Page</a>
+<a class="text-[#8b8fa3] text-xs px-3 py-1 rounded hover:bg-[#232736] hover:text-white no-underline" href="#types">4 Insights</a>
+<a class="text-[#8b8fa3] text-xs px-3 py-1 rounded hover:bg-[#232736] hover:text-white no-underline" href="#why">Why+Fix</a>
+<a class="text-[#8b8fa3] text-xs px-3 py-1 rounded hover:bg-[#232736] hover:text-white no-underline" href="#field">Intent Field</a>
+</nav>
+<div class="max-w-6xl mx-auto px-6 pt-20 pb-16 space-y-16" id="content"></div>
+<script>
+document.getElementById('content').innerHTML = `
+
+<!-- OVERVIEW -->
+<section id="overview">
+<h1 class="text-4xl font-extrabold bg-gradient-to-r from-indigo-400 to-cyan-400 bg-clip-text text-transparent">Profit Radar</h1>
+<p class="text-[#8b8fa3] text-lg mt-2 max-w-2xl">Grocery-native operational intelligence. Detects revenue leaks using 12 behavioral intent axes. Optional marketing demo overlay.</p>
+<div class="grid grid-cols-3 gap-4 mt-8">
+<div class="c p-5 text-center"><div class="text-3xl font-extrabold text-green-500">4</div><div class="text-sm text-[#8b8fa3]">Business Problems</div><div class="text-xs text-[#8b8fa3] mt-1">Lost Sales · Underperforming Zones · Staff Misallocation · Layout Friction</div></div>
+<div class="c p-5 text-center"><div class="text-3xl font-extrabold text-indigo-400">12</div><div class="text-sm text-[#8b8fa3]">Intent Axes [0..1]</div><div class="text-xs text-[#8b8fa3] mt-1">Per track, per 10s window, deterministic</div></div>
+<div class="c p-5 text-center"><div class="text-3xl font-extrabold text-amber-400">2</div><div class="text-sm text-[#8b8fa3]">UI Modes</div><div class="text-xs text-[#8b8fa3] mt-1">Operational (default) + Intent Field (demo)</div></div>
+</div>
+<div class="grid grid-cols-2 gap-4 mt-6">
+<div class="c p-5"><div class="font-bold mb-2">Operational Users (Default)</div><ul class="text-sm text-[#8b8fa3] list-disc pl-5 space-y-1"><li>Profit Radar page: 3-6 insight cards ranked by € impact</li><li>Each: Problem → Explanation → € Impact → Fix</li><li>No AI jargon, no model internals</li><li>"Intent Field" toggle OFF by default</li></ul></div>
+<div class="c p-5"><div class="font-bold mb-2">Marketing / Demo (Toggle ON)</div><ul class="text-sm text-[#8b8fa3] list-disc pl-5 space-y-1"><li><strong class="text-white">Layer 1:</strong> Zone glow by dominant aggregate behavior</li><li><strong class="text-white">Layer 2:</strong> Behavior clusters — dynamic halos around groups sharing same intent (e.g. "3× hesitating")</li><li><strong class="text-white">Layer 3:</strong> Solo track glyphs (dot + needle, no label)</li><li>Legend + visual key, GPU-friendly, no FPS drop</li></ul></div>
+</div>
+</section>
+
+<!-- ARCHITECTURE -->
+<section id="arch">
+<h2 class="text-2xl font-bold">System Architecture</h2>
+<div class="c p-6 mt-4 overflow-x-auto"><div class="flex items-start gap-3 min-w-[900px]">
+<div class="c2 p-4 flex-1"><div class="text-xs font-bold text-indigo-400 uppercase mb-2">LiDAR Sensors</div><div class="text-xs text-[#8b8fa3]">Raw x,y,z + track ID · 10-20fps</div><div class="mt-2 text-[10px] px-2 py-0.5 bg-indigo-500/15 text-indigo-400 rounded inline-block font-semibold">EXISTING</div></div>
+<div class="text-[#8b8fa3] pt-8 text-lg">→</div>
+<div class="c2 p-4 flex-1"><div class="text-xs font-bold text-indigo-400 uppercase mb-2">Track Aggregator</div><div class="text-xs text-[#8b8fa3]">Trail buffer (100pts) · Zone occupancy · Coord transform</div><div class="mt-2 text-[10px] px-2 py-0.5 bg-indigo-500/15 text-indigo-400 rounded inline-block font-semibold">EXISTING</div></div>
+<div class="text-[#8b8fa3] pt-8 text-lg">→</div>
+<div class="c2 p-4 flex-1 border-indigo-500/50 shadow-lg shadow-indigo-500/10"><div class="text-xs font-bold text-indigo-400 uppercase mb-2">Intent Scorer</div><div class="text-xs text-[#8b8fa3]">Feature extraction · 12 axis computation · 10s window · 1Hz</div><div class="mt-2 text-[10px] px-2 py-0.5 bg-green-500/15 text-green-400 rounded inline-block font-semibold">NEW</div></div>
+<div class="text-[#8b8fa3] pt-8 text-lg">→</div>
+<div class="c2 p-4 flex-1 border-indigo-500/50 shadow-lg shadow-indigo-500/10"><div class="text-xs font-bold text-indigo-400 uppercase mb-2">Zone Aggregator</div><div class="text-xs text-[#8b8fa3]">Mean axes/zone · Dominant axis · Intensity · 0.5Hz</div><div class="mt-2 text-[10px] px-2 py-0.5 bg-green-500/15 text-green-400 rounded inline-block font-semibold">NEW</div></div>
+<div class="text-[#8b8fa3] pt-8 text-lg">→</div>
+<div class="c2 p-4 flex-1 border-indigo-500/50 shadow-lg shadow-indigo-500/10"><div class="text-xs font-bold text-indigo-400 uppercase mb-2">Profit Radar Engine</div><div class="text-xs text-[#8b8fa3]">4 insight types · Threshold gating · € impact · 30-60s</div><div class="mt-2 text-[10px] px-2 py-0.5 bg-green-500/15 text-green-400 rounded inline-block font-semibold">NEW</div></div>
+</div></div>
+<h3 class="text-lg font-bold mt-6 mb-3">Socket.IO Events (/tracking namespace)</h3>
+<div class="space-y-1">
+<div class="flex"><div class="c2 px-4 py-2.5 w-48 text-xs font-semibold rounded-r-none">semantics:trackAxes</div><div class="c px-4 py-2.5 flex-1 text-xs text-[#8b8fa3] flex justify-between rounded-l-none border-l-0">Per-track 12-axis scores + debug<span class="bg-indigo-500 text-white text-[10px] px-2 py-0.5 rounded font-bold">1Hz/track</span></div></div>
+<div class="flex"><div class="c2 px-4 py-2.5 w-48 text-xs font-semibold rounded-r-none">semantics:zoneField</div><div class="c px-4 py-2.5 flex-1 text-xs text-[#8b8fa3] flex justify-between rounded-l-none border-l-0">Per-zone aggregated axes + dominant + intensity<span class="bg-indigo-500 text-white text-[10px] px-2 py-0.5 rounded font-bold">0.5Hz</span></div></div>
+<div class="flex"><div class="c2 px-4 py-2.5 w-48 text-xs font-semibold rounded-r-none">profitRadar:insights</div><div class="c px-4 py-2.5 flex-1 text-xs text-[#8b8fa3] flex justify-between rounded-l-none border-l-0">3-6 ranked insights (impact, explanation, fix)<span class="bg-indigo-500 text-white text-[10px] px-2 py-0.5 rounded font-bold">30-60s</span></div></div>
+</div>
+</section>
+
+<!-- 12 AXES -->
+<section id="axes">
+<h2 class="text-2xl font-bold">12 Intent Axes <span class="text-xs bg-indigo-500 text-white px-2.5 py-1 rounded-full font-semibold ml-2">SEMANTICS</span></h2>
+<p class="text-[#8b8fa3] mt-1 mb-6">Each: continuous [0,1]. Per track per 10s window. Deterministic heuristics from observable movement features.</p>
+<div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+${[
+['🧭','exploration','cyan',72,'Browsing, not heading anywhere specific','high zone_entropy + many transitions + moderate speed + low straightness'],
+['🎯','goal_directedness','green',88,'Knows exactly where they are going','high straightness + low zone_entropy + consistent heading + few turns'],
+['⚡','urgency','red',65,'In a rush','high mean_speed + low dwell + high jerk_proxy + low stop_ratio'],
+['💪','commitment','blue',81,'Likely to buy — engaged and progressing','high goal_directedness + sustained direction + low churn + meaningful dwell'],
+['🤔','hesitation','amber',55,'Unsure — stopping and looking around','high stop_ratio + high curvature + revisits + speed variance + micro-movements'],
+['❓','confusion','orange',42,'Seems lost — backtracking and looping','high backtrack_ratio + loops + high revisit_count + high zone_entropy + erratic heading'],
+['👥','social_groupness','pink',68,'Shopping with others — moving in sync','stable neighbor proximity + heading/speed alignment + co-movement + small distance'],
+['🚫','avoidance','red',38,'Deliberately bypasses certain areas','pass-through (high speed+low dwell) + detour paths + low engagement'],
+['⏳','waiting_queueing','purple',78,'Waiting in a queue or line','very low speed + high local_density + long stop segments + queue zone proximity'],
+['👀','engagement_with_POI','emerald',84,'Actively looking at products','high dwell near POI + micro-movements + oriented toward shelves + low speed'],
+['🚪','churn_exit_intent','rose',47,'Heading to exit — may leave without buying','movement toward exits + decreasing engagement + short session + no checkout visit'],
+['🧱','friction','violet',61,'Struggling with layout — bottlenecks','wall-hugging + backtracking + slowdowns at choke points + path inefficiency']
+].map(([icon,name,color,val,desc,signals])=>`
+<div class="c p-5 hover:border-indigo-500/50 transition relative overflow-hidden">
+<div class="absolute top-0 left-0 right-0 h-0.5 bg-${color}-500"></div>
+<div class="flex items-center gap-2 mb-1">
+<span class="w-7 h-7 rounded-lg bg-${color}-500/15 text-${color}-400 flex items-center justify-center text-sm">${icon}</span>
+<span class="font-bold text-${color}-400">${name}</span>
+<span class="text-[10px] font-mono text-[#8b8fa3] ml-auto">[0.0 — 1.0]</span>
+</div>
+<p class="text-sm text-[#8b8fa3] mt-2"><strong class="text-[#e2e4ed]">Plain English:</strong> "${desc}"</p>
+<div class="text-[11px] bg-indigo-500/10 text-indigo-300 p-2.5 rounded-lg mt-3"><strong class="text-white">Signals:</strong> ${signals}</div>
+<div class="flex items-center gap-2 mt-3"><span class="text-[10px] text-[#8b8fa3]">0</span><div class="flex-1 h-1.5 bg-[#232736] rounded-full overflow-hidden"><div class="h-full bg-${color}-500 rounded-full" style="width:${val}%"></div></div><span class="text-[11px] text-[#8b8fa3] font-semibold w-8 text-right">${(val/100).toFixed(2)}</span></div>
+</div>`).join('')}
+</div>
+</section>
+
+<!-- PROFIT RADAR PAGE WIREFRAME -->
+<section id="page">
+<h2 class="text-2xl font-bold">Profit Radar Page</h2>
+<p class="text-[#8b8fa3] mt-1 mb-4">Full-page view. 3-6 cards ranked by € impact. Time range selector.</p>
+<div class="c overflow-hidden">
+<div class="flex items-center gap-2 px-4 py-2.5 bg-[#232736] border-b border-[#2e3348] text-xs text-[#8b8fa3]"><div class="w-2.5 h-2.5 rounded-full bg-red-500"></div><div class="w-2.5 h-2.5 rounded-full bg-amber-500"></div><div class="w-2.5 h-2.5 rounded-full bg-green-500"></div><span class="ml-3">Hyperspace — Profit Radar</span></div>
+<div class="flex" style="min-height:600px">
+<div class="w-12 bg-[#14161e] border-r border-[#2e3348] flex flex-col items-center pt-3 gap-3">
+<div class="w-7 h-7 rounded bg-[#232736] text-center text-[10px] leading-7 text-[#8b8fa3]">🏠</div>
+<div class="w-7 h-7 rounded bg-[#232736] text-center text-[10px] leading-7 text-[#8b8fa3]">📦</div>
+<div class="w-7 h-7 rounded bg-indigo-500 text-center text-[10px] leading-7 text-white font-bold">📡</div>
+</div>
+<div class="flex-1 flex flex-col">
+<div class="flex items-center justify-between px-6 py-3 border-b border-[#2e3348]">
+<div class="flex items-center gap-3"><span class="text-xs text-[#8b8fa3]">← Back</span><span class="text-lg font-bold">Profit Radar</span><span class="text-xs bg-green-500/15 text-green-400 px-2 py-0.5 rounded font-semibold">Live</span></div>
+<div class="flex gap-2"><span class="text-xs px-3 py-1.5 rounded-lg border border-[#2e3348] bg-[#232736] text-[#8b8fa3]">1h</span><span class="text-xs px-3 py-1.5 rounded-lg border border-[#2e3348] bg-[#232736] text-[#8b8fa3]">24h</span><span class="text-xs px-3 py-1.5 rounded-lg bg-indigo-500 text-white font-semibold">7 Days</span></div>
+</div>
+<div class="flex gap-6 px-6 py-2.5 bg-indigo-500/5 border-b border-[#2e3348] text-xs"><span class="text-[#8b8fa3]">Active: <strong class="text-white">4</strong></span><span class="text-[#8b8fa3]">Weekly Impact: <strong class="text-amber-400">€2,400–€4,100</strong></span><span class="text-[#8b8fa3]">Basis: <strong class="text-white">1,247 paths (7d)</strong></span></div>
+<div class="grid grid-cols-2 gap-4 p-5 content-start">
+${[
+['Lost Sales','red','High interest but no purchase in Dairy Aisle','Dairy Aisle (Zone B3) · Weekdays 16:00-19:00','Shoppers dwell near dairy but frequently leave without selecting items.','€800–€1,200','78','312'],
+['Layout Friction','violet','Bottleneck near Bakery entrance','Bakery (Zone A1) · Peak 11:00-13:00','Customers backtrack and slow down due to narrow passage and display placement.','€600–€1,100','85','478'],
+['Staff Misallocation','cyan','Service opportunity in Wine & Spirits','Wine & Spirits (Zone D2) · Weekends 14:00-18:00','High confusion and hesitation — customers may need help choosing.','€500–€900','72','189'],
+['Underperforming Zone','amber','Organic section: traffic but no engagement','Organic (Zone C4) · All week','Many pass through but few stop to browse — high avoidance signal.','€500–€900/mo','68','268']
+].map(([type,color,headline,where,explanation,impact,conf,paths])=>`
+<div class="c2 p-5">
+<span class="text-[10px] font-bold uppercase tracking-wider px-2.5 py-1 rounded bg-${color}-500/15 text-${color}-400">${type}</span>
+<div class="text-[15px] font-bold mt-3">${headline}</div>
+<div class="text-xs text-[#8b8fa3] mt-1">${where}</div>
+<p class="text-[13px] text-[#8b8fa3] mt-2">${explanation}</p>
+<div class="text-xl font-extrabold mt-3 text-amber-400">${impact}<span class="text-xs font-normal text-[#8b8fa3] ml-1">/ week</span></div>
+<div class="text-[11px] text-[#8b8fa3] mt-1">Confidence: ${conf}% · Based on ${paths} paths (7d) · vs baseline</div>
+<div class="flex gap-2 mt-4">
+<span class="text-[11px] px-3 py-1.5 rounded bg-indigo-500 text-white font-semibold cursor-pointer">View Area</span>
+<span class="text-[11px] px-3 py-1.5 rounded border border-[#2e3348] text-[#8b8fa3] cursor-pointer">Suggested Fix</span>
+<span class="text-[11px] px-3 py-1.5 rounded border border-[#2e3348] text-[#8b8fa3] cursor-pointer">Why?</span>
+</div></div>`).join('')}
+</div></div></div></div>
+</section>
+
+<!-- 4 INSIGHT TYPES -->
+<section id="types">
+<h2 class="text-2xl font-bold">4 Insight Types — Deep Dive</h2>
+<p class="text-[#8b8fa3] mt-1 mb-6">Each maps axis combinations → business problem. Thresholds prevent false positives.</p>
+<div class="grid grid-cols-1 md:grid-cols-2 gap-5">
+${[
+['Lost Sales','red','Engage but leave without buying','engagement_with_POI=HIGH + hesitation=HIGH + commitment=LOW + churn_exit_intent=HIGH','engaged_visitors × conversion_gap × avg_basket × recovery(0.3–0.5)','persistence≥3d, traffic≥10%, impact≥€500/wk'],
+['Underperforming Zone','amber','Traffic but no browsing conversion','engagement_with_POI=LOW + avoidance=HIGH + goal_directedness=HIGH (pass-through)','zone_traffic × conversion_gap × avg_basket (monthly)','deviation≥25% vs baseline, repeated≥5x'],
+['Staff Misallocation','cyan','Customers need help, no staff nearby','confusion=HIGH + hesitation=HIGH + low staff proximity','customers_needing_help × assisted_uplift(0.1–0.2) × avg_basket','confusion+hesitation sustained, impact≥€500/wk'],
+['Layout Friction','violet','Bottlenecks and inefficient paths','friction=HIGH + backtrack_ratio=HIGH + zone_entropy=ELEVATED','affected_visitors × basket_uplift(0.03–0.06) × avg_basket','persistence≥3d, traffic≥10%']
+].map(([name,color,desc,pattern,roi,gate])=>`
+<div class="c p-6 border-l-4 border-l-${color}-500">
+<h4 class="text-lg font-bold text-${color}-400">${name}</h4>
+<p class="text-sm text-[#8b8fa3] mt-1 mb-3">${desc}</p>
+<div class="text-xs font-mono bg-white/5 p-3 rounded-lg text-indigo-300 mb-3"><strong class="text-white">Axis Pattern:</strong><br>${pattern.split(' + ').join('<br>+ ')}</div>
+<div class="text-xs text-[#8b8fa3]"><strong>ROI:</strong> ${roi}</div>
+<div class="text-xs text-[#8b8fa3] mt-2 italic">Gating: ${gate}</div>
+</div>`).join('')}
+</div>
+</section>
+
+<!-- WHY + FIX -->
+<section id="why">
+<h2 class="text-2xl font-bold">Why? Panel & Suggested Fix</h2>
+<p class="text-[#8b8fa3] mt-1 mb-6">Right panel. Observable features only — never model jargon.</p>
+<div class="grid grid-cols-2 gap-6">
+<div>
+<h3 class="text-base font-bold mb-3">Why? Panel</h3>
+<div class="c p-6" style="max-width:420px">
+<h4 class="text-sm font-bold mb-4">❓ Why: Lost Sales in Dairy Aisle</h4>
+${[
+['Shoppers dwell 2.3× longer than average near dairy, indicating strong interest.'],
+['67% leave hesitating — frequent stops, direction changes near yogurt section.'],
+['42% head directly to exit after dairy without checkout — high churn intent.']
+].map((b,i)=>`<div class="flex gap-3 items-start py-2 ${i<2?'border-b border-[#2e3348]':''}"><span class="w-5 h-5 rounded-full bg-indigo-500 text-white flex items-center justify-center text-[10px] font-bold shrink-0">${i+1}</span><span class="text-sm text-[#8b8fa3]">${b[0]}</span></div>`).join('')}
+<div class="mt-4 pt-4 border-t border-[#2e3348] text-xs text-[#8b8fa3] space-y-1">
+<div>Confidence: 78%</div><div>Based on <strong class="text-white">312 paths</strong> (7 days)</div><div>Compared vs <strong class="text-white">store baseline</strong></div>
+</div></div>
+</div>
+<div>
+<h3 class="text-base font-bold mb-3">Suggested Fix</h3>
+<div class="c p-6" style="max-width:420px">
+<h4 class="text-sm font-bold mb-4">✅ Fix: Lost Sales in Dairy</h4>
+${[
+'Add clear category signage above yogurt sub-section to reduce search time.',
+'Place "Staff Picks" shelf tags to reduce choice overload.',
+'Schedule staff near dairy during peak hours (16:00-19:00).'
+].map((s,i)=>`<div class="flex gap-3 items-start py-2 ${i<2?'border-b border-[#2e3348]':''}"><span class="w-6 h-6 rounded-full bg-green-500 text-black flex items-center justify-center text-[11px] font-extrabold shrink-0">${i+1}</span><span class="text-sm text-[#8b8fa3]">${s}</span></div>`).join('')}
+<div class="mt-4 text-xs text-[#8b8fa3] italic">Expected recovery: 30-50% of lost sales (€240-€600/wk)</div>
+</div></div></div>
+</section>
+
+<!-- INTENT FIELD — HYBRID APPROACH -->
+<section id="field">
+<h2 class="text-2xl font-bold">Intent Field — Hybrid Demo Overlay <span class="text-xs bg-indigo-500 text-white px-2.5 py-1 rounded-full font-semibold ml-2">3 LAYERS</span></h2>
+<p class="text-[#8b8fa3] mt-1 mb-4">Toggle ON in viewport. <strong class="text-white">3-layer system:</strong> Zone glows (base) + Behavior Clusters (dynamic halos around groups) + Isolated glyphs (solo tracks). Default OFF.</p>
+
+<!-- 3-layer explanation -->
+<div class="grid grid-cols-3 gap-4 mb-6">
+<div class="c p-5 border-t-2 border-t-indigo-500">
+<div class="text-xs font-bold text-indigo-400 uppercase mb-2">Layer 1 — Zone Glow</div>
+<div class="text-sm text-[#8b8fa3]">Each ROI zone glows with the color of its <strong class="text-white">dominant aggregate behavior</strong>. Intensity = how strongly that behavior is present across all people in the zone.</div>
+<div class="text-xs text-[#8b8fa3] mt-3 italic">Always stable. Follows zone boundaries. Updates at 0.5Hz.</div>
+</div>
+<div class="c p-5 border-t-2 border-t-pink-500">
+<div class="text-xs font-bold text-pink-400 uppercase mb-2">Layer 2 — Behavior Clusters (Trajectory-Enriched)</div>
+<div class="text-sm text-[#8b8fa3]"><strong class="text-white">2+ people within ~2m sharing the same dominant axis</strong> form a dynamic cluster. Label shows <strong class="text-white">intent + trajectory context</strong>: zone path, stop count, avg dwell, category. E.g. <span class="text-pink-400">"3× hesitating · dairy→bakery · avg 40s dwell"</span>.</div>
+<div class="text-xs text-[#8b8fa3] mt-3 italic">Dynamic. Can cross zone boundaries. Labels enriched from trajectory history.</div>
+</div>
+<div class="c p-5 border-t-2 border-t-cyan-500">
+<div class="text-xs font-bold text-cyan-400 uppercase mb-2">Layer 3 — Isolated Glyphs</div>
+<div class="text-sm text-[#8b8fa3]">Solo tracks (not in any cluster) get a <strong class="text-white">small dot + needle</strong> showing their heading. No label, no ID — just a subtle directional indicator. Minimal visual weight.</div>
+<div class="text-xs text-[#8b8fa3] mt-3 italic">Lightweight. No text. Only visible at close zoom.</div>
+</div>
+</div>
+
+<!-- Viewport mockup -->
+<div class="c overflow-hidden">
+<div class="flex items-center gap-2 px-4 py-2.5 bg-[#232736] border-b border-[#2e3348] text-xs text-[#8b8fa3]">3D Viewport — Intent Field ON (Hybrid Mode)</div>
+<div class="relative bg-gradient-to-b from-[#12141c] to-[#1a1d27]" style="height:520px">
+
+<!-- LAYER 1: Zone glows (base, subtle) -->
+<div class="absolute rounded-xl glow" style="top:80px;left:60px;width:200px;height:140px;background:radial-gradient(ellipse,rgba(245,158,11,.3),transparent 70%)"><span class="absolute bottom-2 left-3 text-[10px] font-bold text-amber-400/60">Dairy Aisle</span></div>
+<div class="absolute rounded-xl glow" style="top:160px;left:320px;width:160px;height:120px;background:radial-gradient(ellipse,rgba(168,85,247,.3),transparent 70%);animation-delay:1s"><span class="absolute bottom-2 left-3 text-[10px] font-bold text-violet-400/60">Bakery</span></div>
+<div class="absolute rounded-xl glow" style="top:60px;left:520px;width:180px;height:150px;background:radial-gradient(ellipse,rgba(34,197,94,.3),transparent 70%);animation-delay:.5s"><span class="absolute bottom-2 left-3 text-[10px] font-bold text-green-400/60">Wine & Spirits</span></div>
+<div class="absolute rounded-xl glow" style="top:290px;left:160px;width:150px;height:100px;background:radial-gradient(ellipse,rgba(239,68,68,.2),transparent 70%);animation-delay:1.5s"><span class="absolute bottom-2 left-3 text-[10px] font-bold text-red-400/60">Organic</span></div>
+<div class="absolute rounded-xl glow" style="top:270px;left:460px;width:160px;height:110px;background:radial-gradient(ellipse,rgba(6,182,212,.25),transparent 70%);animation-delay:2s"><span class="absolute bottom-2 left-3 text-[10px] font-bold text-cyan-400/60">Produce</span></div>
+
+<!-- LAYER 2: Behavior Clusters (dynamic halos with labels) -->
+<!-- Cluster: 3 people hesitating in Dairy -->
+<div class="absolute" style="top:100px;left:100px;width:110px;height:80px">
+<div class="absolute inset-0 rounded-full border-2 border-amber-400/50 glow" style="background:radial-gradient(ellipse,rgba(245,158,11,.2),transparent 60%)"></div>
+<div class="absolute w-3 h-3 rounded-full bg-amber-400 shadow-lg shadow-amber-500/40" style="top:20px;left:25px"></div>
+<div class="absolute w-3 h-3 rounded-full bg-amber-400 shadow-lg shadow-amber-500/40" style="top:35px;left:55px"></div>
+<div class="absolute w-3 h-3 rounded-full bg-amber-400 shadow-lg shadow-amber-500/40" style="top:50px;left:30px"></div>
+<div class="absolute -top-5 left-1/2 -translate-x-1/2 text-center whitespace-nowrap"><div class="bg-amber-500/90 text-black text-[9px] font-bold px-2 py-0.5 rounded-t-full rounded-b-none">3× hesitating</div><div class="bg-black/70 text-amber-300 text-[8px] px-2 py-0.5 rounded-b-full">dairy→bakery · avg 40s</div></div>
+</div>
+
+<!-- Cluster: 4 people engaged in Wine -->
+<div class="absolute" style="top:80px;left:545px;width:120px;height:90px">
+<div class="absolute inset-0 rounded-full border-2 border-emerald-400/50 glow" style="background:radial-gradient(ellipse,rgba(34,197,94,.2),transparent 60%);animation-delay:.7s"></div>
+<div class="absolute w-3 h-3 rounded-full bg-emerald-400 shadow-lg shadow-emerald-500/40" style="top:25px;left:30px"></div>
+<div class="absolute w-3 h-3 rounded-full bg-emerald-400 shadow-lg shadow-emerald-500/40" style="top:15px;left:65px"></div>
+<div class="absolute w-3 h-3 rounded-full bg-emerald-400 shadow-lg shadow-emerald-500/40" style="top:50px;left:45px"></div>
+<div class="absolute w-3 h-3 rounded-full bg-emerald-400 shadow-lg shadow-emerald-500/40" style="top:55px;left:80px"></div>
+<div class="absolute -top-5 left-1/2 -translate-x-1/2 text-center whitespace-nowrap"><div class="bg-emerald-500/90 text-black text-[9px] font-bold px-2 py-0.5 rounded-t-full rounded-b-none">4× engaged</div><div class="bg-black/70 text-emerald-300 text-[8px] px-2 py-0.5 rounded-b-full">wine specialist · avg 2m12s</div></div>
+</div>
+
+<!-- Cluster: 2 people confused near Bakery -->
+<div class="absolute" style="top:180px;left:350px;width:80px;height:60px">
+<div class="absolute inset-0 rounded-full border-2 border-violet-400/50 glow" style="background:radial-gradient(ellipse,rgba(168,85,247,.2),transparent 60%);animation-delay:1.3s"></div>
+<div class="absolute w-3 h-3 rounded-full bg-violet-400 shadow-lg shadow-violet-500/40" style="top:15px;left:20px"></div>
+<div class="absolute w-3 h-3 rounded-full bg-violet-400 shadow-lg shadow-violet-500/40" style="top:35px;left:45px"></div>
+<div class="absolute -top-5 left-1/2 -translate-x-1/2 text-center whitespace-nowrap"><div class="bg-violet-500/90 text-white text-[9px] font-bold px-2 py-0.5 rounded-t-full rounded-b-none">2× friction</div><div class="bg-black/70 text-violet-300 text-[8px] px-2 py-0.5 rounded-b-full">full-shop · stuck at choke</div></div>
+</div>
+
+<!-- LAYER 3: Isolated glyphs (solo tracks, small, no label) -->
+<div class="absolute" style="top:310px;left:200px"><div class="w-2.5 h-2.5 rounded-full bg-red-400/70"></div><div class="absolute -top-1.5 left-1/2 w-px h-2 bg-red-400/50 origin-bottom -translate-x-1/2 rotate-[-25deg]"></div></div>
+<div class="absolute" style="top:140px;left:420px"><div class="w-2.5 h-2.5 rounded-full bg-cyan-400/70"></div><div class="absolute -top-1.5 left-1/2 w-px h-2 bg-cyan-400/50 origin-bottom -translate-x-1/2 rotate-[15deg]"></div></div>
+<div class="absolute" style="top:290px;left:510px"><div class="w-2.5 h-2.5 rounded-full bg-blue-400/70"></div><div class="absolute -top-1.5 left-1/2 w-px h-2 bg-blue-400/50 origin-bottom -translate-x-1/2 rotate-[5deg]"></div></div>
+<div class="absolute" style="top:370px;left:350px"><div class="w-2.5 h-2.5 rounded-full bg-green-400/70"></div><div class="absolute -top-1.5 left-1/2 w-px h-2 bg-green-400/50 origin-bottom -translate-x-1/2 rotate-[-10deg]"></div></div>
+
+<!-- Layers toggle -->
+<div class="absolute top-3 right-3 bg-[#1a1d27]/92 border border-[#2e3348] rounded-lg p-3 text-xs space-y-2 z-10">
+<div class="font-bold text-[#8b8fa3] mb-1">Layers</div>
+<div class="flex items-center gap-2"><div class="w-8 h-4 rounded-full bg-[#232736] border border-[#2e3348] relative"><div class="absolute w-3 h-3 rounded-full bg-white top-0.5 left-0.5"></div></div><span class="text-[#8b8fa3]">Objects</span></div>
+<div class="flex items-center gap-2"><div class="w-8 h-4 rounded-full bg-[#232736] border border-[#2e3348] relative"><div class="absolute w-3 h-3 rounded-full bg-white top-0.5 left-0.5"></div></div><span class="text-[#8b8fa3]">Tracks</span></div>
+<div class="flex items-center gap-2"><div class="w-8 h-4 rounded-full bg-indigo-500 relative"><div class="absolute w-3 h-3 rounded-full bg-white top-0.5 right-0.5"></div></div><span class="text-indigo-400 font-semibold">Intent Field ✨</span></div>
+<div class="pl-6 space-y-1 mt-1 border-l border-[#2e3348] ml-4">
+<div class="flex items-center gap-2"><div class="w-6 h-3 rounded-full bg-indigo-500/60 relative"><div class="absolute w-2 h-2 rounded-full bg-white top-0.5 right-0.5"></div></div><span class="text-[#8b8fa3] text-[10px]">Zone Glows</span></div>
+<div class="flex items-center gap-2"><div class="w-6 h-3 rounded-full bg-indigo-500/60 relative"><div class="absolute w-2 h-2 rounded-full bg-white top-0.5 right-0.5"></div></div><span class="text-[#8b8fa3] text-[10px]">Behavior Clusters</span></div>
+<div class="flex items-center gap-2"><div class="w-6 h-3 rounded-full bg-indigo-500/60 relative"><div class="absolute w-2 h-2 rounded-full bg-white top-0.5 right-0.5"></div></div><span class="text-[#8b8fa3] text-[10px]">Isolated Glyphs</span></div>
+</div>
+</div>
+
+<!-- Legend -->
+<div class="absolute bottom-3 left-3 bg-[#1a1d27]/94 border border-[#2e3348] rounded-lg p-3 text-[11px] z-10" style="max-width:280px">
+<div class="text-xs font-bold text-indigo-400 mb-2">Intent Legend</div>
+<div class="grid grid-cols-2 gap-x-4 gap-y-1">
+${[
+['cyan','Exploration — browsing'],['green','Goal-directed — beeline'],
+['red','Urgency — rushing'],['blue','Commitment — buying'],
+['amber','Hesitation — unsure'],['orange','Confusion — lost'],
+['pink','Social — in group'],['red','Avoidance — bypassing'],
+['purple','Waiting — in queue'],['emerald','Engagement — looking'],
+['rose','Churn — leaving'],['violet','Friction — stuck']
+].map(([c,t])=>`<div class="flex items-center gap-1.5"><div class="w-2 h-2 rounded-full bg-${c}-400 shrink-0"></div><span class="text-[#8b8fa3]">${t}</span></div>`).join('')}
+</div>
+</div>
+
+<!-- Visual key -->
+<div class="absolute bottom-3 right-3 bg-[#1a1d27]/94 border border-[#2e3348] rounded-lg p-3 text-[11px] z-10">
+<div class="text-xs font-bold text-indigo-400 mb-2">Visual Key</div>
+<div class="space-y-1.5 text-[#8b8fa3]">
+<div class="flex items-center gap-2"><div class="w-8 h-5 rounded bg-amber-500/20 border border-amber-500/30"></div>Zone glow = area behavior</div>
+<div class="flex items-center gap-2"><div class="w-8 h-5 rounded-full border-2 border-dashed border-pink-400/50 flex items-center justify-center"><div class="w-1 h-1 rounded-full bg-pink-400"></div></div>Cluster = group behavior</div>
+<div class="flex items-center gap-2"><div class="flex items-center"><div class="w-2 h-2 rounded-full bg-cyan-400/70"></div><div class="w-px h-2 bg-cyan-400/50 -mt-0.5 ml-0.5"></div></div>Glyph = solo track</div>
+</div>
+</div>
+</div></div>
+
+<!-- Cluster Algorithm -->
+<h3 class="text-lg font-bold mt-8 mb-3">Behavior Cluster Algorithm <span class="text-xs bg-pink-500/15 text-pink-400 px-2 py-0.5 rounded font-semibold ml-2">TRAJECTORY-ENRICHED</span></h3>
+<div class="grid grid-cols-2 gap-4">
+<div class="c p-5">
+<div class="text-xs font-bold text-pink-400 uppercase mb-2">Clustering Logic (server-side)</div>
+<div class="text-sm text-[#8b8fa3] space-y-2">
+<div><strong class="text-white">1. Group by dominant axis</strong> — for each active track, find argmax(intentAxes). Tracks with same dominant axis are candidates.</div>
+<div><strong class="text-white">2. Spatial proximity</strong> — within candidates, find groups of 2+ tracks within <span class="text-indigo-400 font-mono">CLUSTER_RADIUS = 2.0m</span>. Simple radius-based grouping.</div>
+<div><strong class="text-white">3. Enrich with trajectory</strong> — for each cluster member, look up their zone visit history from TrackAggregator trail buffer:</div>
+<div class="pl-4 space-y-1 text-xs">
+<div>• <strong class="text-white">zonePath</strong> — ordered list of zones visited (e.g. ["dairy","bakery","checkout"])</div>
+<div>• <strong class="text-white">stopCount</strong> — number of stops (speed &lt; 0.1m/s for &gt;2s)</div>
+<div>• <strong class="text-white">avgDwell</strong> — mean stop duration at current zone</div>
+<div>• <strong class="text-white">journeyType</strong> — derived label: <span class="text-indigo-400">quick-run</span> (≤2 zones) · <span class="text-indigo-400">category-specialist</span> (1 long stop) · <span class="text-indigo-400">full-shop</span> (5+ zones) · <span class="text-indigo-400">browse-and-bail</span> (many zones, short dwell, no checkout)</div>
+</div>
+<div><strong class="text-white">4. Compute cluster summary</strong> — intersection of member zone paths, mean dwell, most common journey type.</div>
+<div><strong class="text-white">5. Emit</strong> — each cluster: centroid, members, dominant axis, intensity, + trajectory context. At 0.5Hz.</div>
+</div>
+</div>
+<div class="c p-5">
+<div class="text-xs font-bold text-pink-400 uppercase mb-2">Socket.IO Payload (enriched)</div>
+<div class="c2 p-3 font-mono text-xs text-indigo-300 leading-relaxed">
+<div><span class="text-[#8b8fa3]">// semantics:zoneField payload</span></div>
+<div>{</div>
+<div class="pl-3">zones: { ... },</div>
+<div class="pl-3 text-pink-400">clusters: [</div>
+<div class="pl-6">{</div>
+<div class="pl-8">centroidX, centroidZ,</div>
+<div class="pl-8">memberCount: 3,</div>
+<div class="pl-8">dominantAxis: "hesitation",</div>
+<div class="pl-8">intensity: 0.72,</div>
+<div class="pl-8">radius: 1.8,</div>
+<div class="pl-8 text-amber-300">// trajectory context</div>
+<div class="pl-8 text-amber-300">commonZones: ["dairy","bakery"],</div>
+<div class="pl-8 text-amber-300">avgDwellSec: 40,</div>
+<div class="pl-8 text-amber-300">stopCount: 3,</div>
+<div class="pl-8 text-amber-300">journeyType: "quick-run"</div>
+<div class="pl-6">}</div>
+<div class="pl-3 text-pink-400">]</div>
+<div>}</div>
+</div>
+<div class="text-xs text-[#8b8fa3] mt-3"><strong>Frontend label:</strong> Line 1 = <span class="text-white">"3× hesitating"</span> (intent). Line 2 = <span class="text-amber-300">"dairy→bakery · avg 40s"</span> (trajectory). CSS2D sprite, 2-line pill. Dissolves when memberCount &lt; 2.</div>
+</div>
+</div>
+
+<!-- Journey Types reference -->
+<h3 class="text-lg font-bold mt-6 mb-3">Journey Type Classification</h3>
+<div class="grid grid-cols-4 gap-3">
+${[
+['🏃','quick-run','cyan','≤2 zones visited, low total time. E.g. enter→dairy→checkout→exit.'],
+['🔬','category-specialist','emerald','1-2 zones with long dwell (>60s). Deep engagement in specific category.'],
+['🛒','full-shop','blue','5+ zones, moderate dwell. Typical weekly grocery run.'],
+['👀','browse-and-bail','rose','3+ zones but short dwell (<15s each), no checkout visit. High churn risk.']
+].map(([icon,name,color,desc])=>\`
+<div class="c2 p-4">
+<div class="flex items-center gap-2 mb-2"><span class="text-lg">\${icon}</span><span class="font-bold text-\${color}-400 text-sm">\${name}</span></div>
+<div class="text-xs text-[#8b8fa3]">\${desc}</div>
+</div>\`).join('')}
+</div>
+</section>
+
+`;
+</script>
+</body>
+</html>

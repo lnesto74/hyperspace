@@ -8,7 +8,8 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 // Ensure uploads directory exists
-const uploadsDir = join(__dirname, '..', 'uploads', 'logos');
+const UPLOADS_BASE = process.env.UPLOADS_DIR || join(__dirname, '..', 'uploads');
+const uploadsDir = join(UPLOADS_BASE, 'logos');
 if (!existsSync(uploadsDir)) {
   mkdirSync(uploadsDir, { recursive: true });
 }
