@@ -14,10 +14,20 @@
 
 import { Router } from 'express';
 import { v4 as uuidv4 } from 'uuid';
+import { Worker } from 'worker_threads';
+import { fileURLToPath } from 'url';
+import path from 'path';
 import { DoohAttributionEngine, DEFAULT_CAMPAIGN_PARAMS } from '../services/dooh_attribution/DoohAttributionEngine.js';
 import { ShelfAnalyticsAdapter } from '../services/dooh_attribution/ShelfAnalyticsAdapter.js';
 
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
 const router = Router();
+
+// Job tracking for async attribution runs
+const runJobs = new Map();
+const DB_PATH = process.env.DB_PATH || './database/hyperspace.db';
 
 // Feature flag check middleware
 const checkFeatureFlag = (req, res, next) => {
@@ -267,11 +277,11 @@ router.delete('/campaigns/:id', (req, res) => {
 // ============================================
 
 /**
- * POST /api/dooh-attribution/run - Run attribution analysis
+ * POST /api/dooh-attribution/run - Start attribution analysis (async via worker thread)
+ * Returns immediately with a runId; poll /run/status/:runId for progress.
  */
-router.post('/run', async (req, res) => {
+router.post('/run', (req, res) => {
   try {
-    const db = req.app.get('db');
     const { venueId, campaignId, startTs, endTs, bucketMinutes = 15 } = req.body;
 
     if (!venueId || !campaignId || !startTs || !endTs) {
@@ -280,31 +290,88 @@ router.post('/run', async (req, res) => {
       });
     }
 
-    const engine = new DoohAttributionEngine(db);
+    const runId = uuidv4();
+    const workerPath = path.join(__dirname, '..', 'services', 'dooh_attribution', 'attributionWorker.js');
 
-    // Run attribution analysis
-    console.log(`🎯 Running PEBLE™ attribution for campaign ${campaignId}...`);
-    const result = await engine.run(venueId, campaignId, startTs, endTs);
-    console.log(`✅ Attribution complete: ${result.attributionEvents} events, ${result.controlMatches} controls`);
+    console.log(`🎯 Starting PEBLE™ attribution worker for campaign ${campaignId} (runId: ${runId})`);
 
-    // Aggregate KPIs
-    console.log(`📊 Aggregating campaign KPIs...`);
-    const kpis = engine.aggregateKPIs(venueId, campaignId, startTs, endTs, bucketMinutes);
-    console.log(`✅ Aggregated ${kpis.length} KPI buckets`);
+    const job = {
+      status: 'running',
+      startedAt: Date.now(),
+      progress: null,
+      result: null,
+      error: null,
+    };
+    runJobs.set(runId, job);
 
-    // Get summary
-    const summary = engine.getSummaryKPIs(venueId, campaignId, startTs, endTs);
-
-    res.json({
-      success: true,
-      ...result,
-      kpiBuckets: kpis.length,
-      summary,
+    const worker = new Worker(workerPath, {
+      workerData: { dbPath: DB_PATH, venueId, campaignId, startTs, endTs, bucketMinutes },
     });
+
+    worker.on('message', (msg) => {
+      if (msg.type === 'progress') {
+        job.progress = msg;
+      } else if (msg.type === 'done') {
+        job.status = 'done';
+        job.result = msg.result;
+        console.log(`✅ PEBLE™ worker done (runId: ${runId})`);
+        // Auto-cleanup after 10 minutes
+        setTimeout(() => runJobs.delete(runId), 10 * 60 * 1000);
+      } else if (msg.type === 'error') {
+        job.status = 'error';
+        job.error = msg.message;
+        console.error(`❌ PEBLE™ worker error (runId: ${runId}):`, msg.message);
+        setTimeout(() => runJobs.delete(runId), 5 * 60 * 1000);
+      }
+    });
+
+    worker.on('error', (err) => {
+      job.status = 'error';
+      job.error = err.message;
+      console.error(`❌ PEBLE™ worker crashed (runId: ${runId}):`, err.message);
+      setTimeout(() => runJobs.delete(runId), 5 * 60 * 1000);
+    });
+
+    worker.on('exit', (code) => {
+      if (code !== 0 && job.status === 'running') {
+        job.status = 'error';
+        job.error = `Worker exited with code ${code}`;
+      }
+    });
+
+    // Return immediately — frontend will poll /run/status/:runId
+    res.json({ runId, status: 'running' });
   } catch (err) {
-    console.error('❌ Failed to run DOOH attribution:', err.message);
-    res.status(500).json({ error: 'Failed to run attribution', message: err.message });
+    console.error('❌ Failed to start DOOH attribution:', err.message);
+    res.status(500).json({ error: 'Failed to start attribution', message: err.message });
   }
+});
+
+/**
+ * GET /api/dooh-attribution/run/status/:runId - Poll attribution job progress
+ */
+router.get('/run/status/:runId', (req, res) => {
+  const job = runJobs.get(req.params.runId);
+  if (!job) {
+    return res.status(404).json({ error: 'Run not found or expired' });
+  }
+
+  const elapsed = ((Date.now() - job.startedAt) / 1000).toFixed(1);
+
+  if (job.status === 'done') {
+    return res.json({ status: 'done', elapsed, ...job.result });
+  }
+
+  if (job.status === 'error') {
+    return res.json({ status: 'error', elapsed, error: job.error });
+  }
+
+  // Still running
+  res.json({
+    status: 'running',
+    elapsed,
+    progress: job.progress,
+  });
 });
 
 // ============================================

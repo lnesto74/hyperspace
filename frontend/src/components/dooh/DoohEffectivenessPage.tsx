@@ -324,12 +324,16 @@ export default function DoohEffectivenessPage({ onClose }: DoohEffectivenessPage
     }
   }, [venue?.id, selectedCampaign, timeRange])
 
-  // Run attribution analysis
+  // Run progress state
+  const [runProgress, setRunProgress] = useState<{ chunksCompleted: number; totalChunks: number; elapsedS: number } | null>(null)
+
+  // Run attribution analysis (async worker + polling)
   const runAnalysis = async () => {
     if (!venue?.id || !selectedCampaign) return
     
     setRunning(true)
     setError(null)
+    setRunProgress(null)
     
     try {
       const now = Date.now()
@@ -338,7 +342,8 @@ export default function DoohEffectivenessPage({ onClose }: DoohEffectivenessPage
       if (timeRange === 'hour') startTs = now - 60 * 60 * 1000
       else if (timeRange === 'week') startTs = now - 7 * 24 * 60 * 60 * 1000
       
-      const res = await fetch(`${API_BASE}/api/dooh-attribution/run`, {
+      // Step 1: Start the run (returns immediately with runId)
+      const startRes = await fetch(`${API_BASE}/api/dooh-attribution/run`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -350,27 +355,52 @@ export default function DoohEffectivenessPage({ onClose }: DoohEffectivenessPage
         }),
       })
       
-      if (!res.ok) {
-        const errData = await res.json()
-        throw new Error(errData.message || 'Failed to run analysis')
+      if (!startRes.ok) {
+        const errData = await startRes.json()
+        throw new Error(errData.message || 'Failed to start analysis')
       }
       
-      const runResult = await res.json()
+      const { runId } = await startRes.json()
       
-      // Use summary from the run response directly (avoids timing issues with re-query)
-      if (runResult.summary) {
-        setKpiSummary(runResult.summary)
-        setHasAnalyzisData(true)
-        setLastAnalyzedAt(new Date().toISOString())
+      // Step 2: Poll for progress until done
+      let done = false
+      while (!done) {
+        await new Promise(r => setTimeout(r, 2000))
+        
+        try {
+          const statusRes = await fetch(`${API_BASE}/api/dooh-attribution/run/status/${runId}`)
+          if (!statusRes.ok) throw new Error('Failed to check run status')
+          
+          const statusData = await statusRes.json()
+          
+          if (statusData.status === 'done') {
+            done = true
+            if (statusData.summary) {
+              setKpiSummary(statusData.summary)
+              setHasAnalyzisData(true)
+              setLastAnalyzedAt(new Date().toISOString())
+            }
+            await fetchKPIs()
+          } else if (statusData.status === 'error') {
+            throw new Error(statusData.error || 'Analysis failed')
+          } else if (statusData.progress) {
+            setRunProgress({
+              chunksCompleted: statusData.progress.chunksCompleted,
+              totalChunks: statusData.progress.totalChunks,
+              elapsedS: parseFloat(statusData.elapsed),
+            })
+          }
+        } catch (pollErr) {
+          // If polling fails, keep trying (transient network issue)
+          console.warn('Poll error, retrying...', pollErr)
+        }
       }
-      
-      // Also fetch buckets for the chart
-      await fetchKPIs()
     } catch (err) {
       console.error('Failed to run analysis:', err)
       setError(err instanceof Error ? err.message : 'Failed to run analysis')
     } finally {
       setRunning(false)
+      setRunProgress(null)
     }
   }
 
@@ -544,19 +574,34 @@ export default function DoohEffectivenessPage({ onClose }: DoohEffectivenessPage
             ))}
           </div>
           
-          {selectedCampaign && (
+          {selectedCampaign && !running && (
             <button
               onClick={runAnalysis}
-              disabled={running}
-              className="flex items-center gap-2 px-3 py-1.5 bg-purple-600 hover:bg-purple-700 disabled:bg-purple-800 text-white rounded-lg text-sm"
+              className="flex items-center gap-2 px-3 py-1.5 bg-purple-600 hover:bg-purple-700 text-white rounded-lg text-sm"
             >
-              {running ? (
-                <RefreshCw className="w-4 h-4 animate-spin" />
-              ) : (
-                <Play className="w-4 h-4" />
-              )}
+              <Play className="w-4 h-4" />
               Run Analysis
             </button>
+          )}
+          {running && (
+            <div className="flex items-center gap-3">
+              <div className="flex items-center gap-2 min-w-[200px]">
+                <RefreshCw className="w-3.5 h-3.5 text-purple-400 animate-spin shrink-0" />
+                <div className="flex-1">
+                  <div className="h-1.5 bg-gray-700 rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-purple-500 rounded-full transition-all duration-500"
+                      style={{ width: `${runProgress ? Math.round((runProgress.chunksCompleted / runProgress.totalChunks) * 100) : 2}%` }}
+                    />
+                  </div>
+                </div>
+                <span className="text-[10px] text-gray-400 whitespace-nowrap">
+                  {runProgress
+                    ? `${runProgress.chunksCompleted}/${runProgress.totalChunks} chunks · ${Math.round(runProgress.elapsedS)}s`
+                    : 'Starting...'}
+                </span>
+              </div>
+            </div>
           )}
         </div>
       </div>

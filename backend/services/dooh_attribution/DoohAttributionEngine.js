@@ -653,7 +653,7 @@ export class DoohAttributionEngine {
   /**
    * Run attribution analysis for a campaign (OPTIMIZED)
    */
-  async run(venueId, campaignId, startTs, endTs) {
+  async run(venueId, campaignId, startTs, endTs, onProgress = null) {
     const runStart = Date.now();
     console.log(`\n🚀 [PEBLE] Starting attribution analysis...`);
     console.log(`📅 Time range: ${new Date(startTs).toISOString()} - ${new Date(endTs).toISOString()}`);
@@ -890,6 +890,18 @@ export class DoohAttributionEngine {
       this.positionCache.clear();
       const elapsed = ((Date.now() - runStart) / 1000).toFixed(1);
       console.log(`✅ [PEBLE] Chunk ${chunkIdx}/${totalChunks} done (${chunkAttrEvents.length} events, ${elapsed}s elapsed)`);
+
+      // Report progress if callback provided
+      if (onProgress) {
+        onProgress({
+          chunksCompleted: chunkIdx,
+          totalChunks,
+          totalAttributionEvents,
+          totalControlMatches,
+          totalConverted,
+          elapsedS: parseFloat(elapsed),
+        });
+      }
     } // end chunk loop
 
     const totalTime = ((Date.now() - runStart) / 1000).toFixed(1);
