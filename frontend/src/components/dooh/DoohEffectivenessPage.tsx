@@ -343,6 +343,7 @@ export default function DoohEffectivenessPage({ onClose }: DoohEffectivenessPage
       else if (timeRange === 'week') startTs = now - 7 * 24 * 60 * 60 * 1000
       
       // Step 1: Start the run (returns immediately with runId)
+      console.log('[PEBLE] Starting run...', { venueId: venue.id, campaignId: selectedCampaign.id, startTs, endTs: now })
       const startRes = await fetch(`${API_BASE}/api/dooh-attribution/run`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -360,21 +361,32 @@ export default function DoohEffectivenessPage({ onClose }: DoohEffectivenessPage
         throw new Error(errData.message || 'Failed to start analysis')
       }
       
-      const { runId } = await startRes.json()
+      const startData = await startRes.json()
+      console.log('[PEBLE] Run started:', startData)
+      const runId = startData.runId
+      
+      if (!runId) {
+        throw new Error('No runId returned from server')
+      }
       
       // Step 2: Poll for progress until done
       let done = false
+      let pollCount = 0
       while (!done) {
         await new Promise(r => setTimeout(r, 2000))
+        pollCount++
         
         try {
           const statusRes = await fetch(`${API_BASE}/api/dooh-attribution/run/status/${runId}`)
+          console.log(`[PEBLE] Poll #${pollCount} status:`, statusRes.status)
           if (!statusRes.ok) throw new Error('Failed to check run status')
           
           const statusData = await statusRes.json()
+          console.log(`[PEBLE] Poll #${pollCount} data:`, statusData)
           
           if (statusData.status === 'done') {
             done = true
+            console.log('[PEBLE] Run complete! Summary:', statusData.summary)
             if (statusData.summary) {
               setKpiSummary(statusData.summary)
               setHasAnalyzisData(true)
@@ -391,8 +403,7 @@ export default function DoohEffectivenessPage({ onClose }: DoohEffectivenessPage
             })
           }
         } catch (pollErr) {
-          // If polling fails, keep trying (transient network issue)
-          console.warn('Poll error, retrying...', pollErr)
+          console.warn(`[PEBLE] Poll #${pollCount} error, retrying...`, pollErr)
         }
       }
     } catch (err) {
