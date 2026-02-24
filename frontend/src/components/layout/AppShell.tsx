@@ -345,7 +345,7 @@ export default function AppShell({ onOpenDwgImporter, onOpenEdgeCommissioning, s
         )}
         
         {/* Status Bar */}
-        <div className="absolute bottom-0 left-0 right-0 h-12 bg-panel-bg/90 border-t border-border-dark flex items-center px-4 text-xs text-gray-400">
+        <div className="absolute bottom-0 left-0 right-0 h-12 bg-panel-bg/90 border-t border-border-dark flex items-center px-4 text-xs text-gray-400 z-20">
           <span className="mr-4">
             <span className="text-gray-500">Venue:</span>{' '}
             <span className="text-gray-300">{venue?.name || 'None'}</span>
