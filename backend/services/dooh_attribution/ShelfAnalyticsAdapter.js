@@ -164,9 +164,9 @@ export class ShelfAnalyticsAdapter {
    */
   getShelfCategories(venueId, shelfId, planogramId) {
     if (!planogramId) {
-      // Try to find active planogram for venue
+      // Find latest planogram for venue (any status)
       const planogram = this.db.prepare(`
-        SELECT id FROM planograms WHERE venue_id = ? AND status = 'active' LIMIT 1
+        SELECT id FROM planograms WHERE venue_id = ? ORDER BY version DESC LIMIT 1
       `).get(venueId);
       planogramId = planogram?.id;
     }
@@ -199,7 +199,7 @@ export class ShelfAnalyticsAdapter {
   getShelfBrands(venueId, shelfId, planogramId) {
     if (!planogramId) {
       const planogram = this.db.prepare(`
-        SELECT id FROM planograms WHERE venue_id = ? AND status = 'active' LIMIT 1
+        SELECT id FROM planograms WHERE venue_id = ? ORDER BY version DESC LIMIT 1
       `).get(venueId);
       planogramId = planogram?.id;
     }
@@ -232,7 +232,7 @@ export class ShelfAnalyticsAdapter {
   getShelfSkus(venueId, shelfId, planogramId) {
     if (!planogramId) {
       const planogram = this.db.prepare(`
-        SELECT id FROM planograms WHERE venue_id = ? AND status = 'active' LIMIT 1
+        SELECT id FROM planograms WHERE venue_id = ? ORDER BY version DESC LIMIT 1
       `).get(venueId);
       planogramId = planogram?.id;
     }
@@ -370,7 +370,7 @@ export class ShelfAnalyticsAdapter {
   findShelvesForTarget(venueId, type, ids) {
     const shelfIds = new Set();
 
-    // Get active planogram
+    // Get latest planogram (any status)
     const planogram = this.db.prepare(`
       SELECT id FROM planograms WHERE venue_id = ? ORDER BY version DESC LIMIT 1
     `).get(venueId);
@@ -379,14 +379,24 @@ export class ShelfAnalyticsAdapter {
 
     const shelfPlanograms = shelfPlanogramQueries.getByPlanogramId(this.db, planogram.id);
 
+    // Diagnostic: collect all categories/brands found
+    const allCategories = new Set();
+    const allBrands = new Set();
+    let totalSkus = 0;
+    let totalSlots = 0;
+
     for (const sp of shelfPlanograms) {
       const slots = sp.slots;
       
       slots.levels?.forEach(level => {
         level.slots?.forEach(slot => {
+          totalSlots++;
           if (slot.skuItemId) {
             const sku = skuItemQueries.getById(this.db, slot.skuItemId);
             if (sku) {
+              totalSkus++;
+              if (sku.category) allCategories.add(sku.category);
+              if (sku.brand) allBrands.add(sku.brand);
               if (type === 'category' && ids.includes(sku.category)) {
                 shelfIds.add(sp.shelfId);
               } else if (type === 'brand' && ids.includes(sku.brand)) {
@@ -399,6 +409,11 @@ export class ShelfAnalyticsAdapter {
         });
       });
     }
+
+    console.log(`🔍 [DIAG] findShelvesForTarget: ${shelfPlanograms.length} shelf planograms, ${totalSlots} slots, ${totalSkus} SKUs resolved`);
+    console.log(`🔍 [DIAG] All categories in planogram: [${Array.from(allCategories).join(', ')}]`);
+    console.log(`🔍 [DIAG] All brands in planogram: [${Array.from(allBrands).slice(0, 10).join(', ')}]`);
+    console.log(`🔍 [DIAG] Looking for ${type}=${ids.join(',')} → matched ${shelfIds.size} shelves`);
 
     return Array.from(shelfIds);
   }
