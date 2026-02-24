@@ -267,12 +267,16 @@ export class TrajectoryStorageService extends EventEmitter {
       CREATE INDEX IF NOT EXISTS idx_track_positions_venue_time ON track_positions(venue_id, timestamp);
       CREATE INDEX IF NOT EXISTS idx_track_positions_track ON track_positions(track_key, timestamp);
       CREATE INDEX IF NOT EXISTS idx_track_positions_venue_track_time ON track_positions(venue_id, track_key, timestamp);
+      CREATE INDEX IF NOT EXISTS idx_track_positions_roi_time ON track_positions(roi_id, timestamp);
+      CREATE INDEX IF NOT EXISTS idx_zone_visits_track_roi ON zone_visits(track_key, roi_id, is_dwell, start_time);
       CREATE INDEX IF NOT EXISTS idx_zone_kpi_daily_roi_date ON zone_kpi_daily(roi_id, date);
       CREATE INDEX IF NOT EXISTS idx_zone_settings_roi ON zone_settings(roi_id);
       CREATE INDEX IF NOT EXISTS idx_zone_alert_rules_roi ON zone_alert_rules(roi_id);
       CREATE INDEX IF NOT EXISTS idx_activity_ledger_venue_time ON activity_ledger(venue_id, timestamp);
       CREATE INDEX IF NOT EXISTS idx_activity_ledger_roi_time ON activity_ledger(roi_id, timestamp);
       CREATE INDEX IF NOT EXISTS idx_zone_kpi_hourly_roi_date ON zone_kpi_hourly(roi_id, date, hour);
+      CREATE INDEX IF NOT EXISTS idx_zone_visits_venue_track_time ON zone_visits(venue_id, track_key, start_time);
+      CREATE INDEX IF NOT EXISTS idx_zone_visits_venue_end_start ON zone_visits(venue_id, end_time, start_time);
     `);
     
     // Migration: Add queue-specific columns to zone_settings if they don't exist

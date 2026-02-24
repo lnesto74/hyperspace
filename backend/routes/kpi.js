@@ -6,6 +6,10 @@ import { shelfPlanogramQueries, planogramQueries } from '../database/schema.js';
 const timelineCache = new Map();
 const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes TTL
 
+// Zone KPI cache - short-lived to avoid recomputing on rapid re-opens
+const kpiCache = new Map();
+const KPI_CACHE_TTL_MS = 30 * 1000; // 30 seconds TTL
+
 function getTimelineCacheKey(venueId, startTime, endTime, interval, roiId) {
   return `${venueId}:${startTime}:${endTime}:${interval}:${roiId || 'all'}`;
 }
@@ -148,8 +152,25 @@ export default function createKpiRoutes(db, kpiCalculator, trajectoryStorage) {
         end = now;
       }
       
+      // Check KPI cache
+      const kpiCacheKey = `${roiId}:${start}:${end}`;
+      const cachedKpi = kpiCache.get(kpiCacheKey);
+      if (cachedKpi && (Date.now() - cachedKpi.cachedAt) < KPI_CACHE_TTL_MS) {
+        return res.json({ roiId, startTime: start, endTime: end, kpis: cachedKpi.data, fromCache: true });
+      }
+
       const kpis = kpiCalculator.getZoneKPIs(roiId, start, end);
       
+      // Store in cache
+      kpiCache.set(kpiCacheKey, { data: kpis, cachedAt: Date.now() });
+      // Evict stale entries periodically (keep cache small)
+      if (kpiCache.size > 100) {
+        const now = Date.now();
+        for (const [k, v] of kpiCache) {
+          if (now - v.cachedAt > KPI_CACHE_TTL_MS) kpiCache.delete(k);
+        }
+      }
+
       res.json({
         roiId,
         startTime: start,
@@ -433,86 +454,89 @@ export default function createKpiRoutes(db, kpiCalculator, trajectoryStorage) {
       const slots = [];
       const slotDuration = intervalMins * 60 * 1000;
       
+      // --- Optimized: 2 bulk queries instead of 4×N per-slot queries ---
+      
+      // Bulk query 1: occupancy data for entire range
+      let occupancyRows;
+      if (roiId) {
+        occupancyRows = db.prepare(`
+          SELECT timestamp, occupancy_count
+          FROM zone_occupancy
+          WHERE venue_id = ? AND roi_id = ? AND timestamp >= ? AND timestamp < ?
+          ORDER BY timestamp
+        `).all(venueId, roiId, startTime, endTime);
+      } else {
+        occupancyRows = db.prepare(`
+          SELECT timestamp, occupancy_count
+          FROM zone_occupancy
+          WHERE venue_id = ? AND timestamp >= ? AND timestamp < ?
+          ORDER BY timestamp
+        `).all(venueId, startTime, endTime);
+      }
+      
+      // Bulk query 2: visits data for entire range (includes dwell & engagement flags)
+      let visitRows;
+      if (roiId) {
+        visitRows = db.prepare(`
+          SELECT start_time, is_dwell, is_engagement
+          FROM zone_visits
+          WHERE venue_id = ? AND roi_id = ? AND start_time >= ? AND start_time < ?
+          ORDER BY start_time
+        `).all(venueId, roiId, startTime, endTime);
+      } else {
+        visitRows = db.prepare(`
+          SELECT start_time, is_dwell, is_engagement
+          FROM zone_visits
+          WHERE venue_id = ? AND start_time >= ? AND start_time < ?
+          ORDER BY start_time
+        `).all(venueId, startTime, endTime);
+      }
+      
+      // Index occupancy into slots in-memory
+      const occupancyBySlot = new Map();
+      for (const row of occupancyRows) {
+        const slotKey = Math.floor(row.timestamp / slotDuration) * slotDuration;
+        if (!occupancyBySlot.has(slotKey)) {
+          occupancyBySlot.set(slotKey, { sum: 0, count: 0, peak: 0 });
+        }
+        const slot = occupancyBySlot.get(slotKey);
+        slot.sum += row.occupancy_count;
+        slot.count++;
+        slot.peak = Math.max(slot.peak, row.occupancy_count);
+      }
+      
+      // Index visits into slots in-memory
+      const visitsBySlot = new Map();
+      for (const row of visitRows) {
+        const slotKey = Math.floor(row.start_time / slotDuration) * slotDuration;
+        if (!visitsBySlot.has(slotKey)) {
+          visitsBySlot.set(slotKey, { visits: 0, dwells: 0, engagements: 0 });
+        }
+        const slot = visitsBySlot.get(slotKey);
+        slot.visits++;
+        if (row.is_dwell === 1) slot.dwells++;
+        if (row.is_engagement === 1) slot.engagements++;
+      }
+      
+      // Build slots from in-memory data
       for (let ts = startTime; ts < endTime; ts += slotDuration) {
-        const slotEnd = ts + slotDuration;
         const date = new Date(ts);
+        const occ = occupancyBySlot.get(ts);
+        const vis = visitsBySlot.get(ts);
         
-        // Get occupancy for this slot (filter by zone if specified)
-        let occupancy;
-        if (roiId) {
-          occupancy = db.prepare(`
-            SELECT AVG(occupancy_count) as avg_occupancy, MAX(occupancy_count) as peak
-            FROM zone_occupancy
-            WHERE venue_id = ? AND roi_id = ? AND timestamp >= ? AND timestamp < ?
-          `).get(venueId, roiId, ts, slotEnd);
-        } else {
-          occupancy = db.prepare(`
-            SELECT AVG(occupancy_count) as avg_occupancy, MAX(occupancy_count) as peak
-            FROM zone_occupancy
-            WHERE venue_id = ? AND timestamp >= ? AND timestamp < ?
-          `).get(venueId, ts, slotEnd);
-        }
-        
-        // Get visits for this slot
-        let visits;
-        if (roiId) {
-          visits = db.prepare(`
-            SELECT COUNT(*) as count
-            FROM zone_visits
-            WHERE venue_id = ? AND roi_id = ? AND start_time >= ? AND start_time < ?
-          `).get(venueId, roiId, ts, slotEnd);
-        } else {
-          visits = db.prepare(`
-            SELECT COUNT(*) as count
-            FROM zone_visits
-            WHERE venue_id = ? AND start_time >= ? AND start_time < ?
-          `).get(venueId, ts, slotEnd);
-        }
-        
-        // Get dwells for this slot
-        let dwells;
-        if (roiId) {
-          dwells = db.prepare(`
-            SELECT COUNT(*) as count
-            FROM zone_visits
-            WHERE venue_id = ? AND roi_id = ? AND start_time >= ? AND start_time < ? AND is_dwell = 1
-          `).get(venueId, roiId, ts, slotEnd);
-        } else {
-          dwells = db.prepare(`
-            SELECT COUNT(*) as count
-            FROM zone_visits
-            WHERE venue_id = ? AND start_time >= ? AND start_time < ? AND is_dwell = 1
-          `).get(venueId, ts, slotEnd);
-        }
-        
-        // Get engagements for this slot
-        let engagements;
-        if (roiId) {
-          engagements = db.prepare(`
-            SELECT COUNT(*) as count
-            FROM zone_visits
-            WHERE venue_id = ? AND roi_id = ? AND start_time >= ? AND start_time < ? AND is_engagement = 1
-          `).get(venueId, roiId, ts, slotEnd);
-        } else {
-          engagements = db.prepare(`
-            SELECT COUNT(*) as count
-            FROM zone_visits
-            WHERE venue_id = ? AND start_time >= ? AND start_time < ? AND is_engagement = 1
-          `).get(venueId, ts, slotEnd);
-        }
+        const avgOccupancy = occ && occ.count > 0 ? occ.sum / occ.count : 0;
         
         slots.push({
           timestamp: ts,
           time: date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false }),
           date: date.toLocaleDateString(),
-          occupancy: Math.round((occupancy?.avg_occupancy || 0) * 10) / 10,
-          peakOccupancy: occupancy?.peak || 0,
-          visits: visits?.count || 0,
-          dwells: dwells?.count || 0,
-          engagements: engagements?.count || 0,
-          // For the frontend, map to kpi1Value and kpi2Value
-          kpi1Value: Math.round((occupancy?.avg_occupancy || 0) * 10) / 10,
-          kpi2Value: visits?.count || 0,
+          occupancy: Math.round(avgOccupancy * 10) / 10,
+          peakOccupancy: occ?.peak || 0,
+          visits: vis?.visits || 0,
+          dwells: vis?.dwells || 0,
+          engagements: vis?.engagements || 0,
+          kpi1Value: Math.round(avgOccupancy * 10) / 10,
+          kpi2Value: vis?.visits || 0,
         });
       }
       

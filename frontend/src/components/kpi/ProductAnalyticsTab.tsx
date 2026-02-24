@@ -387,12 +387,10 @@ export default function ProductAnalyticsTab({
     setError(null)
     
     try {
-      const url = new URL(`${API_BASE}/api/shelf/${shelfId}/enriched-kpis`)
-      url.searchParams.set('planogramId', planogramId)
-      url.searchParams.set('period', period)
-      if (roiId) url.searchParams.set('roiId', roiId)
+      const params = new URLSearchParams({ planogramId, period })
+      if (roiId) params.set('roiId', roiId)
       
-      const res = await fetch(url.toString())
+      const res = await fetch(`${API_BASE}/api/shelf/${shelfId}/enriched-kpis?${params}`)
       if (!res.ok) throw new Error('Failed to fetch enriched KPIs')
       const result = await res.json()
       setData(result)
