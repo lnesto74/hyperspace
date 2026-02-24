@@ -337,13 +337,12 @@ export default function DoohEffectivenessPage({ onClose }: DoohEffectivenessPage
     
     try {
       const now = Date.now()
-      let startTs = now - 24 * 60 * 60 * 1000
-      
-      if (timeRange === 'hour') startTs = now - 60 * 60 * 1000
-      else if (timeRange === 'week') startTs = now - 7 * 24 * 60 * 60 * 1000
+      // Always compute the full 7-day range so switching tabs never re-triggers computation.
+      // The backend uses incremental mode — already-processed exposures are skipped instantly.
+      const startTs = now - 7 * 24 * 60 * 60 * 1000
       
       // Step 1: Start the run (returns immediately with runId)
-      console.log('[PEBLE] Starting run...', { venueId: venue.id, campaignId: selectedCampaign.id, startTs, endTs: now })
+      console.log('[PEBLE] Starting run (full 7d range, incremental)...', { venueId: venue.id, campaignId: selectedCampaign.id, startTs, endTs: now })
       const startRes = await fetch(`${API_BASE}/api/dooh-attribution/run`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

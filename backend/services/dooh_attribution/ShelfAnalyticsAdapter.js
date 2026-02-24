@@ -13,12 +13,95 @@ import { shelfPlanogramQueries, skuItemQueries } from '../../database/schema.js'
 export class ShelfAnalyticsAdapter {
   constructor(db) {
     this.db = db;
+    // === Performance caches (reset per run via clearCaches()) ===
+    this._planogramIdCache = new Map();    // venueId -> planogramId
+    this._skuCache = new Map();            // skuItemId -> sku object
+    this._shelfTargetCache = new Map();    // cacheKey -> shelfIds[]
+    this._targetShelfPositions = null;     // cached shelf venue_objects for position-based fallback
+    this._zoneVisitsIndex = null;          // Map<trackKey, visits[]> — batch loaded per chunk
+    this._shelfMatchCache = new Map();     // shelfId -> { categories, brands, skus }
   }
 
   /**
-   * Find the best planogram for a venue - prefers the one with actual shelf data
+   * Clear all caches between runs
+   */
+  clearCaches() {
+    this._planogramIdCache.clear();
+    this._skuCache.clear();
+    this._shelfTargetCache.clear();
+    this._targetShelfPositions = null;
+    this._zoneVisitsIndex = null;
+    this._shelfMatchCache.clear();
+  }
+
+  /**
+   * Pre-load all zone_visits for a chunk time window.
+   * Call once per chunk before processing exposures.
+   * Eliminates hundreds of individual per-track DB queries.
+   */
+  preloadChunk(venueId, startTs, endTs) {
+    const visits = this.db.prepare(`
+      SELECT 
+        zv.id, zv.track_key, zv.roi_id, zv.start_time, zv.end_time,
+        zv.duration_ms, zv.is_dwell, zv.is_engagement,
+        r.name as roi_name, r.metadata_json
+      FROM zone_visits zv
+      JOIN regions_of_interest r ON zv.roi_id = r.id
+      WHERE zv.venue_id = ? AND zv.end_time >= ? AND zv.start_time <= ?
+      ORDER BY zv.track_key, zv.start_time ASC
+    `).all(venueId, startTs, endTs);
+
+    this._zoneVisitsIndex = new Map();
+    for (const v of visits) {
+      if (!this._zoneVisitsIndex.has(v.track_key)) {
+        this._zoneVisitsIndex.set(v.track_key, []);
+      }
+      this._zoneVisitsIndex.get(v.track_key).push(v);
+    }
+    console.log(`📊 [PEBLE] Preloaded ${visits.length} zone_visits for ${this._zoneVisitsIndex.size} tracks`);
+  }
+
+  /**
+   * Pre-compute and cache target shelf IDs + positions for a campaign target.
+   * Call once at the start of a run.
+   */
+  initTargetCache(venueId, targetJson) {
+    const { type, ids } = targetJson;
+    const cacheKey = `${venueId}:${type}:${ids.join(',')}`;
+    if (!this._shelfTargetCache.has(cacheKey)) {
+      this._shelfTargetCache.set(cacheKey, this._findShelvesForTargetUncached(venueId, type, ids));
+    }
+    const targetShelfIds = this._shelfTargetCache.get(cacheKey);
+
+    // Cache shelf positions for position-based fallback
+    if (targetShelfIds.length > 0 && !this._targetShelfPositions) {
+      const placeholders = targetShelfIds.map(() => '?').join(',');
+      this._targetShelfPositions = this.db.prepare(`
+        SELECT id, position_x, position_z, scale_x, scale_z
+        FROM venue_objects
+        WHERE venue_id = ? AND id IN (${placeholders})
+      `).all(venueId, ...targetShelfIds);
+    } else if (!this._targetShelfPositions) {
+      this._targetShelfPositions = [];
+    }
+  }
+
+  /**
+   * Get cached SKU by ID (avoids repeated DB lookups)
+   */
+  _getSkuCached(skuItemId) {
+    if (this._skuCache.has(skuItemId)) return this._skuCache.get(skuItemId);
+    const sku = skuItemQueries.getById(this.db, skuItemId);
+    this._skuCache.set(skuItemId, sku);
+    return sku;
+  }
+
+  /**
+   * Find the best planogram for a venue - prefers the one with actual shelf data (cached)
    */
   findBestPlanogram(venueId) {
+    if (this._planogramIdCache.has(venueId)) return this._planogramIdCache.get(venueId);
+
     // Find planogram that actually has shelf_planograms data
     const withData = this.db.prepare(`
       SELECT p.id FROM planograms p
@@ -28,13 +111,18 @@ export class ShelfAnalyticsAdapter {
       ORDER BY p.version DESC
       LIMIT 1
     `).get(venueId);
-    if (withData) return withData.id;
+    if (withData) {
+      this._planogramIdCache.set(venueId, withData.id);
+      return withData.id;
+    }
 
     // Fallback: latest planogram by version
     const latest = this.db.prepare(`
       SELECT id FROM planograms WHERE venue_id = ? ORDER BY version DESC LIMIT 1
     `).get(venueId);
-    return latest?.id || null;
+    const result = latest?.id || null;
+    this._planogramIdCache.set(venueId, result);
+    return result;
   }
 
   /**
@@ -51,27 +139,31 @@ export class ShelfAnalyticsAdapter {
   queryEngagementsForTrack(venueId, trackKey, startTs, endTs, targetJson) {
     const { type, ids } = targetJson;
     
-    // Query zone visits (engagements) from TrajectoryStorageService tables
-    const visits = this.db.prepare(`
-      SELECT 
-        zv.id,
-        zv.roi_id,
-        zv.start_time,
-        zv.end_time,
-        zv.duration_ms,
-        zv.is_dwell,
-        zv.is_engagement,
-        r.name as roi_name,
-        r.metadata_json
-      FROM zone_visits zv
-      JOIN regions_of_interest r ON zv.roi_id = r.id
-      WHERE zv.venue_id = ? 
-        AND zv.track_key = ?
-        AND zv.start_time >= ?
-        AND zv.start_time <= ?
-        AND (zv.is_dwell = 1 OR zv.is_engagement = 1)
-      ORDER BY zv.start_time ASC
-    `).all(venueId, trackKey, startTs, endTs);
+    // Use pre-loaded zone visits if available (batch mode)
+    let visits;
+    if (this._zoneVisitsIndex) {
+      const allVisits = this._zoneVisitsIndex.get(trackKey) || [];
+      visits = allVisits.filter(v =>
+        v.start_time >= startTs && v.start_time <= endTs &&
+        (v.is_dwell === 1 || v.is_engagement === 1)
+      );
+    } else {
+      // Fallback: individual query
+      visits = this.db.prepare(`
+        SELECT 
+          zv.id, zv.roi_id, zv.start_time, zv.end_time,
+          zv.duration_ms, zv.is_dwell, zv.is_engagement,
+          r.name as roi_name, r.metadata_json
+        FROM zone_visits zv
+        JOIN regions_of_interest r ON zv.roi_id = r.id
+        WHERE zv.venue_id = ? 
+          AND zv.track_key = ?
+          AND zv.start_time >= ?
+          AND zv.start_time <= ?
+          AND (zv.is_dwell = 1 OR zv.is_engagement = 1)
+        ORDER BY zv.start_time ASC
+      `).all(venueId, trackKey, startTs, endTs);
+    }
 
     for (const visit of visits) {
       const metadata = visit.metadata_json ? JSON.parse(visit.metadata_json) : {};
@@ -122,51 +214,38 @@ export class ShelfAnalyticsAdapter {
         }
         break;
 
-      case 'category':
-        const categoryMatch = this.getShelfCategories(venueId, shelfId, planogramId);
-        for (const cat of categoryMatch) {
-          if (ids.includes(cat.categoryId || cat.category)) {
-            return { 
-              matchType: 'category', 
-              matchedId: cat.categoryId || cat.category,
-              categoryId: cat.categoryId || cat.category,
-              shelfId 
-            };
+      case 'category': {
+        const shelfData = this._getShelfDataCached(venueId, shelfId, planogramId);
+        for (const cat of shelfData.categories) {
+          if (ids.includes(cat)) {
+            return { matchType: 'category', matchedId: cat, categoryId: cat, shelfId };
           }
         }
         break;
+      }
 
-      case 'brand':
-        const brandMatch = this.getShelfBrands(venueId, shelfId, planogramId);
-        for (const brand of brandMatch) {
-          if (ids.includes(brand.brandId || brand.brand)) {
-            return { 
-              matchType: 'brand', 
-              matchedId: brand.brandId || brand.brand,
-              brandId: brand.brandId || brand.brand,
-              shelfId 
-            };
+      case 'brand': {
+        const shelfData = this._getShelfDataCached(venueId, shelfId, planogramId);
+        for (const brand of shelfData.brands) {
+          if (ids.includes(brand)) {
+            return { matchType: 'brand', matchedId: brand, brandId: brand, shelfId };
           }
         }
         break;
+      }
 
-      case 'sku':
-        const skuMatch = this.getShelfSkus(venueId, shelfId, planogramId);
-        for (const sku of skuMatch) {
-          if (ids.includes(sku.skuId || sku.id)) {
-            return { 
-              matchType: 'sku', 
-              matchedId: sku.skuId || sku.id,
-              skuId: sku.skuId || sku.id,
-              shelfId 
-            };
+      case 'sku': {
+        const shelfData = this._getShelfDataCached(venueId, shelfId, planogramId);
+        for (const skuId of shelfData.skuIds) {
+          if (ids.includes(skuId)) {
+            return { matchType: 'sku', matchedId: skuId, skuId, shelfId };
           }
         }
         break;
+      }
 
       case 'slot':
         // Slot matching requires position-based detection
-        // Check if the slot position matches
         if (metadata.slotId && ids.includes(metadata.slotId)) {
           return { 
             matchType: 'slot', 
@@ -182,100 +261,69 @@ export class ShelfAnalyticsAdapter {
   }
 
   /**
-   * Get categories present on a shelf
+   * Get cached shelf data (categories, brands, skuIds) for a shelf.
+   * Consolidates getShelfCategories/Brands/Skus into one cached lookup.
    */
-  getShelfCategories(venueId, shelfId, planogramId) {
-    if (!planogramId) {
-      planogramId = this.findBestPlanogram(venueId);
-    }
+  _getShelfDataCached(venueId, shelfId, planogramId) {
+    if (this._shelfMatchCache.has(shelfId)) return this._shelfMatchCache.get(shelfId);
 
-    if (!planogramId) return [];
+    if (!planogramId) planogramId = this.findBestPlanogram(venueId);
+    const result = { categories: [], brands: [], skuIds: [] };
+    if (!planogramId) { this._shelfMatchCache.set(shelfId, result); return result; }
 
     const shelfPlanogram = shelfPlanogramQueries.getByShelfId(this.db, planogramId, shelfId);
-    if (!shelfPlanogram) return [];
+    if (!shelfPlanogram) { this._shelfMatchCache.set(shelfId, result); return result; }
 
-    const categories = new Set();
+    const cats = new Set();
+    const brands = new Set();
+    const skuIds = [];
     const slots = shelfPlanogram.slots;
 
     slots.levels?.forEach(level => {
       level.slots?.forEach(slot => {
         if (slot.skuItemId) {
-          const sku = skuItemQueries.getById(this.db, slot.skuItemId);
-          if (sku?.category) {
-            categories.add(sku.category);
+          const sku = this._getSkuCached(slot.skuItemId);
+          if (sku) {
+            if (sku.category) cats.add(sku.category);
+            if (sku.brand) brands.add(sku.brand);
+            skuIds.push(sku.id);
           }
         }
       });
     });
 
-    return Array.from(categories).map(cat => ({ category: cat, categoryId: cat }));
+    result.categories = Array.from(cats);
+    result.brands = Array.from(brands);
+    result.skuIds = skuIds;
+    this._shelfMatchCache.set(shelfId, result);
+    return result;
+  }
+
+  /**
+   * Get categories present on a shelf
+   */
+  getShelfCategories(venueId, shelfId, planogramId) {
+    const data = this._getShelfDataCached(venueId, shelfId, planogramId);
+    return data.categories.map(cat => ({ category: cat, categoryId: cat }));
   }
 
   /**
    * Get brands present on a shelf
    */
   getShelfBrands(venueId, shelfId, planogramId) {
-    if (!planogramId) {
-      planogramId = this.findBestPlanogram(venueId);
-    }
-
-    if (!planogramId) return [];
-
-    const shelfPlanogram = shelfPlanogramQueries.getByShelfId(this.db, planogramId, shelfId);
-    if (!shelfPlanogram) return [];
-
-    const brands = new Set();
-    const slots = shelfPlanogram.slots;
-
-    slots.levels?.forEach(level => {
-      level.slots?.forEach(slot => {
-        if (slot.skuItemId) {
-          const sku = skuItemQueries.getById(this.db, slot.skuItemId);
-          if (sku?.brand) {
-            brands.add(sku.brand);
-          }
-        }
-      });
-    });
-
-    return Array.from(brands).map(brand => ({ brand, brandId: brand }));
+    const data = this._getShelfDataCached(venueId, shelfId, planogramId);
+    return data.brands.map(brand => ({ brand, brandId: brand }));
   }
 
   /**
    * Get SKUs present on a shelf
    */
   getShelfSkus(venueId, shelfId, planogramId) {
-    if (!planogramId) {
-      planogramId = this.findBestPlanogram(venueId);
-    }
-
-    if (!planogramId) return [];
-
-    const shelfPlanogram = shelfPlanogramQueries.getByShelfId(this.db, planogramId, shelfId);
-    if (!shelfPlanogram) return [];
-
-    const skus = [];
-    const slots = shelfPlanogram.slots;
-
-    slots.levels?.forEach(level => {
-      level.slots?.forEach(slot => {
-        if (slot.skuItemId) {
-          const sku = skuItemQueries.getById(this.db, slot.skuItemId);
-          if (sku) {
-            skus.push({
-              id: sku.id,
-              skuId: sku.id,
-              skuCode: sku.skuCode,
-              name: sku.name,
-              brand: sku.brand,
-              category: sku.category
-            });
-          }
-        }
-      });
-    });
-
-    return skus;
+    const data = this._getShelfDataCached(venueId, shelfId, planogramId);
+    return data.skuIds.map(id => {
+      const sku = this._getSkuCached(id);
+      return sku ? { id: sku.id, skuId: sku.id, skuCode: sku.skuCode, name: sku.name, brand: sku.brand, category: sku.category } : null;
+    }).filter(Boolean);
   }
 
   /**
@@ -284,26 +332,26 @@ export class ShelfAnalyticsAdapter {
   queryPositionBasedEngagement(venueId, trackKey, startTs, endTs, targetJson) {
     const { type, ids } = targetJson;
 
-    // Get shelf positions for target shelves
-    let targetShelfIds = [];
-    
-    if (type === 'shelf') {
-      targetShelfIds = ids;
+    // Use cached shelf positions if available
+    let shelves;
+    if (this._targetShelfPositions) {
+      shelves = this._targetShelfPositions;
     } else {
-      // Find shelves containing target category/brand/sku
-      targetShelfIds = this.findShelvesForTarget(venueId, type, ids);
+      let targetShelfIds = [];
+      if (type === 'shelf') {
+        targetShelfIds = ids;
+      } else {
+        targetShelfIds = this.findShelvesForTarget(venueId, type, ids);
+      }
+      if (targetShelfIds.length === 0) return null;
+      shelves = this.db.prepare(`
+        SELECT id, position_x, position_z, scale_x, scale_z
+        FROM venue_objects
+        WHERE venue_id = ? AND id IN (${targetShelfIds.map(() => '?').join(',')})
+      `).all(venueId, ...targetShelfIds);
     }
 
-    if (targetShelfIds.length === 0) return null;
-
-    // Get shelf objects with positions
-    const shelves = this.db.prepare(`
-      SELECT id, position_x, position_z, scale_x, scale_z
-      FROM venue_objects
-      WHERE venue_id = ? AND id IN (${targetShelfIds.map(() => '?').join(',')})
-    `).all(venueId, ...targetShelfIds);
-
-    if (shelves.length === 0) return null;
+    if (!shelves || shelves.length === 0) return null;
 
     // Get track positions in time window
     const positions = this.db.prepare(`
@@ -380,33 +428,32 @@ export class ShelfAnalyticsAdapter {
    * Find shelves containing target category/brand/sku
    */
   findShelvesForTarget(venueId, type, ids) {
+    const cacheKey = `${venueId}:${type}:${ids.join(',')}`;
+    if (this._shelfTargetCache.has(cacheKey)) return this._shelfTargetCache.get(cacheKey);
+    const result = this._findShelvesForTargetUncached(venueId, type, ids);
+    this._shelfTargetCache.set(cacheKey, result);
+    return result;
+  }
+
+  _findShelvesForTargetUncached(venueId, type, ids) {
     const shelfIds = new Set();
 
-    // Get planogram with actual shelf data
     const planogramId = this.findBestPlanogram(venueId);
-
     if (!planogramId) return [];
 
     const shelfPlanograms = shelfPlanogramQueries.getByPlanogramId(this.db, planogramId);
-
-    // Diagnostic: collect all categories/brands found
-    const allCategories = new Set();
-    const allBrands = new Set();
-    let totalSkus = 0;
     let totalSlots = 0;
+    let totalSkus = 0;
 
     for (const sp of shelfPlanograms) {
       const slots = sp.slots;
-      
       slots.levels?.forEach(level => {
         level.slots?.forEach(slot => {
           totalSlots++;
           if (slot.skuItemId) {
-            const sku = skuItemQueries.getById(this.db, slot.skuItemId);
+            const sku = this._getSkuCached(slot.skuItemId);
             if (sku) {
               totalSkus++;
-              if (sku.category) allCategories.add(sku.category);
-              if (sku.brand) allBrands.add(sku.brand);
               if (type === 'category' && ids.includes(sku.category)) {
                 shelfIds.add(sp.shelfId);
               } else if (type === 'brand' && ids.includes(sku.brand)) {
@@ -420,11 +467,7 @@ export class ShelfAnalyticsAdapter {
       });
     }
 
-    console.log(`🔍 [DIAG] findShelvesForTarget: ${shelfPlanograms.length} shelf planograms, ${totalSlots} slots, ${totalSkus} SKUs resolved`);
-    console.log(`🔍 [DIAG] All categories in planogram: [${Array.from(allCategories).join(', ')}]`);
-    console.log(`🔍 [DIAG] All brands in planogram: [${Array.from(allBrands).slice(0, 10).join(', ')}]`);
-    console.log(`🔍 [DIAG] Looking for ${type}=${ids.join(',')} → matched ${shelfIds.size} shelves`);
-
+    console.log(`🔍 [PEBLE] findShelvesForTarget: ${shelfPlanograms.length} shelves, ${totalSlots} slots, ${totalSkus} SKUs → matched ${shelfIds.size}`);
     return Array.from(shelfIds);
   }
 
@@ -485,31 +528,56 @@ export class ShelfAnalyticsAdapter {
     const preWindowStart = exposureEndTs - (windowS * 1000);
     const postWindowEnd = exposureEndTs + (windowS * 1000);
 
-    // Get ROI visits before and after exposure
-    const preVisits = this.db.prepare(`
-      SELECT r.name, r.metadata_json
-      FROM zone_visits zv
-      JOIN regions_of_interest r ON zv.roi_id = r.id
-      WHERE zv.venue_id = ? AND zv.track_key = ?
-        AND zv.end_time >= ? AND zv.end_time <= ?
-      ORDER BY zv.end_time DESC
-      LIMIT 1
-    `).get(venueId, trackKey, preWindowStart, exposureEndTs);
+    let preVisit = null;
+    let postVisit = null;
 
-    const postVisits = this.db.prepare(`
-      SELECT r.name, r.metadata_json
-      FROM zone_visits zv
-      JOIN regions_of_interest r ON zv.roi_id = r.id
-      WHERE zv.venue_id = ? AND zv.track_key = ?
-        AND zv.start_time >= ? AND zv.start_time <= ?
-      ORDER BY zv.start_time ASC
-      LIMIT 1
-    `).get(venueId, trackKey, exposureEndTs, postWindowEnd);
+    if (this._zoneVisitsIndex) {
+      // Use batch-loaded data
+      const allVisits = this._zoneVisitsIndex.get(trackKey) || [];
+      // Pre: latest visit ending before exposure
+      for (let i = allVisits.length - 1; i >= 0; i--) {
+        const v = allVisits[i];
+        if (v.end_time >= preWindowStart && v.end_time <= exposureEndTs) {
+          preVisit = v;
+          break;
+        }
+      }
+      // Post: earliest visit starting after exposure
+      for (const v of allVisits) {
+        if (v.start_time >= exposureEndTs && v.start_time <= postWindowEnd) {
+          postVisit = v;
+          break;
+        }
+      }
+    } else {
+      // Fallback: individual queries
+      preVisit = this.db.prepare(`
+        SELECT r.name, r.metadata_json
+        FROM zone_visits zv
+        JOIN regions_of_interest r ON zv.roi_id = r.id
+        WHERE zv.venue_id = ? AND zv.track_key = ?
+          AND zv.end_time >= ? AND zv.end_time <= ?
+        ORDER BY zv.end_time DESC
+        LIMIT 1
+      `).get(venueId, trackKey, preWindowStart, exposureEndTs);
+
+      postVisit = this.db.prepare(`
+        SELECT r.name, r.metadata_json
+        FROM zone_visits zv
+        JOIN regions_of_interest r ON zv.roi_id = r.id
+        WHERE zv.venue_id = ? AND zv.track_key = ?
+          AND zv.start_time >= ? AND zv.start_time <= ?
+        ORDER BY zv.start_time ASC
+        LIMIT 1
+      `).get(venueId, trackKey, exposureEndTs, postWindowEnd);
+    }
 
     // Determine journey phase
     let phase = 'browsing';
-    const preZone = preVisits?.name?.toLowerCase() || '';
-    const postZone = postVisits?.name?.toLowerCase() || '';
+    const preZoneName = preVisit?.roi_name || preVisit?.name || '';
+    const postZoneName = postVisit?.roi_name || postVisit?.name || '';
+    const preZone = preZoneName.toLowerCase();
+    const postZone = postZoneName.toLowerCase();
 
     if (preZone.includes('entrance')) phase = 'arrival';
     else if (preZone.includes('queue') || preZone.includes('checkout')) phase = 'checkout';
@@ -517,8 +585,8 @@ export class ShelfAnalyticsAdapter {
     else if (postZone.includes('queue') || postZone.includes('checkout')) phase = 'pre-checkout';
 
     return {
-      preZone: preVisits?.name || null,
-      postZone: postVisits?.name || null,
+      preZone: preZoneName || null,
+      postZone: postZoneName || null,
       phase
     };
   }

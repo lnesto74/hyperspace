@@ -660,6 +660,7 @@ export class DoohAttributionEngine {
 
     // Clear caches for fresh run
     this.clearCaches();
+    this.shelfAdapter.clearCaches();
 
     const campaign = this.getCampaign(campaignId);
     if (!campaign) {
@@ -674,6 +675,7 @@ export class DoohAttributionEngine {
     const target = campaign.target;
     const actionWindowMs = params.action_window_minutes * 60 * 1000;
     const bucketMs = params.match_time_bucket_min * 60 * 1000;
+    const prePostWindowMs = (params.pre_post_window_s || 30) * 1000;
 
     console.log(`🎯 Campaign: ${campaign.name}`);
     console.log(`📺 Screens: ${campaign.screenIds.length}`);
@@ -683,21 +685,19 @@ export class DoohAttributionEngine {
     const targetPosition = this.getTargetPosition(venueId, target);
     console.log(`📍 Target position: ${targetPosition ? `(${targetPosition.x.toFixed(1)}, ${targetPosition.z.toFixed(1)})` : 'N/A'}`);
 
-    // DIAGNOSTIC: Check planogram and shelf data
-    const diag_planogram = this.db.prepare(`SELECT id, version, status FROM planograms WHERE venue_id = ? ORDER BY version DESC LIMIT 1`).get(venueId);
-    console.log(`🔍 [DIAG] Planogram: ${diag_planogram ? `${diag_planogram.id} (v${diag_planogram.version}, ${diag_planogram.status})` : 'NONE'}`);
-    
-    const diag_shelvesForTarget = this.shelfAdapter.findShelvesForTarget(venueId, target.type, target.ids);
-    console.log(`🔍 [DIAG] Shelves matching target ${target.type}=${target.ids.join(',')}: ${diag_shelvesForTarget.length} shelves → [${diag_shelvesForTarget.slice(0, 5).join(', ')}]`);
-    
-    if (diag_shelvesForTarget.length > 0) {
-      const shelfPlaceholders = diag_shelvesForTarget.map(() => '?').join(',');
-      const diag_venueObjects = this.db.prepare(`SELECT id, position_x, position_z FROM venue_objects WHERE venue_id = ? AND id IN (${shelfPlaceholders})`).all(venueId, ...diag_shelvesForTarget);
-      console.log(`🔍 [DIAG] Venue objects for those shelves: ${diag_venueObjects.length}`);
+    // Pre-compute and cache target shelf IDs + positions (done once)
+    this.shelfAdapter.initTargetCache(venueId, target);
+
+    // INCREMENTAL: find already-processed exposure event IDs for this campaign/range
+    const existingAttrIds = new Set(
+      this.db.prepare(`
+        SELECT exposure_event_id FROM dooh_attribution_events
+        WHERE campaign_id = ? AND exposure_end_ts >= ? AND exposure_end_ts <= ?
+      `).all(campaignId, startTs, endTs).map(r => r.exposure_event_id)
+    );
+    if (existingAttrIds.size > 0) {
+      console.log(`♻️ [PEBLE] Incremental mode: ${existingAttrIds.size} exposures already processed, will skip`);
     }
-    
-    const diag_zoneVisits = this.db.prepare(`SELECT COUNT(*) as cnt FROM zone_visits WHERE venue_id = ? AND start_time >= ? AND start_time <= ?`).get(venueId, startTs, endTs);
-    console.log(`🔍 [DIAG] Zone visits in range: ${diag_zoneVisits.cnt}`);
 
     // Load exposure events
     const exposureEvents = this.getExposureEvents(
@@ -712,6 +712,28 @@ export class DoohAttributionEngine {
     if (exposureEvents.length === 0) {
       console.log(`⚠️ No exposure events found - nothing to analyze`);
       return { attributionEvents: 0, controlMatches: 0, converted: 0, conversionRate: 0, totalTimeS: 0 };
+    }
+
+    // Filter out already-processed exposures (incremental)
+    const newExposureEvents = existingAttrIds.size > 0
+      ? exposureEvents.filter(e => !existingAttrIds.has(e.id))
+      : exposureEvents;
+    console.log(`👀 New exposures to process: ${newExposureEvents.length} (skipped ${exposureEvents.length - newExposureEvents.length})`);
+
+    if (newExposureEvents.length === 0) {
+      const totalTime = ((Date.now() - runStart) / 1000).toFixed(1);
+      console.log(`✅ [PEBLE] All exposures already processed (incremental). Done in ${totalTime}s`);
+      return {
+        campaign: campaign.name,
+        exposureEvents: exposureEvents.length,
+        attributionEvents: 0,
+        controlMatches: 0,
+        converted: 0,
+        conversionRate: 0,
+        totalTimeS: parseFloat(totalTime),
+        incremental: true,
+        skipped: existingAttrIds.size,
+      };
     }
 
     // Pre-build exposed tracks set (lightweight)
@@ -729,7 +751,7 @@ export class DoohAttributionEngine {
     for (let chunkStart = startTs; chunkStart < endTs; chunkStart += CHUNK_MS) {
       chunkIdx++;
       const chunkEnd = Math.min(chunkStart + CHUNK_MS, endTs);
-      const chunkExposures = exposureEvents.filter(e => e.endTs >= chunkStart && e.endTs < chunkEnd);
+      const chunkExposures = newExposureEvents.filter(e => e.endTs >= chunkStart && e.endTs < chunkEnd);
       if (chunkExposures.length === 0) continue;
 
       console.log(`📦 [PEBLE] Chunk ${chunkIdx}/${totalChunks}: ${chunkExposures.length} exposures`);
@@ -740,11 +762,13 @@ export class DoohAttributionEngine {
       const paddedEnd = chunkEnd + actionWindowMs + bucketMs;
       const allPositions = this.batchLoadPositions(venueId, paddedStart, paddedEnd);
 
+      // Batch-load zone_visits for this chunk (covers action windows + context windows)
+      this.shelfAdapter.preloadChunk(venueId, paddedStart - prePostWindowMs, paddedEnd + prePostWindowMs);
+
       // Per-chunk arrays (discarded after persist)
       const chunkAttrEvents = [];
       const chunkCtrlMatches = [];
 
-    let exposureDiagCount = 0;
     for (const exposure of chunkExposures) {
       const screen = this.getScreen(exposure.screenId);
       if (!screen) continue;
@@ -758,25 +782,6 @@ export class DoohAttributionEngine {
         actionWindowEnd,
         target
       );
-
-      // Diagnostic logging for first 3 exposures overall
-      if (totalAttributionEvents + chunkAttrEvents.length < 3) {
-        exposureDiagCount++;
-        console.log(`🔍 [DIAG-EXP ${exposureDiagCount}] track=${exposure.trackKey}, window=${exposure.endTs}-${actionWindowEnd}`);
-        console.log(`🔍 [DIAG-EXP ${exposureDiagCount}] engagement result: ${engagement ? JSON.stringify(engagement).slice(0, 200) : 'NULL'}`);
-        
-        // Check zone_visits directly
-        const diagVisits = this.db.prepare(`
-          SELECT COUNT(*) as cnt FROM zone_visits WHERE venue_id = ? AND track_key = ? AND start_time >= ? AND start_time <= ?
-        `).get(venueId, exposure.trackKey, exposure.endTs, actionWindowEnd);
-        console.log(`🔍 [DIAG-EXP ${exposureDiagCount}] zone_visits for track in action window: ${diagVisits.cnt}`);
-        
-        // Check positions in action window
-        const diagPositions = this.db.prepare(`
-          SELECT COUNT(*) as cnt FROM track_positions WHERE venue_id = ? AND track_key = ? AND timestamp >= ? AND timestamp <= ?
-        `).get(venueId, exposure.trackKey, exposure.endTs, actionWindowEnd);
-        console.log(`🔍 [DIAG-EXP ${exposureDiagCount}] positions for track in action window: ${diagPositions.cnt}`);
-      }
 
       const converted = engagement !== null;
       const ttaS = converted ? (engagement.startTs - exposure.endTs) / 1000 : null;
@@ -941,11 +946,12 @@ export class DoohAttributionEngine {
     } // end chunk loop
 
     const totalTime = ((Date.now() - runStart) / 1000).toFixed(1);
-    const conversionRate = exposureEvents.length > 0 ? ((totalConverted / exposureEvents.length) * 100).toFixed(1) : 0;
+    const totalProcessed = totalAttributionEvents + existingAttrIds.size;
+    const conversionRate = totalProcessed > 0 ? ((totalConverted / totalProcessed) * 100).toFixed(1) : 0;
 
     console.log(`\n✅ [PEBLE] Attribution analysis complete!`);
     console.log(`📊 Results:`);
-    console.log(`   - Exposure events: ${exposureEvents.length}`);
+    console.log(`   - Exposure events: ${exposureEvents.length} (${existingAttrIds.size} cached, ${newExposureEvents.length} new)`);
     console.log(`   - Attribution events: ${totalAttributionEvents}`);
     console.log(`   - Control matches: ${totalControlMatches}`);
     console.log(`   - Conversions: ${totalConverted} (${conversionRate}%)`);
@@ -959,6 +965,8 @@ export class DoohAttributionEngine {
       converted: totalConverted,
       conversionRate: parseFloat(conversionRate),
       totalTimeS: parseFloat(totalTime),
+      incremental: existingAttrIds.size > 0,
+      skipped: existingAttrIds.size,
     };
   }
 

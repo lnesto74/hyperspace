@@ -538,6 +538,7 @@ export function initDatabase() {
     CREATE INDEX IF NOT EXISTS idx_dooh_attribution_events_screen_id ON dooh_attribution_events(screen_id);
     CREATE INDEX IF NOT EXISTS idx_dooh_attribution_events_exposure_ts ON dooh_attribution_events(exposure_end_ts);
     CREATE INDEX IF NOT EXISTS idx_dooh_attribution_events_track ON dooh_attribution_events(track_key);
+    CREATE INDEX IF NOT EXISTS idx_dooh_attribution_events_campaign_ts ON dooh_attribution_events(campaign_id, exposure_end_ts);
 
     -- DOOH Control Matches - Matched control trajectories for attribution
     CREATE TABLE IF NOT EXISTS dooh_control_matches (
