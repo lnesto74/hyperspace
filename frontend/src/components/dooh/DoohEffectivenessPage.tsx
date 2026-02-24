@@ -796,7 +796,7 @@ export default function DoohEffectivenessPage({ onClose }: DoohEffectivenessPage
                     <div className="mt-2 flex items-center gap-2 text-xs">
                       <span className="text-cyan-400">
                         {kpiSummary.dciExposed !== null && kpiSummary.dciControl !== null
-                          ? `+${((kpiSummary.dciExposed - kpiSummary.dciControl) * 100).toFixed(0)}`
+                          ? `${((kpiSummary.dciExposed - kpiSummary.dciControl) * 100) >= 0 ? '+' : ''}${((kpiSummary.dciExposed - kpiSummary.dciControl) * 100).toFixed(0)}`
                           : '—'}
                       </span>
                       <span className="text-gray-500">vs control</span>
@@ -958,7 +958,7 @@ export default function DoohEffectivenessPage({ onClose }: DoohEffectivenessPage
                     <div className="bg-gradient-to-br from-cyan-600/30 to-cyan-800/20 border border-cyan-500/40 rounded-lg p-3">
                       <div className="text-[10px] text-cyan-300 font-medium mb-1">DCI™ (Direction Change Index)</div>
                       <div className="text-2xl font-bold text-white">
-                        {kpiSummary.dciExposed !== null ? `+${(kpiSummary.dciExposed * 100).toFixed(1)}` : '—'}
+                        {kpiSummary.dciExposed !== null ? `${(kpiSummary.dciExposed * 100) >= 0 ? '+' : ''}${(kpiSummary.dciExposed * 100).toFixed(1)}` : '—'}
                       </div>
                       <p className="text-[9px] text-gray-400 mt-1">Significant shift in path towards the promoted category</p>
                     </div>
