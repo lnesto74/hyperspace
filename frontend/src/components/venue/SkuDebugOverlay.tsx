@@ -158,6 +158,8 @@ export default function SkuDebugOverlay({ enabled, containerRef, cameraRef, onHo
       
       if (cancelled) return
       
+      console.log(`[SKU Debug FE] updateDetections: ${newDetections.size} tracks with SKUs`)
+      
       // Keep stale detections for persistence period
       setTrackDetections(prev => {
         const merged = new Map(newDetections)
@@ -248,6 +250,10 @@ export default function SkuDebugOverlay({ enabled, containerRef, cameraRef, onHo
   const detectionsArray = Array.from(trackDetections.values())
     .filter(d => d.detectedSkus.length > 0)
     .sort((a, b) => b.totalDwellTime - a.totalDwellTime)
+  
+  if (detectionsArray.length > 0) {
+    console.log(`[SKU Debug FE] RENDER: ${detectionsArray.length} cards, trackDetections.size=${trackDetections.size}`)
+  }
   
   return (
     <div className="absolute inset-0 pointer-events-none overflow-hidden z-40">
