@@ -109,7 +109,7 @@ export default function SkuDebugOverlay({ enabled, containerRef, cameraRef, onHo
     return []
   }, [venue?.id])
   
-  // Update detections on a stable interval (reads tracks from ref to avoid re-firing on every WebSocket frame)
+  // Update detections using recursive setTimeout (prevents overlapping async calls)
   useEffect(() => {
     if (!enabled || !venue?.id) {
       setTrackDetections(new Map())
@@ -120,80 +120,95 @@ export default function SkuDebugOverlay({ enabled, containerRef, cameraRef, onHo
     console.log('[SKU Debug FE] ✓ SKU Detection ENABLED for venue', venue.id)
     let cancelled = false
     
-    const updateDetections = async () => {
+    const runCycle = async () => {
       if (cancelled) return
-      const currentTracks = tracksRef.current
-      if (currentTracks.size === 0) return
       
-      const newDetections = new Map<string, TrackSkuDetection>()
-      const now = Date.now()
-      
-      // Process all current tracks
-      for (const [trackKey, track] of currentTracks) {
-        if (cancelled) return
-        const position = { x: track.venuePosition.x, z: track.venuePosition.z }
-        const skus = await detectSkusForTrack(trackKey, position)
-        
-        if (skus && skus.length > 0) {
-          // Track dwell time
-          let dwellStartTime = dwellTimersRef.current.get(trackKey) || now
-          if (!dwellTimersRef.current.has(trackKey)) {
-            dwellTimersRef.current.set(trackKey, now)
-          }
-          
-          // Update last seen time
-          lastSeenTimesRef.current.set(trackKey, now)
-          
-          newDetections.set(trackKey, {
-            trackKey,
-            position,
-            detectedSkus: skus,
-            dwellStartTime,
-            totalDwellTime: now - dwellStartTime,
-            lastSeenTime: now,
-            isStale: false,
-          })
+      try {
+        const currentTracks = tracksRef.current
+        if (currentTracks.size === 0) {
+          // Schedule next cycle even if no tracks
+          if (!cancelled) setTimeout(runCycle, 500)
+          return
         }
-      }
-      
-      if (cancelled) return
-      
-      console.log(`[SKU Debug FE] updateDetections: ${newDetections.size} tracks with SKUs`)
-      
-      // Keep stale detections for persistence period
-      setTrackDetections(prev => {
-        const merged = new Map(newDetections)
         
-        for (const [trackKey, detection] of prev) {
-          if (!merged.has(trackKey)) {
-            const lastSeen = lastSeenTimesRef.current.get(trackKey) || detection.lastSeenTime
-            const timeSinceLastSeen = now - lastSeen
+        const now = Date.now()
+        
+        // Process all tracks in parallel (cache prevents excessive API calls)
+        const entries = Array.from(currentTracks.entries())
+        const results = await Promise.all(
+          entries.map(async ([trackKey, track]) => {
+            try {
+              if (!track.venuePosition) return { trackKey, position: null, skus: [] }
+              const position = { x: track.venuePosition.x, z: track.venuePosition.z }
+              const skus = await detectSkusForTrack(trackKey, position)
+              return { trackKey, position, skus: skus || [] }
+            } catch (e) {
+              console.warn('[SKU Debug FE] Error processing track', trackKey, e)
+              return { trackKey, position: null, skus: [] }
+            }
+          })
+        )
+        
+        if (cancelled) return
+        
+        // Build new detections map
+        const newDetections = new Map<string, TrackSkuDetection>()
+        for (const { trackKey, position, skus } of results) {
+          if (skus.length > 0 && position) {
+            let dwellStartTime = dwellTimersRef.current.get(trackKey) || now
+            if (!dwellTimersRef.current.has(trackKey)) {
+              dwellTimersRef.current.set(trackKey, now)
+            }
+            lastSeenTimesRef.current.set(trackKey, now)
             
-            if (timeSinceLastSeen < CARD_PERSISTENCE_MS) {
-              // Keep the card but mark as stale
-              merged.set(trackKey, {
-                ...detection,
-                isStale: true,
-                totalDwellTime: detection.totalDwellTime, // Freeze dwell time
-              })
-            } else {
-              // Card has expired, clean up
-              dwellTimersRef.current.delete(trackKey)
-              lastSeenTimesRef.current.delete(trackKey)
+            newDetections.set(trackKey, {
+              trackKey,
+              position,
+              detectedSkus: skus,
+              dwellStartTime,
+              totalDwellTime: now - dwellStartTime,
+              lastSeenTime: now,
+              isStale: false,
+            })
+          }
+        }
+        
+        console.log(`[SKU Debug FE] CYCLE: ${entries.length} tracks, ${newDetections.size} with SKUs`)
+        
+        // Merge with stale detections
+        setTrackDetections(prev => {
+          const merged = new Map(newDetections)
+          
+          for (const [trackKey, detection] of prev) {
+            if (!merged.has(trackKey)) {
+              const lastSeen = lastSeenTimesRef.current.get(trackKey) || detection.lastSeenTime
+              const timeSinceLastSeen = now - lastSeen
+              
+              if (timeSinceLastSeen < CARD_PERSISTENCE_MS) {
+                merged.set(trackKey, {
+                  ...detection,
+                  isStale: true,
+                  totalDwellTime: detection.totalDwellTime,
+                })
+              } else {
+                dwellTimersRef.current.delete(trackKey)
+                lastSeenTimesRef.current.delete(trackKey)
+              }
             }
           }
-        }
-        
-        return merged
-      })
+          
+          return merged
+        })
+      } catch (e) {
+        console.error('[SKU Debug FE] Cycle error:', e)
+      }
+      
+      // Schedule next cycle AFTER this one completes (no overlap)
+      if (!cancelled) setTimeout(runCycle, 500)
     }
     
-    updateDetections()
-    const interval = setInterval(updateDetections, 500)
-    return () => {
-      cancelled = true
-      clearInterval(interval)
-    }
+    runCycle()
+    return () => { cancelled = true }
   }, [enabled, venue?.id, detectSkusForTrack])
   
   // Convert 3D position to screen position
@@ -257,6 +272,11 @@ export default function SkuDebugOverlay({ enabled, containerRef, cameraRef, onHo
   
   return (
     <div className="absolute inset-0 pointer-events-none overflow-hidden z-40">
+      {/* Always-visible indicator when SKU debug is ON */}
+      <div className="absolute bottom-4 left-4 bg-green-600/90 text-white text-xs px-3 py-1.5 rounded-full font-medium z-50 flex items-center gap-2">
+        <div className="w-2 h-2 rounded-full bg-white animate-pulse" />
+        SKU Debug ON | {trackDetections.size} detections | {tracks.size} tracks
+      </div>
       {/* Stacked SKU Cards Panel - Left Side */}
       {detectionsArray.length > 0 && (
         <div className="absolute top-4 left-16 flex flex-col gap-2 max-h-[calc(100%-8rem)] overflow-y-auto">

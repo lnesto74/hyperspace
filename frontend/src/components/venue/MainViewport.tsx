@@ -662,6 +662,7 @@ export default function MainViewport({
     renderer.domElement.style.position = 'absolute'
     renderer.domElement.style.top = '0'
     renderer.domElement.style.left = '0'
+    renderer.domElement.style.zIndex = '1'
     container.appendChild(renderer.domElement)
     rendererRef.current = renderer
 
@@ -671,6 +672,7 @@ export default function MainViewport({
     labelRenderer.domElement.style.position = 'absolute'
     labelRenderer.domElement.style.top = '0'
     labelRenderer.domElement.style.left = '0'
+    labelRenderer.domElement.style.zIndex = '2'
     labelRenderer.domElement.style.pointerEvents = 'none'
     container.appendChild(labelRenderer.domElement)
     labelRendererRef.current = labelRenderer
