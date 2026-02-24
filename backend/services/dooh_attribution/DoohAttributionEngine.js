@@ -702,13 +702,12 @@ export class DoohAttributionEngine {
     const exposedTracksSet = new Set(exposureEvents.map(e => e.trackKey));
     console.log(`🚶 Unique exposed tracks: ${exposedTracksSet.size}`);
 
-    // CHUNKED PROCESSING: 1-hour windows to avoid OOM on large time ranges
-    const CHUNK_MS = 60 * 60 * 1000;
+    // CHUNKED PROCESSING: 15-minute windows to keep position sets small
+    const CHUNK_MS = 15 * 60 * 1000;
     const totalChunks = Math.ceil((endTs - startTs) / CHUNK_MS);
-    const allAttributionEvents = [];
-    const allControlMatches = [];
     let totalAttributionEvents = 0;
     let totalControlMatches = 0;
+    let totalConverted = 0;
     let chunkIdx = 0;
 
     for (let chunkStart = startTs; chunkStart < endTs; chunkStart += CHUNK_MS) {
@@ -724,6 +723,10 @@ export class DoohAttributionEngine {
       const paddedStart = chunkStart - bucketMs;
       const paddedEnd = chunkEnd + actionWindowMs + bucketMs;
       const allPositions = this.batchLoadPositions(venueId, paddedStart, paddedEnd);
+
+      // Per-chunk arrays (discarded after persist)
+      const chunkAttrEvents = [];
+      const chunkCtrlMatches = [];
 
     for (const exposure of chunkExposures) {
       const screen = this.getScreen(exposure.screenId);
@@ -845,7 +848,7 @@ export class DoohAttributionEngine {
       }
 
       const attributionEventId = uuidv4();
-      allAttributionEvents.push({
+      chunkAttrEvents.push({
         id: attributionEventId,
         venueId,
         campaignId,
@@ -866,47 +869,46 @@ export class DoohAttributionEngine {
 
       // Link controls to this event
       for (const ctrl of matchedControls) {
-        allControlMatches.push({
+        chunkCtrlMatches.push({
           ...ctrl,
           attributionEventId,
         });
       }
     } // end exposure loop
 
-      // Persist this chunk's results immediately to free memory
-      const chunkAttrCount = allAttributionEvents.length - totalAttributionEvents;
-      const chunkCtrlCount = allControlMatches.length - totalControlMatches;
-      if (chunkAttrCount > 0) {
-        this.storeAttributionEvents(allAttributionEvents.slice(totalAttributionEvents));
-        this.storeControlMatches(allControlMatches.slice(totalControlMatches));
+      // Persist this chunk's results immediately, then discard
+      if (chunkAttrEvents.length > 0) {
+        this.storeAttributionEvents(chunkAttrEvents);
+        this.storeControlMatches(chunkCtrlMatches);
       }
-      totalAttributionEvents = allAttributionEvents.length;
-      totalControlMatches = allControlMatches.length;
+      const chunkConverted = chunkAttrEvents.filter(e => e.converted).length;
+      totalAttributionEvents += chunkAttrEvents.length;
+      totalControlMatches += chunkCtrlMatches.length;
+      totalConverted += chunkConverted;
 
       // Free position cache before next chunk
       this.positionCache.clear();
       const elapsed = ((Date.now() - runStart) / 1000).toFixed(1);
-      console.log(`✅ [PEBLE] Chunk ${chunkIdx}/${totalChunks} done (${chunkAttrCount} events, ${elapsed}s elapsed)`);
+      console.log(`✅ [PEBLE] Chunk ${chunkIdx}/${totalChunks} done (${chunkAttrEvents.length} events, ${elapsed}s elapsed)`);
     } // end chunk loop
 
     const totalTime = ((Date.now() - runStart) / 1000).toFixed(1);
-    const convertedCount = allAttributionEvents.filter(e => e.converted).length;
-    const conversionRate = exposureEvents.length > 0 ? ((convertedCount / exposureEvents.length) * 100).toFixed(1) : 0;
+    const conversionRate = exposureEvents.length > 0 ? ((totalConverted / exposureEvents.length) * 100).toFixed(1) : 0;
 
     console.log(`\n✅ [PEBLE] Attribution analysis complete!`);
     console.log(`📊 Results:`);
     console.log(`   - Exposure events: ${exposureEvents.length}`);
-    console.log(`   - Attribution events: ${allAttributionEvents.length}`);
-    console.log(`   - Control matches: ${allControlMatches.length}`);
-    console.log(`   - Conversions: ${convertedCount} (${conversionRate}%)`);
+    console.log(`   - Attribution events: ${totalAttributionEvents}`);
+    console.log(`   - Control matches: ${totalControlMatches}`);
+    console.log(`   - Conversions: ${totalConverted} (${conversionRate}%)`);
     console.log(`   - Total time: ${totalTime}s\n`);
 
     return {
       campaign: campaign.name,
       exposureEvents: exposureEvents.length,
-      attributionEvents: allAttributionEvents.length,
-      controlMatches: allControlMatches.length,
-      converted: convertedCount,
+      attributionEvents: totalAttributionEvents,
+      controlMatches: totalControlMatches,
+      converted: totalConverted,
       conversionRate: parseFloat(conversionRate),
       totalTimeS: parseFloat(totalTime),
     };
