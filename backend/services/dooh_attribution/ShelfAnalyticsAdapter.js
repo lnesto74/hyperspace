@@ -16,6 +16,28 @@ export class ShelfAnalyticsAdapter {
   }
 
   /**
+   * Find the best planogram for a venue - prefers the one with actual shelf data
+   */
+  findBestPlanogram(venueId) {
+    // Find planogram that actually has shelf_planograms data
+    const withData = this.db.prepare(`
+      SELECT p.id FROM planograms p
+      JOIN shelf_planograms sp ON sp.planogram_id = p.id
+      WHERE p.venue_id = ?
+      GROUP BY p.id
+      ORDER BY p.version DESC
+      LIMIT 1
+    `).get(venueId);
+    if (withData) return withData.id;
+
+    // Fallback: latest planogram by version
+    const latest = this.db.prepare(`
+      SELECT id FROM planograms WHERE venue_id = ? ORDER BY version DESC LIMIT 1
+    `).get(venueId);
+    return latest?.id || null;
+  }
+
+  /**
    * Query engagement events for a specific track within a time window
    * Returns first qualifying engagement that matches campaign target
    * 
@@ -164,11 +186,7 @@ export class ShelfAnalyticsAdapter {
    */
   getShelfCategories(venueId, shelfId, planogramId) {
     if (!planogramId) {
-      // Find latest planogram for venue (any status)
-      const planogram = this.db.prepare(`
-        SELECT id FROM planograms WHERE venue_id = ? ORDER BY version DESC LIMIT 1
-      `).get(venueId);
-      planogramId = planogram?.id;
+      planogramId = this.findBestPlanogram(venueId);
     }
 
     if (!planogramId) return [];
@@ -198,10 +216,7 @@ export class ShelfAnalyticsAdapter {
    */
   getShelfBrands(venueId, shelfId, planogramId) {
     if (!planogramId) {
-      const planogram = this.db.prepare(`
-        SELECT id FROM planograms WHERE venue_id = ? ORDER BY version DESC LIMIT 1
-      `).get(venueId);
-      planogramId = planogram?.id;
+      planogramId = this.findBestPlanogram(venueId);
     }
 
     if (!planogramId) return [];
@@ -231,10 +246,7 @@ export class ShelfAnalyticsAdapter {
    */
   getShelfSkus(venueId, shelfId, planogramId) {
     if (!planogramId) {
-      const planogram = this.db.prepare(`
-        SELECT id FROM planograms WHERE venue_id = ? ORDER BY version DESC LIMIT 1
-      `).get(venueId);
-      planogramId = planogram?.id;
+      planogramId = this.findBestPlanogram(venueId);
     }
 
     if (!planogramId) return [];
@@ -370,14 +382,12 @@ export class ShelfAnalyticsAdapter {
   findShelvesForTarget(venueId, type, ids) {
     const shelfIds = new Set();
 
-    // Get latest planogram (any status)
-    const planogram = this.db.prepare(`
-      SELECT id FROM planograms WHERE venue_id = ? ORDER BY version DESC LIMIT 1
-    `).get(venueId);
+    // Get planogram with actual shelf data
+    const planogramId = this.findBestPlanogram(venueId);
 
-    if (!planogram) return [];
+    if (!planogramId) return [];
 
-    const shelfPlanograms = shelfPlanogramQueries.getByPlanogramId(this.db, planogram.id);
+    const shelfPlanograms = shelfPlanogramQueries.getByPlanogramId(this.db, planogramId);
 
     // Diagnostic: collect all categories/brands found
     const allCategories = new Set();
