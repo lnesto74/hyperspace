@@ -355,7 +355,16 @@ export default function DoohEffectivenessPage({ onClose }: DoohEffectivenessPage
         throw new Error(errData.message || 'Failed to run analysis')
       }
       
-      // Refresh KPIs after run
+      const runResult = await res.json()
+      
+      // Use summary from the run response directly (avoids timing issues with re-query)
+      if (runResult.summary) {
+        setKpiSummary(runResult.summary)
+        setHasAnalyzisData(true)
+        setLastAnalyzedAt(new Date().toISOString())
+      }
+      
+      // Also fetch buckets for the chart
       await fetchKPIs()
     } catch (err) {
       console.error('Failed to run analysis:', err)
@@ -445,6 +454,13 @@ export default function DoohEffectivenessPage({ onClose }: DoohEffectivenessPage
       fetchLatestKPIs()
     }
   }, [selectedCampaign, fetchLatestKPIs])
+
+  // Reload KPIs from DB when time range changes (lightweight, no recompute)
+  useEffect(() => {
+    if (selectedCampaign && hasAnalyzisData) {
+      fetchKPIs()
+    }
+  }, [timeRange])
 
   useEffect(() => {
     if (showDebug && selectedCampaign) {

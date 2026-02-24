@@ -20,7 +20,7 @@ import {
   Eye,
   Zap,
   TrendingUp,
-  Calendar,
+  // Calendar removed - using button tabs instead
   X,
   Save,
   Trash2,
@@ -645,30 +645,37 @@ export default function DoohAnalyticsPage({ onClose }: { onClose: () => void }) 
         </span>
         <div className="flex-1" />
         
-        {/* Time Range Selector + Refresh */}
+        {/* Time Range Selector + Run Analysis */}
         <div className="flex items-center gap-2">
-          <Calendar className="w-4 h-4 text-gray-400" />
-          <select
-            value={timeRange}
-            onChange={(e) => setTimeRange(e.target.value as any)}
-            className="bg-gray-700 text-white text-sm rounded px-2 py-1 border border-gray-600"
-          >
-            <option value="1h">Last 1 hour</option>
-            <option value="24h">Last 24 hours</option>
-            <option value="7d">Last 7 days</option>
-            <option value="custom">Custom</option>
-          </select>
+          <div className="flex bg-gray-700 rounded-lg p-0.5">
+            {([['1h', '1H'], ['24h', '24H'], ['7d', '7D']] as const).map(([value, label]) => (
+              <button
+                key={value}
+                onClick={() => setTimeRange(value as any)}
+                className={`px-3 py-1 text-sm rounded-md transition-colors ${
+                  timeRange === value
+                    ? 'bg-purple-600 text-white'
+                    : 'text-gray-400 hover:text-white'
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
           {cacheAge && (
             <span className="text-xs text-gray-500">{cacheAge}</span>
           )}
           <button
             onClick={runComputation}
             disabled={isRunning}
-            className="flex items-center gap-1 px-2 py-1 text-xs bg-gray-700 hover:bg-gray-600 text-gray-300 rounded transition-colors disabled:opacity-50"
-            title="Recompute KPIs for this time range"
+            className="flex items-center gap-2 px-3 py-1.5 bg-purple-600 hover:bg-purple-700 disabled:bg-purple-800 text-white rounded-lg text-sm"
           >
-            <RefreshCw className={`w-3 h-3 ${isRunning ? 'animate-spin' : ''}`} />
-            {isRunning ? 'Computing...' : 'Refresh'}
+            {isRunning ? (
+              <RefreshCw className="w-4 h-4 animate-spin" />
+            ) : (
+              <Play className="w-4 h-4" />
+            )}
+            Run Analysis
           </button>
         </div>
         
