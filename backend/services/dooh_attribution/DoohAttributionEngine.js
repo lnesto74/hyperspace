@@ -683,6 +683,22 @@ export class DoohAttributionEngine {
     const targetPosition = this.getTargetPosition(venueId, target);
     console.log(`📍 Target position: ${targetPosition ? `(${targetPosition.x.toFixed(1)}, ${targetPosition.z.toFixed(1)})` : 'N/A'}`);
 
+    // DIAGNOSTIC: Check planogram and shelf data
+    const diag_planogram = this.db.prepare(`SELECT id, version, status FROM planograms WHERE venue_id = ? ORDER BY version DESC LIMIT 1`).get(venueId);
+    console.log(`🔍 [DIAG] Planogram: ${diag_planogram ? `${diag_planogram.id} (v${diag_planogram.version}, ${diag_planogram.status})` : 'NONE'}`);
+    
+    const diag_shelvesForTarget = this.shelfAdapter.findShelvesForTarget(venueId, target.type, target.ids);
+    console.log(`🔍 [DIAG] Shelves matching target ${target.type}=${target.ids.join(',')}: ${diag_shelvesForTarget.length} shelves → [${diag_shelvesForTarget.slice(0, 5).join(', ')}]`);
+    
+    if (diag_shelvesForTarget.length > 0) {
+      const shelfPlaceholders = diag_shelvesForTarget.map(() => '?').join(',');
+      const diag_venueObjects = this.db.prepare(`SELECT id, position_x, position_z FROM venue_objects WHERE venue_id = ? AND id IN (${shelfPlaceholders})`).all(venueId, ...diag_shelvesForTarget);
+      console.log(`🔍 [DIAG] Venue objects for those shelves: ${diag_venueObjects.length}`);
+    }
+    
+    const diag_zoneVisits = this.db.prepare(`SELECT COUNT(*) as cnt FROM zone_visits WHERE venue_id = ? AND start_time >= ? AND start_time <= ?`).get(venueId, startTs, endTs);
+    console.log(`🔍 [DIAG] Zone visits in range: ${diag_zoneVisits.cnt}`);
+
     // Load exposure events
     const exposureEvents = this.getExposureEvents(
       venueId,
@@ -728,6 +744,7 @@ export class DoohAttributionEngine {
       const chunkAttrEvents = [];
       const chunkCtrlMatches = [];
 
+    let exposureDiagCount = 0;
     for (const exposure of chunkExposures) {
       const screen = this.getScreen(exposure.screenId);
       if (!screen) continue;
@@ -741,6 +758,25 @@ export class DoohAttributionEngine {
         actionWindowEnd,
         target
       );
+
+      // Diagnostic logging for first 3 exposures overall
+      if (totalAttributionEvents + chunkAttrEvents.length < 3) {
+        exposureDiagCount++;
+        console.log(`🔍 [DIAG-EXP ${exposureDiagCount}] track=${exposure.trackKey}, window=${exposure.endTs}-${actionWindowEnd}`);
+        console.log(`🔍 [DIAG-EXP ${exposureDiagCount}] engagement result: ${engagement ? JSON.stringify(engagement).slice(0, 200) : 'NULL'}`);
+        
+        // Check zone_visits directly
+        const diagVisits = this.db.prepare(`
+          SELECT COUNT(*) as cnt FROM zone_visits WHERE venue_id = ? AND track_key = ? AND start_time >= ? AND start_time <= ?
+        `).get(venueId, exposure.trackKey, exposure.endTs, actionWindowEnd);
+        console.log(`🔍 [DIAG-EXP ${exposureDiagCount}] zone_visits for track in action window: ${diagVisits.cnt}`);
+        
+        // Check positions in action window
+        const diagPositions = this.db.prepare(`
+          SELECT COUNT(*) as cnt FROM track_positions WHERE venue_id = ? AND track_key = ? AND timestamp >= ? AND timestamp <= ?
+        `).get(venueId, exposure.trackKey, exposure.endTs, actionWindowEnd);
+        console.log(`🔍 [DIAG-EXP ${exposureDiagCount}] positions for track in action window: ${diagPositions.cnt}`);
+      }
 
       const converted = engagement !== null;
       const ttaS = converted ? (engagement.startTs - exposure.endTs) / 1000 : null;
