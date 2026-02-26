@@ -87,6 +87,9 @@ services:
       - RESEND_API_KEY=${RESEND_API_KEY}
       - RESEND_FROM_EMAIL=${RESEND_FROM_EMAIL}
       - LEAD_NOTIFICATION_EMAIL=${LEAD_NOTIFICATION_EMAIL}
+      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID:-}
+      - SUPERADMIN_EMAIL=${SUPERADMIN_EMAIL:-ln@ulisse.tech}
+      - JWT_SECRET=${JWT_SECRET:-hyperspace-prod-secret-change-me}
       - UPLOADS_DIR=/data/uploads
       - MODELS_DIR=/data/models
       - REPLAY_DB_PATH=/data/db/replay_insight.db
