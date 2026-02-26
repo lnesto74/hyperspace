@@ -44,9 +44,9 @@ COPY --from=builder /app /app
 # Create directories for persistent data
 RUN mkdir -p /data/db /data/uploads /data/models
 
-# Health check
-HEALTHCHECK --interval=15s --timeout=5s --start-period=60s --retries=5 \
-    CMD node -e "fetch('http://localhost:3001/api/health').then(r => r.ok ? process.exit(0) : process.exit(1)).catch(() => process.exit(1))"
+# Health check (generous start-period for heavy init: DB migrations, KPI aggregation, etc.)
+HEALTHCHECK --interval=15s --timeout=10s --start-period=120s --retries=10 \
+    CMD curl -sf http://localhost:3001/api/health || exit 1
 
 EXPOSE 3001
 
