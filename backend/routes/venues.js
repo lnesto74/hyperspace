@@ -16,6 +16,11 @@ export default function venuesRoutes(db) {
         depth: v.depth,
         height: v.height,
         tileSize: v.tile_size,
+        company_id: v.company_id || null,
+        address: v.address || null,
+        latitude: v.latitude || null,
+        longitude: v.longitude || null,
+        place_id: v.place_id || null,
         createdAt: v.created_at,
         updatedAt: v.updated_at,
       })));
@@ -150,6 +155,66 @@ export default function venuesRoutes(db) {
     } catch (error) {
       console.error('Delete venue error:', error);
       res.status(500).json({ error: 'Failed to delete venue' });
+    }
+  });
+
+  // Update venue address/location (Google Places data)
+  router.patch('/:id/address', (req, res) => {
+    try {
+      const { address, latitude, longitude, place_id } = req.body;
+      const venue = venueQueries.getById(db, req.params.id);
+      if (!venue) {
+        return res.status(404).json({ error: 'Venue not found' });
+      }
+
+      db.prepare(`
+        UPDATE venues SET address = ?, latitude = ?, longitude = ?, place_id = ?, updated_at = datetime('now')
+        WHERE id = ?
+      `).run(address || null, latitude || null, longitude || null, place_id || null, req.params.id);
+
+      res.json({ success: true });
+    } catch (error) {
+      console.error('Update venue address error:', error);
+      res.status(500).json({ error: 'Failed to update venue address' });
+    }
+  });
+
+  // Update venue company assignment
+  router.patch('/:id/company', (req, res) => {
+    try {
+      const { company_id } = req.body;
+      const venue = venueQueries.getById(db, req.params.id);
+      if (!venue) {
+        return res.status(404).json({ error: 'Venue not found' });
+      }
+
+      db.prepare("UPDATE venues SET company_id = ?, updated_at = datetime('now') WHERE id = ?")
+        .run(company_id || null, req.params.id);
+
+      res.json({ success: true });
+    } catch (error) {
+      console.error('Update venue company error:', error);
+      res.status(500).json({ error: 'Failed to update venue company' });
+    }
+  });
+
+  // Link venue to a DWG layout version (called when layout is generated in DWG Importer)
+  router.patch('/:id/dwg-layout', (req, res) => {
+    try {
+      const { dwg_layout_version_id } = req.body;
+      const venue = venueQueries.getById(db, req.params.id);
+      if (!venue) {
+        return res.status(404).json({ error: 'Venue not found' });
+      }
+      db.prepare(`
+        UPDATE venues SET dwg_layout_version_id = ?, scene_source = 'dwg', updated_at = datetime('now')
+        WHERE id = ?
+      `).run(dwg_layout_version_id || null, req.params.id);
+      console.log(`🔗 Venue ${req.params.id} linked to DWG layout: ${dwg_layout_version_id}`);
+      res.json({ success: true, dwg_layout_version_id });
+    } catch (error) {
+      console.error('Update venue DWG layout error:', error);
+      res.status(500).json({ error: 'Failed to update venue DWG layout' });
     }
   });
 

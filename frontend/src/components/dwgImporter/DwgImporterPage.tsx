@@ -1,5 +1,5 @@
-import { useState, useEffect, useCallback } from 'react'
-import { FileUp, Box, ArrowLeft, AlertCircle, CheckCircle2, Loader2, Eye, Box as Box3D, Radio } from 'lucide-react'
+import { useState, useEffect, useCallback, useRef } from 'react'
+import { FileUp, Box, ArrowLeft, AlertCircle, CheckCircle2, Loader2, Eye, Box as Box3D } from 'lucide-react'
 import { useVenue } from '../../context/VenueContext'
 import UploadCard from './UploadCard'
 import GroupListPanel from './GroupListPanel'
@@ -176,6 +176,7 @@ export default function DwgImporterPage({ onClose, onLayoutGenerated }: DwgImpor
   const [selectedLidarInstanceId, setSelectedLidarInstanceId] = useState<string | null>(null)
   const [simulationResult, setSimulationResult] = useState<SimulationResult | null>(null)
   const [isSimulating, setIsSimulating] = useState(false)
+  const [lidarRoi, setLidarRoiState] = useState<{ x: number; z: number }[] | null>(null)
   
   // Persist selected LiDAR model whenever it changes (using generatedLayoutId as key)
   useEffect(() => {
@@ -251,34 +252,91 @@ export default function DwgImporterPage({ onClose, onLayoutGenerated }: DwgImpor
     }
   }, [featureEnabled])
 
-  // Fetch LiDAR models when entering LiDAR mode or 3D preview
+  // Fetch LiDAR data once when layout is available (not on every view switch)
+  const lidarDataLoaded = useRef(false)
   useEffect(() => {
-    if ((lidarMode || show3DPreview) && generatedLayoutId) {
-      const fetchLidarData = async () => {
-        try {
-          // Fetch models
-          const modelsRes = await fetch(`${API_BASE}/api/lidar/models`)
-          if (modelsRes.ok) {
-            const models = await modelsRes.json()
-            setLidarModels(models)
-            if (models.length > 0 && !selectedLidarModelId) {
-              setSelectedLidarModelId(models[0].id)
+    if (!generatedLayoutId || lidarDataLoaded.current) return
+    if (!lidarMode && !show3DPreview) return
+    lidarDataLoaded.current = true
+
+    const fetchLidarData = async () => {
+      try {
+        // Fetch models
+        const modelsRes = await fetch(`${API_BASE}/api/lidar/models`)
+        if (modelsRes.ok) {
+          const models = await modelsRes.json()
+          setLidarModels(models)
+          if (models.length > 0 && !selectedLidarModelId) {
+            setSelectedLidarModelId(models[0].id)
+          }
+        }
+        // Fetch instances for this layout
+        const instancesRes = await fetch(`${API_BASE}/api/lidar/instances?layout_version_id=${generatedLayoutId}`)
+        if (instancesRes.ok) {
+          const instances = await instancesRes.json()
+          console.log('Fetched LiDAR instances:', instances.length)
+          setLidarInstances(instances)
+        }
+        // Fetch ROIs for this layout
+        if (venue?.id) {
+          const roiRes = await fetch(`${API_BASE}/api/venues/${venue.id}/dwg/${generatedLayoutId}/roi`)
+          if (roiRes.ok) {
+            const rois = await roiRes.json()
+            if (rois.length > 0) {
+              setLidarRoiState(rois[0].vertices)
+              console.log('Fetched ROI from database:', rois[0].vertices.length, 'vertices')
             }
           }
-          // Fetch instances for this layout
-          const instancesRes = await fetch(`${API_BASE}/api/lidar/instances?layout_version_id=${generatedLayoutId}`)
-          if (instancesRes.ok) {
-            const instances = await instancesRes.json()
-            console.log('Fetched LiDAR instances:', instances.length)
-            setLidarInstances(instances)
-          }
-        } catch (err) {
-          console.error('Failed to fetch LiDAR data:', err)
         }
+      } catch (err) {
+        console.error('Failed to fetch LiDAR data:', err)
       }
-      fetchLidarData()
     }
-  }, [lidarMode, show3DPreview, generatedLayoutId, selectedLidarModelId])
+    fetchLidarData()
+  }, [lidarMode, show3DPreview, generatedLayoutId, venue?.id])
+
+  // ROI handler - save to database
+  const handleSetLidarRoi = useCallback(async (roi: { x: number; z: number }[] | null) => {
+    setLidarRoiState(roi)
+    if (!venue?.id || !generatedLayoutId) return
+    
+    try {
+      if (roi && roi.length >= 3) {
+        // Delete existing ROIs for this layout first
+        const existingRes = await fetch(`${API_BASE}/api/venues/${venue.id}/dwg/${generatedLayoutId}/roi`)
+        if (existingRes.ok) {
+          const existing = await existingRes.json()
+          for (const r of existing) {
+            await fetch(`${API_BASE}/api/roi/${r.id}`, { method: 'DELETE' })
+          }
+        }
+        // Create new ROI
+        await fetch(`${API_BASE}/api/venues/${venue.id}/dwg/${generatedLayoutId}/roi`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            name: 'LiDAR Coverage ROI',
+            vertices: roi,
+            color: '#f59e0b',
+            opacity: 0.5
+          })
+        })
+        console.log('Saved ROI to database:', roi.length, 'vertices')
+      } else if (roi === null) {
+        // Delete all ROIs for this layout
+        const existingRes = await fetch(`${API_BASE}/api/venues/${venue.id}/dwg/${generatedLayoutId}/roi`)
+        if (existingRes.ok) {
+          const existing = await existingRes.json()
+          for (const r of existing) {
+            await fetch(`${API_BASE}/api/roi/${r.id}`, { method: 'DELETE' })
+          }
+        }
+        console.log('Deleted ROI from database')
+      }
+    } catch (err) {
+      console.error('Failed to save ROI:', err)
+    }
+  }, [venue?.id, generatedLayoutId])
 
   // LiDAR handlers
   const handleAddLidarInstance = useCallback(async (x: number, z: number) => {
@@ -325,6 +383,8 @@ export default function DwgImporterPage({ onClose, onLayoutGenerated }: DwgImpor
   }, [selectedLidarInstanceId])
 
   const handleUpdateLidarInstance = useCallback(async (instanceId: string, updates: Partial<LidarInstance>) => {
+    // Optimistically update local state immediately (prevents snap-back on drag)
+    setLidarInstances(prev => prev.map(i => i.id === instanceId ? { ...i, ...updates } : i))
     try {
       const res = await fetch(`${API_BASE}/api/lidar/instances/${instanceId}`, {
         method: 'PATCH',
@@ -334,7 +394,9 @@ export default function DwgImporterPage({ onClose, onLayoutGenerated }: DwgImpor
       if (res.ok) {
         const updated = await res.json()
         setLidarInstances(prev => prev.map(i => i.id === instanceId ? { ...i, ...updated } : i))
-        console.log('Updated LiDAR instance:', instanceId, updates)
+      } else {
+        // Revert on failure — refetch from server
+        console.error('Failed to update LiDAR instance, reverting')
       }
     } catch (err) {
       console.error('Failed to update LiDAR instance:', err)
@@ -591,13 +653,22 @@ export default function DwgImporterPage({ onClose, onLayoutGenerated }: DwgImpor
           // Use the most recent active layout
           const activeLayout = layouts.find((l: any) => l.is_active) || layouts[0]
           setGeneratedLayoutId(activeLayout.id)
+          
+          // Ensure venue is linked to this layout (may have been missed previously)
+          if (venue?.id) {
+            fetch(`${API_BASE}/api/venues/${venue.id}/dwg-layout`, {
+              method: 'PATCH',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ dwg_layout_version_id: activeLayout.id })
+            }).catch(err => console.error('Failed to link layout to venue:', err))
+          }
         }
       }
       
     } catch (err: any) {
       setError(err.message)
     }
-  }, [])
+  }, [venue?.id])
 
   // Update mapping for a group
   const updateMapping = useCallback((groupId: string, mapping: GroupMapping | null) => {
@@ -724,6 +795,15 @@ export default function DwgImporterPage({ onClose, onLayoutGenerated }: DwgImpor
       
       setGeneratedLayoutId(result.layout_version_id)
       onLayoutGenerated?.(result.layout_version_id)
+      
+      // Link this layout to the venue so Edge Commissioning can find it
+      if (venue?.id) {
+        fetch(`${API_BASE}/api/venues/${venue.id}/dwg-layout`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ dwg_layout_version_id: result.layout_version_id })
+        }).catch(err => console.error('Failed to link layout to venue:', err))
+      }
       
     } catch (err: any) {
       setError(err.message)
@@ -964,20 +1044,25 @@ export default function DwgImporterPage({ onClose, onLayoutGenerated }: DwgImpor
                   isSimulating={isSimulating}
                   onRunSimulation={handleRunSimulation}
                   onAutoPlace={handleAutoPlace}
+                  lidarRoi={lidarRoi}
+                  onSetLidarRoi={handleSetLidarRoi}
+                  layoutVersionId={generatedLayoutId}
                 />
               )}
             </div>
           </div>
 
-          {/* Right Panel - Mapping */}
-          <div className="w-80 border-l border-border-dark overflow-hidden flex flex-col">
-            <MappingPanel
-              group={importData.groups.find(g => g.group_id === selectedGroupId) || null}
-              mapping={selectedGroupId ? mappings[selectedGroupId] : undefined}
-              catalog={catalog}
-              onUpdateMapping={(mapping: GroupMapping | null) => selectedGroupId && updateMapping(selectedGroupId, mapping)}
-            />
-          </div>
+          {/* Right Panel - Mapping (only shown when a fixture group is selected) */}
+          {selectedGroupId && (
+            <div className="w-80 border-l border-border-dark overflow-hidden flex flex-col">
+              <MappingPanel
+                group={importData.groups.find(g => g.group_id === selectedGroupId) || null}
+                mapping={selectedGroupId ? mappings[selectedGroupId] : undefined}
+                catalog={catalog}
+                onUpdateMapping={(mapping: GroupMapping | null) => selectedGroupId && updateMapping(selectedGroupId, mapping)}
+              />
+            </div>
+          )}
         </div>
       )}
     </div>

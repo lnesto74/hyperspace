@@ -1134,6 +1134,17 @@ router.get('/export-config', async (req, res) => {
     const venueWidth = roiBounds.maxX - roiBounds.minX;
     const venueDepth = roiBounds.maxZ - roiBounds.minZ;
 
+    // Get ALL lidar_instances for this venue's layout (ground truth)
+    let allInstances = [];
+    if (venue.dwg_layout_version_id) {
+      allInstances = db.prepare(`
+        SELECT i.*, m.name as model_name, m.hfov_deg, m.vfov_deg, m.range_m, m.dome_mode
+        FROM lidar_instances i
+        LEFT JOIN lidar_models m ON i.model_id = m.id
+        WHERE i.layout_version_id = ?
+      `).all(venue.dwg_layout_version_id);
+    }
+
     // Get pairings
     let pairingsQuery = 'SELECT * FROM edge_lidar_pairings WHERE venue_id = ?';
     const params = [venueId];
@@ -1142,61 +1153,37 @@ router.get('/export-config', async (req, res) => {
       params.push(edgeId);
     }
     const pairings = db.prepare(pairingsQuery).all(...params);
+    // Index pairings by placement_id for quick lookup
+    const pairingByPlacement = {};
+    for (const p of pairings) { pairingByPlacement[p.placement_id] = p; }
 
-    // Build LiDAR configs
+    // Build LiDAR configs from ALL instances (ground truth)
     const lidarConfigs = [];
-    for (const pairing of pairings) {
-      let placement = db.prepare('SELECT * FROM lidar_placements WHERE id = ?').get(pairing.placement_id);
-      let modelInfo = { name: 'Unknown', hfov_deg: 360, vfov_deg: 30, range_m: 10, dome_mode: true };
-
-      if (!placement) {
-        const instance = db.prepare(`
-          SELECT i.*, m.name as model_name, m.hfov_deg, m.vfov_deg, m.range_m, m.dome_mode
-          FROM lidar_instances i
-          LEFT JOIN lidar_models m ON i.model_id = m.id
-          WHERE i.id = ?
-        `).get(pairing.placement_id);
-
-        if (instance) {
-          placement = {
-            position_x: instance.x_m,
-            position_y: instance.mount_y_m,
-            position_z: instance.z_m,
-            rotation_y: instance.yaw_deg * Math.PI / 180,
-            mount_height: instance.mount_y_m,
-          };
-          modelInfo = {
-            name: instance.model_name || 'Unknown',
-            hfov_deg: instance.hfov_deg || 360,
-            vfov_deg: instance.vfov_deg || 30,
-            range_m: instance.range_m || 10,
-            dome_mode: !!instance.dome_mode,
-          };
-        }
-      } else {
-        modelInfo = {
-          name: 'Manual Placement',
-          hfov_deg: placement.fov_horizontal,
-          vfov_deg: placement.fov_vertical,
-          range_m: placement.range,
-          dome_mode: true,
-        };
-      }
-
-      if (!placement) continue;
-
-      const transformedX = placement.position_x - roiBounds.minX;
-      const transformedZ = placement.position_z - roiBounds.minZ;
+    const coveredIds = new Set();
+    for (const inst of allInstances) {
+      coveredIds.add(inst.id);
+      const pairing = pairingByPlacement[inst.id];
+      const txX = inst.x_m - roiBounds.minX;
+      const txZ = inst.z_m - roiBounds.minZ;
 
       lidarConfigs.push({
-        lidarId: pairing.lidar_id,
-        ip: pairing.lidar_ip,
-        model: modelInfo,
+        placementId: inst.id,
+        lidarId: pairing ? pairing.lidar_id : null,
+        ip: pairing ? pairing.lidar_ip : null,
+        paired: !!pairing,
+        edgeId: pairing ? pairing.edge_id : null,
+        model: {
+          name: inst.model_name || 'Unknown',
+          hfov_deg: inst.hfov_deg || 360,
+          vfov_deg: inst.vfov_deg || 30,
+          range_m: inst.range_m || 10,
+          dome_mode: !!inst.dome_mode,
+        },
         extrinsics: {
-          x_m: transformedX,
-          y_m: placement.mount_height || placement.position_y,
-          z_m: transformedZ,
-          yaw_deg: (placement.rotation_y || 0) * 180 / Math.PI,
+          x_m: txX,
+          y_m: inst.mount_y_m || 3,
+          z_m: txZ,
+          yaw_deg: inst.yaw_deg || 0,
           pitch_deg: 0,
           roll_deg: 0,
         },
@@ -1235,6 +1222,11 @@ router.get('/export-config', async (req, res) => {
       },
       roiVertices: transformedRoiVertices,
       lidars: lidarConfigs,
+      summary: {
+        totalPlacements: lidarConfigs.length,
+        paired: lidarConfigs.filter(l => l.paired).length,
+        unassigned: lidarConfigs.filter(l => !l.paired).length,
+      },
       operationalParams: {
         groundPlaneY: 0,
         ceilingY: venue.height || 4.5,
@@ -1564,19 +1556,30 @@ router.post('/edge/:edgeId/deploy-her', async (req, res) => {
     console.log(`🔗 [HER Deploy] Using MQTT broker: ${MQTT_BROKER}`);
     const deploymentId = uuidv4();
     
-    const lidarConfigs = pairings.map(p => ({
-      lidarId: p.lidar_id,
-      ip: p.lidar_ip,
-      model: p.lidar_model || 'Unknown',
-      extrinsics: {
-        x_m: p.position_x || 0,
-        y_m: p.position_y || 0,
-        z_m: p.position_z || 0,
-        yaw_deg: p.rotation_z || 0,   // rotation_z = yaw
-        pitch_deg: p.rotation_x || 0, // rotation_x = pitch
-        roll_deg: p.rotation_y || 0,  // rotation_y = roll
-      },
-    }));
+    // Look up ground-truth positions from lidar_instances (not legacy lidar_placements)
+    const lidarConfigs = pairings.map(p => {
+      const inst = venue.dwg_layout_version_id
+        ? db.prepare(`
+            SELECT i.*, m.name as model_name, m.range_m
+            FROM lidar_instances i
+            LEFT JOIN lidar_models m ON i.model_id = m.id
+            WHERE i.id = ? AND i.layout_version_id = ?
+          `).get(p.placement_id, venue.dwg_layout_version_id)
+        : null;
+      return {
+        lidarId: p.lidar_id,
+        ip: p.lidar_ip,
+        model: inst?.model_name || p.lidar_model || 'Unknown',
+        extrinsics: {
+          x_m: inst ? inst.x_m : (p.position_x || 0),
+          y_m: inst ? inst.mount_y_m : (p.position_y || 0),
+          z_m: inst ? inst.z_m : (p.position_z || 0),
+          yaw_deg: inst ? (inst.yaw_deg || 0) : (p.rotation_z || 0),
+          pitch_deg: 0,
+          roll_deg: 0,
+        },
+      };
+    });
     
     // Build deployment package (same as existing deploy)
     const deployment = {

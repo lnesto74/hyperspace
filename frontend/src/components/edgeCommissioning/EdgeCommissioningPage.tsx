@@ -504,7 +504,7 @@ export default function EdgeCommissioningPage({ onClose }: { onClose: () => void
                     <LidarCard
                       key={lidar.lidarId}
                       lidar={lidar}
-                      isPaired={pairings.some(p => p.lidarId === lidar.lidarId || p.lidarIp === lidar.ip)}
+                      isPaired={pairings.some(p => (p.lidarId === lidar.lidarId || p.lidarIp === lidar.ip) && placements.some(pl => pl.id === p.placementId))}
                       onDragStart={() => handleDragStart(lidar)}
                       onDragEnd={handleDragEnd}
                       onViewPointCloud={() => selectedEdge && setPointCloudLidar({ 
@@ -740,7 +740,7 @@ export default function EdgeCommissioningPage({ onClose }: { onClose: () => void
                   )}
 
                   {/* Export Config JSON Section */}
-                  {venue && pairings.length > 0 && (
+                  {venue && placements.length > 0 && (
                     <div className="border-t border-gray-700 mt-4 pt-4">
                       <div className="flex items-center justify-between mb-2">
                         <span className="text-xs font-medium text-gray-300 flex items-center gap-1.5">
