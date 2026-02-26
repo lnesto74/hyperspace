@@ -9,6 +9,11 @@ interface VenueListItem {
   width: number
   depth: number
   updatedAt: string
+  company_id?: string | null
+  address?: string | null
+  latitude?: number | null
+  longitude?: number | null
+  place_id?: string | null
 }
 
 interface DwgBootstrapResult {

@@ -130,9 +130,20 @@ export default function PreviewPanel({
   const [isDragging, setIsDragging] = useState(false)
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 })
   const [dragStartOffset, setDragStartOffset] = useState({ x: 0, y: 0 })
-  const [showGrid, setShowGrid] = useState(false)
+  const [showGrid, setShowGrid] = useState(true)
   const [activeTool, setActiveTool] = useState<Tool>('select')
   const [viewMode, setViewMode] = useState<ViewMode>('dwg')
+  // Per-mode view state: store zoom+pan for each mode so switching doesn't lose position
+  const perModeView = useRef<Record<ViewMode, { zoom: number; panOffset: { x: number; y: number } }>>({
+    dwg: { zoom: 1, panOffset: { x: 0, y: 0 } },
+    floorplan: { zoom: 1, panOffset: { x: 0, y: 0 } },
+    overlay: { zoom: 1, panOffset: { x: 0, y: 0 } }
+  })
+  // LiDAR drag state
+  const [draggingLidarId, setDraggingLidarId] = useState<string | null>(null)
+  const [lidarDragStart, setLidarDragStart] = useState<{ x: number; y: number } | null>(null)
+  const [lidarDragOriginal, setLidarDragOriginal] = useState<{ x_m: number; z_m: number } | null>(null)
+  const [lidarDragCurrent, setLidarDragCurrent] = useState<{ x_m: number; z_m: number } | null>(null)
   const [selectionRect, setSelectionRect] = useState<{ x: number; y: number; w: number; h: number } | null>(null)
   const [hasSavedView, setHasSavedView] = useState(false)
   const [justSaved, setJustSaved] = useState(false)
@@ -427,12 +438,31 @@ export default function PreviewPanel({
         const viewData = JSON.parse(saved)
         setZoom(viewData.zoom)
         setPanOffset(viewData.panOffset)
+        // Initialize all per-mode views with saved state
+        perModeView.current.dwg = { zoom: viewData.zoom, panOffset: { ...viewData.panOffset } }
+        perModeView.current.floorplan = { zoom: viewData.zoom, panOffset: { ...viewData.panOffset } }
+        perModeView.current.overlay = { zoom: viewData.zoom, panOffset: { ...viewData.panOffset } }
         console.log('2D view restored from saved')
       } catch (e) {
         console.error('Failed to load saved 2D view:', e)
       }
     }
   }, [storageKey])
+
+  // Auto-save view state to localStorage whenever zoom/pan changes (debounced)
+  const autoSaveTimeout = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(() => {
+    // Update current mode's per-mode state
+    perModeView.current[viewMode] = { zoom, panOffset: { ...panOffset } }
+    // Debounced save to localStorage
+    if (autoSaveTimeout.current) clearTimeout(autoSaveTimeout.current)
+    autoSaveTimeout.current = setTimeout(() => {
+      const viewData = { zoom, panOffset }
+      localStorage.setItem(storageKey, JSON.stringify(viewData))
+      setHasSavedView(true)
+    }, 1000)
+    return () => { if (autoSaveTimeout.current) clearTimeout(autoSaveTimeout.current) }
+  }, [zoom, panOffset, viewMode, storageKey])
 
   // Save current view - store visible world bounds for resolution independence
   const saveView = useCallback(() => {
@@ -705,8 +735,9 @@ export default function PreviewPanel({
         }
         setIsDragging(false)
       } else if (!e.shiftKey) {
-        // Clear selection if clicking empty space
+        // Clear fixture AND LiDAR selection when clicking empty space
         onSelectFixtures([])
+        onSelectLidarInstance?.(null)
       }
     } else if (activeTool === 'rectangle') {
       setSelectionRect({ x: pos.x, y: pos.y, w: 0, h: 0 })
@@ -745,10 +776,40 @@ export default function PreviewPanel({
       setFpCropStart(pos)
       setFpCropCurrent(pos)
     }
-  }, [activeTool, getMousePos, panOffset, findFixtureAt, selectedFixtureIds, onSelectFixtures, fromScreen, importData.unit_scale_to_m, scaleCorrection, onAddLidarInstance, floorplan, calibrationPoints, viewMode])
+  }, [activeTool, getMousePos, panOffset, findFixtureAt, selectedFixtureIds, onSelectFixtures, fromScreen, importData.unit_scale_to_m, scaleCorrection, onAddLidarInstance, floorplan, calibrationPoints, viewMode, lidarMode, lidarInstances, toScreen, selectedLidarInstanceId, onSelectLidarInstance])
+
+  // Global mouseup for LiDAR drag (handles mouse leaving the SVG)
+  useEffect(() => {
+    if (!draggingLidarId) return
+    const handleGlobalMouseUp = () => {
+      // Persist final position to database if drag actually moved
+      if (lidarDragCurrent && draggingLidarId) {
+        onUpdateLidarInstance?.(draggingLidarId, { x_m: lidarDragCurrent.x_m, z_m: lidarDragCurrent.z_m })
+      }
+      setDraggingLidarId(null)
+      setLidarDragStart(null)
+      setLidarDragOriginal(null)
+      setLidarDragCurrent(null)
+    }
+    window.addEventListener('mouseup', handleGlobalMouseUp)
+    return () => window.removeEventListener('mouseup', handleGlobalMouseUp)
+  }, [draggingLidarId, lidarDragCurrent, onUpdateLidarInstance])
 
   const handleMouseMove = useCallback((e: React.MouseEvent) => {
     const pos = getMousePos(e)
+    
+    // Handle LiDAR dragging — track position locally, persist on mouseup
+    if (draggingLidarId && lidarDragStart && lidarDragOriginal) {
+      const effectiveScale = importData.unit_scale_to_m * scaleCorrection
+      const worldNow = fromScreen(pos.x, pos.y)
+      const worldStart = fromScreen(lidarDragStart.x, lidarDragStart.y)
+      const worldDx = (worldNow.x - worldStart.x) * effectiveScale
+      const worldDy = (worldNow.y - worldStart.y) * effectiveScale
+      const newX = lidarDragOriginal.x_m + worldDx
+      const newZ = lidarDragOriginal.z_m + worldDy
+      setLidarDragCurrent({ x_m: newX, z_m: newZ })
+      return
+    }
     
     // Track hover when not dragging (skip during floor plan tools and floorplan view)
     if (!isDragging && onHoverFixture && viewMode !== 'floorplan' && activeTool !== 'move_floorplan' && activeTool !== 'calibrate_floorplan' && activeTool !== 'crop_floorplan') {
@@ -791,9 +852,13 @@ export default function PreviewPanel({
     } else if (activeTool === 'crop_floorplan' && fpCropStart) {
       setFpCropCurrent(pos)
     }
-  }, [isDragging, getMousePos, dragStart, dragStartOffset, activeTool, selectionRect, onHoverFixture, findFixtureAt, fpCropStart, viewMode, floorplan, fpDragStart, fpDragStartTransform, fromScreen])
+  }, [isDragging, getMousePos, dragStart, dragStartOffset, activeTool, selectionRect, onHoverFixture, findFixtureAt, fpCropStart, viewMode, floorplan, fpDragStart, fpDragStartTransform, fromScreen, draggingLidarId, lidarDragStart, lidarDragOriginal, importData.unit_scale_to_m, scaleCorrection])
 
   const handleMouseUp = useCallback((e: React.MouseEvent) => {
+    // LiDAR drag is handled by the global mouseup listener (which also persists to DB)
+    if (draggingLidarId) {
+      return
+    }
     // Save floorplan position on drag end
     if (activeTool === 'move_floorplan' && floorplan && fpDragStart) {
       saveFloorplanTransform(floorplan.transform)
@@ -921,30 +986,40 @@ export default function PreviewPanel({
     })
   }, [selectedFixtureIds, importData, dimensions, viewTransform.baseScale, toScreen, panOffset, resetView])
 
-  // Grid lines
+  // Grid lines - adaptive spacing based on zoom level
   const gridLines = useMemo(() => {
     if (!showGrid) return []
     
     const { bounds, unit_scale_to_m } = importData
-    const gridSpacing = 1
-    const lines: { x1: number; y1: number; x2: number; y2: number }[] = []
+    const pixelsPerMeter = viewTransform.scale
+    // Adaptive spacing: pick nice spacing so grid cells are 20-100px on screen
+    let gridSpacing = 1
+    if (pixelsPerMeter * gridSpacing < 20) gridSpacing = 5
+    if (pixelsPerMeter * gridSpacing < 20) gridSpacing = 10
+    if (pixelsPerMeter * gridSpacing < 20) gridSpacing = 50
+    if (pixelsPerMeter * gridSpacing > 200) gridSpacing = 0.5
+    if (pixelsPerMeter * gridSpacing > 200) gridSpacing = 0.1
     
-    const startX = Math.floor(bounds.minX * unit_scale_to_m)
-    const endX = Math.ceil(bounds.maxX * unit_scale_to_m)
+    const lines: { x1: number; y1: number; x2: number; y2: number; major: boolean }[] = []
+    
+    const startX = Math.floor(bounds.minX * unit_scale_to_m / gridSpacing) * gridSpacing
+    const endX = Math.ceil(bounds.maxX * unit_scale_to_m / gridSpacing) * gridSpacing
     for (let x = startX; x <= endX; x += gridSpacing) {
       const screenX = toScreen(x / unit_scale_to_m, bounds.minY).x
-      lines.push({ x1: screenX, y1: 0, x2: screenX, y2: dimensions.height })
+      const major = Math.abs(x % (gridSpacing * 5)) < 0.001
+      lines.push({ x1: screenX, y1: 0, x2: screenX, y2: dimensions.height, major })
     }
     
-    const startY = Math.floor(bounds.minY * unit_scale_to_m)
-    const endY = Math.ceil(bounds.maxY * unit_scale_to_m)
+    const startY = Math.floor(bounds.minY * unit_scale_to_m / gridSpacing) * gridSpacing
+    const endY = Math.ceil(bounds.maxY * unit_scale_to_m / gridSpacing) * gridSpacing
     for (let y = startY; y <= endY; y += gridSpacing) {
       const screenY = toScreen(bounds.minX, y / unit_scale_to_m).y
-      lines.push({ x1: 0, y1: screenY, x2: dimensions.width, y2: screenY })
+      const major = Math.abs(y % (gridSpacing * 5)) < 0.001
+      lines.push({ x1: 0, y1: screenY, x2: dimensions.width, y2: screenY, major })
     }
     
     return lines
-  }, [showGrid, importData, dimensions, toScreen])
+  }, [showGrid, importData, dimensions, toScreen, viewTransform.scale])
 
   return (
     <div className="h-full flex flex-col bg-gray-900">
@@ -954,7 +1029,16 @@ export default function PreviewPanel({
         {(['dwg', 'floorplan', 'overlay'] as ViewMode[]).map(mode => (
           <button
             key={mode}
-            onClick={() => { setViewMode(mode); setActiveTool('select') }}
+            onClick={() => {
+              // Save current mode's view state before switching
+              perModeView.current[viewMode] = { zoom, panOffset: { ...panOffset } }
+              // Restore target mode's view state
+              const saved = perModeView.current[mode]
+              setZoom(saved.zoom)
+              setPanOffset({ ...saved.panOffset })
+              setViewMode(mode)
+              setActiveTool('select')
+            }}
             className={`px-3 py-1 text-xs font-medium rounded-t transition-colors flex items-center gap-1 ${viewMode === mode ? 'bg-gray-900 text-white border-t border-x border-gray-600' : 'text-gray-400 hover:text-white hover:bg-gray-700/50'}`}
           >
             {mode === 'dwg' ? 'DWG' : mode === 'floorplan' ? 'Floor Plan' : 'Overlay'}
@@ -1096,50 +1180,52 @@ export default function PreviewPanel({
           <span className="text-xs text-gray-500 italic">No floor plan uploaded</span>
         )}
         
-        {lidarMode && (
-          <div className="relative">
-            <button
-              onClick={() => setShowLayersPanel(!showLayersPanel)}
-              className={`p-1.5 rounded transition-colors ${showLayersPanel ? 'bg-blue-600 text-white' : 'text-gray-500 hover:text-white'}`}
-              title="Toggle Layers"
-            >
-              <Layers className="w-4 h-4" />
-            </button>
-            {showLayersPanel && (
-              <div className="absolute top-full left-0 mt-1 bg-gray-800 border border-gray-700 rounded-lg shadow-xl p-2 min-w-[180px] z-50">
-                <div className="text-xs font-medium text-gray-400 mb-1 px-1">Layers</div>
-                <label className="flex items-center gap-2 py-1 px-1 rounded hover:bg-gray-700 cursor-pointer text-xs">
-                  <input type="checkbox" checked={layerVisibility.base} onChange={(e) => setLayerVisibility(prev => ({ ...prev, base: e.target.checked }))} className="rounded border-gray-600 bg-gray-700 text-blue-500 w-3 h-3" />
-                  <span className="text-gray-300">Base Fixtures</span>
-                </label>
-                <label className="flex items-center gap-2 py-1 px-1 rounded hover:bg-gray-700 cursor-pointer text-xs">
-                  <input type="checkbox" checked={layerVisibility.floorplan} onChange={(e) => setLayerVisibility(prev => ({ ...prev, floorplan: e.target.checked }))} className="rounded border-gray-600 bg-gray-700 text-orange-500 w-3 h-3" />
-                  <span className="text-gray-300">Floor Plan Image</span>
-                </label>
-                <label className="flex items-center gap-2 py-1 px-1 rounded hover:bg-gray-700 cursor-pointer text-xs">
-                  <input type="checkbox" checked={layerVisibility.roi} onChange={(e) => setLayerVisibility(prev => ({ ...prev, roi: e.target.checked }))} className="rounded border-gray-600 bg-gray-700 text-amber-500 w-3 h-3" />
-                  <span className="text-gray-300">ROI Polygon</span>
-                </label>
-                <label className="flex items-center gap-2 py-1 px-1 rounded hover:bg-gray-700 cursor-pointer text-xs">
-                  <input type="checkbox" checked={layerVisibility.lidarDevices} onChange={(e) => setLayerVisibility(prev => ({ ...prev, lidarDevices: e.target.checked }))} className="rounded border-gray-600 bg-gray-700 text-green-500 w-3 h-3" />
-                  <span className="text-gray-300">LiDAR Devices</span>
-                </label>
-                <label className="flex items-center gap-2 py-1 px-1 rounded hover:bg-gray-700 cursor-pointer text-xs">
-                  <input type="checkbox" checked={layerVisibility.coverageCircles} onChange={(e) => setLayerVisibility(prev => ({ ...prev, coverageCircles: e.target.checked }))} className="rounded border-gray-600 bg-gray-700 text-green-500 w-3 h-3" />
-                  <span className="text-gray-300">Coverage Circles</span>
-                </label>
-                <label className="flex items-center gap-2 py-1 px-1 rounded hover:bg-gray-700 cursor-pointer text-xs">
-                  <input type="checkbox" checked={layerVisibility.coverageHeatmap} onChange={(e) => setLayerVisibility(prev => ({ ...prev, coverageHeatmap: e.target.checked }))} className="rounded border-gray-600 bg-gray-700 text-cyan-500 w-3 h-3" />
-                  <span className="text-gray-300">Coverage Heatmap</span>
-                </label>
-                <label className="flex items-center gap-2 py-1 px-1 rounded hover:bg-gray-700 cursor-pointer text-xs">
-                  <input type="checkbox" checked={layerVisibility.overlapCells} onChange={(e) => setLayerVisibility(prev => ({ ...prev, overlapCells: e.target.checked }))} className="rounded border-gray-600 bg-gray-700 text-purple-500 w-3 h-3" />
-                  <span className="text-gray-300">Overlap Cells</span>
-                </label>
-              </div>
-            )}
-          </div>
-        )}
+        <div className="relative">
+          <button
+            onClick={() => setShowLayersPanel(!showLayersPanel)}
+            className={`p-1.5 rounded transition-colors ${showLayersPanel ? 'bg-blue-600 text-white' : 'text-gray-500 hover:text-white'}`}
+            title="Toggle Layers"
+          >
+            <Layers className="w-4 h-4" />
+          </button>
+          {showLayersPanel && (
+            <div className="absolute top-full left-0 mt-1 bg-gray-800 border border-gray-700 rounded-lg shadow-xl p-2 min-w-[180px] z-50">
+              <div className="text-xs font-medium text-gray-400 mb-1 px-1">Layers</div>
+              <label className="flex items-center gap-2 py-1 px-1 rounded hover:bg-gray-700 cursor-pointer text-xs">
+                <input type="checkbox" checked={layerVisibility.base} onChange={(e) => setLayerVisibility(prev => ({ ...prev, base: e.target.checked }))} className="rounded border-gray-600 bg-gray-700 text-blue-500 w-3 h-3" />
+                <span className="text-gray-300">Base Fixtures</span>
+              </label>
+              <label className="flex items-center gap-2 py-1 px-1 rounded hover:bg-gray-700 cursor-pointer text-xs">
+                <input type="checkbox" checked={layerVisibility.floorplan} onChange={(e) => setLayerVisibility(prev => ({ ...prev, floorplan: e.target.checked }))} className="rounded border-gray-600 bg-gray-700 text-orange-500 w-3 h-3" />
+                <span className="text-gray-300">Floor Plan Image</span>
+              </label>
+              <label className="flex items-center gap-2 py-1 px-1 rounded hover:bg-gray-700 cursor-pointer text-xs">
+                <input type="checkbox" checked={layerVisibility.roi} onChange={(e) => setLayerVisibility(prev => ({ ...prev, roi: e.target.checked }))} className="rounded border-gray-600 bg-gray-700 text-amber-500 w-3 h-3" />
+                <span className="text-gray-300">ROI Polygon</span>
+              </label>
+              <label className="flex items-center gap-2 py-1 px-1 rounded hover:bg-gray-700 cursor-pointer text-xs">
+                <input type="checkbox" checked={layerVisibility.lidarDevices} onChange={(e) => setLayerVisibility(prev => ({ ...prev, lidarDevices: e.target.checked }))} className="rounded border-gray-600 bg-gray-700 text-green-500 w-3 h-3" />
+                <span className="text-gray-300">LiDAR Devices</span>
+              </label>
+              <label className="flex items-center gap-2 py-1 px-1 rounded hover:bg-gray-700 cursor-pointer text-xs">
+                <input type="checkbox" checked={layerVisibility.coverageCircles} onChange={(e) => setLayerVisibility(prev => ({ ...prev, coverageCircles: e.target.checked }))} className="rounded border-gray-600 bg-gray-700 text-green-500 w-3 h-3" />
+                <span className="text-gray-300">Coverage Circles</span>
+              </label>
+              <label className="flex items-center gap-2 py-1 px-1 rounded hover:bg-gray-700 cursor-pointer text-xs">
+                <input type="checkbox" checked={layerVisibility.coverageHeatmap} onChange={(e) => setLayerVisibility(prev => ({ ...prev, coverageHeatmap: e.target.checked }))} className="rounded border-gray-600 bg-gray-700 text-cyan-500 w-3 h-3" />
+                <span className="text-gray-300">Coverage Heatmap</span>
+              </label>
+              <label className="flex items-center gap-2 py-1 px-1 rounded hover:bg-gray-700 cursor-pointer text-xs">
+                <input type="checkbox" checked={layerVisibility.overlapCells} onChange={(e) => setLayerVisibility(prev => ({ ...prev, overlapCells: e.target.checked }))} className="rounded border-gray-600 bg-gray-700 text-purple-500 w-3 h-3" />
+                <span className="text-gray-300">Overlap Cells</span>
+              </label>
+              <label className="flex items-center gap-2 py-1 px-1 rounded hover:bg-gray-700 cursor-pointer text-xs">
+                <input type="checkbox" checked={showGrid} onChange={(e) => setShowGrid(e.target.checked)} className="rounded border-gray-600 bg-gray-700 text-gray-500 w-3 h-3" />
+                <span className="text-gray-300">Grid</span>
+              </label>
+            </div>
+          )}
+        </div>
         <div className="flex-1" />
         <button
           onClick={zoomToFit}
@@ -1321,13 +1407,13 @@ export default function PreviewPanel({
           )}
           
           <button
-            onClick={() => setActiveTool('place_lidar')}
+            onClick={() => setActiveTool(activeTool === 'place_lidar' ? 'select' : 'place_lidar')}
             className={`px-2 py-1 rounded text-xs flex items-center gap-1 ${
-              activeTool === 'place_lidar' ? 'bg-blue-600 text-white' : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+              activeTool === 'place_lidar' ? 'bg-blue-600 text-white ring-2 ring-blue-400' : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
             }`}
           >
             <Radio className="w-3 h-3" />
-            Place
+            {activeTool === 'place_lidar' ? 'Placing...' : 'Place'}
           </button>
           
           <div className="w-px h-5 bg-gray-600" />
@@ -2001,7 +2087,7 @@ export default function PreviewPanel({
           height={dimensions.height}
           className="bg-gray-950"
         >
-          {/* Grid */}
+          {/* Grid - square tiles background */}
           {gridLines.map((line, i) => (
             <line
               key={`grid-${i}`}
@@ -2009,8 +2095,9 @@ export default function PreviewPanel({
               y1={line.y1}
               x2={line.x2}
               y2={line.y2}
-              stroke="#1f2937"
-              strokeWidth={0.5}
+              stroke={line.major ? '#374151' : '#1f2937'}
+              strokeWidth={line.major ? 1 : 0.5}
+              opacity={line.major ? 0.8 : 0.5}
             />
           ))}
 
@@ -2195,8 +2282,8 @@ export default function PreviewPanel({
           })}
           </g>
 
-          {/* Floor Plan Image - in overlay mode, render AFTER fixtures so it's visible on top */}
-          {viewMode === 'overlay' && layerVisibility.floorplan && floorplan && (() => {
+          {/* Floor Plan Image - in overlay or DWG mode when layer enabled */}
+          {(viewMode === 'overlay' || viewMode === 'dwg') && layerVisibility.floorplan && floorplan && (() => {
             const t = floorplan.transform
             const topLeft = toScreen(t.x, t.y + floorplan.naturalHeight * t.scaleY)
             const bottomRight = toScreen(t.x + floorplan.naturalWidth * t.scaleX, t.y)
@@ -2326,16 +2413,19 @@ export default function PreviewPanel({
             )
           })}
 
-          {/* LiDAR Instances */}
-          {viewMode !== 'floorplan' && lidarMode && lidarInstances.map((inst) => {
+          {/* LiDAR Instances - visible in DWG and Overlay when layer enabled */}
+          {viewMode !== 'floorplan' && layerVisibility.lidarDevices && lidarInstances.map((inst) => {
             const model = lidarModels.find(m => m.id === inst.model_id)
             const range = inst.range_m || model?.range_m || 10
-            // Apply scale correction when converting meters back to DXF units
             const effectiveScale = importData.unit_scale_to_m * scaleCorrection
-            const pos = toScreen(inst.x_m / effectiveScale, inst.z_m / effectiveScale)
-            // Range is in meters, viewTransform.scale uses uncorrected unit_scale, so divide by scaleCorrection
+            // Use dragged position if this LiDAR is being dragged
+            const isBeingDragged = draggingLidarId === inst.id
+            const displayX = isBeingDragged && lidarDragCurrent ? lidarDragCurrent.x_m : inst.x_m
+            const displayZ = isBeingDragged && lidarDragCurrent ? lidarDragCurrent.z_m : inst.z_m
+            const pos = toScreen(displayX / effectiveScale, displayZ / effectiveScale)
             const rangeRadius = Math.abs(range * viewTransform.scale / scaleCorrection)
             const isSelected = selectedLidarInstanceId === inst.id
+            const isDragging = isBeingDragged
             
             return (
               <g key={inst.id}>
@@ -2351,31 +2441,57 @@ export default function PreviewPanel({
                     strokeDasharray="4 2"
                   />
                 )}
-                {/* Device marker - controlled by lidarDevices layer */}
-                {layerVisibility.lidarDevices && (
-                  <>
-                    <circle
-                      cx={pos.x}
-                      cy={pos.y}
-                      r={isSelected ? 10 : 8}
-                      fill={isSelected ? '#3b82f6' : inst.source === 'auto' ? '#22c55e' : '#1e40af'}
-                      stroke={isSelected ? '#60a5fa' : inst.source === 'auto' ? '#4ade80' : '#3b82f6'}
-                      strokeWidth="2"
-                      className="cursor-pointer"
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        onSelectLidarInstance?.(isSelected ? null : inst.id)
-                      }}
-                    />
-                    {/* Icon indicator */}
-                    <circle
-                      cx={pos.x}
-                      cy={pos.y}
-                      r={3}
-                      fill="white"
-                      pointerEvents="none"
-                    />
-                  </>
+                {/* Device marker — clickable hit area (larger than visible) */}
+                <circle
+                  cx={pos.x}
+                  cy={pos.y}
+                  r={18}
+                  fill="transparent"
+                  stroke="none"
+                  className={isDragging ? 'cursor-grabbing' : 'cursor-grab'}
+                  onMouseDown={(e) => {
+                    if (e.button !== 0) return
+                    e.stopPropagation()
+                    e.preventDefault()
+                    onSelectLidarInstance?.(inst.id)
+                    const rect = containerRef.current?.getBoundingClientRect()
+                    if (!rect) return
+                    const mousePos = { x: e.clientX - rect.left, y: e.clientY - rect.top }
+                    setDraggingLidarId(inst.id)
+                    setLidarDragStart(mousePos)
+                    setLidarDragOriginal({ x_m: inst.x_m, z_m: inst.z_m })
+                  }}
+                />
+                {/* Visible device dot */}
+                <circle
+                  cx={pos.x}
+                  cy={pos.y}
+                  r={isSelected ? 12 : isDragging ? 11 : 8}
+                  fill={isDragging ? '#f59e0b' : isSelected ? '#3b82f6' : inst.source === 'auto' ? '#22c55e' : '#1e40af'}
+                  stroke={isDragging ? '#fbbf24' : isSelected ? '#60a5fa' : inst.source === 'auto' ? '#4ade80' : '#3b82f6'}
+                  strokeWidth={isSelected || isDragging ? 3 : 2}
+                  pointerEvents="none"
+                />
+                {/* Icon indicator */}
+                <circle
+                  cx={pos.x}
+                  cy={pos.y}
+                  r={3}
+                  fill="white"
+                  pointerEvents="none"
+                />
+                {/* Selected indicator ring */}
+                {isSelected && (
+                  <circle
+                    cx={pos.x}
+                    cy={pos.y}
+                    r={16}
+                    fill="none"
+                    stroke="#60a5fa"
+                    strokeWidth="1"
+                    strokeDasharray="3 3"
+                    pointerEvents="none"
+                  />
                 )}
               </g>
             )
@@ -2547,6 +2663,7 @@ export default function PreviewPanel({
           lidarModels={lidarModels}
           projectName={importData.filename || 'Untitled Project'}
           layoutVersionId={importData.filename || ''}
+          floorplan={floorplan}
         />
       )}
     </div>

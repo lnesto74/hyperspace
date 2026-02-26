@@ -33,7 +33,7 @@ export default function Sidebar({ activeTab, onTabChange, onOpenDwgImporter, onO
   const [showSimulator, setShowSimulator] = useState(false)
 
   return (
-    <div className="w-72 flex-shrink-0 h-full bg-panel-bg border-r border-border-dark flex flex-col overflow-hidden">
+    <div className="w-80 flex-shrink-0 h-full bg-panel-bg border-r border-border-dark flex flex-col overflow-hidden">
       {/* Header */}
       <style>{`
         @keyframes sidebar-hue { from { filter: hue-rotate(0deg); } to { filter: hue-rotate(-360deg); } }

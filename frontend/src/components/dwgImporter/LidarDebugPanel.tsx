@@ -52,6 +52,13 @@ interface LidarDebugPanelProps {
   lidarModels?: LidarModel[]
   projectName?: string
   layoutVersionId?: string
+  floorplan?: {
+    imageUrl: string
+    transform: { x: number; y: number; scaleX: number; scaleY: number; rotation: number; opacity: number }
+    naturalWidth: number
+    naturalHeight: number
+    cropRect: { x: number; y: number; w: number; h: number } | null
+  } | null
 }
 
 interface SimulatedLidar {
@@ -73,7 +80,8 @@ export default function LidarDebugPanel({
   lidarInstances = [],
   lidarModels = [],
   projectName = 'Untitled Project',
-  layoutVersionId = ''
+  layoutVersionId = '',
+  floorplan = null
 }: LidarDebugPanelProps) {
   const [simulatedLidars, setSimulatedLidars] = useState<SimulatedLidar[]>([])
   const [isSimulating, setIsSimulating] = useState(false)
@@ -236,6 +244,7 @@ export default function LidarDebugPanel({
               lidarModels={lidarModels}
               projectName={projectName}
               layoutVersionId={layoutVersionId}
+              floorplan={floorplan}
             />
           </div>
         )}
@@ -379,14 +388,10 @@ export default function LidarDebugPanel({
             <div className="bg-gray-800 rounded-lg p-3">
               <div className="flex items-center justify-between mb-3">
                 <h3 className="text-sm font-medium text-gray-300">Wireframe (to scale)</h3>
-                <button
-                  onClick={runSimulation}
-                  disabled={isSimulating || !roiBounds}
-                  className="px-3 py-1 bg-blue-600 hover:bg-blue-500 disabled:bg-gray-600 text-white text-xs rounded flex items-center gap-1"
-                >
-                  {isSimulating ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Play className="w-3 h-3" />}
-                  Simulate
-                </button>
+                <span className="px-2 py-1 bg-blue-600/30 text-blue-300 text-xs rounded flex items-center gap-1">
+                  <span className="w-2 h-2 bg-blue-400 rounded-full animate-pulse" />
+                  Live from DB
+                </span>
               </div>
 
               {/* SVG Wireframe */}
@@ -438,19 +443,22 @@ export default function LidarDebugPanel({
                   />
                 )}
 
-                {/* Simulated LiDARs */}
-                {simulatedLidars.map((lidar, i) => {
-                  const pos = toWireframe(lidar.x, lidar.z)
-                  const radiusPx = lidar.effectiveRadius * wireframeScale
+                {/* Persisted LiDAR Instances (from database) */}
+                {lidarInstances.map((inst, i) => {
+                  const model = lidarModels.find(m => m.id === inst.model_id)
+                  const range = inst.range_m || model?.range_m || 10
+                  const pos = toWireframe(inst.x_m, inst.z_m)
+                  const radiusPx = range * 0.9 * wireframeScale // effective radius
+                  const isAuto = inst.source === 'auto'
                   return (
-                    <g key={i}>
+                    <g key={inst.id || i}>
                       {/* Coverage circle */}
                       <circle
                         cx={pos.x}
                         cy={pos.y}
                         r={radiusPx}
-                        fill="rgba(34, 197, 94, 0.15)"
-                        stroke="rgba(34, 197, 94, 0.5)"
+                        fill={isAuto ? 'rgba(34, 197, 94, 0.15)' : 'rgba(59, 130, 246, 0.15)'}
+                        stroke={isAuto ? 'rgba(34, 197, 94, 0.5)' : 'rgba(59, 130, 246, 0.5)'}
                         strokeWidth="1"
                         strokeDasharray="4 2"
                       />
@@ -459,7 +467,7 @@ export default function LidarDebugPanel({
                         cx={pos.x}
                         cy={pos.y}
                         r={6}
-                        fill="#22c55e"
+                        fill={isAuto ? '#22c55e' : '#3b82f6'}
                         stroke="white"
                         strokeWidth="2"
                       />
@@ -467,7 +475,7 @@ export default function LidarDebugPanel({
                         x={pos.x}
                         y={pos.y - 10}
                         textAnchor="middle"
-                        fill="#22c55e"
+                        fill={isAuto ? '#22c55e' : '#3b82f6'}
                         fontSize="10"
                       >
                         {i + 1}
@@ -525,19 +533,21 @@ export default function LidarDebugPanel({
                 )}
               </svg>
 
-              {/* Simulation results */}
-              {simulatedLidars.length > 0 && (
-                <div className="mt-3 p-2 bg-green-900/30 rounded text-xs">
-                  <div className="flex justify-between text-green-300">
-                    <span>Simulated LiDARs:</span>
-                    <span className="font-mono font-medium">{simulatedLidars.length}</span>
-                  </div>
-                  <div className="flex justify-between text-green-300 mt-1">
-                    <span>Grid spacing:</span>
-                    <span className="font-mono">{(effectiveRadius * 1.4).toFixed(2)}m</span>
-                  </div>
+              {/* Persisted LiDAR count */}
+              <div className="mt-3 p-2 bg-blue-900/30 rounded text-xs">
+                <div className="flex justify-between text-blue-300">
+                  <span>Persisted LiDARs:</span>
+                  <span className="font-mono font-medium">{lidarInstances.length}</span>
                 </div>
-              )}
+                <div className="flex justify-between text-gray-400 mt-1">
+                  <span>Auto-placed:</span>
+                  <span className="font-mono text-green-400">{lidarInstances.filter(i => i.source === 'auto').length}</span>
+                </div>
+                <div className="flex justify-between text-gray-400 mt-1">
+                  <span>Manual:</span>
+                  <span className="font-mono text-blue-400">{lidarInstances.filter(i => i.source !== 'auto').length}</span>
+                </div>
+              </div>
             </div>
 
             {/* ROI Vertices Table */}

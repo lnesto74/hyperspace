@@ -20,12 +20,28 @@ listener 1883 0.0.0.0
 allow_anonymous true
 EOF
 
-# Kill any existing processes on required ports
+# Kill any existing processes on required ports (thorough cleanup)
 echo "🧹 Cleaning up old processes..."
-lsof -ti :1883 | xargs kill -9 2>/dev/null
-lsof -ti :3001 | xargs kill -9 2>/dev/null
-lsof -ti :5173 | xargs kill -9 2>/dev/null
-sleep 1
+for port in 1883 3001 5173; do
+    pids=$(lsof -ti :$port 2>/dev/null)
+    if [ -n "$pids" ]; then
+        echo "   Killing processes on port $port: $pids"
+        echo "$pids" | xargs kill -9 2>/dev/null
+    fi
+done
+# Also kill any orphaned node processes from previous runs
+pkill -f "node.*hyperspace.*backend" 2>/dev/null
+pkill -f "node.*hyperspace.*frontend" 2>/dev/null
+pkill -f "node.*server\.js" 2>/dev/null
+sleep 2
+# Double-check ports are free
+for port in 1883 3001 5173; do
+    if lsof -ti :$port > /dev/null 2>&1; then
+        echo "   ⚠️  Port $port still in use, force killing..."
+        lsof -ti :$port | xargs kill -9 2>/dev/null
+        sleep 1
+    fi
+done
 
 # Start Mosquitto MQTT broker in background
 echo "📡 Starting Mosquitto MQTT broker on port 1883..."
@@ -45,13 +61,32 @@ echo "🔧 Starting Backend on port 3001..."
 cd "$PROJECT_DIR/backend"
 NODE_OPTIONS="--max-old-space-size=4096" MOCK_LIDAR=false MQTT_ENABLED=true MQTT_BROKER_URL=mqtt://127.0.0.1:1883 npm run dev > /tmp/hyperspace-backend.log 2>&1 &
 BACKEND_PID=$!
-sleep 3
 
-if ps -p $BACKEND_PID > /dev/null; then
-    echo "   ✅ Backend running (PID: $BACKEND_PID)"
+# Wait for backend to actually be ready (health check loop)
+echo "   ⏳ Waiting for backend to be ready..."
+BACKEND_READY=false
+for i in $(seq 1 30); do
+    if curl -s http://localhost:3001/api/venues > /dev/null 2>&1; then
+        BACKEND_READY=true
+        break
+    fi
+    # Check process is still alive
+    if ! ps -p $BACKEND_PID > /dev/null 2>&1; then
+        echo "   ❌ Backend process died"
+        cat /tmp/hyperspace-backend.log
+        exit 1
+    fi
+    sleep 1
+    printf "   ⏳ Attempt %d/30...\r" "$i"
+done
+echo ""
+
+if $BACKEND_READY; then
+    echo "   ✅ Backend running and responding (PID: $BACKEND_PID)"
 else
-    echo "   ❌ Backend failed to start"
-    cat /tmp/hyperspace-backend.log
+    echo "   ❌ Backend started but not responding after 30s"
+    echo "   Last 20 lines of backend log:"
+    tail -20 /tmp/hyperspace-backend.log
     exit 1
 fi
 
@@ -60,13 +95,30 @@ echo "🎨 Starting Frontend on port 5173..."
 cd "$PROJECT_DIR/frontend"
 npm run dev > /tmp/hyperspace-frontend.log 2>&1 &
 FRONTEND_PID=$!
-sleep 3
 
-if ps -p $FRONTEND_PID > /dev/null; then
-    echo "   ✅ Frontend running (PID: $FRONTEND_PID)"
+# Wait for frontend to be ready
+echo "   ⏳ Waiting for frontend to be ready..."
+FRONTEND_READY=false
+for i in $(seq 1 20); do
+    if curl -s http://localhost:5173 > /dev/null 2>&1; then
+        FRONTEND_READY=true
+        break
+    fi
+    if ! ps -p $FRONTEND_PID > /dev/null 2>&1; then
+        echo "   ❌ Frontend process died"
+        cat /tmp/hyperspace-frontend.log
+        exit 1
+    fi
+    sleep 1
+    printf "   ⏳ Attempt %d/20...\r" "$i"
+done
+echo ""
+
+if $FRONTEND_READY; then
+    echo "   ✅ Frontend running and responding (PID: $FRONTEND_PID)"
 else
-    echo "   ❌ Frontend failed to start"
-    cat /tmp/hyperspace-frontend.log
+    echo "   ❌ Frontend started but not responding after 20s"
+    tail -20 /tmp/hyperspace-frontend.log
     exit 1
 fi
 

@@ -220,7 +220,7 @@ router.post('/instances', (req, res) => {
   }
 });
 
-// PUT /api/lidar/instances/:id - Update a LiDAR instance
+// PUT /api/lidar/instances/:id - Update a LiDAR instance (full replace)
 router.put('/instances/:id', (req, res) => {
   try {
     const db = req.app.get('db');
@@ -256,6 +256,48 @@ router.put('/instances/:id', (req, res) => {
   } catch (err) {
     console.error('Error updating LiDAR instance:', err);
     res.status(500).json({ error: 'Failed to update LiDAR instance' });
+  }
+});
+
+// PATCH /api/lidar/instances/:id - Partial update (used by drag-and-drop)
+router.patch('/instances/:id', (req, res) => {
+  try {
+    const db = req.app.get('db');
+    const { id } = req.params;
+    const updates = req.body;
+    
+    const existing = db.prepare('SELECT * FROM lidar_instances WHERE id = ?').get(id);
+    if (!existing) {
+      return res.status(404).json({ error: 'LiDAR instance not found' });
+    }
+    
+    const fields = ['model_id', 'x_m', 'z_m', 'mount_y_m', 'yaw_deg'];
+    const setClauses = [];
+    const values = [];
+    for (const f of fields) {
+      if (updates[f] !== undefined) {
+        setClauses.push(`${f} = ?`);
+        values.push(updates[f]);
+      }
+    }
+    if (updates.params_override !== undefined) {
+      setClauses.push('params_override_json = ?');
+      values.push(JSON.stringify(updates.params_override));
+    }
+    
+    if (setClauses.length === 0) {
+      return res.json(existing);
+    }
+    
+    values.push(id);
+    db.prepare(`UPDATE lidar_instances SET ${setClauses.join(', ')} WHERE id = ?`).run(...values);
+    
+    // Return the full updated row
+    const updated = db.prepare('SELECT * FROM lidar_instances WHERE id = ?').get(id);
+    res.json(updated);
+  } catch (err) {
+    console.error('Error patching LiDAR instance:', err);
+    res.status(500).json({ error: 'Failed to patch LiDAR instance' });
   }
 });
 

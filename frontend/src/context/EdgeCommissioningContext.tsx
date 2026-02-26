@@ -408,9 +408,22 @@ export function EdgeCommissioningProvider({ children }: Props) {
     }
   }, [addToast])
 
-  // Load pairings for a venue
+  // Load pairings for a venue (also auto-cleans orphaned pairings)
   const loadPairings = useCallback(async (venueId: string) => {
     try {
+      // Silently cleanup orphaned pairings first (pairings referencing deleted placements)
+      try {
+        const cleanupRes = await fetch(`${API_BASE}/api/edge-commissioning/pairings/cleanup-orphaned?venueId=${venueId}`, { method: 'DELETE' })
+        if (cleanupRes.ok) {
+          const cleanupData = await cleanupRes.json()
+          if (cleanupData.deleted > 0) {
+            console.log(`🧹 Auto-cleaned ${cleanupData.deleted} orphaned pairings`)
+          }
+        }
+      } catch (e) {
+        // Cleanup is best-effort, don't block loading
+      }
+
       const res = await fetch(`${API_BASE}/api/edge-commissioning/pairings?venueId=${venueId}`)
       if (!res.ok) throw new Error('Failed to load pairings')
       const data = await res.json()

@@ -34,10 +34,14 @@ import { BusinessReportingPage } from './features/businessReporting'
 import { ProfitRadarPage } from './features/profitRadar'
 import { ProfitRadarProvider } from './context/ProfitRadarContext'
 
-import { BarChart3, Bell, Thermometer, Zap, LayoutGrid, ShoppingCart, Monitor, Activity, PieChart, Clapperboard, Crosshair } from 'lucide-react'
+import { BarChart3, Bell, Thermometer, Zap, LayoutGrid, ShoppingCart, Monitor, Activity, PieChart, Clapperboard, Crosshair, Building2, LogOut, User } from 'lucide-react'
 import { useState, useEffect, createContext, useContext } from 'react'
+import { Routes, Route, useNavigate } from 'react-router-dom'
+import { useAuth } from './context/AuthContext'
 import { useVenue } from './context/VenueContext'
 import { API_BASE } from './config/api'
+import LoginPage from './components/auth/LoginPage'
+import CompaniesPage from './components/admin/CompaniesPage'
 
 // App view mode context
 type ViewMode = 'main' | 'planogram' | 'dwgImporter' | 'lidarPlanner' | 'edgeCommissioning' | 'doohAnalytics' | 'doohEffectiveness' | 'businessReporting' | 'profitRadar'
@@ -465,7 +469,59 @@ function MainApp() {
   )
 }
 
-function App() {
+function UserMenu() {
+  const { user, logout, isSuperadmin } = useAuth()
+  const navigate = useNavigate()
+  const [open, setOpen] = useState(false)
+  
+  if (!user) return null
+  
+  return (
+    <div className="fixed top-3 right-4 z-50">
+      <button
+        onClick={() => setOpen(!open)}
+        className="flex items-center gap-2 px-2 py-1.5 rounded-lg bg-gray-800/80 backdrop-blur-sm border border-gray-700/50 hover:border-gray-600 transition-all"
+      >
+        {user.picture ? (
+          <img src={user.picture} alt="" className="w-6 h-6 rounded-full" />
+        ) : (
+          <User className="w-4 h-4 text-gray-400" />
+        )}
+        <span className="text-xs text-gray-300 max-w-[120px] truncate hidden sm:block">{user.name || user.email}</span>
+      </button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
+          <div className="absolute right-0 top-full mt-1 w-56 bg-gray-900 border border-gray-700 rounded-xl shadow-xl z-50 py-1 overflow-hidden">
+            <div className="px-3 py-2 border-b border-gray-800">
+              <p className="text-sm text-white font-medium truncate">{user.name}</p>
+              <p className="text-[11px] text-gray-500 truncate">{user.email}</p>
+              {isSuperadmin && <span className="inline-block mt-1 px-1.5 py-0.5 text-[9px] uppercase tracking-wider bg-blue-500/20 text-blue-400 rounded font-semibold">Superadmin</span>}
+            </div>
+            {isSuperadmin && (
+              <button
+                onClick={() => { setOpen(false); navigate('/companies'); }}
+                className="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-300 hover:bg-gray-800 hover:text-white transition-colors"
+              >
+                <Building2 className="w-4 h-4" />
+                Companies & Venues
+              </button>
+            )}
+            <button
+              onClick={() => { setOpen(false); logout(); }}
+              className="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-300 hover:bg-gray-800 hover:text-red-400 transition-colors"
+            >
+              <LogOut className="w-4 h-4" />
+              Sign Out
+            </button>
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
+function AuthenticatedApp() {
   return (
     <ToastProvider>
       <VenueProvider>
@@ -477,7 +533,11 @@ function App() {
                   <Narrator2Provider>
                     <ReplayInsightProvider>
                       <ProfitRadarProvider>
-                        <MainApp />
+                        <UserMenu />
+                        <Routes>
+                          <Route path="/companies" element={<CompaniesPage onClose={() => window.history.back()} />} />
+                          <Route path="/*" element={<MainApp />} />
+                        </Routes>
                       </ProfitRadarProvider>
                     </ReplayInsightProvider>
                   </Narrator2Provider>
@@ -489,6 +549,27 @@ function App() {
       </VenueProvider>
     </ToastProvider>
   )
+}
+
+function App() {
+  const { isAuthenticated, isLoading } = useAuth()
+  
+  if (isLoading) {
+    return (
+      <div className="fixed inset-0 bg-gray-950 flex items-center justify-center">
+        <div className="flex flex-col items-center gap-4">
+          <img src="/hyperspace-logo.png" alt="" className="w-16 h-16 object-contain animate-pulse" onError={(e) => { (e.target as HTMLImageElement).src = '/hyperspace.svg' }} />
+          <p className="text-sm text-gray-500">Loading...</p>
+        </div>
+      </div>
+    )
+  }
+  
+  if (!isAuthenticated) {
+    return <LoginPage />
+  }
+  
+  return <AuthenticatedApp />
 }
 
 export default App

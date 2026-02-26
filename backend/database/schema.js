@@ -49,6 +49,28 @@ export function initDatabase() {
 
   // Create tables
   db.exec(`
+    -- Users table (Google OAuth)
+    CREATE TABLE IF NOT EXISTS users (
+      id TEXT PRIMARY KEY,
+      email TEXT NOT NULL UNIQUE,
+      name TEXT,
+      picture TEXT,
+      google_id TEXT UNIQUE,
+      role TEXT NOT NULL DEFAULT 'viewer',
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    -- Companies (customers) table
+    CREATE TABLE IF NOT EXISTS companies (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      slug TEXT UNIQUE,
+      logo_url TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
     -- Venues table
     CREATE TABLE IF NOT EXISTS venues (
       id TEXT PRIMARY KEY,
@@ -906,6 +928,42 @@ export function initDatabase() {
     }
   } catch (migrationErr) {
     // Table may not exist yet, that's fine
+  }
+
+  // Migration: Add company_id and address fields to venues
+  try {
+    const venueColumns = db.prepare("PRAGMA table_info(venues)").all();
+    const venueColumnNames = venueColumns.map(c => c.name);
+    
+    if (venueColumnNames.length > 0 && !venueColumnNames.includes('company_id')) {
+      db.exec("ALTER TABLE venues ADD COLUMN company_id TEXT DEFAULT NULL REFERENCES companies(id) ON DELETE SET NULL");
+      console.log('📦 Migration: Added company_id column to venues');
+    }
+    if (venueColumnNames.length > 0 && !venueColumnNames.includes('address')) {
+      db.exec("ALTER TABLE venues ADD COLUMN address TEXT DEFAULT NULL");
+      console.log('📦 Migration: Added address column to venues');
+    }
+    if (venueColumnNames.length > 0 && !venueColumnNames.includes('latitude')) {
+      db.exec("ALTER TABLE venues ADD COLUMN latitude REAL DEFAULT NULL");
+      console.log('📦 Migration: Added latitude column to venues');
+    }
+    if (venueColumnNames.length > 0 && !venueColumnNames.includes('longitude')) {
+      db.exec("ALTER TABLE venues ADD COLUMN longitude REAL DEFAULT NULL");
+      console.log('📦 Migration: Added longitude column to venues');
+    }
+    if (venueColumnNames.length > 0 && !venueColumnNames.includes('place_id')) {
+      db.exec("ALTER TABLE venues ADD COLUMN place_id TEXT DEFAULT NULL");
+      console.log('📦 Migration: Added place_id column to venues');
+    }
+  } catch (migrationErr) {
+    // Table may not exist yet, that's fine
+  }
+
+  // Create index for venues by company_id
+  try {
+    db.exec("CREATE INDEX IF NOT EXISTS idx_venues_company_id ON venues(company_id)");
+  } catch (e) {
+    // Index may already exist
   }
 
   console.log('📦 Database initialized');

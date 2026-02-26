@@ -38,6 +38,8 @@ import algorithmProvidersRoutes from './routes/algorithmProviders.js';
 import { seedProviders } from './data/algorithmProviders.js';
 import createReplayInsightRoutes from './routes/replayInsight.js';
 import { EpisodeDetectorOrchestrator } from './services/replay-insight/index.js';
+import authRoutes from './routes/auth.js';
+import companiesRoutes from './routes/companies.js';
 import { IntentScorer, ZoneAggregator, BehaviorClusterer, ProfitRadarEngine } from './services/profit-radar/index.js';
 
 const PORT = process.env.PORT || 3001;
@@ -256,6 +258,8 @@ app.use('/api/models-static', (req, res, next) => {
 }, express.static(MODELS_DIR));
 
 // Mount routes
+app.use('/api/auth', authRoutes(db));
+app.use('/api/companies', companiesRoutes(db));
 app.use('/api/discovery', discoveryRoutes(tailscaleService, mockGenerator));
 app.use('/api/venues', venuesRoutes(db));
 app.use('/api/lidars', lidarsRoutes(lidarConnectionManager, tailscaleService, mockGenerator));

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { 
   Map as MapIcon, 
   RefreshCw, 
@@ -10,15 +10,25 @@ import {
   Save,
   ChevronDown,
   ChevronUp,
+  ChevronRight,
   Trash2,
-  Radio
+  Radio,
+  Building2
 } from 'lucide-react'
 import { useVenue } from '../../context/VenueContext'
 import { useLidar } from '../../context/LidarContext'
 import { useToast } from '../../context/ToastContext'
+import { useAuth } from '../../context/AuthContext'
 import { LidarPlacement } from '../../types'
 import VenueSettingsPanel from './VenueSettingsPanel'
+import AddressAutocomplete from './AddressAutocomplete'
 import { API_BASE } from '../../config/api'
+
+interface Company {
+  id: string
+  name: string
+  venue_count: number
+}
 
 
 interface DwgImport {
@@ -68,6 +78,7 @@ export default function FloorplanPanel({ onOpenDwgImporter }: FloorplanPanelProp
   } = useVenue()
   const { placements, setPlacements } = useLidar()
   const { addToast } = useToast()
+  const { token, isSuperadmin } = useAuth()
   
   // DWG state
   const [imports, setImports] = useState<DwgImport[]>([])
@@ -78,6 +89,11 @@ export default function FloorplanPanel({ onOpenDwgImporter }: FloorplanPanelProp
   const [isLoadingDwg, setIsLoadingDwg] = useState(true)
   const [error, setError] = useState<string | null>(null)
   
+  // Company state
+  const [companies, setCompanies] = useState<Company[]>([])
+  const [filterCompanyId, setFilterCompanyId] = useState<string>('all')
+  const [expandedCompanies, setExpandedCompanies] = useState<Set<string>>(new Set(['all']))
+  
   // UI state
   const [showSettings, setShowSettings] = useState(false)
   const [showVenueSettingsModal, setShowVenueSettingsModal] = useState(false)
@@ -86,11 +102,26 @@ export default function FloorplanPanel({ onOpenDwgImporter }: FloorplanPanelProp
   const [newVenueWidth, setNewVenueWidth] = useState(20)
   const [newVenueDepth, setNewVenueDepth] = useState(15)
   const [newVenueHeight, setNewVenueHeight] = useState(4)
+  const [newVenueAddress, setNewVenueAddress] = useState<{ address: string; latitude: number; longitude: number; place_id: string } | null>(null)
 
   // Fetch venue list on mount
   useEffect(() => {
     fetchVenueList()
   }, [])
+
+  // Fetch companies
+  useEffect(() => {
+    if (!token || !isSuperadmin) return
+    const fetchCompanies = async () => {
+      try {
+        const res = await fetch(`${API_BASE}/api/companies`, {
+          headers: { Authorization: `Bearer ${token}` },
+        })
+        if (res.ok) setCompanies(await res.json())
+      } catch { /* ignore */ }
+    }
+    fetchCompanies()
+  }, [token, isSuperadmin])
 
   // Fetch DWG imports
   useEffect(() => {
@@ -200,14 +231,50 @@ export default function FloorplanPanel({ onOpenDwgImporter }: FloorplanPanelProp
     addToast('success', 'Venue saved')
   }
 
-  const handleCreateManual = () => {
+  const handleCreateManual = async () => {
     createVenue(newVenueName, newVenueWidth, newVenueDepth, newVenueHeight, 1)
     setShowNewManual(false)
+    setSelectedLayoutId(null) // Clear DWG selection for manual venue
+    
+    // Save address if provided (will be persisted after venue is saved)
+    if (newVenueAddress) {
+      // We need to wait for the venue to be saved first, then patch address
+      // The venue ID is set via createVenue but not yet persisted.
+      // We'll patch it after the next save cycle via a timeout.
+      const addrData = newVenueAddress
+      setTimeout(async () => {
+        try {
+          // Fetch the latest venue list to get the newly created venue ID
+          const res = await fetch(`${API_BASE}/api/venues`)
+          if (res.ok) {
+            const allVenues = await res.json()
+            const newest = allVenues.find((v: any) => v.name === newVenueName)
+            if (newest) {
+              await fetch(`${API_BASE}/api/venues/${newest.id}/address`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(addrData),
+              })
+            }
+          }
+        } catch { /* address will need manual save */ }
+      }, 2000)
+    }
+    
     setNewVenueName('New Venue')
     setNewVenueWidth(20)
     setNewVenueDepth(15)
     setNewVenueHeight(4)
-    setSelectedLayoutId(null) // Clear DWG selection for manual venue
+    setNewVenueAddress(null)
+  }
+
+  const toggleCompanyExpand = (id: string) => {
+    setExpandedCompanies(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
   }
 
   const handleDeleteFloorplan = async (e: React.MouseEvent, fp: FloorplanItem) => {
@@ -222,6 +289,45 @@ export default function FloorplanPanel({ onOpenDwgImporter }: FloorplanPanelProp
   const handleRefresh = () => {
     window.location.reload()
   }
+
+  // Group floorplans by company
+  const groupedFloorplans = useMemo(() => {
+    const groups: { id: string; name: string; items: FloorplanItem[] }[] = []
+    
+    if (companies.length === 0) {
+      // No companies loaded — show flat list under "All Venues"
+      groups.push({ id: 'all', name: 'All Venues', items: floorplans })
+      return groups
+    }
+
+    // Group by company
+    const companyMap = new Map<string, FloorplanItem[]>()
+    const unassigned: FloorplanItem[] = []
+    
+    floorplans.forEach(fp => {
+      const venueItem = venueList.find(v => v.id === fp.venueId)
+      const companyId = venueItem?.company_id
+      if (companyId) {
+        if (!companyMap.has(companyId)) companyMap.set(companyId, [])
+        companyMap.get(companyId)!.push(fp)
+      } else {
+        unassigned.push(fp)
+      }
+    })
+
+    companies.forEach(c => {
+      const items = companyMap.get(c.id) || []
+      if (filterCompanyId === 'all' || filterCompanyId === c.id) {
+        groups.push({ id: c.id, name: c.name, items })
+      }
+    })
+
+    if (filterCompanyId === 'all' && unassigned.length > 0) {
+      groups.push({ id: 'unassigned', name: 'Unassigned', items: unassigned })
+    }
+
+    return groups
+  }, [floorplans, companies, venueList, filterCompanyId])
 
   const isLoading = isLoadingDwg || venueLoading
 
@@ -320,6 +426,24 @@ export default function FloorplanPanel({ onOpenDwgImporter }: FloorplanPanelProp
                   className="w-full bg-panel-bg border border-border-dark rounded px-3 py-2 text-sm text-white focus:border-highlight focus:outline-none"
                 />
               </div>
+              <div>
+                <label className="block text-xs text-gray-400 mb-1">Address</label>
+                <AddressAutocomplete
+                  value={venueList.find(v => v.id === venue.id)?.address}
+                  onChange={async (result) => {
+                    try {
+                      await fetch(`${API_BASE}/api/venues/${venue.id}/address`, {
+                        method: 'PATCH',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(result || { address: null, latitude: null, longitude: null, place_id: null }),
+                      })
+                      fetchVenueList()
+                      addToast('success', result ? 'Address updated' : 'Address cleared')
+                    } catch { addToast('error', 'Failed to update address') }
+                  }}
+                  placeholder="Search store address..."
+                />
+              </div>
               <div className="grid grid-cols-3 gap-2">
                 <div>
                   <label className="block text-[10px] text-gray-500 mb-1">Width (m)</label>
@@ -374,10 +498,24 @@ export default function FloorplanPanel({ onOpenDwgImporter }: FloorplanPanelProp
 
       {/* Section 3: Floorplan Library */}
       <div className="bg-card-bg border border-border-dark rounded-lg p-4">
-        <h3 className="text-sm font-medium text-gray-300 mb-3 flex items-center gap-2">
-          <Radio className="w-4 h-4" />
-          Floorplan Library
-        </h3>
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-sm font-medium text-gray-300 flex items-center gap-2">
+            <Radio className="w-4 h-4" />
+            Floorplan Library
+          </h3>
+          {companies.length > 0 && (
+            <select
+              value={filterCompanyId}
+              onChange={e => setFilterCompanyId(e.target.value)}
+              className="bg-panel-bg border border-border-dark rounded px-2 py-1 text-[11px] text-gray-300 focus:border-highlight focus:outline-none max-w-[120px]"
+            >
+              <option value="all">All Companies</option>
+              {companies.map(c => (
+                <option key={c.id} value={c.id}>{c.name}</option>
+              ))}
+            </select>
+          )}
+        </div>
 
         {error && (
           <div className="p-2 mb-3 bg-red-500/10 border border-red-500/30 rounded text-red-400 text-xs flex items-center gap-2">
@@ -393,60 +531,98 @@ export default function FloorplanPanel({ onOpenDwgImporter }: FloorplanPanelProp
             <p className="text-xs text-gray-600 mt-1">Import a DWG or create a manual venue</p>
           </div>
         ) : (
-          <div className="space-y-2 max-h-64 overflow-y-auto">
-            {floorplans.map(fp => {
-              const isActive = 
-                (fp.type === 'dwg' && fp.layoutId === selectedLayoutId) ||
-                (fp.type === 'manual' && fp.venueId === venue?.id && !selectedLayoutId)
-              
+          <div className="space-y-1 max-h-72 overflow-y-auto">
+            {groupedFloorplans.map(group => {
+              const isGroupExpanded = expandedCompanies.has(group.id) || expandedCompanies.has('all')
+              const isCompanyGroup = group.id !== 'all'
+
               return (
-                <button
-                  key={fp.id}
-                  onClick={() => fp.has3D && handleSelectFloorplan(fp)}
-                  disabled={!fp.has3D}
-                  className={`w-full text-left p-3 rounded-lg border transition-colors group ${
-                    isActive
-                      ? 'bg-highlight/10 border-highlight text-white'
-                      : fp.has3D
-                      ? 'bg-panel-bg border-border-dark hover:border-gray-600 text-gray-300'
-                      : 'bg-panel-bg/50 border-border-dark/50 text-gray-500 cursor-not-allowed'
-                  }`}
-                >
-                  <div className="flex items-start justify-between">
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2">
-                        {isActive ? (
-                          <div className="w-3 h-3 rounded-full bg-highlight flex-shrink-0" />
-                        ) : (
-                          <div className="w-3 h-3 rounded-full border border-gray-600 flex-shrink-0" />
-                        )}
-                        <span className="text-sm font-medium truncate">{fp.name}</span>
-                        <span className={`text-[10px] px-1.5 py-0.5 rounded ${
-                          fp.type === 'dwg' 
-                            ? 'bg-blue-500/20 text-blue-400' 
-                            : 'bg-purple-500/20 text-purple-400'
-                        }`}>
-                          {fp.type === 'dwg' ? 'DWG' : 'Manual'}
-                        </span>
-                      </div>
-                      <div className="text-xs text-gray-500 mt-1 ml-5">
-                        {fp.dimensions.width}m × {fp.dimensions.depth}m
-                        {fp.dwgFilename && (
-                          <span className="ml-2 text-gray-600">· {fp.dwgFilename}</span>
-                        )}
-                      </div>
+                <div key={group.id}>
+                  {/* Company group header */}
+                  {isCompanyGroup && (
+                    <button
+                      onClick={() => toggleCompanyExpand(group.id)}
+                      className="w-full flex items-center gap-2 px-2 py-1.5 text-xs text-gray-400 hover:text-gray-200 transition-colors rounded hover:bg-white/5"
+                    >
+                      {isGroupExpanded ? (
+                        <ChevronDown className="w-3 h-3 shrink-0" />
+                      ) : (
+                        <ChevronRight className="w-3 h-3 shrink-0" />
+                      )}
+                      <Building2 className="w-3 h-3 shrink-0 text-blue-400" />
+                      <span className="font-medium truncate">{group.name}</span>
+                      <span className="text-gray-600 ml-auto shrink-0">{group.items.length}</span>
+                    </button>
+                  )}
+
+                  {/* Venue items */}
+                  {(isGroupExpanded || !isCompanyGroup) && (
+                    <div className={`space-y-1 ${isCompanyGroup ? 'ml-3 mt-1 mb-2' : ''}`}>
+                      {group.items.length === 0 && isCompanyGroup ? (
+                        <p className="text-[11px] text-gray-600 px-2 py-1 italic">No venues</p>
+                      ) : (
+                        group.items.map(fp => {
+                          const isActive = 
+                            (fp.type === 'dwg' && fp.layoutId === selectedLayoutId) ||
+                            (fp.type === 'manual' && fp.venueId === venue?.id && !selectedLayoutId)
+                          const venueItem = venueList.find(v => v.id === fp.venueId)
+                          
+                          return (
+                            <button
+                              key={fp.id}
+                              onClick={() => fp.has3D && handleSelectFloorplan(fp)}
+                              disabled={!fp.has3D}
+                              className={`w-full text-left p-2.5 rounded-lg border transition-colors group ${
+                                isActive
+                                  ? 'bg-highlight/10 border-highlight text-white'
+                                  : fp.has3D
+                                  ? 'bg-panel-bg border-border-dark hover:border-gray-600 text-gray-300'
+                                  : 'bg-panel-bg/50 border-border-dark/50 text-gray-500 cursor-not-allowed'
+                              }`}
+                            >
+                              <div className="flex items-start justify-between">
+                                <div className="flex-1 min-w-0">
+                                  <div className="flex items-center gap-2">
+                                    {isActive ? (
+                                      <div className="w-2.5 h-2.5 rounded-full bg-highlight flex-shrink-0" />
+                                    ) : (
+                                      <div className="w-2.5 h-2.5 rounded-full border border-gray-600 flex-shrink-0" />
+                                    )}
+                                    <span className="text-sm font-medium truncate">{fp.name}</span>
+                                    <span className={`text-[10px] px-1.5 py-0.5 rounded ${
+                                      fp.type === 'dwg' 
+                                        ? 'bg-blue-500/20 text-blue-400' 
+                                        : 'bg-purple-500/20 text-purple-400'
+                                    }`}>
+                                      {fp.type === 'dwg' ? 'DWG' : 'Manual'}
+                                    </span>
+                                  </div>
+                                  <div className="text-xs text-gray-500 mt-0.5 ml-[18px]">
+                                    {fp.dimensions.width}m × {fp.dimensions.depth}m
+                                  </div>
+                                  {venueItem?.address && (
+                                    <div className="text-[11px] text-gray-600 mt-0.5 ml-[18px] truncate max-w-[200px]" title={venueItem.address}>
+                                      {venueItem.address}
+                                    </div>
+                                  )}
+                                </div>
+                                {fp.venueId && (
+                                  <button
+                                    onClick={(e) => handleDeleteFloorplan(e, fp)}
+                                    className="p-1 text-gray-500 hover:text-red-400 hover:bg-red-400/10 rounded opacity-0 group-hover:opacity-100 transition-all"
+                                    title="Delete"
+                                  >
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                  </button>
+                                )}
+                              </div>
+                            </button>
+                          )
+                        })
+                      )}
                     </div>
-                    {fp.venueId && (
-                      <button
-                        onClick={(e) => handleDeleteFloorplan(e, fp)}
-                        className="p-1.5 text-gray-500 hover:text-red-400 hover:bg-red-400/10 rounded opacity-0 group-hover:opacity-100 transition-all"
-                        title="Delete"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
-                    )}
-                  </div>
-                </button>
+                  )}
+                </div>
               )
             })}
           </div>
@@ -492,6 +668,14 @@ export default function FloorplanPanel({ onOpenDwgImporter }: FloorplanPanelProp
               className="w-full bg-panel-bg border border-border-dark rounded px-3 py-2 text-sm text-white focus:border-highlight focus:outline-none"
             />
           </div>
+          <div>
+            <label className="block text-xs text-gray-400 mb-1">Address</label>
+            <AddressAutocomplete
+              value={newVenueAddress?.address}
+              onChange={(result) => setNewVenueAddress(result)}
+              placeholder="Search store address..."
+            />
+          </div>
           <div className="grid grid-cols-3 gap-2">
             <div>
               <label className="block text-[10px] text-gray-500 mb-1">Width (m)</label>
@@ -535,7 +719,7 @@ export default function FloorplanPanel({ onOpenDwgImporter }: FloorplanPanelProp
               Create
             </button>
             <button
-              onClick={() => setShowNewManual(false)}
+              onClick={() => { setShowNewManual(false); setNewVenueAddress(null) }}
               className="flex-1 py-2 bg-border-dark text-gray-300 rounded hover:bg-gray-600 transition-colors text-sm"
             >
               Cancel
