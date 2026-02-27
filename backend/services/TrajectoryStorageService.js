@@ -918,10 +918,8 @@ export class TrajectoryStorageService extends EventEmitter {
     this.syncInterval = setInterval(() => this.syncToDatabase(), this.DB_SYNC_MS);
     
     // Start cleanup interval to prevent database bloat
+    // No initial cleanup — first run happens at CLEANUP_MS (15min). Startup must not block.
     this.cleanupInterval = setInterval(() => this.cleanupOldData(), this.CLEANUP_MS);
-    
-    // Run initial cleanup (delayed to not block startup)
-    setTimeout(() => this.cleanupOldData(), 30000);
     
     // Event loop lag monitor — logs when event loop is blocked >100ms
     let lastTick = Date.now();
@@ -968,32 +966,36 @@ export class TrajectoryStorageService extends EventEmitter {
    * IMPORTANT: Aggregates data BEFORE deleting to preserve historical KPIs
    */
   cleanupOldData() {
-    // Run cleanup as async chain — yields event loop between steps so tracks keep flowing
+    // Fully async chain — every heavy step in its own setImmediate so tracks keep flowing
     const _t0 = Date.now();
     const cutoffTime = _t0 - this.DATA_RETENTION_MS;
     
-    // Step 1: Aggregate hourly data
-    try {
-      this.aggregateHourlyData(cutoffTime);
-    } catch (err) { console.error('Cleanup step 1 (hourly agg) failed:', err); }
-    const _s1 = Date.now() - _t0;
-    
-    // Yield event loop, then continue with remaining steps
+    // Step 1: Aggregate hourly data (yielded)
     setImmediate(() => {
+      let _s1 = 0;
       try {
-        // Step 2: Update daily aggregates
-        const _t2 = Date.now();
-        this.updateDailyAggregates();
-        const _s2 = Date.now() - _t2;
+        const _t1 = Date.now();
+        this.aggregateHourlyData(cutoffTime);
+        _s1 = Date.now() - _t1;
+      } catch (err) { console.error('Cleanup step 1 (hourly agg) failed:', err); }
+      
+      // Step 2: Update daily aggregates (yielded)
+      setImmediate(() => {
+        let _s2 = 0;
+        try {
+          const _t2 = Date.now();
+          this.updateDailyAggregates();
+          _s2 = Date.now() - _t2;
+        } catch (err) { console.error('Cleanup step 2 (daily agg) failed:', err); }
         
+        // Step 3: Chunked deletes (yielded)
         setImmediate(() => {
+          let _s3 = 0;
           try {
-            // Step 3: Chunked deletes (limit rows per batch to avoid long locks)
-            const CHUNK = 50000;
+            const CHUNK = 10000;
             const _t3 = Date.now();
             
-            let posDeleted = 0;
-            let r;
+            let posDeleted = 0, r;
             do {
               r = this.db.prepare(`DELETE FROM track_positions WHERE rowid IN (SELECT rowid FROM track_positions WHERE timestamp < ? LIMIT ?)`).run(cutoffTime, CHUNK);
               posDeleted += r.changes;
@@ -1007,32 +1009,32 @@ export class TrajectoryStorageService extends EventEmitter {
             
             const ledgerCutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;
             const ledgerResult = this.db.prepare(`DELETE FROM activity_ledger WHERE timestamp < ? AND acknowledged = 1`).run(ledgerCutoff);
-            
-            const _s3 = Date.now() - _t3;
-            
-            // Step 4: Clean up in-memory maps (fast, no DB)
-            const sessionCutoff = Date.now() - 60 * 60 * 1000;
-            let staleSessions = 0, staleQueues = 0;
-            for (const [key, session] of this.visitSessions.entries()) {
-              if (session.lastSeen < sessionCutoff) { this.visitSessions.delete(key); staleSessions++; }
-            }
-            for (const [key, session] of this.queueSessions.entries()) {
-              const lastActivity = session.lastSeenInService || session.lastSeenInQueue || session.queueEntryTime;
-              if (lastActivity < sessionCutoff) { this.queueSessions.delete(key); staleQueues++; }
-            }
-            for (const [trackKey, time] of this.lastSampleTime.entries()) {
-              if (time < sessionCutoff) this.lastSampleTime.delete(trackKey);
-            }
+            _s3 = Date.now() - _t3;
             
             const totalDeleted = posDeleted + occDeleted + ledgerResult.changes;
-            if (totalDeleted > 0 || staleSessions > 0 || staleQueues > 0) {
-              console.log(`🧹 Cleanup: ${posDeleted} positions, ${occDeleted} occupancy, ${ledgerResult.changes} ledger, ${staleSessions} stale sessions, ${staleQueues} stale queues`);
+            if (totalDeleted > 0) {
+              console.log(`🧹 Cleanup: ${posDeleted} positions, ${occDeleted} occupancy, ${ledgerResult.changes} ledger`);
             }
-            const _total = Date.now() - _t0;
-            console.log(`⏱️ cleanupOldData total=${_total}ms (hourlyAgg=${_s1}ms, dailyAgg=${_s2}ms, deletes=${_s3}ms)`);
           } catch (err) { console.error('Cleanup step 3 (deletes) failed:', err); }
+          
+          // Step 4: Clean up in-memory maps (fast, no DB)
+          const sessionCutoff = Date.now() - 60 * 60 * 1000;
+          let staleSessions = 0, staleQueues = 0;
+          for (const [key, session] of this.visitSessions.entries()) {
+            if (session.lastSeen < sessionCutoff) { this.visitSessions.delete(key); staleSessions++; }
+          }
+          for (const [key, session] of this.queueSessions.entries()) {
+            const lastActivity = session.lastSeenInService || session.lastSeenInQueue || session.queueEntryTime;
+            if (lastActivity < sessionCutoff) { this.queueSessions.delete(key); staleQueues++; }
+          }
+          for (const [trackKey, time] of this.lastSampleTime.entries()) {
+            if (time < sessionCutoff) this.lastSampleTime.delete(trackKey);
+          }
+          
+          const _total = Date.now() - _t0;
+          console.log(`⏱️ cleanupOldData total=${_total}ms (hourlyAgg=${_s1}ms, dailyAgg=${_s2}ms, deletes=${_s3}ms)`);
         });
-      } catch (err) { console.error('Cleanup step 2 (daily agg) failed:', err); }
+      });
     });
   }
 
@@ -1456,6 +1458,13 @@ export class TrajectoryStorageService extends EventEmitter {
       
       if (hoursWithData.length === 0) return;
       
+      // Cap per-run to avoid blocking event loop for seconds on large backlogs
+      const MAX_PER_RUN = 100;
+      const batch = hoursWithData.slice(0, MAX_PER_RUN);
+      if (hoursWithData.length > MAX_PER_RUN) {
+        console.log(`📊 aggregateHourlyData: processing ${MAX_PER_RUN} of ${hoursWithData.length} hour/ROI combos (rest next cycle)`);
+      }
+      
       // Prepare all statements ONCE outside the loop (was re-preparing per iteration before)
       const upsertHourly = this.db.prepare(`
         INSERT INTO zone_kpi_hourly (venue_id, roi_id, date, hour, visits, time_spent_ms, dwells, engagements, peak_occupancy, avg_occupancy, avg_waiting_time_ms)
@@ -1495,7 +1504,7 @@ export class TrajectoryStorageService extends EventEmitter {
       // Wrap in transaction for massive speedup (single fsync instead of per-row)
       const aggregateAll = this.db.transaction(() => {
         let count = 0;
-        for (const { venue_id, roi_id, date, hour } of hoursWithData) {
+        for (const { venue_id, roi_id, date, hour } of batch) {
           const hourInt = parseInt(hour);
           const hourStart = new Date(`${date}T${hour.padStart(2, '0')}:00:00`).getTime();
           const hourEnd = hourStart + 60 * 60 * 1000;
