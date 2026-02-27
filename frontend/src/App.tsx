@@ -483,7 +483,7 @@ function UserMenu() {
         className="flex items-center gap-2 px-2 py-1.5 rounded-lg bg-gray-800/80 backdrop-blur-sm border border-gray-700/50 hover:border-gray-600 transition-all"
       >
         {user.picture ? (
-          <img src={user.picture} alt="" className="w-6 h-6 rounded-full" />
+          <img src={user.picture} alt="" className="w-6 h-6 rounded-full" referrerPolicy="no-referrer" />
         ) : (
           <User className="w-4 h-4 text-gray-400" />
         )}
