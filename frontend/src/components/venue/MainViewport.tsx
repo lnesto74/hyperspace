@@ -185,6 +185,7 @@ export default function MainViewport({
   const objectMeshesRef = useRef<Map<string, THREE.Mesh | THREE.Group>>(new Map())
   const lidarMeshesRef = useRef<Map<string, THREE.Group>>(new Map())
   const trackMeshesRef = useRef<Map<string, THREE.Group>>(new Map())
+  const trailLinesRef = useRef<Map<string, THREE.Line>>(new Map())
   const roiMeshesRef = useRef<Map<string, THREE.Group>>(new Map())
   const roiVertexHandlesRef = useRef<Map<string, THREE.Mesh[]>>(new Map())
   const drawingLinesRef = useRef<THREE.Line | null>(null)
@@ -1665,15 +1666,16 @@ export default function MainViewport({
             mat.dispose()
           }
         })
-        // Remove trail
-        const trail = scene.getObjectByName(`trail-${key}`)
+        // Remove trail via ref (no scene search)
+        const trail = trailLinesRef.current.get(key)
         if (trail) {
           scene.remove(trail)
-          ;(trail as THREE.Line).geometry.dispose()
-          ;((trail as THREE.Line).material as THREE.Material).dispose()
+          trail.geometry.dispose()
+          ;(trail.material as THREE.Material).dispose()
         }
       })
       trackMeshesRef.current.clear()
+      trailLinesRef.current.clear()
       sezEntryTimesRef.current.clear()
       
       // Dispose loaded models cache
@@ -2596,12 +2598,13 @@ export default function MainViewport({
             mat.dispose()
           }
         })
-        // Also remove trail from scene
-        const trail = scene.getObjectByName(`trail-${key}`)
+        // Also remove trail from scene (O(1) lookup via ref)
+        const trail = trailLinesRef.current.get(key)
         if (trail) {
           scene.remove(trail)
-          ;(trail as THREE.Line).geometry.dispose()
-          ;((trail as THREE.Line).material as THREE.Material).dispose()
+          trail.geometry.dispose()
+          ;(trail.material as THREE.Material).dispose()
+          trailLinesRef.current.delete(key)
         }
         // Clean up SEZ entry time tracking to prevent memory leak
         sezEntryTimesRef.current.delete(key)
@@ -2804,34 +2807,50 @@ export default function MainViewport({
         sezLabel.position.y = cylinderHeight / 2 + 0.5
       }
 
-      // Update/create trail - use absolute world coordinates
+      // Update/create trail - reuse geometry buffer in-place to avoid GC pressure
+      // (creating new geometry every frame for 200+ tracks caused Chrome OOM after ~5min)
       if (track.trail.length > 1) {
-        // Trail points are in world coordinates, starting from cylinder base center
-        const trailGeometry = new THREE.BufferGeometry()
-        const points = track.trail.map(p => new THREE.Vector3(p.x, 0.02, p.z)) // Just above floor
-        trailGeometry.setFromPoints(points)
+        let trailLine = trailLinesRef.current.get(key)
         
-        // Trail color matches person color (red if influenced)
-        const trailMaterial = new THREE.LineBasicMaterial({ 
-          color, 
-          transparent: true, 
-          opacity: 0.8,
-        })
-        
-        // Remove old trail from scene (not from group - trail is in world space)
-        const oldTrailKey = `trail-${key}`
-        const existingTrail = scene.getObjectByName(oldTrailKey)
-        if (existingTrail) {
-          scene.remove(existingTrail)
-          ;(existingTrail as THREE.Line).geometry.dispose()
-          ;((existingTrail as THREE.Line).material as THREE.Material).dispose()
+        if (!trailLine) {
+          // Pre-allocate buffer for max trail length (reused across all future updates)
+          const MAX_TRAIL = 256
+          const posArray = new Float32Array(MAX_TRAIL * 3)
+          const geom = new THREE.BufferGeometry()
+          geom.setAttribute('position', new THREE.BufferAttribute(posArray, 3))
+          geom.setDrawRange(0, 0)
+          
+          const mat = new THREE.LineBasicMaterial({ 
+            color, 
+            transparent: true, 
+            opacity: 0.8,
+          })
+          
+          trailLine = new THREE.Line(geom, mat)
+          trailLine.frustumCulled = false
+          trailLine.userData.isTrail = true
+          trailLine.userData.trackKey = key
+          scene.add(trailLine)
+          trailLinesRef.current.set(key, trailLine)
         }
         
-        const trail = new THREE.Line(trailGeometry, trailMaterial)
-        trail.name = oldTrailKey
-        trail.userData.isTrail = true
-        trail.userData.trackKey = key
-        scene.add(trail)
+        // Update positions in-place (zero allocations)
+        const posAttr = trailLine.geometry.getAttribute('position') as THREE.BufferAttribute
+        const buf = posAttr.array as Float32Array
+        const maxPts = buf.length / 3
+        const count = Math.min(track.trail.length, maxPts)
+        
+        for (let i = 0; i < count; i++) {
+          buf[i * 3]     = track.trail[i].x
+          buf[i * 3 + 1] = 0.02
+          buf[i * 3 + 2] = track.trail[i].z
+        }
+        
+        posAttr.needsUpdate = true
+        trailLine.geometry.setDrawRange(0, count)
+        
+        // Update trail color to match person (red if SEZ influenced)
+        ;(trailLine.material as THREE.LineBasicMaterial).color.set(color as any)
       }
 
       // Toggle visibility based on display mode
