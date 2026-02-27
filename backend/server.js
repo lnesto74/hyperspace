@@ -576,9 +576,15 @@ app.get('/api/venues/:venueId/checkout/live-status', (req, res) => {
     // Get all ROIs for this venue with vertices for sorting by position (synchronous better-sqlite3)
     const rois = db.prepare('SELECT id, name, vertices FROM regions_of_interest WHERE venue_id = ?').all(venueId);
     
-    // Find Queue and Service ROI pairs
-    const queueRois = rois.filter(r => r.name && r.name.includes('- Queue'));
-    const serviceRois = rois.filter(r => r.name && r.name.includes('- Service'));
+    // Find Queue and Service ROI pairs, deduplicating by name
+    // (Old stale ROIs may coexist with new ones after ROI recreation)
+    const dedupeByName = (list) => {
+      const byName = new Map();
+      for (const r of list) byName.set(r.name, r); // last one wins (newest)
+      return [...byName.values()];
+    };
+    const queueRois = dedupeByName(rois.filter(r => r.name && r.name.includes('- Queue')));
+    const serviceRois = dedupeByName(rois.filter(r => r.name && r.name.includes('- Service')));
     
     // Calculate center X for each queue ROI for sorting
     const getCenter = (roi) => {
@@ -605,9 +611,11 @@ app.get('/api/venues/:venueId/checkout/live-status', (req, res) => {
       
       // Get current occupancy for the queue ROI
       const queueCount = trackAggregator.getZoneOccupancy(queueRoi.id) || 0;
-      const serviceOccupied = serviceRoi ? (trackAggregator.getZoneOccupancy(serviceRoi.id) || 0) > 0 : false;
       
-      totalQueueCount += queueCount;
+      // Use trajectoryStorage.openLanes as source of truth for lane open/closed state
+      const isOpen = trajectoryStorage.isLaneOpen(queueRoi.id);
+      
+      if (isOpen) totalQueueCount += queueCount;
       
       const displayIndex = index + 1;
       lanes.push({
@@ -617,9 +625,9 @@ app.get('/api/venues/:venueId/checkout/live-status', (req, res) => {
         displayIndex,
         displayName: `Lane ${displayIndex}`,
         name: prefix,
-        desiredState: 'open', // In live mode, lanes are always "open" (no manual control)
-        status: serviceOccupied ? 'OPEN' : 'CLOSED',
-        queueCount: queueCount,
+        desiredState: isOpen ? 'open' : 'closed',
+        status: isOpen ? 'OPEN' : 'CLOSED',
+        queueCount: isOpen ? queueCount : 0,
         cashierAgentId: null
       });
     });
