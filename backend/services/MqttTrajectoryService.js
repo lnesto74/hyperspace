@@ -83,7 +83,15 @@ class MqttTrajectoryService {
   handleMessage(topic, message) {
     try {
       const data = JSON.parse(message.toString())
-      console.log(`[MQTT] Received trajectory on ${topic}:`, JSON.stringify(data).slice(0, 200))
+      
+      // Sample log every 10s to avoid I/O bottleneck (was logging every message = 200+/sec)
+      this._mqttMsgCount = (this._mqttMsgCount || 0) + 1
+      const now = Date.now()
+      if (!this._lastMqttLog || now - this._lastMqttLog > 10000) {
+        console.log(`[MQTT] ${this._mqttMsgCount} msgs in last ${this._lastMqttLog ? Math.round((now - this._lastMqttLog)/1000) + 's' : 'startup'}, latest on ${topic}`)
+        this._mqttMsgCount = 0
+        this._lastMqttLog = now
+      }
       
       // Expected format: hyperspace/trajectories/{deviceId}
       const topicParts = topic.split('/')

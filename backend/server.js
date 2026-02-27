@@ -156,16 +156,6 @@ trackAggregator.on('tracks', (data) => {
   setImmediate(() => {
     const parsedRois = getCachedRois(data.venueId);
     
-    // Debug: log ROI count and queue zone check once
-    if (!global._roiDebugLogged) {
-      const queueZones = parsedRois.filter(r => r.name?.includes('Queue'));
-      console.log(`📊 DEBUG: Loaded ${parsedRois.length} ROIs, ${queueZones.length} queue zones`);
-      if (queueZones.length > 0) {
-        console.log(`📊 DEBUG: Queue zone example: ${queueZones[0].name} at ${JSON.stringify(queueZones[0].vertices[0])}`);
-      }
-      global._roiDebugLogged = true;
-    }
-    
     for (const track of data.tracks) {
       trajectoryStorage.recordTrackPosition(data.venueId, track, parsedRois);
     }
