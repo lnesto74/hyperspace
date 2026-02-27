@@ -92,16 +92,21 @@ export class EpisodeDetectorOrchestrator {
         new DoohEpisodeDetector(this.mainDb, this.baselineTracker),
       ];
 
-      // Run initial baseline computation
-      this._updateAllBaselines();
+      // Defer initial baseline computation so it doesn't block server startup
+      // (was taking 47s synchronously, preventing HTTP/MQTT from starting)
+      setTimeout(() => {
+        console.log('[ReplayInsight] Starting deferred baseline computation...');
+        const _t0 = Date.now();
+        this._updateAllBaselines();
+        console.log(`[ReplayInsight] Baseline computation done in ${Date.now() - _t0}ms`);
+        // Run first detection after baselines are ready
+        setTimeout(() => this._runDetection(), 5000);
+      }, 5000);
 
       // Start periodic detection
       this.detectionInterval = setInterval(() => this._runDetection(), DETECTION_INTERVAL_MS);
       this.baselineInterval = setInterval(() => this._updateAllBaselines(), BASELINE_INTERVAL_MS);
       this.cleanupInterval = setInterval(() => this._cleanup(), CLEANUP_INTERVAL_MS);
-
-      // Run first detection after a short delay (let baselines settle)
-      setTimeout(() => this._runDetection(), 10000);
 
       this.isRunning = true;
       console.log('[ReplayInsight] Episode detector started');
