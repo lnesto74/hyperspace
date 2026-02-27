@@ -198,7 +198,20 @@ trackingNamespace.on('connection', (socket) => {
     if (trackVisibilityMode !== visible) {
       trackVisibilityMode = visible;
       trajectoryStorage.demoMode = visible;
-      console.log(`📊 Track visibility mode: ${visible ? 'ON (demo - KPI throttled)' : 'OFF (full KPI processing)'}`);
+      if (visible) {
+        // DEMO MODE: Stop all heavy background services
+        intentScorer.stop();
+        zoneAggregator.stop();
+        behaviorClusterer.stop();
+        profitRadarEngine.stop();
+      } else {
+        // NORMAL MODE: Restart services
+        intentScorer.start();
+        zoneAggregator.start();
+        behaviorClusterer.start();
+        profitRadarEngine.start();
+      }
+      console.log(`📊 Track visibility mode: ${visible ? 'ON (demo - all background services paused)' : 'OFF (full processing resumed)'}`);
     }
   });
 

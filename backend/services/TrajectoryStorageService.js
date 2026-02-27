@@ -929,8 +929,10 @@ export class TrajectoryStorageService extends EventEmitter {
       if (!this.demoMode) this.cleanupOldData();
     }, this.CLEANUP_MS);
     
-    // Run initial cleanup (delayed to not block startup)
-    setTimeout(() => this.cleanupOldData(), 30000);
+    // Run initial cleanup (delayed, skipped if in demo mode)
+    setTimeout(() => {
+      if (!this.demoMode) this.cleanupOldData();
+    }, 30000);
     
     // Event loop lag monitor — logs when event loop is blocked >100ms
     let lastTick = Date.now();
