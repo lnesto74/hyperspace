@@ -197,6 +197,7 @@ trackingNamespace.on('connection', (socket) => {
   socket.on('track_visibility', ({ visible }) => {
     if (trackVisibilityMode !== visible) {
       trackVisibilityMode = visible;
+      trajectoryStorage.demoMode = visible;
       console.log(`📊 Track visibility mode: ${visible ? 'ON (demo - KPI throttled)' : 'OFF (full KPI processing)'}`);
     }
   });

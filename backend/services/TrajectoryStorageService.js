@@ -50,6 +50,9 @@ export class TrajectoryStorageService extends EventEmitter {
     // Track last sample time per track to avoid over-sampling
     this.lastSampleTime = new Map();
     
+    // Demo mode: when true, skip heavy operations (sync, cleanup) for smooth trajectory visualization
+    this.demoMode = false;
+    
     // Ensure data directory exists
     if (!fs.existsSync(this.dataDir)) {
       fs.mkdirSync(this.dataDir, { recursive: true });
@@ -912,16 +915,22 @@ export class TrajectoryStorageService extends EventEmitter {
     this.isRunning = true;
     
     // Start buffer flush interval
-    this.flushInterval = setInterval(() => this.flushBuffer(), this.BUFFER_FLUSH_MS);
+    this.flushInterval = setInterval(() => {
+      if (!this.demoMode) this.flushBuffer();
+    }, this.BUFFER_FLUSH_MS);
     
     // Start DB sync interval
-    this.syncInterval = setInterval(() => this.syncToDatabase(), this.DB_SYNC_MS);
+    this.syncInterval = setInterval(() => {
+      if (!this.demoMode) this.syncToDatabase();
+    }, this.DB_SYNC_MS);
     
     // Start cleanup interval to prevent database bloat
-    this.cleanupInterval = setInterval(() => this.cleanupOldData(), this.CLEANUP_MS);
+    this.cleanupInterval = setInterval(() => {
+      if (!this.demoMode) this.cleanupOldData();
+    }, this.CLEANUP_MS);
     
-    // Run initial cleanup
-    setTimeout(() => this.cleanupOldData(), 10000);
+    // Run initial cleanup (delayed to not block startup)
+    setTimeout(() => this.cleanupOldData(), 30000);
     
     // Event loop lag monitor — logs when event loop is blocked >100ms
     let lastTick = Date.now();
@@ -1455,6 +1464,7 @@ export class TrajectoryStorageService extends EventEmitter {
       
       if (hoursWithData.length === 0) return;
       
+      // Prepare all statements ONCE outside the loop (was re-preparing per iteration before)
       const upsertHourly = this.db.prepare(`
         INSERT INTO zone_kpi_hourly (venue_id, roi_id, date, hour, visits, time_spent_ms, dwells, engagements, peak_occupancy, avg_occupancy, avg_waiting_time_ms)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -1468,56 +1478,56 @@ export class TrajectoryStorageService extends EventEmitter {
           avg_waiting_time_ms = (avg_waiting_time_ms + excluded.avg_waiting_time_ms) / 2,
           updated_at = datetime('now')
       `);
+      const visitStatsStmt = this.db.prepare(`
+        SELECT 
+          COUNT(DISTINCT track_key) as visits,
+          SUM(duration_ms) as time_spent_ms,
+          SUM(CASE WHEN is_dwell = 1 THEN 1 ELSE 0 END) as dwells,
+          SUM(CASE WHEN is_engagement = 1 THEN 1 ELSE 0 END) as engagements
+        FROM zone_visits
+        WHERE roi_id = ? AND start_time >= ? AND start_time < ?
+      `);
+      const occStatsStmt = this.db.prepare(`
+        SELECT 
+          MAX(occupancy_count) as peak,
+          AVG(occupancy_count) as avg
+        FROM zone_occupancy
+        WHERE roi_id = ? AND timestamp >= ? AND timestamp < ?
+      `);
+      const queueStatsStmt = this.db.prepare(`
+        SELECT AVG(waiting_time_ms) as avg_wait
+        FROM queue_sessions
+        WHERE queue_zone_id = ? AND queue_entry_time >= ? AND queue_entry_time < ?
+      `);
       
-      let aggregatedCount = 0;
-      for (const { venue_id, roi_id, date, hour } of hoursWithData) {
-        const hourInt = parseInt(hour);
-        const hourStart = new Date(`${date}T${hour.padStart(2, '0')}:00:00`).getTime();
-        const hourEnd = hourStart + 60 * 60 * 1000;
-        
-        // Get visit stats for this hour
-        const visitStats = this.db.prepare(`
-          SELECT 
-            COUNT(DISTINCT track_key) as visits,
-            SUM(duration_ms) as time_spent_ms,
-            SUM(CASE WHEN is_dwell = 1 THEN 1 ELSE 0 END) as dwells,
-            SUM(CASE WHEN is_engagement = 1 THEN 1 ELSE 0 END) as engagements
-          FROM zone_visits
-          WHERE roi_id = ? AND start_time >= ? AND start_time < ?
-        `).get(roi_id, hourStart, hourEnd);
-        
-        // Get occupancy stats for this hour
-        const occStats = this.db.prepare(`
-          SELECT 
-            MAX(occupancy_count) as peak,
-            AVG(occupancy_count) as avg
-          FROM zone_occupancy
-          WHERE roi_id = ? AND timestamp >= ? AND timestamp < ?
-        `).get(roi_id, hourStart, hourEnd);
-        
-        // Get queue waiting time stats
-        const queueStats = this.db.prepare(`
-          SELECT AVG(waiting_time_ms) as avg_wait
-          FROM queue_sessions
-          WHERE queue_zone_id = ? AND queue_entry_time >= ? AND queue_entry_time < ?
-        `).get(roi_id, hourStart, hourEnd);
-        
-        upsertHourly.run(
-          venue_id,
-          roi_id,
-          date,
-          hourInt,
-          visitStats?.visits || 0,
-          visitStats?.time_spent_ms || 0,
-          visitStats?.dwells || 0,
-          visitStats?.engagements || 0,
-          occStats?.peak || 0,
-          occStats?.avg || 0,
-          queueStats?.avg_wait || 0
-        );
-        aggregatedCount++;
-      }
+      // Wrap in transaction for massive speedup (single fsync instead of per-row)
+      const aggregateAll = this.db.transaction(() => {
+        let count = 0;
+        for (const { venue_id, roi_id, date, hour } of hoursWithData) {
+          const hourInt = parseInt(hour);
+          const hourStart = new Date(`${date}T${hour.padStart(2, '0')}:00:00`).getTime();
+          const hourEnd = hourStart + 60 * 60 * 1000;
+          
+          const visitStats = visitStatsStmt.get(roi_id, hourStart, hourEnd);
+          const occStats = occStatsStmt.get(roi_id, hourStart, hourEnd);
+          const queueStats = queueStatsStmt.get(roi_id, hourStart, hourEnd);
+          
+          upsertHourly.run(
+            venue_id, roi_id, date, hourInt,
+            visitStats?.visits || 0,
+            visitStats?.time_spent_ms || 0,
+            visitStats?.dwells || 0,
+            visitStats?.engagements || 0,
+            occStats?.peak || 0,
+            occStats?.avg || 0,
+            queueStats?.avg_wait || 0
+          );
+          count++;
+        }
+        return count;
+      });
       
+      const aggregatedCount = aggregateAll();
       if (aggregatedCount > 0) {
         console.log(`📊 Aggregated ${aggregatedCount} hourly KPI records`);
       }
@@ -1540,6 +1550,9 @@ export class TrajectoryStorageService extends EventEmitter {
       WHERE start_time >= ? AND start_time < ?
     `).all(startOfDay, endOfDay);
     
+    if (roisWithVisits.length === 0) return;
+    
+    // Prepare all statements ONCE outside the loop
     const upsertStmt = this.db.prepare(`
       INSERT INTO zone_kpi_daily (venue_id, roi_id, date, visits, time_spent_ms, dwells_cumulative, dwells_unique, engagements_cumulative, engagements_unique, peak_occupancy, total_occupancy_samples, sum_occupancy)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -1555,42 +1568,44 @@ export class TrajectoryStorageService extends EventEmitter {
         sum_occupancy = excluded.sum_occupancy,
         updated_at = datetime('now')
     `);
+    const visitStatsStmt = this.db.prepare(`
+      SELECT 
+        COUNT(DISTINCT track_key) as visits,
+        SUM(duration_ms) as time_spent_ms,
+        SUM(CASE WHEN is_dwell = 1 THEN 1 ELSE 0 END) as dwells_cumulative,
+        COUNT(DISTINCT CASE WHEN is_dwell = 1 THEN track_key END) as dwells_unique,
+        SUM(CASE WHEN is_engagement = 1 THEN 1 ELSE 0 END) as engagements_cumulative,
+        COUNT(DISTINCT CASE WHEN is_engagement = 1 THEN track_key END) as engagements_unique
+      FROM zone_visits
+      WHERE roi_id = ? AND start_time >= ? AND start_time < ?
+    `);
+    const occStatsStmt = this.db.prepare(`
+      SELECT MAX(occupancy_count) as peak, COUNT(*) as samples, SUM(occupancy_count) as total
+      FROM zone_occupancy
+      WHERE roi_id = ? AND timestamp >= ? AND timestamp < ?
+    `);
     
-    for (const { venue_id, roi_id } of roisWithVisits) {
-      const stats = this.db.prepare(`
-        SELECT 
-          COUNT(DISTINCT track_key) as visits,
-          SUM(duration_ms) as time_spent_ms,
-          SUM(CASE WHEN is_dwell = 1 THEN 1 ELSE 0 END) as dwells_cumulative,
-          COUNT(DISTINCT CASE WHEN is_dwell = 1 THEN track_key END) as dwells_unique,
-          SUM(CASE WHEN is_engagement = 1 THEN 1 ELSE 0 END) as engagements_cumulative,
-          COUNT(DISTINCT CASE WHEN is_engagement = 1 THEN track_key END) as engagements_unique
-        FROM zone_visits
-        WHERE roi_id = ? AND start_time >= ? AND start_time < ?
-      `).get(roi_id, startOfDay, endOfDay);
-      
-      // Get peak occupancy
-      const occupancy = this.db.prepare(`
-        SELECT MAX(occupancy_count) as peak, COUNT(*) as samples, SUM(occupancy_count) as total
-        FROM zone_occupancy
-        WHERE roi_id = ? AND timestamp >= ? AND timestamp < ?
-      `).get(roi_id, startOfDay, endOfDay);
-      
-      upsertStmt.run(
-        venue_id,
-        roi_id,
-        today,
-        stats.visits || 0,
-        stats.time_spent_ms || 0,
-        stats.dwells_cumulative || 0,
-        stats.dwells_unique || 0,
-        stats.engagements_cumulative || 0,
-        stats.engagements_unique || 0,
-        occupancy?.peak || 0,
-        occupancy?.samples || 0,
-        occupancy?.total || 0
-      );
-    }
+    // Wrap in transaction for massive speedup
+    const updateAll = this.db.transaction(() => {
+      for (const { venue_id, roi_id } of roisWithVisits) {
+        const stats = visitStatsStmt.get(roi_id, startOfDay, endOfDay);
+        const occupancy = occStatsStmt.get(roi_id, startOfDay, endOfDay);
+        
+        upsertStmt.run(
+          venue_id, roi_id, today,
+          stats.visits || 0,
+          stats.time_spent_ms || 0,
+          stats.dwells_cumulative || 0,
+          stats.dwells_unique || 0,
+          stats.engagements_cumulative || 0,
+          stats.engagements_unique || 0,
+          occupancy?.peak || 0,
+          occupancy?.samples || 0,
+          occupancy?.total || 0
+        );
+      }
+    });
+    updateAll();
   }
 
   /**
