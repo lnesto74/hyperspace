@@ -154,6 +154,52 @@ export default function PreviewPanel({
     const fallback = { zoom: s?.zoom ?? 1, panOffset: s?.panOffset ?? { x: 0, y: 0 } }
     return { dwg: { ...fallback }, floorplan: { ...fallback }, overlay: { ...fallback } }
   })())
+  
+  // Track if we've already loaded from this storage key to avoid re-loading on every render
+  const loadedStorageKeyRef = useRef<string | null>(null)
+  
+  // Load saved view from localStorage when storageKey changes (handles async filename availability)
+  useEffect(() => {
+    if (loadedStorageKeyRef.current === storageKey) return // Already loaded from this key
+    loadedStorageKeyRef.current = storageKey
+    
+    try {
+      const raw = localStorage.getItem(storageKey)
+      if (raw) {
+        const saved = JSON.parse(raw)
+        console.log(`[2D View] Loading saved view for ${storageKey}:`, saved)
+        
+        // Restore viewMode first
+        if (saved.viewMode && ['dwg', 'floorplan', 'overlay'].includes(saved.viewMode)) {
+          setViewMode(saved.viewMode)
+        }
+        
+        // Restore per-mode views
+        if (saved.perModeViews) {
+          perModeView.current = {
+            dwg: saved.perModeViews.dwg || { zoom: 1, panOffset: { x: 0, y: 0 } },
+            floorplan: saved.perModeViews.floorplan || { zoom: 1, panOffset: { x: 0, y: 0 } },
+            overlay: saved.perModeViews.overlay || { zoom: 1, panOffset: { x: 0, y: 0 } }
+          }
+        }
+        
+        // Restore zoom and panOffset for current mode
+        const currentMode = saved.viewMode || 'dwg'
+        const modeState = saved.perModeViews?.[currentMode] || saved
+        if (modeState.zoom !== undefined && modeState.zoom !== 1) {
+          setZoom(modeState.zoom)
+        }
+        if (modeState.panOffset && (modeState.panOffset.x !== 0 || modeState.panOffset.y !== 0)) {
+          setPanOffset(modeState.panOffset)
+        }
+        
+        setHasSavedView(true)
+      }
+    } catch (e) {
+      console.error('[2D View] Failed to load saved view:', e)
+    }
+  }, [storageKey])
+  
   // LiDAR drag state
   const [draggingLidarId, setDraggingLidarId] = useState<string | null>(null)
   const [lidarDragStart, setLidarDragStart] = useState<{ x: number; y: number } | null>(null)
