@@ -145,10 +145,37 @@ export default function Layout3DPreview({ layoutVersionId, importId, lidarInstan
 
   // DB-persisted camera view ref (loaded from API)
   const dbCameraViewRef = useRef<{ position: { x: number; y: number; z: number }; target: { x: number; y: number; z: number } } | null>(null)
+  const sceneBuiltRef = useRef(false)
+
+  // Helper: apply a camera view object to the current camera+controls
+  const applyCameraView = useCallback((viewData: { position: { x: number; y: number; z: number }; target: { x: number; y: number; z: number } }) => {
+    if (!cameraRef.current || !controlsRef.current) return false
+    try {
+      cameraRef.current.position.set(viewData.position.x, viewData.position.y, viewData.position.z)
+      controlsRef.current.target.set(viewData.target.x, viewData.target.y, viewData.target.z)
+      controlsRef.current.update()
+      return true
+    } catch { return false }
+  }, [])
 
   // Check if saved camera view exists (from DB first, then localStorage fallback)
+  // If scene is already built, apply it immediately (fixes race condition in production)
   useEffect(() => {
     const checkSavedView = async () => {
+      // Try localStorage first (instant)
+      const savedView = localStorage.getItem(`dwg-camera-view-${layoutVersionId}`)
+      if (savedView) {
+        try {
+          dbCameraViewRef.current = JSON.parse(savedView)
+          setHasSavedView(true)
+          // If scene already built, apply now
+          if (sceneBuiltRef.current) {
+            applyCameraView(dbCameraViewRef.current!)
+            console.log('Camera view applied from localStorage (post-build)')
+          }
+        } catch { /* ignore */ }
+      }
+      // Then try DB (may overwrite localStorage version if newer)
       try {
         const res = await fetch(`${API_BASE}/api/dwg/layout/${layoutVersionId}`)
         if (res.ok) {
@@ -156,20 +183,38 @@ export default function Layout3DPreview({ layoutVersionId, importId, lidarInstan
           if (data.camera_view) {
             dbCameraViewRef.current = data.camera_view
             setHasSavedView(true)
+            // If scene already built, apply the DB view now (race condition fix)
+            if (sceneBuiltRef.current) {
+              applyCameraView(data.camera_view)
+              console.log('Camera view applied from DB (post-build)')
+            }
             return
           }
         }
       } catch (e) {
-        // API unavailable, fall through to localStorage
+        // API unavailable, localStorage version already loaded above
       }
-      const savedView = localStorage.getItem(`dwg-camera-view-${layoutVersionId}`)
-      if (savedView) {
-        dbCameraViewRef.current = JSON.parse(savedView)
-      }
-      setHasSavedView(!!savedView)
     }
     checkSavedView()
+  }, [layoutVersionId, applyCameraView])
+
+  // Auto-save camera position (debounced) on orbit/pan/zoom
+  const cameraAutoSaveRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const startCameraAutoSaveRef = useRef<(() => void) | null>(null)
+  const startCameraAutoSave = useCallback(() => {
+    if (cameraAutoSaveRef.current) clearTimeout(cameraAutoSaveRef.current)
+    cameraAutoSaveRef.current = setTimeout(() => {
+      if (!cameraRef.current || !controlsRef.current) return
+      const viewData = {
+        position: { x: cameraRef.current.position.x, y: cameraRef.current.position.y, z: cameraRef.current.position.z },
+        target: { x: controlsRef.current.target.x, y: controlsRef.current.target.y, z: controlsRef.current.target.z }
+      }
+      localStorage.setItem(`dwg-camera-view-${layoutVersionId}`, JSON.stringify(viewData))
+      dbCameraViewRef.current = viewData
+      setHasSavedView(true)
+    }, 2000)
   }, [layoutVersionId])
+  startCameraAutoSaveRef.current = startCameraAutoSave
 
   // Save current camera view (to DB + localStorage)
   const saveCameraView = useCallback(async () => {
@@ -228,17 +273,10 @@ export default function Layout3DPreview({ layoutVersionId, importId, lidarInstan
     }
     if (!viewData) return false
     
-    try {
-      cameraRef.current.position.set(viewData.position.x, viewData.position.y, viewData.position.z)
-      controlsRef.current.target.set(viewData.target.x, viewData.target.y, viewData.target.z)
-      controlsRef.current.update()
-      console.log('Camera view restored from saved')
-      return true
-    } catch (e) {
-      console.error('Failed to load saved camera view:', e)
-      return false
-    }
-  }, [layoutVersionId])
+    const ok = applyCameraView(viewData)
+    if (ok) console.log('Camera view restored from saved')
+    return ok
+  }, [layoutVersionId, applyCameraView])
 
   // Fetch custom models list
   useEffect(() => {
@@ -338,6 +376,7 @@ export default function Layout3DPreview({ layoutVersionId, importId, lidarInstan
     const controls = new OrbitControls(camera, renderer.domElement)
     controls.enableDamping = true
     controls.dampingFactor = 0.05
+    controls.addEventListener('change', () => startCameraAutoSaveRef.current?.())
     controlsRef.current = controls
 
     // Lights - match main venue scene lighting
@@ -828,6 +867,9 @@ export default function Layout3DPreview({ layoutVersionId, importId, lidarInstan
         wireGroup.add(arrow)
       }
     })
+
+    // Mark scene as built so async camera view fetch can apply when it arrives
+    sceneBuiltRef.current = true
 
     // Update camera to fit scene - try loading saved view first
     if (cameraRef.current && controlsRef.current) {

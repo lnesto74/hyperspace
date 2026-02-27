@@ -108,37 +108,52 @@ export default function PreviewPanel({
   // Generate storage key from import data filename
   const storageKey = `dwg-2d-view-${importData.filename || 'default'}`
   
-  // Initialize zoom and panOffset from localStorage to preserve view on remount
+  // Initialize zoom, panOffset, viewMode and per-mode states from localStorage
+  const savedViewRef = useRef<any>(null)
+  if (!savedViewRef.current) {
+    try {
+      const raw = localStorage.getItem(storageKey)
+      if (raw) savedViewRef.current = JSON.parse(raw)
+    } catch { /* ignore */ }
+  }
   const [zoom, setZoom] = useState(() => {
-    const saved = localStorage.getItem(storageKey)
-    if (saved) {
-      try {
-        return JSON.parse(saved).zoom || 1
-      } catch { return 1 }
+    const s = savedViewRef.current
+    if (s?.perModeViews && s?.viewMode) {
+      return s.perModeViews[s.viewMode]?.zoom ?? s.zoom ?? 1
     }
-    return 1
+    return s?.zoom ?? 1
   })
   const [panOffset, setPanOffset] = useState(() => {
-    const saved = localStorage.getItem(storageKey)
-    if (saved) {
-      try {
-        return JSON.parse(saved).panOffset || { x: 0, y: 0 }
-      } catch { return { x: 0, y: 0 } }
+    const s = savedViewRef.current
+    if (s?.perModeViews && s?.viewMode) {
+      return s.perModeViews[s.viewMode]?.panOffset ?? s.panOffset ?? { x: 0, y: 0 }
     }
-    return { x: 0, y: 0 }
+    return s?.panOffset ?? { x: 0, y: 0 }
   })
   const [isDragging, setIsDragging] = useState(false)
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 })
   const [dragStartOffset, setDragStartOffset] = useState({ x: 0, y: 0 })
   const [showGrid, setShowGrid] = useState(true)
   const [activeTool, setActiveTool] = useState<Tool>('select')
-  const [viewMode, setViewMode] = useState<ViewMode>('dwg')
-  // Per-mode view state: store zoom+pan for each mode so switching doesn't lose position
-  const perModeView = useRef<Record<ViewMode, { zoom: number; panOffset: { x: number; y: number } }>>({
-    dwg: { zoom: 1, panOffset: { x: 0, y: 0 } },
-    floorplan: { zoom: 1, panOffset: { x: 0, y: 0 } },
-    overlay: { zoom: 1, panOffset: { x: 0, y: 0 } }
+  const [viewMode, setViewMode] = useState<ViewMode>(() => {
+    const s = savedViewRef.current
+    if (s?.viewMode && ['dwg', 'floorplan', 'overlay'].includes(s.viewMode)) return s.viewMode
+    return 'dwg'
   })
+  // Per-mode view state: store zoom+pan for each mode so switching doesn't lose position
+  const perModeView = useRef<Record<ViewMode, { zoom: number; panOffset: { x: number; y: number } }>>(() => {
+    const s = savedViewRef.current
+    const defaults = { zoom: 1, panOffset: { x: 0, y: 0 } }
+    if (s?.perModeViews) {
+      return {
+        dwg: s.perModeViews.dwg || { ...defaults },
+        floorplan: s.perModeViews.floorplan || { ...defaults },
+        overlay: s.perModeViews.overlay || { ...defaults }
+      }
+    }
+    const fallback = { zoom: s?.zoom ?? 1, panOffset: s?.panOffset ?? { x: 0, y: 0 } }
+    return { dwg: { ...fallback }, floorplan: { ...fallback }, overlay: { ...fallback } }
+  })()
   // LiDAR drag state
   const [draggingLidarId, setDraggingLidarId] = useState<string | null>(null)
   const [lidarDragStart, setLidarDragStart] = useState<{ x: number; y: number } | null>(null)
@@ -429,35 +444,33 @@ export default function PreviewPanel({
     }
   }, [importData?.import_id])
 
-  // Check if saved view exists and load it on mount
+  // Check if saved view exists on mount
   useEffect(() => {
     const saved = localStorage.getItem(storageKey)
     if (saved) {
       setHasSavedView(true)
-      try {
-        const viewData = JSON.parse(saved)
-        setZoom(viewData.zoom)
-        setPanOffset(viewData.panOffset)
-        // Initialize all per-mode views with saved state
-        perModeView.current.dwg = { zoom: viewData.zoom, panOffset: { ...viewData.panOffset } }
-        perModeView.current.floorplan = { zoom: viewData.zoom, panOffset: { ...viewData.panOffset } }
-        perModeView.current.overlay = { zoom: viewData.zoom, panOffset: { ...viewData.panOffset } }
-        console.log('2D view restored from saved')
-      } catch (e) {
-        console.error('Failed to load saved 2D view:', e)
-      }
+      console.log('2D view restored from saved')
     }
   }, [storageKey])
 
-  // Auto-save view state to localStorage whenever zoom/pan changes (debounced)
+  // Auto-save view state to localStorage whenever zoom/pan/viewMode changes (debounced)
   const autoSaveTimeout = useRef<ReturnType<typeof setTimeout> | null>(null)
   useEffect(() => {
     // Update current mode's per-mode state
     perModeView.current[viewMode] = { zoom, panOffset: { ...panOffset } }
-    // Debounced save to localStorage
+    // Debounced save to localStorage (includes viewMode + per-mode states)
     if (autoSaveTimeout.current) clearTimeout(autoSaveTimeout.current)
     autoSaveTimeout.current = setTimeout(() => {
-      const viewData = { zoom, panOffset }
+      const viewData = {
+        zoom,
+        panOffset,
+        viewMode,
+        perModeViews: {
+          dwg: perModeView.current.dwg,
+          floorplan: perModeView.current.floorplan,
+          overlay: perModeView.current.overlay
+        }
+      }
       localStorage.setItem(storageKey, JSON.stringify(viewData))
       setHasSavedView(true)
     }, 1000)
@@ -491,9 +504,18 @@ export default function PreviewPanel({
       y: ((dimensions.height - dimensions.height + offsetY) / scale / u) + b.minY
     }
     
+    // Update current mode's per-mode state before saving
+    perModeView.current[viewMode] = { zoom, panOffset: { ...panOffset } }
+    
     const viewData = { 
       zoom, 
       panOffset,
+      viewMode,
+      perModeViews: {
+        dwg: perModeView.current.dwg,
+        floorplan: perModeView.current.floorplan,
+        overlay: perModeView.current.overlay
+      },
       // Store visible world bounds for resolution-independent loading
       visibleBounds: {
         minX: topLeftWorld.x,
