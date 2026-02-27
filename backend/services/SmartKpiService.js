@@ -558,54 +558,113 @@ export class SmartKpiService {
     return deletedCount;
   }
 
-  // Save generated ROIs to database (replaces existing ones for the template)
+  // Save generated ROIs to database (incremental: update existing, add new, remove stale)
+  // Matches by name to preserve UUIDs, zone_settings, and queue session history
   // dwgLayoutId: null = manual mode, non-null = DWG mode
   saveRois(venueId, rois, templateId, dwgLayoutId = null) {
-    // First, delete existing zones for this template (filtered by mode)
-    if (templateId) {
-      this.deleteExistingSmartKpiZones(venueId, templateId, dwgLayoutId);
-    }
-
     const now = new Date().toISOString();
     const savedRois = [];
 
-    for (const roi of rois) {
-      const roiData = {
-        id: roi.id,
-        venueId,
-        dwgLayoutId,  // Mode separation
-        name: roi.name,
-        vertices: roi.vertices,
-        color: roi.color,
-        opacity: roi.opacity,
-        metadata: roi.metadata || null,
-        createdAt: now,
-        updatedAt: now,
-      };
+    // Get name patterns for this template to identify which existing ROIs belong to it
+    const templatePatterns = {
+      'cashier-queue': ['- Queue', '- Service'],
+      'entrance-flow': ['- Traffic Zone'],
+      'shelf-engagement': ['- Engagement'],
+    };
+    const patterns = templatePatterns[templateId] || [];
 
-      try {
-        const stmt = this.db.prepare(`
-          INSERT INTO regions_of_interest (id, venue_id, dwg_layout_id, name, vertices, color, opacity, metadata_json, created_at, updated_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `);
-        stmt.run(
-          roiData.id,
-          roiData.venueId,
-          roiData.dwgLayoutId,
-          roiData.name,
-          JSON.stringify(roiData.vertices),
-          roiData.color,
-          roiData.opacity,
-          roiData.metadata ? JSON.stringify(roiData.metadata) : null,
-          roiData.createdAt,
-          roiData.updatedAt
-        );
-        savedRois.push(roiData);
-      } catch (err) {
-        console.error('Failed to save ROI:', err);
+    // Load ALL existing ROIs for this venue that match the template patterns
+    // Search across ALL modes (not filtered by dwgLayoutId) to catch cross-mode duplicates
+    const allExisting = this.db.prepare(
+      'SELECT id, name, dwg_layout_id FROM regions_of_interest WHERE venue_id = ?'
+    ).all(venueId);
+    
+    const existingForTemplate = allExisting.filter(row =>
+      patterns.some(p => row.name && row.name.includes(p))
+    );
+
+    // Build lookup: name -> existing ROI (for matching)
+    // If duplicates exist (same name, different IDs), keep one and delete the rest
+    const existingByName = new Map();
+    const duplicatesToDelete = [];
+    for (const row of existingForTemplate) {
+      if (existingByName.has(row.name)) {
+        // Duplicate — mark older one for deletion
+        duplicatesToDelete.push(existingByName.get(row.name));
+      }
+      existingByName.set(row.name, row); // keep last (newest)
+    }
+    
+    if (duplicatesToDelete.length > 0) {
+      const delDupStmt = this.db.prepare('DELETE FROM regions_of_interest WHERE id = ?');
+      const delDupZsStmt = this.db.prepare('DELETE FROM zone_settings WHERE roi_id = ?');
+      for (const dup of duplicatesToDelete) {
+        delDupZsStmt.run(dup.id);
+        delDupStmt.run(dup.id);
+      }
+      console.log(`📊 Cleaned up ${duplicatesToDelete.length} duplicate ROIs`);
+    }
+
+    // Build set of new names for detecting removals
+    const newNames = new Set(rois.map(r => r.name));
+
+    // 1. UPDATE existing or INSERT new ROIs
+    const updateStmt = this.db.prepare(`
+      UPDATE regions_of_interest 
+      SET vertices = ?, color = ?, opacity = ?, metadata_json = ?, dwg_layout_id = ?, updated_at = ?
+      WHERE id = ?
+    `);
+    const insertStmt = this.db.prepare(`
+      INSERT INTO regions_of_interest (id, venue_id, dwg_layout_id, name, vertices, color, opacity, metadata_json, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+
+    let updatedCount = 0, insertedCount = 0;
+
+    for (const roi of rois) {
+      const existing = existingByName.get(roi.name);
+      const metadataJson = roi.metadata ? JSON.stringify(roi.metadata) : null;
+      const verticesJson = JSON.stringify(roi.vertices);
+
+      if (existing) {
+        // UPDATE existing ROI — preserves UUID, zone_settings, queue_sessions
+        try {
+          updateStmt.run(verticesJson, roi.color, roi.opacity, metadataJson, dwgLayoutId, now, existing.id);
+          savedRois.push({ ...roi, id: existing.id, venueId, dwgLayoutId });
+          updatedCount++;
+        } catch (err) {
+          console.error(`Failed to update ROI "${roi.name}":`, err.message);
+        }
+      } else {
+        // INSERT new ROI
+        try {
+          insertStmt.run(roi.id, venueId, dwgLayoutId, roi.name, verticesJson, roi.color, roi.opacity, metadataJson, now, now);
+          savedRois.push({ ...roi, venueId, dwgLayoutId });
+          insertedCount++;
+        } catch (err) {
+          console.error(`Failed to insert ROI "${roi.name}":`, err.message);
+        }
       }
     }
 
+    // 2. DELETE ROIs that no longer exist in the new set + clean up zone_settings
+    let deletedCount = 0;
+    const deleteRoiStmt = this.db.prepare('DELETE FROM regions_of_interest WHERE id = ?');
+    const deleteZoneSettingsStmt = this.db.prepare('DELETE FROM zone_settings WHERE roi_id = ?');
+
+    for (const [name, existing] of existingByName) {
+      if (!newNames.has(name)) {
+        try {
+          deleteZoneSettingsStmt.run(existing.id);
+          deleteRoiStmt.run(existing.id);
+          deletedCount++;
+        } catch (err) {
+          console.error(`Failed to delete stale ROI "${name}":`, err.message);
+        }
+      }
+    }
+
+    console.log(`📊 ROI save: ${updatedCount} updated, ${insertedCount} inserted, ${deletedCount} removed (template: ${templateId})`);
     return savedRois;
   }
 
