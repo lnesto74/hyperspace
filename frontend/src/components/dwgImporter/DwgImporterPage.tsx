@@ -252,12 +252,11 @@ export default function DwgImporterPage({ onClose, onLayoutGenerated }: DwgImpor
     }
   }, [featureEnabled])
 
-  // Fetch LiDAR data once when layout is available (not on every view switch)
-  const lidarDataLoaded = useRef(false)
+  // Fetch LiDAR data once when layout is available (eagerly, regardless of view mode)
+  const lidarDataLoadedForLayout = useRef<string | null>(null)
   useEffect(() => {
-    if (!generatedLayoutId || lidarDataLoaded.current) return
-    if (!lidarMode && !show3DPreview) return
-    lidarDataLoaded.current = true
+    if (!generatedLayoutId || lidarDataLoadedForLayout.current === generatedLayoutId) return
+    lidarDataLoadedForLayout.current = generatedLayoutId
 
     const fetchLidarData = async () => {
       try {
@@ -293,7 +292,7 @@ export default function DwgImporterPage({ onClose, onLayoutGenerated }: DwgImpor
       }
     }
     fetchLidarData()
-  }, [lidarMode, show3DPreview, generatedLayoutId, venue?.id])
+  }, [generatedLayoutId, venue?.id])
 
   // ROI handler - save to database
   const handleSetLidarRoi = useCallback(async (roi: { x: number; z: number }[] | null) => {
