@@ -68,10 +68,14 @@ const io = new Server(httpServer, {
 });
 
 // Initialize database
+const _startupT0 = Date.now();
 const db = initDatabase();
+console.log(`⏱️ STARTUP: initDatabase ${Date.now() - _startupT0}ms`);
 
 // Seed algorithm providers
+const _startupT1 = Date.now();
 seedProviders(db);
+console.log(`⏱️ STARTUP: seedProviders ${Date.now() - _startupT1}ms`);
 
 // Initialize services
 const tailscaleService = new TailscaleService();
@@ -81,7 +85,9 @@ const trackAggregator = new TrackAggregator();
 // Initialize trajectory storage and KPI services
 const trajectoryStorage = new TrajectoryStorageService(db);
 const kpiCalculator = new KPICalculator(db);
+const _startupT2 = Date.now();
 trajectoryStorage.start();
+console.log(`⏱️ STARTUP: trajectoryStorage.start ${Date.now() - _startupT2}ms`);
 console.log('📊 KPI tracking services initialized');
 
 // Initialize Profit Radar services (additive — no impact on existing functionality)

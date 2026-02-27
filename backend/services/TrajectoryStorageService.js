@@ -954,9 +954,15 @@ export class TrajectoryStorageService extends EventEmitter {
       this.cleanupInterval = null;
     }
     
-    // Final flush before stopping
+    // Final flush before stopping — MUST be synchronous (process.exit follows)
     this.flushBuffer();
-    this.syncToDatabase();
+    // Sync directly (not via async syncToDatabase) so data is persisted before exit
+    try {
+      this.syncPositionFiles();
+      this.syncVisitFiles();
+    } catch (err) {
+      console.error('Failed final sync on stop:', err);
+    }
     
     console.log('📊 Trajectory storage service stopped');
   }
@@ -1316,6 +1322,11 @@ export class TrajectoryStorageService extends EventEmitter {
    */
   syncPositionFiles() {
     const files = fs.readdirSync(this.dataDir).filter(f => f.startsWith('positions_'));
+    if (files.length === 0) return;
+    
+    if (files.length > 12) {
+      console.warn(`⚠️ syncPositionFiles: ${files.length} accumulated files (backlog from restarts?)`);
+    }
     
     const insertStmt = this.db.prepare(`
       INSERT INTO track_positions (venue_id, track_key, timestamp, position_x, position_z, velocity_x, velocity_z, roi_id)
@@ -1337,7 +1348,12 @@ export class TrajectoryStorageService extends EventEmitter {
       }
     });
     
-    for (const file of files) {
+    // Process max 12 files per sync cycle (~1 minute of data)
+    // Remaining files are picked up on the next 60s cycle
+    const MAX_FILES = 12;
+    const batch = files.slice(0, MAX_FILES);
+    
+    for (const file of batch) {
       const filepath = path.join(this.dataDir, file);
       try {
         const content = fs.readFileSync(filepath, 'utf-8');

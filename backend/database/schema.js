@@ -26,10 +26,12 @@ export function initDatabase() {
     db.pragma('wal_autocheckpoint = 100'); // Checkpoint every 100 pages (~400KB) to keep WAL small
     console.log('📦 SQLite: WAL mode (production) with FULL sync, no mmap');
     
-    // Initial checkpoint to clear any existing WAL
+    // Initial checkpoint — PASSIVE so it never blocks startup
+    // (TRUNCATE was taking 53s+ on large WAL files, killing trajectories on deploy)
     try {
-      const result = db.pragma('wal_checkpoint(TRUNCATE)');
-      console.log('📦 SQLite: Initial WAL checkpoint:', result);
+      const _t0 = Date.now();
+      const result = db.pragma('wal_checkpoint(PASSIVE)');
+      console.log(`📦 SQLite: Initial WAL checkpoint (PASSIVE): ${JSON.stringify(result)} in ${Date.now() - _t0}ms`);
     } catch (e) {
       console.warn('📦 SQLite: Initial checkpoint failed (OK if fresh DB):', e.message);
     }
