@@ -1,6 +1,29 @@
 # Hyperspace Production Caddyfile
 # Domain: app.hyspace.app (auto HTTPS via Let's Encrypt)
 
+# IP address handler for edge server access (no HTTPS)
+:80 {
+    # Backend API
+    handle /api/* {
+        reverse_proxy backend:3001
+    }
+
+    # Socket.IO - WebSocket upgrade support
+    handle /socket.io/* {
+        reverse_proxy backend:3001
+    }
+
+    # Uploaded files
+    handle /uploads/* {
+        reverse_proxy backend:3001
+    }
+
+    # Fallback
+    handle {
+        respond "Use app.hyspace.app for frontend" 200
+    }
+}
+
 app.hyspace.app {
     # Backend API
     handle /api/* {
