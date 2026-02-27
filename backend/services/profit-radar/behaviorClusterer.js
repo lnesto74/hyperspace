@@ -11,7 +11,7 @@ import { AXIS_NAMES } from './intentScorer.js';
 function dist2D(a, b) { return Math.sqrt((a.x - b.x) ** 2 + (a.z - b.z) ** 2); }
 
 /** Sample every Nth point from trail to reduce PIP test count */
-function sampleTrail(trail, step = 5) {
+function sampleTrail(trail, step = 20) {
   if (!trail || trail.length <= step) return trail;
   const sampled = [];
   for (let i = 0; i < trail.length; i += step) sampled.push(trail[i]);
@@ -146,8 +146,8 @@ export class BehaviorClusterer {
 
   start() {
     if (this.interval) return;
-    this.interval = setInterval(() => this.tick(), 10000); // 0.1Hz (behaviour patterns change slowly)
-    console.log('📡 BehaviorClusterer started (0.1Hz, trajectory-similarity)');
+    this.interval = setInterval(() => this.tick(), 30000); // 0.033Hz (behaviour patterns change slowly)
+    console.log('📡 BehaviorClusterer started (0.033Hz / 30s, trajectory-similarity)');
   }
 
   stop() {
@@ -156,12 +156,20 @@ export class BehaviorClusterer {
   }
 
   tick() {
+    const _t0 = Date.now();
     const trackAxes = this.intentScorer.getTrackAxes();
     if (!trackAxes || trackAxes.size === 0) { this.clusters = []; return; }
 
+    // Limit tracks processed per tick to prevent event loop blocking
+    // 200 tracks × 133 ROIs × multiple PIP passes = millions of PIP tests
+    const MAX_TRACKS = 50;
+    const entries = [...trackAxes.entries()];
+    const sample = entries.length <= MAX_TRACKS ? entries
+      : entries.filter((_, i) => i % Math.ceil(entries.length / MAX_TRACKS) === 0).slice(0, MAX_TRACKS);
+
     // Build fingerprint per track and group by fingerprint
     const fpGroups = new Map(); // fingerprint -> [{ trackKey, position, axes, trail }]
-    for (const [trackKey, data] of trackAxes) {
+    for (const [trackKey, data] of sample) {
       const fp = buildFingerprint(data.trail, data.axes, this.rois);
       if (!fpGroups.has(fp)) fpGroups.set(fp, []);
       fpGroups.get(fp).push({
@@ -207,6 +215,8 @@ export class BehaviorClusterer {
     }
 
     this.clusters = newClusters;
+    const _elapsed = Date.now() - _t0;
+    if (_elapsed > 50) console.warn(`⏱️ BehaviorClusterer.tick took ${_elapsed}ms (${sample.length}/${entries.length} tracks, ${this.rois.length} ROIs, ${newClusters.length} clusters)`);
   }
 
   /** Find the zone where the most cluster members currently are, for billboard placement */

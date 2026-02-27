@@ -49,6 +49,7 @@ export class ZoneAggregator {
   }
 
   tick() {
+    const _t0 = Date.now();
     const trackAxes = this.intentScorer.getTrackAxes();
     if (!trackAxes || trackAxes.size === 0 || this.rois.length === 0) return;
 
@@ -100,6 +101,8 @@ export class ZoneAggregator {
         trackKeys,
       });
     }
+    const _elapsed = Date.now() - _t0;
+    if (_elapsed > 50) console.warn(`⏱️ ZoneAggregator.tick took ${_elapsed}ms (${trackAxes.size} tracks, ${this.rois.length} ROIs)`);
   }
 
   getZoneField() { return this.zoneField; }

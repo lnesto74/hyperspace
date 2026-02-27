@@ -95,7 +95,7 @@ const intentScorer = new IntentScorer(trackAggregator);
 const zoneAggregator = new ZoneAggregator(intentScorer);
 const behaviorClusterer = new BehaviorClusterer(intentScorer);
 const profitRadarEngine = new ProfitRadarEngine(zoneAggregator, behaviorClusterer);
-console.log('📡 Profit Radar services initialized');
+console.log(`⏱️ STARTUP: profit radar init +${Date.now() - _startupT0}ms`);
 
 // Pre-load zone links and open lanes for all venues at startup
 const venues = db.prepare('SELECT DISTINCT id FROM venues').all();
@@ -103,7 +103,7 @@ venues.forEach(v => {
   trajectoryStorage.loadZoneLinks(v.id);
   trajectoryStorage.loadOpenLanes(v.id);
 });
-console.log(`📊 Pre-loaded zone links and open lanes for ${venues.length} venues`);
+console.log(`⏱️ STARTUP: zone links preload +${Date.now() - _startupT0}ms (${venues.length} venues)`);
 
 // Mock generator for testing
 let mockGenerator = null;
@@ -297,9 +297,11 @@ app.use('/api/narrator2', narrator2Routes);
 app.use('/api/algorithm-providers', algorithmProvidersRoutes);
 
 // Replay Insight routes (parallel, read-only behavior episode system)
+console.log(`⏱️ STARTUP: pre-routes +${Date.now() - _startupT0}ms`);
 const replayInsightOrchestrator = new EpisodeDetectorOrchestrator();
 replayInsightOrchestrator.start();
 app.use('/api/replay-insights', createReplayInsightRoutes(replayInsightOrchestrator));
+console.log(`⏱️ STARTUP: post-replay-insight +${Date.now() - _startupT0}ms`);
 
 // Serve uploaded logos
 app.use('/api/uploads/logos', express.static(path.join(UPLOADS_DIR, 'logos')));

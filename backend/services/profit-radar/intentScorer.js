@@ -105,6 +105,7 @@ export class IntentScorer {
   }
 
   tick() {
+    const _t0 = Date.now();
     const tracks = this.trackAggregator.tracks;
     if (!tracks || tracks.size === 0) return;
 
@@ -123,6 +124,8 @@ export class IntentScorer {
     for (const [key, val] of this.trackAxes) {
       if (now - val.timestamp > 8000) this.trackAxes.delete(key);
     }
+    const _elapsed = Date.now() - _t0;
+    if (_elapsed > 50) console.warn(`⏱️ IntentScorer.tick took ${_elapsed}ms (${allEntries.length} tracks)`);
   }
 
   _findNearest(selfKey, pos, allEntries) {
