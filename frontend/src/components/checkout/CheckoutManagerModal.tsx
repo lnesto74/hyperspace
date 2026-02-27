@@ -45,7 +45,7 @@ interface CheckoutStatus {
     queuePressureThreshold: number
     inflowRateThreshold: number
   }
-  source: 'simulation' | 'live'
+  source: 'live'
 }
 
 interface CheckoutAlert {
@@ -148,7 +148,8 @@ export default function CheckoutManagerModal({ isOpen, onClose }: CheckoutManage
   const [status, setStatus] = useState<CheckoutStatus | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [dataSource, setDataSource] = useState<'auto' | 'simulation' | 'live'>('auto')
+  // Lane status always comes from backend trajectory analysis (ground truth)
+  // Backend receives trajectories from any source (simulator or real LiDAR) and analyzes against ROIs
   
   // KPI Snapshot State (auto-refresh every 15 sec)
   const [kpiSnapshot, setKpiSnapshot] = useState<KpiSnapshot | null>(null)
@@ -229,26 +230,15 @@ export default function CheckoutManagerModal({ isOpen, onClose }: CheckoutManage
     setError(null)
     
     try {
-      if (dataSource === 'auto' || dataSource === 'simulation') {
-        const simRes = await fetch(`${API_BASE}/api/edge-simulator/checkout/status`)
-        if (simRes.ok) {
-          const data = await simRes.json()
-          setStatus({ ...data, source: 'simulation' })
-          checkAndGenerateAlerts(data.lanes)
-          setLoading(false)
-          return
-        }
-      }
-      
-      if (dataSource === 'auto' || dataSource === 'live') {
-        const liveRes = await fetch(`${API_BASE}/api/venues/${venue.id}/checkout/live-status`)
-        if (liveRes.ok) {
-          const data = await liveRes.json()
-          setStatus({ ...data, source: 'live' })
-          checkAndGenerateAlerts(data.lanes)
-          setLoading(false)
-          return
-        }
+      // Always use backend trajectory analysis as single source of truth
+      // Backend analyzes actual trajectories (from simulator OR real LiDAR) against ROIs
+      const liveRes = await fetch(`${API_BASE}/api/venues/${venue.id}/checkout/live-status`)
+      if (liveRes.ok) {
+        const data = await liveRes.json()
+        setStatus({ ...data, source: 'live' })
+        checkAndGenerateAlerts(data.lanes)
+        setLoading(false)
+        return
       }
       
       setError('No checkout data available')
@@ -256,7 +246,7 @@ export default function CheckoutManagerModal({ isOpen, onClose }: CheckoutManage
       setError('Failed to fetch checkout status')
     }
     setLoading(false)
-  }, [venue?.id, dataSource, checkAndGenerateAlerts])
+  }, [venue?.id, checkAndGenerateAlerts])
 
   useEffect(() => {
     if (!isOpen) return
@@ -335,18 +325,15 @@ export default function CheckoutManagerModal({ isOpen, onClose }: CheckoutManage
 
   const handleSetLaneState = async (laneId: number, state: 'open' | 'closed') => {
     try {
-      const endpoint = status?.source === 'simulation' 
-        ? `${API_BASE}/api/edge-simulator/checkout/set_lane_state`
-        : `${API_BASE}/api/venues/${venue?.id}/checkout/set_lane_state`
-      
       // Get queueZoneId for this lane to sync with queue tracking
       const lane = status?.lanes?.find(l => l.laneId === laneId)
       const queueZoneId = lane?.queueZoneId
       
-      await fetch(endpoint, {
+      // Always use backend endpoint — it manages lane open/closed state for queue tracking
+      await fetch(`${API_BASE}/api/venues/${venue?.id}/checkout/set-lane-state`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ laneId, state, queueZoneId })
+        body: JSON.stringify({ queueZoneId, isOpen: state === 'open' })
       })
       fetchStatus()
     } catch (err) {
@@ -399,11 +386,7 @@ export default function CheckoutManagerModal({ isOpen, onClose }: CheckoutManage
             <div>
               <h2 className="text-lg font-semibold text-white">Checkout Operations Center</h2>
               <div className="flex items-center gap-2 text-xs">
-                {status?.source === 'simulation' ? (
-                  <span className="text-purple-400 flex items-center gap-1">
-                    <Wifi className="w-3 h-3" /> Simulation
-                  </span>
-                ) : status?.source === 'live' ? (
+                {status ? (
                   <span className="text-green-400 flex items-center gap-1">
                     <Wifi className="w-3 h-3" /> Live Data
                   </span>
@@ -930,20 +913,13 @@ export default function CheckoutManagerModal({ isOpen, onClose }: CheckoutManage
                       </div>
                     </div>
 
-                    {/* Data Source */}
+                    {/* Data Source Info */}
                     <div className="bg-gray-800 rounded-lg p-4">
                       <div className="flex items-center justify-between">
                         <span className="text-sm text-gray-300">Data Source</span>
-                        <select
-                          value={dataSource}
-                          onChange={(e) => setDataSource(e.target.value as 'auto' | 'simulation' | 'live')}
-                          className="bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-gray-300 text-sm"
-                        >
-                          <option value="auto">Auto</option>
-                          <option value="simulation">Simulation</option>
-                          <option value="live">Live</option>
-                        </select>
+                        <span className="text-sm text-green-400">Backend Trajectory Analysis</span>
                       </div>
+                      <p className="text-xs text-gray-500 mt-1">Analyzes trajectories from any source (simulator or real LiDAR) against ROIs</p>
                     </div>
                   </div>
                 )}
