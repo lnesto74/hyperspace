@@ -836,41 +836,59 @@ router.post('/edge/:edgeId/deploy', async (req, res) => {
     let roiBounds = null;
     let roiVertices = null;
     if (venue.dwg_layout_version_id) {
-      const layoutVersion = db.prepare('SELECT layout_json FROM dwg_layout_versions WHERE id = ?').get(venue.dwg_layout_version_id);
-      if (layoutVersion?.layout_json) {
-        const layoutData = JSON.parse(layoutVersion.layout_json);
-        if (layoutData.bounds) {
-          roiBounds = {
-            minX: layoutData.bounds.minX || 0,
-            maxX: layoutData.bounds.maxX || venue.width,
-            minZ: layoutData.bounds.minY || 0, // DWG uses Y for what we call Z
-            maxZ: layoutData.bounds.maxY || venue.depth,
-          };
+      // Priority 1: Read lidar_roi_json from dwg_layout_versions (saved by autoplace in METERS)
+      try {
+        const layoutVersion = db.prepare(`
+          SELECT lv.lidar_roi_json, lv.layout_json, di.unit_scale_to_m
+          FROM dwg_layout_versions lv
+          LEFT JOIN dwg_imports di ON lv.import_id = di.id
+          WHERE lv.id = ?
+        `).get(venue.dwg_layout_version_id);
+
+        if (layoutVersion?.lidar_roi_json) {
+          roiVertices = JSON.parse(layoutVersion.lidar_roi_json);
+          if (roiVertices && roiVertices.length >= 3) {
+            const xs = roiVertices.map(v => v.x);
+            const zs = roiVertices.map(v => v.z);
+            roiBounds = {
+              minX: Math.min(...xs),
+              maxX: Math.max(...xs),
+              minZ: Math.min(...zs),
+              maxZ: Math.max(...zs),
+            };
+            console.log(`📐 [deploy] ROI from lidar_roi_json (meters): X[${roiBounds.minX.toFixed(1)}, ${roiBounds.maxX.toFixed(1)}] Z[${roiBounds.minZ.toFixed(1)}, ${roiBounds.maxZ.toFixed(1)}]`);
+          }
         }
-      }
-      
-      // Also check for ROI defined in regions_of_interest (LiDAR planning ROI)
-      const roi = db.prepare(`
-        SELECT vertices FROM regions_of_interest 
-        WHERE venue_id = ? AND dwg_layout_id = ? 
-        ORDER BY created_at DESC LIMIT 1
-      `).get(venueId, venue.dwg_layout_version_id);
-      
-      if (roi?.vertices) {
-        try {
-          roiVertices = JSON.parse(roi.vertices);
-          // Calculate bounds from vertices
-          const xs = roiVertices.map(v => v.x);
-          const zs = roiVertices.map(v => v.z || v.y); // Handle both x,z and x,y formats
-          roiBounds = {
-            minX: Math.min(...xs),
-            maxX: Math.max(...xs),
-            minZ: Math.min(...zs),
-            maxZ: Math.max(...zs),
-          };
-        } catch (e) {
-          console.warn('Failed to parse ROI vertices:', e.message);
+
+        // Priority 2: Fall back to regions_of_interest (stored in DXF units, need conversion)
+        if (!roiBounds) {
+          const unitScale = layoutVersion?.unit_scale_to_m || 0.001;
+          const roi = db.prepare(`
+            SELECT vertices FROM regions_of_interest 
+            WHERE venue_id = ? AND dwg_layout_id = ? 
+            ORDER BY created_at DESC LIMIT 1
+          `).get(venueId, venue.dwg_layout_version_id);
+
+          if (roi?.vertices) {
+            const rawVertices = JSON.parse(roi.vertices);
+            // Convert from DXF units to meters
+            roiVertices = rawVertices.map(v => ({
+              x: v.x * unitScale,
+              z: (v.z || v.y) * unitScale,
+            }));
+            const xs = roiVertices.map(v => v.x);
+            const zs = roiVertices.map(v => v.z);
+            roiBounds = {
+              minX: Math.min(...xs),
+              maxX: Math.max(...xs),
+              minZ: Math.min(...zs),
+              maxZ: Math.max(...zs),
+            };
+            console.log(`📐 [deploy] ROI from regions_of_interest (converted to meters): X[${roiBounds.minX.toFixed(1)}, ${roiBounds.maxX.toFixed(1)}] Z[${roiBounds.minZ.toFixed(1)}, ${roiBounds.maxZ.toFixed(1)}]`);
+          }
         }
+      } catch (e) {
+        console.warn('Failed to fetch ROI data:', e.message);
       }
     }
 
@@ -882,14 +900,14 @@ router.post('/edge/:edgeId/deploy', async (req, res) => {
         minZ: 0,
         maxZ: venue.depth || 15,
       };
+      console.log(`📐 [deploy] ROI fallback to venue dimensions: ${roiBounds.maxX}x${roiBounds.maxZ}`);
     }
 
     // Calculate venue dimensions from ROI
     const venueWidth = roiBounds.maxX - roiBounds.minX;
     const venueDepth = roiBounds.maxZ - roiBounds.minZ;
 
-    console.log(`📐 ROI bounds: X[${roiBounds.minX.toFixed(2)}, ${roiBounds.maxX.toFixed(2)}] Z[${roiBounds.minZ.toFixed(2)}, ${roiBounds.maxZ.toFixed(2)}]`);
-    console.log(`📐 Venue dimensions: ${venueWidth.toFixed(2)}m x ${venueDepth.toFixed(2)}m`);
+    console.log(`📐 [deploy] Final ROI: ${venueWidth.toFixed(2)}m x ${venueDepth.toFixed(2)}m, offset (${roiBounds.minX.toFixed(2)}, ${roiBounds.minZ.toFixed(2)})`);
 
     // Get placements with model info
     const placementIds = pairings.map(p => p.placement_id);
@@ -1086,39 +1104,59 @@ router.get('/export-config', async (req, res) => {
     let roiBounds = null;
     let roiVertices = null;
     if (venue.dwg_layout_version_id) {
-      const layoutVersion = db.prepare('SELECT layout_json FROM dwg_layout_versions WHERE id = ?').get(venue.dwg_layout_version_id);
-      if (layoutVersion?.layout_json) {
-        const layoutData = JSON.parse(layoutVersion.layout_json);
-        if (layoutData.bounds) {
-          roiBounds = {
-            minX: layoutData.bounds.minX || 0,
-            maxX: layoutData.bounds.maxX || venue.width,
-            minZ: layoutData.bounds.minY || 0,
-            maxZ: layoutData.bounds.maxY || venue.depth,
-          };
+      // Priority 1: Read lidar_roi_json from dwg_layout_versions (saved by autoplace in METERS)
+      try {
+        const layoutVersion = db.prepare(`
+          SELECT lv.lidar_roi_json, lv.layout_json, di.unit_scale_to_m
+          FROM dwg_layout_versions lv
+          LEFT JOIN dwg_imports di ON lv.import_id = di.id
+          WHERE lv.id = ?
+        `).get(venue.dwg_layout_version_id);
+
+        if (layoutVersion?.lidar_roi_json) {
+          roiVertices = JSON.parse(layoutVersion.lidar_roi_json);
+          if (roiVertices && roiVertices.length >= 3) {
+            const xs = roiVertices.map(v => v.x);
+            const zs = roiVertices.map(v => v.z);
+            roiBounds = {
+              minX: Math.min(...xs),
+              maxX: Math.max(...xs),
+              minZ: Math.min(...zs),
+              maxZ: Math.max(...zs),
+            };
+            console.log(`📐 [export-config] ROI from lidar_roi_json (meters): X[${roiBounds.minX.toFixed(1)}, ${roiBounds.maxX.toFixed(1)}] Z[${roiBounds.minZ.toFixed(1)}, ${roiBounds.maxZ.toFixed(1)}]`);
+          }
         }
-      }
-      
-      const roi = db.prepare(`
-        SELECT vertices FROM regions_of_interest 
-        WHERE venue_id = ? AND dwg_layout_id = ? 
-        ORDER BY created_at DESC LIMIT 1
-      `).get(venueId, venue.dwg_layout_version_id);
-      
-      if (roi?.vertices) {
-        try {
-          roiVertices = JSON.parse(roi.vertices);
-          const xs = roiVertices.map(v => v.x);
-          const zs = roiVertices.map(v => v.z || v.y);
-          roiBounds = {
-            minX: Math.min(...xs),
-            maxX: Math.max(...xs),
-            minZ: Math.min(...zs),
-            maxZ: Math.max(...zs),
-          };
-        } catch (e) {
-          console.warn('Failed to parse ROI vertices:', e.message);
+
+        // Priority 2: Fall back to regions_of_interest (stored in DXF units, need conversion)
+        if (!roiBounds) {
+          const unitScale = layoutVersion?.unit_scale_to_m || 0.001;
+          const roi = db.prepare(`
+            SELECT vertices FROM regions_of_interest 
+            WHERE venue_id = ? AND dwg_layout_id = ? 
+            ORDER BY created_at DESC LIMIT 1
+          `).get(venueId, venue.dwg_layout_version_id);
+
+          if (roi?.vertices) {
+            const rawVertices = JSON.parse(roi.vertices);
+            // Convert from DXF units to meters
+            roiVertices = rawVertices.map(v => ({
+              x: v.x * unitScale,
+              z: (v.z || v.y) * unitScale,
+            }));
+            const xs = roiVertices.map(v => v.x);
+            const zs = roiVertices.map(v => v.z);
+            roiBounds = {
+              minX: Math.min(...xs),
+              maxX: Math.max(...xs),
+              minZ: Math.min(...zs),
+              maxZ: Math.max(...zs),
+            };
+            console.log(`📐 [export-config] ROI from regions_of_interest (converted to meters): X[${roiBounds.minX.toFixed(1)}, ${roiBounds.maxX.toFixed(1)}] Z[${roiBounds.minZ.toFixed(1)}, ${roiBounds.maxZ.toFixed(1)}]`);
+          }
         }
+      } catch (e) {
+        console.warn('Failed to fetch ROI data:', e.message);
       }
     }
 
@@ -1129,10 +1167,12 @@ router.get('/export-config', async (req, res) => {
         minZ: 0,
         maxZ: venue.depth || 15,
       };
+      console.log(`📐 [export-config] ROI fallback to venue dimensions: ${roiBounds.maxX}x${roiBounds.maxZ}`);
     }
 
     const venueWidth = roiBounds.maxX - roiBounds.minX;
     const venueDepth = roiBounds.maxZ - roiBounds.minZ;
+    console.log(`📐 [export-config] Final ROI: ${venueWidth.toFixed(2)}m x ${venueDepth.toFixed(2)}m, offset (${roiBounds.minX.toFixed(2)}, ${roiBounds.minZ.toFixed(2)})`);
 
     // Get ALL lidar_instances for this venue's layout (ground truth)
     let allInstances = [];
