@@ -84,13 +84,17 @@ class MqttTrajectoryService {
     try {
       const data = JSON.parse(message.toString())
       
-      // Sample log every 10s to avoid I/O bottleneck (was logging every message = 200+/sec)
-      this._mqttMsgCount = (this._mqttMsgCount || 0) + 1
-      const now = Date.now()
-      if (!this._lastMqttLog || now - this._lastMqttLog > 10000) {
-        console.log(`[MQTT] ${this._mqttMsgCount} msgs in last ${this._lastMqttLog ? Math.round((now - this._lastMqttLog)/1000) + 's' : 'startup'}, latest on ${topic}`)
-        this._mqttMsgCount = 0
-        this._lastMqttLog = now
+      // Logging gated by env: DEBUG_MQTT=verbose logs every msg, DEBUG_MQTT=true samples every 10s
+      if (process.env.DEBUG_MQTT === 'verbose') {
+        console.log(`[MQTT] Received trajectory on ${topic}:`, JSON.stringify(data).slice(0, 200))
+      } else if (process.env.DEBUG_MQTT === 'true') {
+        this._mqttMsgCount = (this._mqttMsgCount || 0) + 1
+        const now = Date.now()
+        if (!this._lastMqttLog || now - this._lastMqttLog > 10000) {
+          console.log(`[MQTT] ${this._mqttMsgCount} msgs in last ${this._lastMqttLog ? Math.round((now - this._lastMqttLog)/1000) + 's' : 'startup'}, latest on ${topic}`)
+          this._mqttMsgCount = 0
+          this._lastMqttLog = now
+        }
       }
       
       // Expected format: hyperspace/trajectories/{deviceId}

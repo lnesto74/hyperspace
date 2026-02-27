@@ -6,6 +6,9 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+// Set DEBUG_QUEUE_TRACKING=true in env to enable verbose queue/trajectory logging
+const DEBUG_QUEUE = process.env.DEBUG_QUEUE_TRACKING === 'true';
+
 /**
  * TrajectoryStorageService
  * 
@@ -612,6 +615,7 @@ export class TrajectoryStorageService extends EventEmitter {
         lastSeenInQueue: timestamp,
         lastSeenInService: null,
       });
+      if (DEBUG_QUEUE) console.log(`📊 Queue session started: ${trackKey} entered queue ${queueZoneId}`);
     }
     
     const session = this.queueSessions.get(sessionKey);
@@ -621,6 +625,7 @@ export class TrajectoryStorageService extends EventEmitter {
       session.queueExitTime = timestamp;
       session.serviceEntryTime = timestamp;
       session.lastSeenInService = timestamp;
+      if (DEBUG_QUEUE) console.log(`📊 Queue→Service transition: ${trackKey} (waited ${Math.round((timestamp - session.queueEntryTime) / 1000)}s)`);
     } else if (inServiceZone && session.serviceEntryTime) {
       // Still in service zone
       session.lastSeenInService = timestamp;
@@ -759,6 +764,7 @@ export class TrajectoryStorageService extends EventEmitter {
       );
       
       const status = isAbandoned ? 'ABANDONED' : (isComplete ? 'COMPLETE' : 'PARTIAL');
+      if (DEBUG_QUEUE) console.log(`📊 Queue session ${status}: wait=${Math.round(waitingTimeMs/1000)}s, service=${serviceTimeMs ? Math.round(serviceTimeMs/1000) + 's' : 'N/A'}`);
       
       this.emit('queue_session_ended', {
         ...session,
@@ -1059,6 +1065,10 @@ export class TrajectoryStorageService extends EventEmitter {
       // Track queue sessions for queue zones (per queue theory)
       // Only call if this ROI is a linked queue zone
       if (this.zoneLinks.has(roi.id)) {
+        if (DEBUG_QUEUE && !this.queueSessions.has(`${track.trackKey}:${roi.id}`)) {
+          const isOpen = this.isLaneOpen(roi.id);
+          console.log(`📊 DEBUG: ${track.trackKey} in queue zone ${roi.id.substring(0,8)}, isOpen=${isOpen}, openLanes=${this.openLanes?.size || 'undefined'}`);
+        }
         this.updateQueueSession(venueId, track.trackKey, roi.id, currentRoiIds, now);
       }
     }
