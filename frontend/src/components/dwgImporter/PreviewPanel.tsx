@@ -141,7 +141,7 @@ export default function PreviewPanel({
     return 'dwg'
   })
   // Per-mode view state: store zoom+pan for each mode so switching doesn't lose position
-  const perModeView = useRef<Record<ViewMode, { zoom: number; panOffset: { x: number; y: number } }>>(() => {
+  const perModeView = useRef<Record<ViewMode, { zoom: number; panOffset: { x: number; y: number } }>>((() => {
     const s = savedViewRef.current
     const defaults = { zoom: 1, panOffset: { x: 0, y: 0 } }
     if (s?.perModeViews) {
@@ -153,7 +153,7 @@ export default function PreviewPanel({
     }
     const fallback = { zoom: s?.zoom ?? 1, panOffset: s?.panOffset ?? { x: 0, y: 0 } }
     return { dwg: { ...fallback }, floorplan: { ...fallback }, overlay: { ...fallback } }
-  })()
+  })())
   // LiDAR drag state
   const [draggingLidarId, setDraggingLidarId] = useState<string | null>(null)
   const [lidarDragStart, setLidarDragStart] = useState<{ x: number; y: number } | null>(null)
