@@ -36,7 +36,7 @@ const __dirname = path.dirname(__filename);
 const MAIN_DB_PATH = process.env.DB_PATH || path.join(__dirname, '../../database/hyperspace.db');
 
 // Detection intervals
-const DETECTION_INTERVAL_MS = 5 * 60 * 1000;   // Run detection every 5 minutes
+const DETECTION_INTERVAL_MS = 15 * 60 * 1000;  // Run detection every 15 minutes (2h window → plenty of overlap)
 const BASELINE_INTERVAL_MS = 60 * 60 * 1000;    // Update baselines every hour
 const CLEANUP_INTERVAL_MS = 24 * 60 * 60 * 1000; // Archive old episodes daily
 
@@ -101,8 +101,8 @@ export class EpisodeDetectorOrchestrator {
       this.baselineInterval = setInterval(() => this._updateAllBaselines(), BASELINE_INTERVAL_MS);
       this.cleanupInterval = setInterval(() => this._cleanup(), CLEANUP_INTERVAL_MS);
 
-      // Run first detection after a short delay (without baselines — detectors handle gracefully)
-      setTimeout(() => this._runDetection(), 30000);
+      // Run first detection after 60s (without baselines — detectors handle gracefully)
+      setTimeout(() => this._runDetection(), 60000);
 
       this.isRunning = true;
       console.log('[ReplayInsight] Episode detector started');
@@ -218,68 +218,90 @@ export class EpisodeDetectorOrchestrator {
   // ─── Internal Detection Pipeline ───
 
   _runDetection() {
+    // Run detectors one at a time with setImmediate between each,
+    // so track emissions can fire between detector runs (~1-2s each).
+    // Without this, all 8 detectors × 2 venues block for 25+ seconds straight.
     const startTime = Date.now();
 
     try {
-      // Get all venues
       const venues = this._getVenues();
       if (venues.length === 0) return;
 
-      let totalEpisodes = 0;
+      // Build work queue: one item per (venue, detector) pair
+      const workQueue = [];
+      const now = Date.now();
+      const startTs = now - 2 * 60 * 60 * 1000;
+      const endTs = now;
 
       for (const venue of venues) {
-        const venueEpisodes = this._detectForVenue(venue.id);
-        totalEpisodes += venueEpisodes;
+        for (const detector of this.detectors) {
+          workQueue.push({ venueId: venue.id, detector, startTs, endTs });
+        }
       }
 
-      this.lastDetectionTs = Date.now();
-      const duration = Date.now() - startTime;
+      // Collect all episodes across all detectors/venues
+      const allEpisodesByVenue = new Map(); // venueId -> episodes[]
 
-      if (duration > 500 || totalEpisodes > 0) {
-        console.log(`[ReplayInsight] Detection complete: ${totalEpisodes} episodes across ${venues.length} venues (${duration}ms)`);
-      }
+      let workIdx = 0;
+      const processNext = () => {
+        if (workIdx >= workQueue.length) {
+          // All detectors done — rank, clip, and store per venue
+          this._finalizeDetection(allEpisodesByVenue, venues.length, startTime);
+          return;
+        }
+
+        const work = workQueue[workIdx++];
+        try {
+          const episodes = work.detector.detect(work.venueId, work.startTs, work.endTs);
+          if (episodes && episodes.length > 0) {
+            if (!allEpisodesByVenue.has(work.venueId)) allEpisodesByVenue.set(work.venueId, []);
+            allEpisodesByVenue.get(work.venueId).push(...episodes);
+          }
+        } catch (err) {
+          console.warn(`[ReplayInsight] Detector ${work.detector.constructor.name} error:`, err.message);
+        }
+
+        // Yield event loop so tracks keep emitting
+        setImmediate(processNext);
+      };
+
+      setImmediate(processNext);
 
     } catch (err) {
       console.error('[ReplayInsight] Detection error:', err.message);
     }
   }
 
-  _detectForVenue(venueId) {
-    // Detection window: last 2 hours (overlaps with previous runs for continuity)
+  _finalizeDetection(allEpisodesByVenue, venueCount, startTime) {
+    let totalEpisodes = 0;
     const now = Date.now();
-    const startTs = now - 2 * 60 * 60 * 1000;
-    const endTs = now;
 
-    let allEpisodes = [];
+    for (const [venueId, allEpisodes] of allEpisodesByVenue) {
+      if (allEpisodes.length === 0) continue;
 
-    // Run each detector
-    for (const detector of this.detectors) {
-      try {
-        const episodes = detector.detect(venueId, startTs, endTs);
-        allEpisodes.push(...episodes);
-      } catch (err) {
-        console.warn(`[ReplayInsight] Detector ${detector.constructor.name} error:`, err.message);
+      // Rank and select top episodes
+      const ranked = this.ranker.rankAndSelect(allEpisodes, 10);
+
+      // Build replay clips for selected episodes
+      const enriched = this.clipBuilder.buildClips(ranked);
+
+      // Set detection metadata
+      for (const ep of enriched) {
+        ep.detection_run_ts = now;
+        ep.period = 'day';
       }
+
+      // Store episodes
+      this.episodeStore.insertEpisodes(enriched);
+      totalEpisodes += enriched.length;
     }
 
-    if (allEpisodes.length === 0) return 0;
+    this.lastDetectionTs = Date.now();
+    const duration = Date.now() - startTime;
 
-    // Rank and select top episodes
-    const ranked = this.ranker.rankAndSelect(allEpisodes, 10);
-
-    // Build replay clips for selected episodes
-    const enriched = this.clipBuilder.buildClips(ranked);
-
-    // Set detection metadata
-    for (const ep of enriched) {
-      ep.detection_run_ts = now;
-      ep.period = 'day';
+    if (duration > 500 || totalEpisodes > 0) {
+      console.log(`[ReplayInsight] Detection complete: ${totalEpisodes} episodes across ${venueCount} venues (${duration}ms, yielded)`);
     }
-
-    // Store episodes
-    this.episodeStore.insertEpisodes(enriched);
-
-    return enriched.length;
   }
 
   _updateAllBaselines() {
