@@ -251,6 +251,7 @@ export class EpisodeDetectorOrchestrator {
         }
 
         const work = workQueue[workIdx++];
+        const _dt0 = Date.now();
         try {
           const episodes = work.detector.detect(work.venueId, work.startTs, work.endTs);
           if (episodes && episodes.length > 0) {
@@ -260,6 +261,8 @@ export class EpisodeDetectorOrchestrator {
         } catch (err) {
           console.warn(`[ReplayInsight] Detector ${work.detector.constructor.name} error:`, err.message);
         }
+        const _dt = Date.now() - _dt0;
+        if (_dt > 500) console.warn(`⏱️ [ReplayInsight] ${work.detector.constructor.name} venue=${work.venueId} took ${_dt}ms`);
 
         // Yield event loop so tracks keep emitting
         setImmediate(processNext);
