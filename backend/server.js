@@ -715,6 +715,59 @@ app.get('/api/venues/:venueId/checkout/active-sessions', (req, res) => {
   }
 });
 
+// ========== QUEUE TRACKING DEBUG ==========
+// Returns diagnostic info about queue tracking state
+app.get('/api/venues/:venueId/checkout/debug', (req, res) => {
+  const { venueId } = req.params;
+  
+  try {
+    // Force reload zone links and open lanes
+    trajectoryStorage.loadZoneLinks(venueId);
+    trajectoryStorage.loadOpenLanes(venueId);
+    
+    // Get zoneLinks Map contents
+    const zoneLinks = [];
+    for (const [queueId, serviceId] of trajectoryStorage.zoneLinks.entries()) {
+      zoneLinks.push({ queueZoneId: queueId, serviceZoneId: serviceId });
+    }
+    
+    // Get openLanes Set contents
+    const openLanes = trajectoryStorage.openLanes ? Array.from(trajectoryStorage.openLanes) : [];
+    
+    // Get all ROIs for the venue
+    const rois = db.prepare(`
+      SELECT id, name, color FROM regions_of_interest WHERE venue_id = ?
+    `).all(venueId);
+    
+    // Get zone_settings
+    const zoneSettings = db.prepare(`
+      SELECT roi_id, lane_number, is_open, linked_service_zone_id 
+      FROM zone_settings WHERE venue_id = ?
+    `).all(venueId);
+    
+    // Get active queue sessions
+    const activeSessions = trajectoryStorage.getActiveQueueSessions();
+    
+    res.json({
+      venueId,
+      timestamp: new Date().toISOString(),
+      zoneLinksCount: zoneLinks.length,
+      zoneLinks,
+      openLanesCount: openLanes.length,
+      openLanes,
+      roisCount: rois.length,
+      rois: rois.map(r => ({ id: r.id.substring(0, 8), name: r.name, color: r.color })),
+      zoneSettingsCount: zoneSettings.length,
+      zoneSettings,
+      activeSessionsCount: activeSessions.length,
+      activeSessions
+    });
+  } catch (err) {
+    console.error('❌ Queue debug failed:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ========== REAL-TIME LANE KPI SNAPSHOT ==========
 // Returns live lane KPIs from database - auto-refresh every 15 sec from frontend
 app.get('/api/venues/:venueId/checkout/kpi-snapshot', (req, res) => {
