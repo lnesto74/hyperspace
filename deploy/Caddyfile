@@ -1,7 +1,7 @@
 # Hyperspace Production Caddyfile
-# For IP-only HTTP access (no domain/HTTPS)
+# Domain: app.hyperspace.app (auto HTTPS via Let's Encrypt)
 
-:80 {
+app.hyperspace.app {
     # Backend API
     handle /api/* {
         reverse_proxy backend:3001
