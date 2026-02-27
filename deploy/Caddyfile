@@ -1,7 +1,7 @@
 # Hyperspace Production Caddyfile
-# Domain: app.hyperspace.app (auto HTTPS via Let's Encrypt)
+# Domain: app.hyspace.app (auto HTTPS via Let's Encrypt)
 
-app.hyperspace.app {
+app.hyspace.app {
     # Backend API
     handle /api/* {
         reverse_proxy backend:3001
