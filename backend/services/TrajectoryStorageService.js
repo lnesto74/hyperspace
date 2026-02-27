@@ -556,9 +556,13 @@ export class TrajectoryStorageService extends EventEmitter {
    */
   setLaneOpen(venueId, queueZoneId, isOpen) {
     try {
+      const isOpenVal = isOpen ? 1 : 0;
+      // UPSERT: if zone_settings row doesn't exist for this ROI ID (stale duplicate scenario),
+      // create it. Otherwise update the existing row.
       this.db.prepare(`
-        UPDATE zone_settings SET is_open = ? WHERE venue_id = ? AND roi_id = ?
-      `).run(isOpen ? 1 : 0, venueId, queueZoneId);
+        INSERT INTO zone_settings (roi_id, venue_id, is_open) VALUES (?, ?, ?)
+        ON CONFLICT(roi_id) DO UPDATE SET is_open = ?, updated_at = datetime('now')
+      `).run(queueZoneId, venueId, isOpenVal, isOpenVal);
       // Reload open lanes
       this.loadOpenLanes(venueId);
       console.log(`📊 Lane ${queueZoneId.substring(0, 8)} set to ${isOpen ? 'OPEN' : 'CLOSED'}`);

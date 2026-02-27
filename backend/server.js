@@ -586,6 +586,19 @@ app.get('/api/venues/:venueId/checkout/live-status', (req, res) => {
     const queueRois = dedupeByName(rois.filter(r => r.name && r.name.includes('- Queue')));
     const serviceRois = dedupeByName(rois.filter(r => r.name && r.name.includes('- Service')));
     
+    // Build open/closed map from zone_settings, keyed by ROI NAME (not ID)
+    // This handles the case where zone_settings has old ROI IDs but live-status uses new deduped IDs
+    const zoneSettingsRows = db.prepare(`
+      SELECT r.name, zs.is_open 
+      FROM zone_settings zs 
+      JOIN regions_of_interest r ON r.id = zs.roi_id 
+      WHERE zs.venue_id = ?
+    `).all(venueId);
+    const openByName = new Map();
+    for (const row of zoneSettingsRows) {
+      openByName.set(row.name, row.is_open === 1);
+    }
+    
     // Calculate center X for each queue ROI for sorting
     const getCenter = (roi) => {
       try {
@@ -612,8 +625,8 @@ app.get('/api/venues/:venueId/checkout/live-status', (req, res) => {
       // Get current occupancy for the queue ROI
       const queueCount = trackAggregator.getZoneOccupancy(queueRoi.id) || 0;
       
-      // Use trajectoryStorage.openLanes as source of truth for lane open/closed state
-      const isOpen = trajectoryStorage.isLaneOpen(queueRoi.id);
+      // Look up open/closed state by ROI name (resilient to stale ROI IDs in zone_settings)
+      const isOpen = openByName.has(queueRoi.name) ? openByName.get(queueRoi.name) : true;
       
       if (isOpen) totalQueueCount += queueCount;
       
