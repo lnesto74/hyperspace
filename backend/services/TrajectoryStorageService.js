@@ -1290,31 +1290,59 @@ export class TrajectoryStorageService extends EventEmitter {
    * Sync JSON files to SQLite database
    */
   syncToDatabase() {
+    // Process position files one-at-a-time with setImmediate between each
+    // so track emissions (50ms interval) can fire between file inserts
     const _t0 = Date.now();
-    // Step 1: Sync positions (yielded)
-    setImmediate(() => {
-      try {
-        const _t1 = Date.now();
-        this.syncPositionFiles();
-        const _posMs = Date.now() - _t1;
-        
-        // Step 2: Sync visits (yielded)
+    const files = fs.readdirSync(this.dataDir).filter(f => f.startsWith('positions_'));
+    const MAX_FILES = 12;
+    const batch = files.slice(0, MAX_FILES);
+    
+    if (files.length > MAX_FILES) {
+      console.warn(`⚠️ syncPositionFiles: ${files.length} accumulated files (processing ${MAX_FILES})`);
+    }
+    
+    const insertStmt = this.db.prepare(`
+      INSERT INTO track_positions (venue_id, track_key, timestamp, position_x, position_z, velocity_x, velocity_z, roi_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    const insertMany = this.db.transaction((positions, venueId) => {
+      for (const pos of positions) {
+        insertStmt.run(venueId, pos.trackKey, pos.timestamp, pos.x, pos.z, pos.vx, pos.vz, pos.roiIds?.[0] || null);
+      }
+    });
+    
+    let fileIdx = 0;
+    const processNext = () => {
+      if (fileIdx >= batch.length) {
+        // All position files done — now sync visits
         setImmediate(() => {
           try {
             const _t2 = Date.now();
             this.syncVisitFiles();
-            const _visitMs = Date.now() - _t2;
-            
             const _total = Date.now() - _t0;
-            if (_total > 50) console.warn(`⏱️ syncToDatabase took ${_total}ms (positions=${_posMs}ms, visits=${_visitMs}ms)`);
-          } catch (err) {
-            console.error('Failed to sync visits:', err);
-          }
+            if (_total > 50) console.warn(`⏱️ syncToDatabase took ${_total}ms (${batch.length} pos files, visits=${Date.now() - _t2}ms)`);
+          } catch (err) { console.error('Failed to sync visits:', err); }
         });
-      } catch (err) {
-        console.error('Failed to sync positions:', err);
+        return;
       }
-    });
+      
+      const file = batch[fileIdx++];
+      const filepath = path.join(this.dataDir, file);
+      try {
+        const content = fs.readFileSync(filepath, 'utf-8');
+        const data = JSON.parse(content);
+        insertMany(data.positions, data.venueId);
+        fs.unlinkSync(filepath);
+      } catch (err) {
+        console.error(`Failed to process position file ${file}:`, err);
+      }
+      
+      // Yield event loop between files so tracks keep emitting
+      setImmediate(processNext);
+    };
+    
+    // Start the chain
+    setImmediate(processNext);
   }
 
   /**

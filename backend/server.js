@@ -946,6 +946,13 @@ app.get('/api/profit-radar/insights', (req, res) => {
 // Setup point cloud WebSocket proxy
 setupPointCloudWebSocket(httpServer);
 
+// Diagnostic: when does the event loop first become available?
+const _syncSetupDone = Date.now();
+console.log(`⏱️ STARTUP: all sync setup done in ${_syncSetupDone - _startupT0}ms`);
+setImmediate(() => {
+  console.log(`⏱️ STARTUP: first event loop tick at +${Date.now() - _syncSetupDone}ms after sync setup`);
+});
+
 // Start server
 httpServer.listen(PORT, async () => {
   // Auto-configure edge simulator backendUrl so SimV2 can fetch zone data
