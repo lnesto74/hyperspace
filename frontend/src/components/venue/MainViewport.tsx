@@ -3215,14 +3215,17 @@ export default function MainViewport({
   }, [isInsightMode, selectedEpisode])
   
   // Toggle layer visibility - Tracks
-  // Also notify backend to throttle KPI processing when tracks are visible (demo mode)
   const { setTrackVisibility } = useTracking()
   useEffect(() => {
     trackMeshesRef.current.forEach(group => {
       group.visible = showTracksLayer
     })
-    setTrackVisibility(showTracksLayer)
   }, [showTracksLayer, tracks])
+  // Notify backend to throttle KPI processing when tracks are visible (demo mode)
+  // Separate effect so it only fires on toggle, not every track update
+  useEffect(() => {
+    setTrackVisibility(showTracksLayer)
+  }, [showTracksLayer])
   
   // Toggle pan mode
   const togglePanMode = useCallback(() => {

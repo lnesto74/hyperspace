@@ -195,8 +195,10 @@ trackingNamespace.on('connection', (socket) => {
   console.log(`📡 Tracking client connected: ${socket.id}`);
 
   socket.on('track_visibility', ({ visible }) => {
-    trackVisibilityMode = visible;
-    console.log(`📊 Track visibility mode: ${visible ? 'ON (demo - KPI throttled)' : 'OFF (full KPI processing)'}`);
+    if (trackVisibilityMode !== visible) {
+      trackVisibilityMode = visible;
+      console.log(`📊 Track visibility mode: ${visible ? 'ON (demo - KPI throttled)' : 'OFF (full KPI processing)'}`);
+    }
   });
 
   socket.on('subscribe', ({ venueId }) => {
