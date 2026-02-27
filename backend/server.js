@@ -154,6 +154,7 @@ trackAggregator.on('tracks', (data) => {
   
   // Record KPI data asynchronously using setImmediate to not block track emission
   setImmediate(() => {
+    const _t0 = Date.now();
     const parsedRois = getCachedRois(data.venueId);
     
     for (const track of data.tracks) {
@@ -168,6 +169,8 @@ trackAggregator.on('tracks', (data) => {
       const tracksMap = new Map(data.tracks.map(t => [t.trackKey, t]));
       trajectoryStorage.recordOccupancy(data.venueId, parsedRois, tracksMap);
     }
+    const _elapsed = Date.now() - _t0;
+    if (_elapsed > 50) console.warn(`⏱️ KPI batch took ${_elapsed}ms (${data.tracks.length} tracks, ${parsedRois.length} ROIs)`);
   });
 });
 

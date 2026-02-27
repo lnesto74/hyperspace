@@ -923,7 +923,19 @@ export class TrajectoryStorageService extends EventEmitter {
     // Run initial cleanup
     setTimeout(() => this.cleanupOldData(), 10000);
     
-    console.log('📊 Trajectory storage service started');
+    // Event loop lag monitor — logs when event loop is blocked >100ms
+    let lastTick = Date.now();
+    this._lagInterval = setInterval(() => {
+      const now = Date.now();
+      const lag = now - lastTick - 2000; // interval is 2s, anything above = lag
+      if (lag > 100) {
+        console.warn(`⚠️ EVENT LOOP LAG: ${lag}ms (expected 0ms)`);
+      }
+      lastTick = now;
+    }, 2000);
+    this._lagInterval.unref(); // don't keep process alive
+    
+    console.log('📊 Trajectory storage service started (with perf monitoring)');
   }
 
   stop() {
@@ -956,7 +968,8 @@ export class TrajectoryStorageService extends EventEmitter {
    * IMPORTANT: Aggregates data BEFORE deleting to preserve historical KPIs
    */
   cleanupOldData() {
-    const cutoffTime = Date.now() - this.DATA_RETENTION_MS;
+    const _t0 = Date.now();
+    const cutoffTime = _t0 - this.DATA_RETENTION_MS;
     
     try {
       // STEP 1: Aggregate hourly data BEFORE deleting raw data
@@ -1015,6 +1028,8 @@ export class TrajectoryStorageService extends EventEmitter {
       
       // WAL checkpoint keeps DB size manageable — no VACUUM needed
       // (VACUUM blocks the entire DB connection and can cause health check timeouts)
+      const _elapsed = Date.now() - _t0;
+      if (_elapsed > 50) console.warn(`⏱️ cleanupOldData took ${_elapsed}ms`);
     } catch (err) {
       console.error('Failed to cleanup old data:', err);
     }
@@ -1218,9 +1233,12 @@ export class TrajectoryStorageService extends EventEmitter {
   flushBuffer() {
     if (this.buffer.size === 0) return;
     
-    const timestamp = Date.now();
+    const _t0 = Date.now();
+    const timestamp = _t0;
+    let totalPositions = 0;
     
     for (const [venueId, positions] of this.buffer.entries()) {
+      totalPositions += positions.length;
       if (positions.length === 0) continue;
       
       const filename = `positions_${venueId}_${timestamp}.json`;
@@ -1239,6 +1257,8 @@ export class TrajectoryStorageService extends EventEmitter {
         console.error('Failed to flush trajectory buffer:', err);
       }
     }
+    const _elapsed = Date.now() - _t0;
+    if (_elapsed > 50) console.warn(`⏱️ flushBuffer took ${_elapsed}ms (${totalPositions} positions)`);
   }
 
   /**
@@ -1261,16 +1281,25 @@ export class TrajectoryStorageService extends EventEmitter {
    * Sync JSON files to SQLite database
    */
   syncToDatabase() {
+    const _t0 = Date.now();
     try {
       // Sync position files
+      const _t1 = Date.now();
       this.syncPositionFiles();
+      const _posMs = Date.now() - _t1;
       
       // Sync visit files
+      const _t2 = Date.now();
       this.syncVisitFiles();
+      const _visitMs = Date.now() - _t2;
       
       // Update daily aggregates
+      const _t3 = Date.now();
       this.updateDailyAggregates();
+      const _aggMs = Date.now() - _t3;
       
+      const _total = Date.now() - _t0;
+      if (_total > 50) console.warn(`⏱️ syncToDatabase took ${_total}ms (positions=${_posMs}ms, visits=${_visitMs}ms, aggregates=${_aggMs}ms)`);
     } catch (err) {
       console.error('Failed to sync to database:', err);
     }
@@ -1572,6 +1601,7 @@ export class TrajectoryStorageService extends EventEmitter {
   recordOccupancy(venueId, rois, tracks) {
     try {
       const now = Date.now();
+      const _t0 = now;
       
       const insertStmt = this.db.prepare(`
         INSERT INTO zone_occupancy (venue_id, roi_id, timestamp, occupancy_count)
@@ -1591,6 +1621,8 @@ export class TrajectoryStorageService extends EventEmitter {
         // Evaluate alert rules for this ROI
         this.evaluateAlertRules(venueId, roi.id, roi.name, { occupancy: count });
       }
+      const _elapsed = Date.now() - _t0;
+      if (_elapsed > 50) console.warn(`⏱️ recordOccupancy took ${_elapsed}ms (${rois.length} rois, ${tracks.size} tracks)`);
     } catch (err) {
       console.error('Failed to record occupancy:', err.message);
     }
