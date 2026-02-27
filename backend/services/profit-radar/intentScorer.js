@@ -95,8 +95,8 @@ export class IntentScorer {
 
   start() {
     if (this.interval) return;
-    this.interval = setInterval(() => this.tick(), 1000); // 1Hz
-    console.log('📡 IntentScorer started (1Hz)');
+    this.interval = setInterval(() => this.tick(), 3000); // 0.33Hz (intent scores are smoothed, don't need 1s precision)
+    console.log('📡 IntentScorer started (0.33Hz)');
   }
 
   stop() {

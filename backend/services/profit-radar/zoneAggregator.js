@@ -39,8 +39,8 @@ export class ZoneAggregator {
 
   start() {
     if (this.interval) return;
-    this.interval = setInterval(() => this.tick(), 2000); // 0.5Hz
-    console.log('📡 ZoneAggregator started (0.5Hz)');
+    this.interval = setInterval(() => this.tick(), 5000); // 0.2Hz (zone field updates don't need sub-second)
+    console.log('📡 ZoneAggregator started (0.2Hz)');
   }
 
   stop() {

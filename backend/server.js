@@ -152,10 +152,6 @@ trackAggregator.on('tracks', (data) => {
   // CRITICAL: Emit tracks FIRST, don't block with KPI recording
   io.of('/tracking').to(`venue:${data.venueId}`).emit('tracks', data);
   
-  // Skip heavy KPI processing when tracks are visible (demo/debug mode)
-  // Track emission to frontend already happened above — this only affects backend recording
-  if (trackVisibilityMode) return;
-  
   // Record KPI data asynchronously using setImmediate to not block track emission
   setImmediate(() => {
     const _t0 = Date.now();
@@ -165,10 +161,10 @@ trackAggregator.on('tracks', (data) => {
       trajectoryStorage.recordTrackPosition(data.venueId, track, parsedRois);
     }
     
-    // Record occupancy snapshot every 2 seconds
+    // Record occupancy snapshot every 5 seconds (reduced from 2s to lower PIP load)
     const now = Date.now();
     const lastRecord = lastOccupancyRecordTime.get(data.venueId) || 0;
-    if (now - lastRecord >= 2000) {
+    if (now - lastRecord >= 5000) {
       lastOccupancyRecordTime.set(data.venueId, now);
       const tracksMap = new Map(data.tracks.map(t => [t.trackKey, t]));
       trajectoryStorage.recordOccupancy(data.venueId, parsedRois, tracksMap);
@@ -185,35 +181,11 @@ trackAggregator.on('track_removed', (data) => {
   trajectoryStorage.endTrackSessions(data.trackKey);
 });
 
-// Track visibility mode: when true, skip heavy KPI processing for smooth trajectory visualization
-let trackVisibilityMode = false;
-
 // Socket.IO tracking namespace
 const trackingNamespace = io.of('/tracking');
 
 trackingNamespace.on('connection', (socket) => {
   console.log(`📡 Tracking client connected: ${socket.id}`);
-
-  socket.on('track_visibility', ({ visible }) => {
-    if (trackVisibilityMode !== visible) {
-      trackVisibilityMode = visible;
-      trajectoryStorage.demoMode = visible;
-      if (visible) {
-        // DEMO MODE: Stop all heavy background services
-        intentScorer.stop();
-        zoneAggregator.stop();
-        behaviorClusterer.stop();
-        profitRadarEngine.stop();
-      } else {
-        // NORMAL MODE: Restart services
-        intentScorer.start();
-        zoneAggregator.start();
-        behaviorClusterer.start();
-        profitRadarEngine.start();
-      }
-      console.log(`📊 Track visibility mode: ${visible ? 'ON (demo - all background services paused)' : 'OFF (full processing resumed)'}`);
-    }
-  });
 
   socket.on('subscribe', ({ venueId }) => {
     socket.join(`venue:${venueId}`);

@@ -10,6 +10,16 @@ import { AXIS_NAMES } from './intentScorer.js';
 
 function dist2D(a, b) { return Math.sqrt((a.x - b.x) ** 2 + (a.z - b.z) ** 2); }
 
+/** Sample every Nth point from trail to reduce PIP test count */
+function sampleTrail(trail, step = 5) {
+  if (!trail || trail.length <= step) return trail;
+  const sampled = [];
+  for (let i = 0; i < trail.length; i += step) sampled.push(trail[i]);
+  // Always include last point
+  if (sampled[sampled.length - 1] !== trail[trail.length - 1]) sampled.push(trail[trail.length - 1]);
+  return sampled;
+}
+
 function getDominantAxis(axes) {
   let best = AXIS_NAMES[0], max = 0;
   for (const a of AXIS_NAMES) {
@@ -30,10 +40,12 @@ function classifyJourney(trail, rois) {
     if (speed < 0.1) { stopCount++; totalDwell += 0.1; }
   }
 
+  // Use sampled trail for PIP tests (zone membership doesn't need per-point precision)
+  const sampled = sampleTrail(trail);
   if (rois && rois.length > 0) {
-    for (const pt of trail) {
+    for (const pt of sampled) {
       for (const roi of rois) {
-        if (pointInPoly(pt, roi.vertices)) { zonesVisited.add(roi.id); }
+        if (pointInPoly(pt, roi.vertices)) { zonesVisited.add(roi.id); break; }
       }
     }
   }
@@ -89,10 +101,11 @@ function buildFingerprint(trail, axes, rois) {
   const dominant = getDominantAxis(axes);
   const journeyType = classifyJourney(trail, rois);
 
-  // Zone set (sorted IDs visited — order-independent)
+  // Zone set (sorted IDs visited — order-independent, sampled for performance)
   const zonesVisited = new Set();
   if (rois && rois.length > 0 && trail) {
-    for (const pt of trail) {
+    const sampled = sampleTrail(trail);
+    for (const pt of sampled) {
       for (const roi of rois) {
         if (pointInPoly(pt, roi.vertices)) { zonesVisited.add(roi.id); break; }
       }
@@ -133,8 +146,8 @@ export class BehaviorClusterer {
 
   start() {
     if (this.interval) return;
-    this.interval = setInterval(() => this.tick(), 2000); // 0.5Hz
-    console.log('📡 BehaviorClusterer started (0.5Hz, trajectory-similarity)');
+    this.interval = setInterval(() => this.tick(), 10000); // 0.1Hz (behaviour patterns change slowly)
+    console.log('📡 BehaviorClusterer started (0.1Hz, trajectory-similarity)');
   }
 
   stop() {
@@ -251,22 +264,23 @@ export class BehaviorClusterer {
       totalDwell += dwell;
       totalDuration += trail.length * 0.1; // ~10Hz sample rate
 
-      // Compute per-zone dwell for this member
+      // Compute per-zone dwell for this member (use sampled trail for PIP performance)
+      const sampledTrail = sampleTrail(trail);
+      const sampleStep = trail.length > 5 ? Math.round(trail.length / sampledTrail.length) : 1;
       let currentZone = null;
       let zoneEnterIdx = 0;
-      for (let i = 0; i < trail.length; i++) {
+      for (let i = 0; i < sampledTrail.length; i++) {
         let inZone = null;
         for (const roi of this.rois) {
-          if (pointInPoly(trail[i], roi.vertices)) {
+          if (pointInPoly(sampledTrail[i], roi.vertices)) {
             inZone = roi.name || roi.id;
             break;
           }
         }
         if (inZone !== currentZone) {
-          // Exiting previous zone — compute dwell
           if (currentZone) {
-            const dwellSec = (i - zoneEnterIdx) * 0.1;
-            if (dwellSec >= 1) { // Count stops ≥1s
+            const dwellSec = (i - zoneEnterIdx) * sampleStep * 0.1;
+            if (dwellSec >= 1) {
               const prev = zoneDwellMap.get(currentZone) || { totalDwell: 0, count: 0 };
               prev.totalDwell += dwellSec;
               prev.count += 1;
@@ -277,9 +291,8 @@ export class BehaviorClusterer {
           zoneEnterIdx = i;
         }
       }
-      // Close last zone
       if (currentZone) {
-        const dwellSec = (trail.length - zoneEnterIdx) * 0.1;
+        const dwellSec = (sampledTrail.length - zoneEnterIdx) * sampleStep * 0.1;
         if (dwellSec >= 1) {
           const prev = zoneDwellMap.get(currentZone) || { totalDwell: 0, count: 0 };
           prev.totalDwell += dwellSec;
@@ -288,7 +301,7 @@ export class BehaviorClusterer {
         }
       }
 
-      const seq = getZoneSequence(trail, this.rois);
+      const seq = getZoneSequence(sampledTrail, this.rois);
       seq.forEach(z => allZones.add(z.roiName || z.roiId));
 
       const jt = classifyJourney(trail, this.rois);

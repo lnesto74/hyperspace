@@ -50,9 +50,6 @@ export class TrajectoryStorageService extends EventEmitter {
     // Track last sample time per track to avoid over-sampling
     this.lastSampleTime = new Map();
     
-    // Demo mode: when true, skip heavy operations (sync, cleanup) for smooth trajectory visualization
-    this.demoMode = false;
-    
     // Ensure data directory exists
     if (!fs.existsSync(this.dataDir)) {
       fs.mkdirSync(this.dataDir, { recursive: true });
@@ -915,24 +912,16 @@ export class TrajectoryStorageService extends EventEmitter {
     this.isRunning = true;
     
     // Start buffer flush interval
-    this.flushInterval = setInterval(() => {
-      if (!this.demoMode) this.flushBuffer();
-    }, this.BUFFER_FLUSH_MS);
+    this.flushInterval = setInterval(() => this.flushBuffer(), this.BUFFER_FLUSH_MS);
     
     // Start DB sync interval
-    this.syncInterval = setInterval(() => {
-      if (!this.demoMode) this.syncToDatabase();
-    }, this.DB_SYNC_MS);
+    this.syncInterval = setInterval(() => this.syncToDatabase(), this.DB_SYNC_MS);
     
     // Start cleanup interval to prevent database bloat
-    this.cleanupInterval = setInterval(() => {
-      if (!this.demoMode) this.cleanupOldData();
-    }, this.CLEANUP_MS);
+    this.cleanupInterval = setInterval(() => this.cleanupOldData(), this.CLEANUP_MS);
     
-    // Run initial cleanup (delayed, skipped if in demo mode)
-    setTimeout(() => {
-      if (!this.demoMode) this.cleanupOldData();
-    }, 30000);
+    // Run initial cleanup (delayed to not block startup)
+    setTimeout(() => this.cleanupOldData(), 30000);
     
     // Event loop lag monitor — logs when event loop is blocked >100ms
     let lastTick = Date.now();
@@ -979,71 +968,72 @@ export class TrajectoryStorageService extends EventEmitter {
    * IMPORTANT: Aggregates data BEFORE deleting to preserve historical KPIs
    */
   cleanupOldData() {
+    // Run cleanup as async chain — yields event loop between steps so tracks keep flowing
     const _t0 = Date.now();
     const cutoffTime = _t0 - this.DATA_RETENTION_MS;
     
+    // Step 1: Aggregate hourly data
     try {
-      // STEP 1: Aggregate hourly data BEFORE deleting raw data
       this.aggregateHourlyData(cutoffTime);
-      
-      // STEP 2: Update daily aggregates
-      this.updateDailyAggregates();
-      
-      // STEP 3: Now safe to delete old raw data (aggregated data preserved)
-      const posResult = this.db.prepare(`
-        DELETE FROM track_positions WHERE timestamp < ?
-      `).run(cutoffTime);
-      
-      // Delete old zone occupancy snapshots
-      const occResult = this.db.prepare(`
-        DELETE FROM zone_occupancy WHERE timestamp < ?
-      `).run(cutoffTime);
-      
-      // Delete old activity ledger entries (keep 7 days)
-      const ledgerCutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;
-      const ledgerResult = this.db.prepare(`
-        DELETE FROM activity_ledger WHERE timestamp < ? AND acknowledged = 1
-      `).run(ledgerCutoff);
-      
-      // Clean up stale visit sessions in memory (older than 1 hour)
-      const sessionCutoff = Date.now() - 60 * 60 * 1000;
-      let staleSessions = 0;
-      for (const [key, session] of this.visitSessions.entries()) {
-        if (session.lastSeen < sessionCutoff) {
-          this.visitSessions.delete(key);
-          staleSessions++;
-        }
-      }
-      
-      // Clean up stale queue sessions
-      let staleQueues = 0;
-      for (const [key, session] of this.queueSessions.entries()) {
-        const lastActivity = session.lastSeenInService || session.lastSeenInQueue || session.queueEntryTime;
-        if (lastActivity < sessionCutoff) {
-          this.queueSessions.delete(key);
-          staleQueues++;
-        }
-      }
-      
-      // Clean up lastSampleTime map
-      for (const [trackKey, time] of this.lastSampleTime.entries()) {
-        if (time < sessionCutoff) {
-          this.lastSampleTime.delete(trackKey);
-        }
-      }
-      
-      const totalDeleted = posResult.changes + occResult.changes + ledgerResult.changes;
-      if (totalDeleted > 0 || staleSessions > 0 || staleQueues > 0) {
-        console.log(`🧹 Cleanup: ${posResult.changes} positions, ${occResult.changes} occupancy, ${ledgerResult.changes} ledger, ${staleSessions} stale sessions, ${staleQueues} stale queues`);
-      }
-      
-      // WAL checkpoint keeps DB size manageable — no VACUUM needed
-      // (VACUUM blocks the entire DB connection and can cause health check timeouts)
-      const _elapsed = Date.now() - _t0;
-      if (_elapsed > 50) console.warn(`⏱️ cleanupOldData took ${_elapsed}ms`);
-    } catch (err) {
-      console.error('Failed to cleanup old data:', err);
-    }
+    } catch (err) { console.error('Cleanup step 1 (hourly agg) failed:', err); }
+    const _s1 = Date.now() - _t0;
+    
+    // Yield event loop, then continue with remaining steps
+    setImmediate(() => {
+      try {
+        // Step 2: Update daily aggregates
+        const _t2 = Date.now();
+        this.updateDailyAggregates();
+        const _s2 = Date.now() - _t2;
+        
+        setImmediate(() => {
+          try {
+            // Step 3: Chunked deletes (limit rows per batch to avoid long locks)
+            const CHUNK = 50000;
+            const _t3 = Date.now();
+            
+            let posDeleted = 0;
+            let r;
+            do {
+              r = this.db.prepare(`DELETE FROM track_positions WHERE rowid IN (SELECT rowid FROM track_positions WHERE timestamp < ? LIMIT ?)`).run(cutoffTime, CHUNK);
+              posDeleted += r.changes;
+            } while (r.changes === CHUNK);
+            
+            let occDeleted = 0;
+            do {
+              r = this.db.prepare(`DELETE FROM zone_occupancy WHERE rowid IN (SELECT rowid FROM zone_occupancy WHERE timestamp < ? LIMIT ?)`).run(cutoffTime, CHUNK);
+              occDeleted += r.changes;
+            } while (r.changes === CHUNK);
+            
+            const ledgerCutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;
+            const ledgerResult = this.db.prepare(`DELETE FROM activity_ledger WHERE timestamp < ? AND acknowledged = 1`).run(ledgerCutoff);
+            
+            const _s3 = Date.now() - _t3;
+            
+            // Step 4: Clean up in-memory maps (fast, no DB)
+            const sessionCutoff = Date.now() - 60 * 60 * 1000;
+            let staleSessions = 0, staleQueues = 0;
+            for (const [key, session] of this.visitSessions.entries()) {
+              if (session.lastSeen < sessionCutoff) { this.visitSessions.delete(key); staleSessions++; }
+            }
+            for (const [key, session] of this.queueSessions.entries()) {
+              const lastActivity = session.lastSeenInService || session.lastSeenInQueue || session.queueEntryTime;
+              if (lastActivity < sessionCutoff) { this.queueSessions.delete(key); staleQueues++; }
+            }
+            for (const [trackKey, time] of this.lastSampleTime.entries()) {
+              if (time < sessionCutoff) this.lastSampleTime.delete(trackKey);
+            }
+            
+            const totalDeleted = posDeleted + occDeleted + ledgerResult.changes;
+            if (totalDeleted > 0 || staleSessions > 0 || staleQueues > 0) {
+              console.log(`🧹 Cleanup: ${posDeleted} positions, ${occDeleted} occupancy, ${ledgerResult.changes} ledger, ${staleSessions} stale sessions, ${staleQueues} stale queues`);
+            }
+            const _total = Date.now() - _t0;
+            console.log(`⏱️ cleanupOldData total=${_total}ms (hourlyAgg=${_s1}ms, dailyAgg=${_s2}ms, deletes=${_s3}ms)`);
+          } catch (err) { console.error('Cleanup step 3 (deletes) failed:', err); }
+        });
+      } catch (err) { console.error('Cleanup step 2 (daily agg) failed:', err); }
+    });
   }
 
   /**
