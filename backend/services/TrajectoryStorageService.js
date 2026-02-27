@@ -386,19 +386,38 @@ export class TrajectoryStorageService extends EventEmitter {
    */
   loadZoneLinks(venueId) {
     try {
-      // First try to load manually configured links
+      // Clear stale links to prevent phantom references to deleted/recreated ROIs
+      this.zoneLinks.clear();
+      
+      // Get current ROI IDs to validate links against
+      const existingRoiIds = new Set(
+        this.db.prepare('SELECT id FROM regions_of_interest WHERE venue_id = ?').all(venueId).map(r => r.id)
+      );
+      
+      // Load manually configured links, validating both ends still exist
       const links = this.db.prepare(`
         SELECT zs.roi_id as queue_zone_id, zs.linked_service_zone_id as service_zone_id
         FROM zone_settings zs
         WHERE zs.venue_id = ? AND zs.linked_service_zone_id IS NOT NULL
       `).all(venueId);
       
+      let validCount = 0;
+      let staleCount = 0;
       for (const link of links) {
-        this.zoneLinks.set(link.queue_zone_id, link.service_zone_id);
+        if (existingRoiIds.has(link.queue_zone_id) && existingRoiIds.has(link.service_zone_id)) {
+          this.zoneLinks.set(link.queue_zone_id, link.service_zone_id);
+          validCount++;
+        } else {
+          staleCount++;
+        }
       }
       
-      // Auto-detect queue→service links based on zone names and colors
-      if (links.length === 0) {
+      if (staleCount > 0) {
+        console.log(`📊 Purged ${staleCount} stale zone links (ROIs no longer exist)`);
+      }
+      
+      // Auto-detect if no valid links found (handles fresh ROIs or stale DB)
+      if (validCount === 0) {
         this.autoDetectZoneLinks(venueId);
       }
       
@@ -500,6 +519,31 @@ export class TrajectoryStorageService extends EventEmitter {
         SELECT roi_id FROM zone_settings WHERE venue_id = ? AND is_open = 1
       `).all(venueId);
       this.openLanes = new Set(rows.map(r => r.roi_id));
+      
+      // Ensure all queue zones from zoneLinks are open by default if they have no explicit setting
+      // This handles newly auto-detected queue zones that don't yet have zone_settings rows
+      const closedIds = new Set(
+        this.db.prepare(`SELECT roi_id FROM zone_settings WHERE venue_id = ? AND is_open = 0`).all(venueId).map(r => r.roi_id)
+      );
+      
+      let autoOpened = 0;
+      for (const queueZoneId of this.zoneLinks.keys()) {
+        if (!this.openLanes.has(queueZoneId) && !closedIds.has(queueZoneId)) {
+          // Queue zone has no zone_settings row at all — default to open and persist
+          this.openLanes.add(queueZoneId);
+          try {
+            this.db.prepare(`
+              INSERT INTO zone_settings (roi_id, venue_id, is_open) VALUES (?, ?, 1)
+              ON CONFLICT(roi_id) DO UPDATE SET is_open = 1, updated_at = datetime('now')
+            `).run(queueZoneId, venueId);
+          } catch (e) { /* ignore upsert failure */ }
+          autoOpened++;
+        }
+      }
+      
+      if (autoOpened > 0) {
+        console.log(`📊 Auto-opened ${autoOpened} queue zones missing from zone_settings`);
+      }
       console.log(`📊 Loaded ${this.openLanes.size} open lanes for queue tracking`);
     } catch (err) {
       console.error('Failed to load open lanes:', err);
