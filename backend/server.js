@@ -152,6 +152,10 @@ trackAggregator.on('tracks', (data) => {
   // CRITICAL: Emit tracks FIRST, don't block with KPI recording
   io.of('/tracking').to(`venue:${data.venueId}`).emit('tracks', data);
   
+  // Skip heavy KPI processing when tracks are visible (demo/debug mode)
+  // Track emission to frontend already happened above — this only affects backend recording
+  if (trackVisibilityMode) return;
+  
   // Record KPI data asynchronously using setImmediate to not block track emission
   setImmediate(() => {
     const _t0 = Date.now();
@@ -181,11 +185,19 @@ trackAggregator.on('track_removed', (data) => {
   trajectoryStorage.endTrackSessions(data.trackKey);
 });
 
+// Track visibility mode: when true, skip heavy KPI processing for smooth trajectory visualization
+let trackVisibilityMode = false;
+
 // Socket.IO tracking namespace
 const trackingNamespace = io.of('/tracking');
 
 trackingNamespace.on('connection', (socket) => {
   console.log(`📡 Tracking client connected: ${socket.id}`);
+
+  socket.on('track_visibility', ({ visible }) => {
+    trackVisibilityMode = visible;
+    console.log(`📊 Track visibility mode: ${visible ? 'ON (demo - KPI throttled)' : 'OFF (full KPI processing)'}`);
+  });
 
   socket.on('subscribe', ({ venueId }) => {
     socket.join(`venue:${venueId}`);

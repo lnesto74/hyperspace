@@ -16,6 +16,7 @@ interface TrackingContextType {
   unsubscribe: (venueId: string) => void
   setReplayMode: (enabled: boolean) => void
   setReplayTracks: (tracks: Map<string, TrackWithTrail>) => void
+  setTrackVisibility: (visible: boolean) => void
 }
 
 const TrackingContext = createContext<TrackingContextType | null>(null)
@@ -179,6 +180,10 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
     setReplayTracksState(newTracks)
   }, [])
 
+  const setTrackVisibility = useCallback((visible: boolean) => {
+    socketRef.current?.emit('track_visibility', { visible })
+  }, [])
+
   return (
     <TrackingContext.Provider value={{ 
       tracks, 
@@ -187,7 +192,8 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
       subscribe, 
       unsubscribe,
       setReplayMode,
-      setReplayTracks
+      setReplayTracks,
+      setTrackVisibility
     }}>
       {children}
     </TrackingContext.Provider>

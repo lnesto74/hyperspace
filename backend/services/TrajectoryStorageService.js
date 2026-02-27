@@ -1293,13 +1293,11 @@ export class TrajectoryStorageService extends EventEmitter {
       this.syncVisitFiles();
       const _visitMs = Date.now() - _t2;
       
-      // Update daily aggregates
-      const _t3 = Date.now();
-      this.updateDailyAggregates();
-      const _aggMs = Date.now() - _t3;
+      // NOTE: updateDailyAggregates removed from here (took 2.7s, blocked event loop)
+      // It runs in cleanupOldData every 15 minutes instead — daily aggregates don't need real-time updates
       
       const _total = Date.now() - _t0;
-      if (_total > 50) console.warn(`⏱️ syncToDatabase took ${_total}ms (positions=${_posMs}ms, visits=${_visitMs}ms, aggregates=${_aggMs}ms)`);
+      if (_total > 50) console.warn(`⏱️ syncToDatabase took ${_total}ms (positions=${_posMs}ms, visits=${_visitMs}ms)`);
     } catch (err) {
       console.error('Failed to sync to database:', err);
     }
