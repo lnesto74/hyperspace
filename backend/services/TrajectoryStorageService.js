@@ -37,7 +37,7 @@ export class TrajectoryStorageService extends EventEmitter {
     this.BUFFER_FLUSH_MS = 5000;      // Flush buffer to JSON every 5 seconds
     this.DB_SYNC_MS = 60000;          // Sync JSON to DB every minute
     this.CLEANUP_MS = 15 * 60 * 1000; // Cleanup old data every 15 minutes
-    this.POSITION_SAMPLE_MS = 1000;   // Sample position every 1 second (not every frame)
+    this.POSITION_SAMPLE_MS = 3000;   // Sample position every 3 seconds (sufficient for heatmaps)
     this.VISIT_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes visit timeout
     // Default thresholds (fallback if zone/venue settings not found)
     this.DEFAULT_DWELL_THRESHOLD_MS = 60 * 1000;       // 60 seconds default
@@ -1285,25 +1285,30 @@ export class TrajectoryStorageService extends EventEmitter {
    */
   syncToDatabase() {
     const _t0 = Date.now();
-    try {
-      // Sync position files
-      const _t1 = Date.now();
-      this.syncPositionFiles();
-      const _posMs = Date.now() - _t1;
-      
-      // Sync visit files
-      const _t2 = Date.now();
-      this.syncVisitFiles();
-      const _visitMs = Date.now() - _t2;
-      
-      // NOTE: updateDailyAggregates removed from here (took 2.7s, blocked event loop)
-      // It runs in cleanupOldData every 15 minutes instead — daily aggregates don't need real-time updates
-      
-      const _total = Date.now() - _t0;
-      if (_total > 50) console.warn(`⏱️ syncToDatabase took ${_total}ms (positions=${_posMs}ms, visits=${_visitMs}ms)`);
-    } catch (err) {
-      console.error('Failed to sync to database:', err);
-    }
+    // Step 1: Sync positions (yielded)
+    setImmediate(() => {
+      try {
+        const _t1 = Date.now();
+        this.syncPositionFiles();
+        const _posMs = Date.now() - _t1;
+        
+        // Step 2: Sync visits (yielded)
+        setImmediate(() => {
+          try {
+            const _t2 = Date.now();
+            this.syncVisitFiles();
+            const _visitMs = Date.now() - _t2;
+            
+            const _total = Date.now() - _t0;
+            if (_total > 50) console.warn(`⏱️ syncToDatabase took ${_total}ms (positions=${_posMs}ms, visits=${_visitMs}ms)`);
+          } catch (err) {
+            console.error('Failed to sync visits:', err);
+          }
+        });
+      } catch (err) {
+        console.error('Failed to sync positions:', err);
+      }
+    });
   }
 
   /**
