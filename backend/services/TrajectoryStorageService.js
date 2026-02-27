@@ -1290,11 +1290,13 @@ export class TrajectoryStorageService extends EventEmitter {
    * Sync JSON files to SQLite database
    */
   syncToDatabase() {
-    // Process position files one-at-a-time with setImmediate between each
-    // so track emissions (50ms interval) can fire between file inserts
+    // Process position files one-at-a-time, chunking large files into
+    // 500-row transactions with setImmediate between each chunk.
+    // This keeps each blocking slice under ~30ms so tracks keep emitting.
     const _t0 = Date.now();
     const files = fs.readdirSync(this.dataDir).filter(f => f.startsWith('positions_'));
     const MAX_FILES = 12;
+    const CHUNK_SIZE = 500; // max rows per transaction (~30ms at 60µs/row)
     const batch = files.slice(0, MAX_FILES);
     
     if (files.length > MAX_FILES) {
@@ -1305,44 +1307,71 @@ export class TrajectoryStorageService extends EventEmitter {
       INSERT INTO track_positions (venue_id, track_key, timestamp, position_x, position_z, velocity_x, velocity_z, roi_id)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `);
-    const insertMany = this.db.transaction((positions, venueId) => {
+    const insertChunk = this.db.transaction((positions, venueId) => {
       for (const pos of positions) {
         insertStmt.run(venueId, pos.trackKey, pos.timestamp, pos.x, pos.z, pos.vx, pos.vz, pos.roiIds?.[0] || null);
       }
     });
     
-    let fileIdx = 0;
-    const processNext = () => {
-      if (fileIdx >= batch.length) {
-        // All position files done — now sync visits
+    // Build a flat work queue: [{positions, venueId, filepath, isLastChunk}]
+    const workQueue = [];
+    for (const file of batch) {
+      const filepath = path.join(this.dataDir, file);
+      try {
+        const content = fs.readFileSync(filepath, 'utf-8');
+        const data = JSON.parse(content);
+        const positions = data.positions || [];
+        // Split into chunks
+        for (let i = 0; i < positions.length; i += CHUNK_SIZE) {
+          const chunk = positions.slice(i, i + CHUNK_SIZE);
+          const isLastChunk = (i + CHUNK_SIZE >= positions.length);
+          workQueue.push({ chunk, venueId: data.venueId, filepath, isLastChunk });
+        }
+        if (positions.length === 0) {
+          // Empty file — still need to delete it
+          workQueue.push({ chunk: [], venueId: data.venueId, filepath, isLastChunk: true });
+        }
+      } catch (err) {
+        console.error(`Failed to read position file ${file}:`, err);
+        // Try to delete corrupt file
+        try { fs.unlinkSync(filepath); } catch {}
+      }
+    }
+    
+    let workIdx = 0;
+    const processNextChunk = () => {
+      if (workIdx >= workQueue.length) {
+        // All position chunks done — now sync visits
         setImmediate(() => {
           try {
             const _t2 = Date.now();
             this.syncVisitFiles();
             const _total = Date.now() - _t0;
-            if (_total > 50) console.warn(`⏱️ syncToDatabase took ${_total}ms (${batch.length} pos files, visits=${Date.now() - _t2}ms)`);
+            if (_total > 50) console.warn(`⏱️ syncToDatabase took ${_total}ms (${batch.length} pos files, ${workQueue.length} chunks, visits=${Date.now() - _t2}ms)`);
           } catch (err) { console.error('Failed to sync visits:', err); }
         });
         return;
       }
       
-      const file = batch[fileIdx++];
-      const filepath = path.join(this.dataDir, file);
+      const work = workQueue[workIdx++];
       try {
-        const content = fs.readFileSync(filepath, 'utf-8');
-        const data = JSON.parse(content);
-        insertMany(data.positions, data.venueId);
-        fs.unlinkSync(filepath);
+        if (work.chunk.length > 0) {
+          insertChunk(work.chunk, work.venueId);
+        }
+        // Delete file only after its last chunk is inserted
+        if (work.isLastChunk) {
+          fs.unlinkSync(work.filepath);
+        }
       } catch (err) {
-        console.error(`Failed to process position file ${file}:`, err);
+        console.error(`Failed to process position chunk:`, err);
       }
       
-      // Yield event loop between files so tracks keep emitting
-      setImmediate(processNext);
+      // Yield event loop between chunks
+      setImmediate(processNextChunk);
     };
     
     // Start the chain
-    setImmediate(processNext);
+    setImmediate(processNextChunk);
   }
 
   /**

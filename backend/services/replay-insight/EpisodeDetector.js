@@ -235,7 +235,7 @@ export class EpisodeDetectorOrchestrator {
       this.lastDetectionTs = Date.now();
       const duration = Date.now() - startTime;
 
-      if (totalEpisodes > 0) {
+      if (duration > 500 || totalEpisodes > 0) {
         console.log(`[ReplayInsight] Detection complete: ${totalEpisodes} episodes across ${venues.length} venues (${duration}ms)`);
       }
 
@@ -283,12 +283,13 @@ export class EpisodeDetectorOrchestrator {
   }
 
   _updateAllBaselines() {
+    const _t0 = Date.now();
     try {
       const venues = this._getVenues();
       for (const venue of venues) {
         this.baselineTracker.updateBaselines(venue.id);
       }
-      console.log(`[ReplayInsight] Baselines updated for ${venues.length} venues`);
+      console.log(`[ReplayInsight] Baselines updated for ${venues.length} venues in ${Date.now() - _t0}ms`);
     } catch (err) {
       console.warn('[ReplayInsight] Baseline update error:', err.message);
     }
