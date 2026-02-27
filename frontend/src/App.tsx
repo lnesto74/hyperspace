@@ -551,8 +551,15 @@ function AuthenticatedApp() {
   )
 }
 
+const AUTH_ENABLED = !!(import.meta.env.VITE_GOOGLE_CLIENT_ID)
+
 function App() {
   const { isAuthenticated, isLoading } = useAuth()
+  
+  // Skip auth gate when Google OAuth is not configured
+  if (!AUTH_ENABLED) {
+    return <AuthenticatedApp />
+  }
   
   if (isLoading) {
     return (
