@@ -282,22 +282,24 @@ export default function EdgeCommissioningPage({ onClose }: { onClose: () => void
           )}
         </div>
         <div className="flex items-center gap-2">
-          {selectedEdge && (
+          {selectedEdge && middlePanelTab === 'algorithm' && (
             <div className="flex items-center gap-2">
-              {/* Simulator Deploy */}
-              <button
-                onClick={handleDeploySimulator}
-                disabled={!canDeploy || isDeploying}
-                className={`flex items-center gap-2 px-3 py-1.5 rounded text-sm font-medium transition-colors ${
-                  canDeploy && !herEnabled
-                    ? 'bg-green-600 hover:bg-green-700 text-white'
-                    : 'bg-gray-700 hover:bg-gray-600 text-gray-300'
-                } disabled:opacity-50 disabled:cursor-not-allowed`}
-                title="Deploy simulator configuration"
-              >
-                <Upload className="w-4 h-4" />
-                {isDeploying && !herEnabled ? 'Deploying...' : 'Deploy Simulator'}
-              </button>
+              {/* Simulator Deploy - only on Algorithm tab when HER is disabled */}
+              {!herEnabled && (
+                <button
+                  onClick={handleDeploySimulator}
+                  disabled={!canDeploy || isDeploying}
+                  className={`flex items-center gap-2 px-3 py-1.5 rounded text-sm font-medium transition-colors ${
+                    canDeploy
+                      ? 'bg-green-600 hover:bg-green-700 text-white'
+                      : 'bg-gray-700 hover:bg-gray-600 text-gray-300'
+                  } disabled:opacity-50 disabled:cursor-not-allowed`}
+                  title="Deploy simulator configuration"
+                >
+                  <Upload className="w-4 h-4" />
+                  {isDeploying ? 'Deploying...' : 'Deploy Simulator'}
+                </button>
+              )}
               
               {/* HER Deploy */}
               {herEnabled && selectedProviderId && (
