@@ -260,12 +260,20 @@ export default function DwgImporterPage({ onClose, onLayoutGenerated }: DwgImpor
 
     const fetchLidarData = async () => {
       try {
+        // Load saved LiDAR model from localStorage FIRST
+        const savedModelStorageKey = `dwg-selected-lidar-model-${generatedLayoutId}`
+        const savedModelId = localStorage.getItem(savedModelStorageKey)
+        
         // Fetch models
         const modelsRes = await fetch(`${API_BASE}/api/lidar/models`)
         if (modelsRes.ok) {
           const models = await modelsRes.json()
           setLidarModels(models)
-          if (models.length > 0 && !selectedLidarModelId) {
+          // Use saved model if available and valid, otherwise default to first
+          if (savedModelId && models.some((m: LidarModel) => m.id === savedModelId)) {
+            setSelectedLidarModelId(savedModelId)
+            console.log('[LiDAR] Restored saved model:', savedModelId)
+          } else if (models.length > 0 && !selectedLidarModelId) {
             setSelectedLidarModelId(models[0].id)
           }
         }

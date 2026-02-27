@@ -223,8 +223,8 @@ export default function PreviewPanel({
     return null
   })
   
-  // Use prop if provided, otherwise use local state
-  const lidarRoi = lidarRoiProp !== undefined ? lidarRoiProp : localLidarRoi
+  // Use prop if provided (and not null), otherwise use local state from localStorage
+  const lidarRoi = lidarRoiProp ?? localLidarRoi
   const setLidarRoi = onSetLidarRoi || ((roi: RoiVertex[] | null) => {
     setLocalLidarRoi(roi)
     // Persist to localStorage with both filename and layoutVersionId keys

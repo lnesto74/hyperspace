@@ -875,14 +875,19 @@ export default function Layout3DPreview({ layoutVersionId, importId, lidarInstan
     if (cameraRef.current && controlsRef.current) {
       // Try to load saved camera view
       if (!loadSavedCameraView()) {
-        // No saved view, use default based on bounds (use effectiveScale)
-        const boundsWidth = (bounds.maxX - bounds.minX) * effectiveScale
-        const boundsDepth = (bounds.maxY - bounds.minY) * effectiveScale
-        const maxSize = Math.max(boundsWidth, boundsDepth)
+        // No saved view, use default based on content bounds
+        const maxSize = useContentBounds ? maxContentSize : Math.max(rawBoundsWidth, rawBoundsDepth)
         
-        cameraRef.current.position.set(maxSize * 0.8, maxSize * 0.6, maxSize * 0.8)
-        controlsRef.current.target.set(0, 0, 0)
+        // Position camera relative to content center for proper rotation
+        cameraRef.current.position.set(
+          contentCenterX + maxSize * 0.8, 
+          maxSize * 0.6, 
+          contentCenterZ + maxSize * 0.8
+        )
+        // Set rotation target to content center (not origin) for intuitive rotation
+        controlsRef.current.target.set(contentCenterX, 0, contentCenterZ)
         controlsRef.current.update()
+        console.log(`[3D] Camera target set to content center: (${contentCenterX.toFixed(1)}, 0, ${contentCenterZ.toFixed(1)})`)
       }
     }
 
@@ -1227,14 +1232,33 @@ export default function Layout3DPreview({ layoutVersionId, importId, lidarInstan
   const resetCamera = useCallback(() => {
     if (!cameraRef.current || !controlsRef.current || !layoutData) return
     
-    const { bounds, unit_scale_to_m } = layoutData
+    const { fixtures, bounds, unit_scale_to_m } = layoutData
     const effectiveScale = unit_scale_to_m * scaleCorrection
-    const boundsWidth = (bounds.maxX - bounds.minX) * effectiveScale
-    const boundsDepth = (bounds.maxY - bounds.minY) * effectiveScale
-    const maxSize = Math.max(boundsWidth, boundsDepth)
+    const centerX = (bounds.minX + bounds.maxX) / 2 * effectiveScale
+    const centerZ = (bounds.minY + bounds.maxY) / 2 * effectiveScale
     
-    cameraRef.current.position.set(maxSize * 0.8, maxSize * 0.6, maxSize * 0.8)
-    controlsRef.current.target.set(0, 0, 0)
+    // Calculate content bounds from fixtures
+    let contentMinX = Infinity, contentMaxX = -Infinity
+    let contentMinZ = Infinity, contentMaxZ = -Infinity
+    fixtures.forEach(fixture => {
+      const x = fixture.pose2d.x * effectiveScale - centerX
+      const z = fixture.pose2d.y * effectiveScale - centerZ
+      const halfW = (fixture.footprint.w * effectiveScale) / 2
+      const halfD = (fixture.footprint.d * effectiveScale) / 2
+      contentMinX = Math.min(contentMinX, x - halfW)
+      contentMaxX = Math.max(contentMaxX, x + halfW)
+      contentMinZ = Math.min(contentMinZ, z - halfD)
+      contentMaxZ = Math.max(contentMaxZ, z + halfD)
+    })
+    
+    const contentCenterX = isFinite(contentMinX) ? (contentMinX + contentMaxX) / 2 : 0
+    const contentCenterZ = isFinite(contentMinZ) ? (contentMinZ + contentMaxZ) / 2 : 0
+    const maxSize = isFinite(contentMinX) 
+      ? Math.max(contentMaxX - contentMinX, contentMaxZ - contentMinZ)
+      : Math.max((bounds.maxX - bounds.minX) * effectiveScale, (bounds.maxY - bounds.minY) * effectiveScale)
+    
+    cameraRef.current.position.set(contentCenterX + maxSize * 0.8, maxSize * 0.6, contentCenterZ + maxSize * 0.8)
+    controlsRef.current.target.set(contentCenterX, 0, contentCenterZ)
     controlsRef.current.update()
   }, [layoutData, scaleCorrection])
 
