@@ -551,10 +551,39 @@ export default function Layout3DPreview({ layoutVersionId, importId, lidarInstan
         const data = await res.json()
         console.log('Layout data loaded:', data.layout)
         console.log('Fixtures count:', data.layout?.fixtures?.length || 0)
+        
+        // If layout has no mapped fixtures, fall back to raw import fixtures
+        if (!data.layout?.fixtures?.length && importId) {
+          console.log('[Layout3DPreview] No mapped fixtures, falling back to import fixtures...')
+          try {
+            const impRes = await fetch(`${API_BASE}/api/dwg/import/${importId}`)
+            if (impRes.ok) {
+              const impData = await impRes.json()
+              const rawFixtures = impData.fixtures || []
+              console.log(`[Layout3DPreview] Loaded ${rawFixtures.length} raw fixtures from import`)
+              if (rawFixtures.length > 0) {
+                // Convert raw import fixtures to layout fixture format
+                const layoutFixtures: LayoutFixture[] = rawFixtures.map((fx: any) => ({
+                  id: fx.id,
+                  group_id: fx.group_id || fx.id,
+                  pose2d: fx.pose2d,
+                  footprint: fx.footprint,
+                  mapping: null,
+                  source: fx.source,
+                }))
+                data.layout.fixtures = layoutFixtures
+                data.layout.total_count = layoutFixtures.length
+              }
+            }
+          } catch (fallbackErr) {
+            console.warn('[Layout3DPreview] Failed to load import fixtures:', fallbackErr)
+          }
+        }
+        
         setLayoutData(data.layout)
         
         if (!data.layout?.fixtures?.length) {
-          setError('No mapped fixtures in this layout. Map fixtures to catalog assets and regenerate.')
+          setError('No fixtures available. Upload a DWG and generate a layout first.')
         }
       } catch (err: any) {
         setError(err.message)
@@ -566,7 +595,7 @@ export default function Layout3DPreview({ layoutVersionId, importId, lidarInstan
     if (layoutVersionId) {
       loadLayout()
     }
-  }, [layoutVersionId])
+  }, [layoutVersionId, importId])
 
   // Render fixtures in 3D
   useEffect(() => {
