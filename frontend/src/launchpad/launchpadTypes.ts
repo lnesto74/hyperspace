@@ -192,6 +192,21 @@ export interface StepDefinition {
   deepLinkViewMode: string | null
 }
 
+// ─── Autopilot Types ─────────────────────────────────────────────
+
+export type AutopilotState = 'idle' | 'running' | 'waiting_input' | 'paused' | 'complete'
+
+export interface AutopilotContext {
+  state: AutopilotState
+  activeStepId: LaunchPadStepId | null
+  /** What kind of input the autopilot is waiting for */
+  waitingFor: 'dwg_upload' | 'classification_review' | 'roi_drawing' | 'edge_connect' | 'manual' | null
+  /** Message to show in the Stage */
+  stageMessage: string | null
+  /** Whether the 3D flythrough should be playing */
+  show3DFlythrough: boolean
+}
+
 // ─── Feature Flags ──────────────────────────────────────────────
 
 export const FEATURE_LAUNCHPAD = 'VITE_FEATURE_LAUNCHPAD'

@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Box, Package, Radar, Settings, Hexagon, Map, Play, X, LayoutGrid } from 'lucide-react'
+import { Box, Package, Radar, Settings, Hexagon, Map, Play, X, LayoutGrid, Rocket } from 'lucide-react'
 import { SidebarTab } from './AppShell'
 import VenuePanel from '../venue/VenuePanel'
 import VenueDwgPanel from '../venue/VenueDwgPanel'
@@ -10,12 +10,15 @@ import RoiPanel from '../roi/RoiPanel'
 import WhiteLabelSettings from '../settings/WhiteLabelSettings'
 import SimulatorControl from '../settings/SimulatorControl'
 import { useVenue } from '../../context/VenueContext'
+import { isLaunchPadEnabled, loadSession } from '../../launchpad'
 
 interface SidebarProps {
   activeTab: SidebarTab
   onTabChange: (tab: SidebarTab) => void
   onOpenDwgImporter?: () => void
   onOpenEdgeCommissioning?: () => void
+  launchPadOpen?: boolean
+  onToggleLaunchPad?: () => void
 }
 
 const tabs: { id: SidebarTab; icon: typeof Box; label: string }[] = [
@@ -27,7 +30,7 @@ const tabs: { id: SidebarTab; icon: typeof Box; label: string }[] = [
   { id: 'regions', icon: Hexagon, label: 'Regions' },
 ]
 
-export default function Sidebar({ activeTab, onTabChange, onOpenDwgImporter, onOpenEdgeCommissioning }: SidebarProps) {
+export default function Sidebar({ activeTab, onTabChange, onOpenDwgImporter, onOpenEdgeCommissioning, launchPadOpen, onToggleLaunchPad }: SidebarProps) {
   const { venue } = useVenue()
   const [showWhiteLabel, setShowWhiteLabel] = useState(false)
   const [showSimulator, setShowSimulator] = useState(false)
@@ -84,6 +87,45 @@ export default function Sidebar({ activeTab, onTabChange, onOpenDwgImporter, onO
         {activeTab === 'lidars' && <LidarNetworkPanel onOpenEdgeCommissioning={onOpenEdgeCommissioning} />}
         {activeTab === 'regions' && <RoiPanel />}
       </div>
+
+      {/* LaunchPad Toggle (setup zone) */}
+      {isLaunchPadEnabled() && onToggleLaunchPad && (() => {
+        const lpSession = loadSession()
+        const lpCompleted = lpSession?.steps.filter(s => s.status === 'done' || s.status === 'warning').length || 0
+        const lpTotal = lpSession?.steps.length || 8
+        const progress = lpTotal > 0 ? lpCompleted / lpTotal : 0
+        const hasProgress = lpCompleted > 0 && lpCompleted < lpTotal
+        return (
+          <button
+            onClick={onToggleLaunchPad}
+            className={`mx-3 mb-2 flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all ${
+              launchPadOpen
+                ? 'bg-indigo-600/20 border border-indigo-500/40 text-indigo-300'
+                : 'bg-gray-800/50 border border-gray-700 text-gray-400 hover:text-indigo-300 hover:border-indigo-500/30 hover:bg-indigo-500/5'
+            }`}
+            title={launchPadOpen ? 'Close LaunchPad' : 'Open LaunchPad — Commissioning Wizard'}
+          >
+            <div className="relative">
+              <Rocket className="w-4 h-4" />
+              {hasProgress && !launchPadOpen && (
+                <span className="absolute -top-1.5 -right-1.5 flex items-center justify-center">
+                  <svg className="w-4 h-4 -rotate-90" viewBox="0 0 20 20">
+                    <circle cx="10" cy="10" r="8" fill="#1e1e2e" stroke="#4b5563" strokeWidth="2" />
+                    <circle cx="10" cy="10" r="8" fill="none" stroke="#818cf8" strokeWidth="2" strokeDasharray={`${progress * 50.27} 50.27`} strokeLinecap="round" />
+                  </svg>
+                </span>
+              )}
+              {lpCompleted === lpTotal && lpTotal > 0 && !launchPadOpen && (
+                <span className="absolute -top-1 -right-1 w-3 h-3 bg-green-500 text-white text-[7px] font-bold rounded-full flex items-center justify-center">✓</span>
+              )}
+            </div>
+            <div className="flex-1 min-w-0">
+              <span className="text-xs font-medium">LaunchPad</span>
+              {hasProgress && <span className="text-[10px] text-gray-500 ml-1">{lpCompleted}/{lpTotal}</span>}
+            </div>
+          </button>
+        )
+      })()}
 
       {/* Footer */}
       <div className="h-12 border-t border-border-dark flex items-center justify-between px-4">

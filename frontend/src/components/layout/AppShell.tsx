@@ -12,6 +12,7 @@ import { useDwg } from '../../context/DwgContext'
 import { useAutoSave } from '../../hooks/useAutoSave'
 import { useProfitRadar } from '../../context/ProfitRadarContext'
 import IntentFieldOverlay from '../../features/profitRadar/IntentFieldOverlay'
+import { useViewMode } from '../../App'
 
 export type SidebarTab = 'floorplan' | 'venueDwg' | 'venue' | 'objects' | 'lidars' | 'regions'
 export type CameraView = 'perspective' | 'top' | 'isometric' | 'front'
@@ -70,6 +71,7 @@ export default function AppShell({ onOpenDwgImporter, onOpenEdgeCommissioning, s
   const { selectedPlacementId, placements } = useLidar()
   const { dwgLayoutId: selectedDwgLayoutId } = useDwg()
   const { intentFieldEnabled, setIntentFieldEnabled } = useProfitRadar()
+  const { launchPadOpen: lpOpen, setLaunchPadOpen: setLpOpen } = useViewMode()
   
   // Determine if we're in DWG venue mode
   const isDwgMode = activeTab === 'venueDwg' && selectedDwgLayoutId !== null
@@ -107,7 +109,7 @@ export default function AppShell({ onOpenDwgImporter, onOpenEdgeCommissioning, s
   return (
     <div className="h-screen w-screen flex bg-app-bg overflow-hidden">
       {/* Left Sidebar */}
-      <Sidebar activeTab={activeTab} onTabChange={setActiveTab} onOpenDwgImporter={onOpenDwgImporter} onOpenEdgeCommissioning={onOpenEdgeCommissioning} />
+      <Sidebar activeTab={activeTab} onTabChange={setActiveTab} onOpenDwgImporter={onOpenDwgImporter} onOpenEdgeCommissioning={onOpenEdgeCommissioning} launchPadOpen={lpOpen} onToggleLaunchPad={() => setLpOpen(!lpOpen)} />
       
       {/* Main 3D Viewport - flex-1 min-w-0 ensures it shrinks when panels open */}
       <div className="flex-1 min-w-0 relative overflow-hidden">

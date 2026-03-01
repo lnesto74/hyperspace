@@ -33,7 +33,7 @@ import DoohEffectivenessPage from './components/dooh/DoohEffectivenessPage'
 import { BusinessReportingPage } from './features/businessReporting'
 import { ProfitRadarPage } from './features/profitRadar'
 import { ProfitRadarProvider } from './context/ProfitRadarContext'
-import { LaunchPadPanel, LaunchPadToggle, isLaunchPadEnabled, loadSession } from './launchpad'
+import { LaunchPadPanel, isLaunchPadEnabled } from './launchpad'
 
 import { BarChart3, Bell, Thermometer, Zap, LayoutGrid, ShoppingCart, Monitor, Activity, PieChart, Clapperboard, Crosshair, Building2, LogOut, User, Rocket } from 'lucide-react'
 import { useState, useEffect, createContext, useContext } from 'react'
@@ -97,10 +97,7 @@ function KPIOverlayToggle() {
   const [showSmartKpiModal, setShowSmartKpiModal] = useState(false)
   const [showCheckoutManager, setShowCheckoutManager] = useState(false)
   const [unreadCount, setUnreadCount] = useState(0)
-  const { launchPadOpen: showLaunchPad, setLaunchPadOpen: setShowLaunchPad } = useViewMode()
-  const launchPadSession = showLaunchPad ? loadSession() : null
-  const lpCompleted = launchPadSession?.steps.filter(s => s.status === 'done' || s.status === 'warning').length || 0
-  const lpTotal = launchPadSession?.steps.length || 8
+  const _viewMode = useViewMode() // context still needed for setMode
   
   // Listen for LaunchPad step activation events (e.g. ROI drawing mode)
   useEffect(() => {
@@ -325,16 +322,6 @@ function KPIOverlayToggle() {
           <Clapperboard className="w-4 h-4" />
         </button>
         
-        {/* LaunchPad Toggle */}
-        {isLaunchPadEnabled() && (
-          <LaunchPadToggle
-            isOpen={showLaunchPad}
-            onToggle={() => setShowLaunchPad(!showLaunchPad)}
-            completedSteps={lpCompleted}
-            totalSteps={lpTotal}
-          />
-        )}
-        
         {/* AI Narrator2 Button (Copilot) */}
         <Narrator2Toggle />
         
@@ -537,7 +524,7 @@ function UserMenu() {
   if (!user) return null
   
   return (
-    <div className="fixed top-3 right-4 z-50">
+    <div className="fixed top-5 left-[248px] z-50">
       <button
         onClick={() => setOpen(!open)}
         className="flex items-center gap-2 px-2 py-1.5 rounded-lg bg-gray-800/80 backdrop-blur-sm border border-gray-700/50 hover:border-gray-600 transition-all"

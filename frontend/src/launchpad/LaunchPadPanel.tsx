@@ -6,8 +6,8 @@
  */
 
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { Rocket, X, RotateCw, Trash2, ChevronDown } from 'lucide-react'
-import type { LaunchPadSession, LaunchPadStepId, MapFixturesData } from './launchpadTypes'
+import { Rocket, X, RotateCw, Trash2, ChevronDown, Play, Pause, ChevronLeft, ChevronRight } from 'lucide-react'
+import type { LaunchPadSession, LaunchPadStepId, MapFixturesData, AutopilotContext } from './launchpadTypes'
 import { isLaunchPadEnabled } from './launchpadTypes'
 import {
   createSession,
@@ -27,6 +27,7 @@ import type { SelectDwgData } from './launchpadTypes'
 import Lidar3DModal from './Lidar3DModal'
 import RoiDrawingModal from './RoiDrawingModal'
 import FixtureClassifyModal from './FixtureClassifyModal'
+import LaunchPadStage from './LaunchPadStage'
 
 interface LaunchPadPanelProps {
   isOpen: boolean
@@ -67,6 +68,18 @@ export default function LaunchPadPanel({
     return api.DEFAULT_AUTOPLACE_SETTINGS
   })
   const [lidarModels, setLidarModels] = useState<Array<{ id: string; name: string; range_m: number; dome_mode: boolean }>>([])
+  const [showStage, setShowStage] = useState(false)
+  const [autopilot, setAutopilot] = useState<AutopilotContext>({
+    state: 'idle',
+    activeStepId: null,
+    waitingFor: null,
+    stageMessage: null,
+    show3DFlythrough: false,
+  })
+  const autopilotRef = useRef(autopilot)
+  autopilotRef.current = autopilot
+  const sessionRef = useRef(session)
+  sessionRef.current = session
   const initialCheckDone = useRef(false)
   const lastGeometryImportId = useRef<string | null>(null)
 
@@ -776,18 +789,243 @@ export default function LaunchPadPanel({
     }
   }, [session, autoPlacing, venueId, autoPlaceSettings])
 
+  // ─── Autopilot: auto-advance loop ───────────────────────────────
+  const STEP_ORDER: LaunchPadStepId[] = [
+    'select_dwg', 'map_fixtures', 'define_rois', 'place_lidars',
+    'commission_edge', 'pair_devices', 'validate_stream', 'go_live',
+  ]
+
+  const advanceAutopilot = useCallback(async (fromStepId?: LaunchPadStepId) => {
+    const s = sessionRef.current
+    if (!s || autopilotRef.current.state !== 'running') return
+
+    // Find next step to process
+    const startIdx = fromStepId ? STEP_ORDER.indexOf(fromStepId) : 0
+    for (let i = startIdx; i < STEP_ORDER.length; i++) {
+      const stepId = STEP_ORDER[i]
+      const step = s.steps.find(st => st.id === stepId)
+      if (!step) continue
+
+      // Skip already-done steps
+      if (step.status === 'done' || step.status === 'warning') continue
+
+      setAutopilot(prev => ({ ...prev, activeStepId: stepId, stageMessage: `Processing ${stepId.replace(/_/g, ' ')}...` }))
+      setExpandedStepId(stepId)
+
+      // Run the check
+      try {
+        const result = await checkStep(s, stepId)
+        const updatedSession = result.session
+        setSession(updatedSession)
+        saveSession(updatedSession)
+        sessionRef.current = updatedSession
+
+        const updatedStep = updatedSession.steps.find(st => st.id === stepId)
+
+        // Step completed — brief pause then advance
+        if (updatedStep?.status === 'done' || updatedStep?.status === 'warning') {
+          // Special: after place_lidars done, show 3D flythrough
+          if (stepId === 'place_lidars') {
+            setAutopilot(prev => ({
+              ...prev,
+              state: 'waiting_input',
+              activeStepId: stepId,
+              stageMessage: null,
+              show3DFlythrough: false, // will show after accept
+              waitingFor: 'manual',
+            }))
+            return
+          }
+
+          setAutopilot(prev => ({ ...prev, stageMessage: `${stepId.replace(/_/g, ' ')} ✓` }))
+          await new Promise(r => setTimeout(r, 600))
+          continue // next step
+        }
+
+        // Step needs action — determine what kind
+        if (stepId === 'select_dwg' && updatedStep?.status === 'ready') {
+          setAutopilot(prev => ({ ...prev, state: 'waiting_input', waitingFor: 'dwg_upload', stageMessage: null }))
+          return
+        }
+        if (stepId === 'map_fixtures') {
+          // Auto-run AI enhance if available, then wait for review
+          setAutopilot(prev => ({ ...prev, state: 'waiting_input', waitingFor: 'classification_review', stageMessage: null }))
+          return
+        }
+        if (stepId === 'define_rois') {
+          setAutopilot(prev => ({ ...prev, state: 'waiting_input', waitingFor: 'roi_drawing', stageMessage: null }))
+          return
+        }
+        if (stepId === 'place_lidars' && updatedStep?.status === 'ready') {
+          // Auto-trigger autoplace
+          setAutopilot(prev => ({ ...prev, stageMessage: 'Running auto-placement...' }))
+          // Trigger autoplace then come back
+          handleAutoPlace()
+          return
+        }
+        if (stepId === 'commission_edge') {
+          setAutopilot(prev => ({ ...prev, state: 'waiting_input', waitingFor: 'edge_connect', stageMessage: null }))
+          return
+        }
+
+        // Generic wait
+        setAutopilot(prev => ({ ...prev, state: 'waiting_input', waitingFor: 'manual', stageMessage: null }))
+        return
+      } catch (err) {
+        console.error('[Autopilot] Step failed:', stepId, err)
+        setAutopilot(prev => ({ ...prev, state: 'waiting_input', waitingFor: 'manual', stageMessage: null }))
+        return
+      }
+    }
+
+    // All steps done
+    setAutopilot(prev => ({ ...prev, state: 'complete', stageMessage: null, activeStepId: null }))
+  }, [handleAutoPlace])
+
+  const handlePlayPause = useCallback(() => {
+    if (autopilot.state === 'running') {
+      setAutopilot(prev => ({ ...prev, state: 'paused', stageMessage: null }))
+    } else {
+      setShowStage(true)
+      setAutopilot(prev => ({
+        ...prev,
+        state: 'running',
+        show3DFlythrough: false,
+        waitingFor: null,
+        stageMessage: 'Starting...',
+      }))
+      // Start from current step
+      const firstIncomplete = session?.steps.find(s =>
+        s.status !== 'done' && s.status !== 'warning' && s.status !== 'locked'
+      )
+      setTimeout(() => advanceAutopilot(firstIncomplete?.id || 'select_dwg'), 300)
+    }
+  }, [autopilot.state, session, advanceAutopilot])
+
+  // Stage callbacks
+  const handleStageDwgUploaded = useCallback(async (_importId: string) => {
+    if (!session) return
+    // After upload, refresh and continue
+    lastGeometryImportId.current = null
+    initialCheckDone.current = false
+    const updated = await runFullCheck(session)
+    setSession(updated)
+    saveSession(updated)
+    sessionRef.current = updated
+    // Resume autopilot
+    setAutopilot(prev => ({ ...prev, state: 'running', waitingFor: null, stageMessage: 'DWG loaded, advancing...' }))
+    setTimeout(() => advanceAutopilot('map_fixtures'), 500)
+  }, [session, advanceAutopilot])
+
+  const handleStageAcceptClassification = useCallback(() => {
+    setAutopilot(prev => ({ ...prev, state: 'running', waitingFor: null, stageMessage: 'Classification accepted' }))
+    setTimeout(() => advanceAutopilot('define_rois'), 500)
+  }, [advanceAutopilot])
+
+  const handleStageRejectClassification = useCallback(() => {
+    setShowClassifyModal(true)
+  }, [])
+
+  const handleStageAcceptRois = useCallback(() => {
+    setAutopilot(prev => ({ ...prev, state: 'running', waitingFor: null, stageMessage: 'ROIs accepted' }))
+    setTimeout(() => advanceAutopilot('place_lidars'), 500)
+  }, [advanceAutopilot])
+
+  const handleStageAcceptLidars = useCallback(() => {
+    // Show 3D flythrough hero moment
+    setAutopilot(prev => ({
+      ...prev,
+      state: 'waiting_input',
+      show3DFlythrough: true,
+      waitingFor: 'manual',
+      stageMessage: null,
+    }))
+  }, [])
+
+  const handleStageContinue = useCallback(() => {
+    const currentIdx = STEP_ORDER.indexOf(autopilot.activeStepId || 'select_dwg')
+    const nextStepId = STEP_ORDER[currentIdx + 1]
+    if (nextStepId) {
+      setAutopilot(prev => ({
+        ...prev,
+        state: 'running',
+        show3DFlythrough: false,
+        waitingFor: null,
+        stageMessage: 'Continuing...',
+      }))
+      setTimeout(() => advanceAutopilot(nextStepId), 300)
+    } else {
+      setAutopilot(prev => ({ ...prev, state: 'complete' }))
+    }
+  }, [autopilot.activeStepId, advanceAutopilot])
+
+  // Resume autopilot after autoplace completes
+  useEffect(() => {
+    if (autopilotRef.current.state === 'running' && autopilotRef.current.activeStepId === 'place_lidars' && !autoPlacing) {
+      const step = session?.steps.find(s => s.id === 'place_lidars')
+      if (step?.status === 'done' || step?.status === 'warning') {
+        setAutopilot(prev => ({
+          ...prev,
+          state: 'waiting_input',
+          waitingFor: 'manual',
+          stageMessage: null,
+        }))
+      }
+    }
+  }, [autoPlacing, session])
+
   if (!enabled || !isOpen || !session) return null
 
   const completedSteps = session.steps.filter(s => s.status === 'done' || s.status === 'warning').length
   const totalSteps = session.steps.length
   const progressPct = (completedSteps / totalSteps) * 100
 
+  const drawerWidth = isMinimized ? 56 : 360
+
   return (
-    <div
-      className={`fixed top-0 right-0 h-full z-40 flex flex-col bg-gray-900 border-l border-gray-700/80 shadow-2xl transition-all duration-300 ${
-        isMinimized ? 'w-14' : 'w-[360px]'
-      }`}
-    >
+    <>
+      {/* ─── Stage Area (left of drawer) ─── */}
+      {showStage && !isMinimized && autopilot.state !== 'idle' && (
+        <div
+          className="fixed top-0 h-full z-[39] transition-all duration-500 ease-in-out"
+          style={{
+            right: `${drawerWidth}px`,
+            width: `calc(100vw - 320px - ${drawerWidth}px)`, // 320px = sidebar width
+            minWidth: 400,
+          }}
+        >
+          <LaunchPadStage
+            session={session}
+            autopilot={autopilot}
+            geometry={geometry}
+            onDwgUploaded={handleStageDwgUploaded}
+            onAcceptClassification={handleStageAcceptClassification}
+            onRejectClassification={handleStageRejectClassification}
+            onAcceptRois={handleStageAcceptRois}
+            onDrawRois={() => setShowRoiModal(true)}
+            onAcceptLidars={handleStageAcceptLidars}
+            onContinue={handleStageContinue}
+          />
+        </div>
+      )}
+
+      {/* ─── Drawer Panel ─── */}
+      <div
+        className={`fixed top-0 right-0 h-full z-40 flex flex-col bg-gray-900 border-l border-gray-700/80 shadow-2xl transition-all duration-300 ${
+          isMinimized ? 'w-14' : 'w-[360px]'
+        }`}
+      >
+      {/* Collapse/expand tab on left edge */}
+      {!isMinimized && (
+        <button
+          onClick={onClose}
+          className="absolute -left-5 top-1/2 -translate-y-1/2 w-5 h-12 bg-gray-800 border border-gray-700 border-r-0 rounded-l-md flex items-center justify-center text-gray-500 hover:text-indigo-400 hover:bg-gray-750 transition-colors z-50"
+          title="Close drawer"
+        >
+          <ChevronRight className="w-3.5 h-3.5" />
+        </button>
+      )}
+
       {/* Header */}
       <div className="flex items-center gap-2 px-3 py-2.5 border-b border-gray-700/80 bg-gray-850 shrink-0">
         {isMinimized ? (
@@ -812,6 +1050,39 @@ export default function LaunchPadPanel({
 
             {/* Header buttons */}
             <div className="flex items-center gap-1 shrink-0">
+              {/* Play/Pause autopilot */}
+              <button
+                onClick={handlePlayPause}
+                className={`w-7 h-7 flex items-center justify-center rounded transition-colors ${
+                  autopilot.state === 'running'
+                    ? 'text-amber-400 hover:text-amber-300 bg-amber-500/10'
+                    : autopilot.state === 'complete'
+                      ? 'text-green-400 hover:text-green-300'
+                      : 'text-indigo-400 hover:text-indigo-300'
+                }`}
+                title={autopilot.state === 'running' ? 'Pause autopilot' : 'Start autopilot'}
+              >
+                {autopilot.state === 'running' ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
+              </button>
+              {/* Toggle stage visibility */}
+              {showStage && (
+                <button
+                  onClick={() => setShowStage(false)}
+                  className="w-7 h-7 flex items-center justify-center text-gray-400 hover:text-white rounded transition-colors"
+                  title="Hide stage"
+                >
+                  <ChevronRight className="w-3.5 h-3.5" />
+                </button>
+              )}
+              {!showStage && autopilot.state !== 'idle' && (
+                <button
+                  onClick={() => setShowStage(true)}
+                  className="w-7 h-7 flex items-center justify-center text-gray-400 hover:text-white rounded transition-colors"
+                  title="Show stage"
+                >
+                  <ChevronLeft className="w-3.5 h-3.5" />
+                </button>
+              )}
               <button
                 onClick={handleRefreshAll}
                 disabled={isChecking}
@@ -1009,6 +1280,7 @@ export default function LaunchPadPanel({
           />
         )
       })()}
-    </div>
+      </div>
+    </>
   )
 }

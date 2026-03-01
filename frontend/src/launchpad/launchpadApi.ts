@@ -22,6 +22,23 @@ import type {
 
 // ─── DWG / Layout APIs ─────────────────────────────────────────
 
+export async function uploadDwgFile(file: File, venueId?: string): Promise<{
+  import_id: string
+  filename: string
+  units: string
+  fixture_count: number
+}> {
+  const formData = new FormData()
+  formData.append('file', file)
+  if (venueId) formData.append('venue_id', venueId)
+  const res = await fetch(`${API_BASE}/api/dwg/import`, { method: 'POST', body: formData })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: 'Upload failed' }))
+    throw new Error(err.error || 'DWG upload failed')
+  }
+  return res.json()
+}
+
 export async function listDwgImports(): Promise<Array<{
   import_id: string
   venue_id: string | null
