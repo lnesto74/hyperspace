@@ -451,6 +451,7 @@ export default function LaunchPadPanel({
       // CRITICAL: clear old layout selection FIRST so checkStep doesn't
       // pick the previous DWG via Priority 1 (venueDwg-selectedLayout)
       localStorage.removeItem('venueDwg-selectedLayout')
+      localStorage.removeItem('launchpad-awaitUserDwg')
       localStorage.setItem('launchpad-activeImportId', importId)
 
       // Check if this import has a layout → sync to venueDwg-selectedLayout
@@ -911,19 +912,47 @@ export default function LaunchPadPanel({
   }, [autopilot.state, session, advanceAutopilot])
 
   // Stage callbacks
-  const handleStageDwgUploaded = useCallback(async (_importId: string) => {
+  const handleStageDwgUploaded = useCallback(async (importId: string) => {
     if (!session) return
-    // After upload, refresh and continue
-    lastGeometryImportId.current = null
-    initialCheckDone.current = false
-    const updated = await runFullCheck(session)
-    setSession(updated)
-    saveSession(updated)
-    sessionRef.current = updated
-    // Resume autopilot
-    setAutopilot(prev => ({ ...prev, state: 'running', waitingFor: null, stageMessage: 'DWG loaded, advancing...' }))
-    setTimeout(() => advanceAutopilot('map_fixtures'), 500)
-  }, [session, advanceAutopilot])
+    try {
+      // Register the new import so checkStep can find it
+      localStorage.setItem('launchpad-activeImportId', importId)
+      localStorage.removeItem('launchpad-awaitUserDwg')
+
+      // Auto-generate a layout for this import (needed for select_dwg to complete)
+      const effectiveVenueId = session.venueId || venueId
+      try {
+        const result = await api.generateLayout(importId, effectiveVenueId || undefined)
+        localStorage.setItem('venueDwg-selectedLayout', result.layout_version_id)
+        window.dispatchEvent(new CustomEvent('dwgLayoutSelected', { detail: { layoutId: result.layout_version_id } }))
+      } catch (err) {
+        console.warn('[LaunchPad] Auto-generate layout after upload failed:', err)
+      }
+
+      // Force geometry re-fetch and run full check
+      lastGeometryImportId.current = null
+      initialCheckDone.current = false
+      const updated = await runFullCheck(session)
+      setSession(updated)
+      saveSession(updated)
+      sessionRef.current = updated
+
+      // Also refresh available imports list
+      api.listDwgImports().then(imports => {
+        setAvailableImports(imports.map(imp => ({
+          import_id: imp.import_id, venue_id: imp.venue_id, filename: imp.filename,
+          units: imp.units, status: imp.status, created_at: imp.created_at,
+          fixture_count: 0, group_count: 0, has_layout: false,
+        })))
+      }).catch(() => {})
+
+      // Resume autopilot
+      setAutopilot(prev => ({ ...prev, state: 'running', waitingFor: null, stageMessage: 'DWG loaded, advancing...' }))
+      setTimeout(() => advanceAutopilot('map_fixtures'), 500)
+    } catch (err) {
+      console.error('[LaunchPad] Stage DWG upload handling failed:', err)
+    }
+  }, [session, venueId, advanceAutopilot])
 
   const handleStageAcceptClassification = useCallback(() => {
     setAutopilot(prev => ({ ...prev, state: 'running', waitingFor: null, stageMessage: 'Classification accepted' }))
