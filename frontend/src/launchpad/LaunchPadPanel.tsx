@@ -513,12 +513,20 @@ export default function LaunchPadPanel({
   const handleResetSession = useCallback(() => {
     if (!confirm('Reset LaunchPad? This will clear all progress.')) return
     clearSession()
+    // Clear DWG selection keys so select_dwg doesn't auto-complete
+    localStorage.removeItem('venueDwg-selectedLayout')
+    localStorage.removeItem('launchpad-activeImportId')
+    localStorage.setItem('launchpad-awaitUserDwg', 'true')
     const s = createSession(venueId, venueName)
     saveSession(s)
     setSession(s)
     setExpandedStepId('select_dwg')
     initialCheckDone.current = false
+    lastGeometryImportId.current = null
+    setGeometry(undefined)
     setAiEnhanced(false)
+    setAutopilot({ state: 'idle', activeStepId: null, waitingFor: null, stageMessage: null, show3DFlythrough: false })
+    setShowStage(false)
   }, [venueId, venueName])
 
   // AI Enhance — call GPT-4o Vision to improve fixture classifications

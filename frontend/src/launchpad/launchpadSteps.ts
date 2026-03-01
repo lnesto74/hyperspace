@@ -273,11 +273,15 @@ export async function checkStep(
 
     switch (stepId) {
       case 'select_dwg': {
+        // If session was just reset, wait for user to explicitly pick a DWG
+        const awaitUser = localStorage.getItem('launchpad-awaitUserDwg') === 'true'
+
         // Priority 1: Explicit layout selected (from DwgContext or DwgImporter)
         const dwgLayoutId = localStorage.getItem('venueDwg-selectedLayout')
         if (dwgLayoutId) {
           try {
             const data = await api.buildSelectDwgData(dwgLayoutId)
+            localStorage.removeItem('launchpad-awaitUserDwg')
             updated = updateStepStatus(updated, stepId, 'done', data as any)
             updated = addLogEntry(updated, { stepId, action: 'complete', message: `DWG layout found: ${data.filename}` })
             return { session: updated, status: 'done', message: `Layout loaded: ${data.filename}` }
@@ -295,6 +299,7 @@ export async function checkStep(
               const best = importLayouts.find(l => l.is_active) || importLayouts[0]
               // Sync to venueDwg-selectedLayout so next check is faster
               localStorage.setItem('venueDwg-selectedLayout', best.id)
+              localStorage.removeItem('launchpad-awaitUserDwg')
               const data = await api.buildSelectDwgData(best.id)
               updated = updateStepStatus(updated, stepId, 'done', data as any)
               return { session: updated, status: 'done', message: `Layout loaded: ${data.filename}` }
@@ -304,6 +309,7 @@ export async function checkStep(
             try {
               const genResult = await api.generateLayout(activeImportId, updated.venueId || undefined)
               localStorage.setItem('venueDwg-selectedLayout', genResult.layout_version_id)
+              localStorage.removeItem('launchpad-awaitUserDwg')
               const data = await api.buildSelectDwgData(genResult.layout_version_id)
               updated = updateStepStatus(updated, stepId, 'done', data as any)
               updated = addLogEntry(updated, { stepId, action: 'complete', message: `Auto-generated layout: ${data.filename}` })
@@ -325,15 +331,18 @@ export async function checkStep(
           } catch { /* fall through */ }
         }
         // Priority 3: Fall back to latest layout in the system
-        const layouts = await api.listDwgLayouts()
-        if (layouts.length > 0) {
-          const latest = layouts[0]
-          const data = await api.buildSelectDwgData(latest.id)
-          localStorage.setItem('venueDwg-selectedLayout', latest.id)
-          updated = updateStepStatus(updated, stepId, 'done', data as any)
-          return { session: updated, status: 'done', message: `Latest layout: ${data.filename}` }
+        // Skip this if user just reset — they want to pick fresh
+        if (!awaitUser) {
+          const layouts = await api.listDwgLayouts()
+          if (layouts.length > 0) {
+            const latest = layouts[0]
+            const data = await api.buildSelectDwgData(latest.id)
+            localStorage.setItem('venueDwg-selectedLayout', latest.id)
+            updated = updateStepStatus(updated, stepId, 'done', data as any)
+            return { session: updated, status: 'done', message: `Latest layout: ${data.filename}` }
+          }
         }
-        // No layout found — needs user action
+        // No layout found or awaiting user — needs user action
         updated = updateStepStatus(updated, stepId, 'ready')
         return { session: updated, status: 'ready', message: 'Upload or select a DWG floor plan' }
       }
