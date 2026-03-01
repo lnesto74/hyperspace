@@ -809,16 +809,12 @@ export async function autoPlaceWithRois(
   const unitScale = baseUnitScale * settings.scaleMultiplier
   console.log(`[AutoPlace] baseUnitScale=${baseUnitScale}, scaleMultiplier=${settings.scaleMultiplier}, effectiveScale=${unitScale}`)
 
-  // 2) Fetch ROIs (try with dwgLayoutId first, then fallback to ALL venue ROIs)
-  let rois = await listRois(venueId, dwgLayoutId)
+  // 2) Fetch ROIs scoped to this DWG layout ONLY (LaunchPad coverage zones)
+  // Never use venue-level KPI ROIs (Checkout Service/Queue, etc.) for LiDAR placement
+  const rois = await listRois(venueId, dwgLayoutId)
   console.log(`[AutoPlace] listRois(venueId=${venueId}, dwgLayoutId=${dwgLayoutId}) → ${rois.length} ROIs`)
   if (rois.length === 0) {
-    // Fallback: fetch ALL ROIs for the venue (any dwg_layout_id)
-    rois = await listAllRois(venueId)
-    console.log(`[AutoPlace] Fallback listAllRois(venueId=${venueId}) → ${rois.length} ROIs`)
-  }
-  if (rois.length === 0) {
-    throw new Error('No ROIs defined — draw zones first in the Define ROIs step')
+    throw new Error('No coverage zones defined — draw zones first in the Define ROIs step')
   }
 
   // 3) Parse all ROI vertices and convert from DXF units to meters

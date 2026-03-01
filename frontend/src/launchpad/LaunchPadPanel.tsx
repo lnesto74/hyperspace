@@ -288,12 +288,9 @@ export default function LaunchPadPanel({
       let rois: MiniRoi[] = []
       if (session.venueId) {
         try {
+          // Only fetch ROIs scoped to this DWG layout (LaunchPad coverage zones)
+          // Never load venue-level KPI ROIs (Checkout Service/Queue, etc.)
           const roiList = await api.listRois(session.venueId, layoutVersionId || undefined)
-          if (roiList.length === 0) {
-            // Fallback: fetch ALL ROIs for venue
-            const allRois = await api.listAllRois(session.venueId)
-            roiList.push(...allRois)
-          }
           rois = roiList.map(r => {
             let vertices: Array<{ x: number; y: number }> = []
             try {
@@ -1340,7 +1337,7 @@ export default function LaunchPadPanel({
             fixtures={geometry?.fixtures || []}
             bounds={geometry?.bounds}
             classifications={geometry?.classifications}
-            existingRois={geometry?.rois || []}
+            existingRois={[]}
             venueId={effectiveVenueId}
             dwgLayoutId={(() => {
               const dwgStep = session.steps.find(s => s.id === 'select_dwg')
