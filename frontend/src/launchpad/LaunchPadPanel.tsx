@@ -213,7 +213,7 @@ export default function LaunchPadPanel({
           rois = roiList.map(r => {
             let vertices: Array<{ x: number; y: number }> = []
             try {
-              const parsed = JSON.parse(r.vertices)
+              const parsed = typeof r.vertices === 'string' ? JSON.parse(r.vertices) : r.vertices
               vertices = Array.isArray(parsed) ? parsed.map((v: any) => ({ x: v.x ?? v[0], y: v.y ?? v.z ?? v[1] })) : []
             } catch { /* bad JSON */ }
             return { name: r.name, color: r.color || '#818cf8', vertices }
@@ -297,7 +297,7 @@ export default function LaunchPadPanel({
           rois = roiList.map(r => {
             let vertices: Array<{ x: number; y: number }> = []
             try {
-              const parsed = JSON.parse(r.vertices)
+              const parsed = typeof r.vertices === 'string' ? JSON.parse(r.vertices) : r.vertices
               vertices = Array.isArray(parsed) ? parsed.map((v: any) => ({ x: v.x ?? v[0], y: v.y ?? v.z ?? v[1] })) : []
             } catch { /* bad JSON */ }
             return { name: r.name, color: r.color || '#818cf8', vertices }
@@ -664,7 +664,7 @@ export default function LaunchPadPanel({
               rois = roiList.map((r: any) => {
                 let vertices: Array<{ x: number; y: number }> = []
                 try {
-                  const parsed = JSON.parse(r.vertices)
+                  const parsed = typeof r.vertices === 'string' ? JSON.parse(r.vertices) : r.vertices
                   vertices = Array.isArray(parsed) ? parsed.map((v: any) => ({ x: v.x ?? v[0], y: v.y ?? v.z ?? v[1] })) : []
                 } catch { /* bad JSON */ }
                 return { name: r.name, color: r.color || '#818cf8', vertices }

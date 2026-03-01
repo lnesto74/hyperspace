@@ -266,7 +266,9 @@ function Inline3DFlythrough({ layoutVersionId, importId, geometry }: { layoutVer
       })
     })
     if (!isFinite(minX)) return undefined
-    return { minX, minY, maxX, maxY }
+    const fb = { minX, minY, maxX, maxY }
+    console.log(`[Inline3DFlythrough] focusBounds from ${rois.length} ROIs:`, fb)
+    return fb
   }, [geometry?.rois])
 
   useEffect(() => {
