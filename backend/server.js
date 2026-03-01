@@ -41,6 +41,8 @@ import { EpisodeDetectorOrchestrator } from './services/replay-insight/index.js'
 import authRoutes from './routes/auth.js';
 import companiesRoutes from './routes/companies.js';
 import { IntentScorer, ZoneAggregator, BehaviorClusterer, ProfitRadarEngine } from './services/profit-radar/index.js';
+import launchpadRoutes from './routes/launchpad.js';
+import createAiClassifyRoutes from './routes/aiClassify.js';
 
 const PORT = process.env.PORT || 3001;
 const MOCK_LIDAR = process.env.MOCK_LIDAR === 'true';
@@ -49,7 +51,29 @@ const MQTT_ENABLED = process.env.MQTT_ENABLED === 'true'; // Disabled by default
 // Initialize Express
 const app = express();
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '50mb' }));
+
+// Memory monitor — log heap every 30s to identify OOM sources
+setInterval(() => {
+  const mem = process.memoryUsage();
+  const heapMB = (mem.heapUsed / 1024 / 1024).toFixed(0);
+  const rssMB = (mem.rss / 1024 / 1024).toFixed(0);
+  if (mem.heapUsed > 500 * 1024 * 1024) { // Only log when >500MB
+    console.warn(`🧠 MEMORY: heap=${heapMB}MB rss=${rssMB}MB`);
+  }
+}, 30000);
+
+// Per-request memory tracking for heavy endpoints
+app.use((req, res, next) => {
+  const before = process.memoryUsage().heapUsed;
+  res.on('finish', () => {
+    const delta = process.memoryUsage().heapUsed - before;
+    if (delta > 10 * 1024 * 1024) { // >10MB growth
+      console.warn(`🧠 HEAVY REQUEST: ${req.method} ${req.originalUrl} +${(delta / 1024 / 1024).toFixed(1)}MB`);
+    }
+  });
+  next();
+});
 
 // Serve static files from uploads directory (for DOOH videos)
 const __filename = fileURLToPath(import.meta.url);
@@ -295,6 +319,12 @@ app.use('/api/narrator2', narrator2Routes);
 
 // Algorithm Providers routes (HER Provider Registry + DEB→Docker Conversion Service)
 app.use('/api/algorithm-providers', algorithmProvidersRoutes);
+
+// LaunchPad Commissioning Wizard routes (separate DB — zero impact on core)
+app.use('/api/launchpad', launchpadRoutes);
+
+// AI Fixture Classification routes (GPT-4o Vision — optional, needs OPENAI_API_KEY)
+app.use('/api/dwg', createAiClassifyRoutes(db));
 
 // Replay Insight routes (parallel, read-only behavior episode system)
 console.log(`⏱️ STARTUP: pre-routes +${Date.now() - _startupT0}ms`);
@@ -1000,10 +1030,12 @@ httpServer.listen(PORT, async () => {
 // Graceful shutdown
 // Prevent uncaught errors from crashing the backend
 process.on('uncaughtException', (err) => {
-  console.error('⚠️ Uncaught exception (process kept alive):', err.message);
+  console.error(`⚠️ [${new Date().toISOString()}] Uncaught exception (process kept alive):`, err.message);
+  console.error(err.stack);
 });
 process.on('unhandledRejection', (reason) => {
-  console.error('⚠️ Unhandled rejection (process kept alive):', reason);
+  console.error(`⚠️ [${new Date().toISOString()}] Unhandled rejection (process kept alive):`, reason);
+  if (reason instanceof Error) console.error(reason.stack);
 });
 
 process.on('SIGINT', () => {

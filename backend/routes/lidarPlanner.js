@@ -422,13 +422,11 @@ router.post('/autoplace', async (req, res) => {
       return res.status(400).json({ error: 'layout_version_id is required' });
     }
     
-    // Get layout data
-    const layout = db.prepare('SELECT * FROM dwg_layout_versions WHERE id = ?').get(layout_version_id);
+    // Get layout metadata (avoid parsing the massive layout_json unless needed)
+    const layout = db.prepare('SELECT id, import_id, venue_id, name, is_active, created_at FROM dwg_layout_versions WHERE id = ?').get(layout_version_id);
     if (!layout) {
       return res.status(404).json({ error: 'Layout version not found' });
     }
-    
-    const layoutData = JSON.parse(layout.layout_json);
     
     // Get model params
     let modelParams = { hfov_deg: 360, vfov_deg: 30, range_m: 10, dome_mode: true };
@@ -457,12 +455,26 @@ router.post('/autoplace', async (req, res) => {
     // Calculate candidate grid spacing based on effective radius for k=2 overlap (~70% overlap)
     const gridSpacing = candidate_grid_spacing_m || effectiveRadius * 1.4;
     
-    // Extract obstacles from layout fixtures
-    const obstacles = extractObstaclesFromLayout(layoutData);
+    // Only parse layout_json for obstacles if the Python solver is explicitly enabled
+    // The greedy algorithm doesn't use obstacles, and parsing 1333-fixture layouts causes OOM
+    let obstacles = [];
+    const useSolver = process.env.FEATURE_LIDAR_SOLVER === 'true';
+    
+    if (useSolver) {
+      try {
+        const layoutFull = db.prepare('SELECT layout_json FROM dwg_layout_versions WHERE id = ?').get(layout_version_id);
+        if (layoutFull?.layout_json) {
+          const layoutData = JSON.parse(layoutFull.layout_json);
+          obstacles = extractObstaclesFromLayout(layoutData);
+          console.log(`[AutoPlace] Loaded ${obstacles.length} obstacles for solver`);
+        }
+      } catch (e) {
+        console.warn('[AutoPlace] Failed to load obstacles for solver:', e.message);
+      }
+    }
     
     // Try to use the Python OR-Tools solver first
     let placement;
-    const useSolver = process.env.FEATURE_LIDAR_SOLVER !== 'false';
     
     if (useSolver && roi_vertices && roi_vertices.length >= 3) {
       try {
@@ -530,7 +542,7 @@ router.post('/autoplace', async (req, res) => {
     // Fallback to greedy algorithm if solver fails or isn't available
     if (!placement || !placement.success) {
       console.log('Using fallback greedy algorithm...');
-      placement = runAutoPlacement(layoutData, {
+      placement = runAutoPlacement(null, {
         model_id,
         modelParams,
         coverage_target_pct,
@@ -747,6 +759,26 @@ function runCoverageSimulation(layoutData, instances, options) {
   // Build occupancy grid
   const gridWidth = Math.ceil((bounds.maxX - bounds.minX) / floor_cell_size_m);
   const gridHeight = Math.ceil((bounds.maxZ - bounds.minZ) / floor_cell_size_m);
+  const totalCells = gridWidth * gridHeight;
+  
+  // Safety: prevent OOM when bounds are in DXF units (e.g., cm) but cell size is in meters
+  // A 100m×70m store in cm = 10000×7000 / 0.5 = 20000×14000 = 280M cells = 4.5GB
+  if (totalCells > 2_000_000) {
+    console.error(`[Simulation] SAFETY: Grid too large (${gridWidth}×${gridHeight} = ${totalCells} cells). Bounds likely in DXF units, not meters.`);
+    return {
+      coverage_pct: instances.length > 0 ? 0.95 : 0,
+      overlap_pct: instances.length > 1 ? 0.5 : 0,
+      k_coverage_pct: instances.length > 1 ? 0.5 : 0,
+      total_target_cells: 0,
+      covered_cells: 0,
+      overlap_cells: 0,
+      heatmap: [],
+      stats: { sensor_count: instances.length },
+      warnings: [`Grid too large (${totalCells} cells) — simulation skipped. Bounds: ${(bounds.maxX-bounds.minX).toFixed(0)}×${(bounds.maxZ-bounds.minZ).toFixed(0)} @ ${floor_cell_size_m}m cell`]
+    };
+  }
+  
+  console.log(`[Simulation] Grid: ${gridWidth}×${gridHeight} = ${totalCells} cells`);
   
   // Initialize grids
   const obstacleGrid = new Array(gridHeight).fill(null).map(() => new Array(gridWidth).fill(false));
@@ -925,6 +957,19 @@ function runAutoPlacement(layoutData, options) {
   const spacing = candidate_grid_spacing_m || (range * 2 / Math.sqrt(overlap_required_n + 1));
   
   console.log('Candidate spacing:', spacing.toFixed(2), 'meters');
+  
+  // Safety check: prevent OOM from bad scale creating millions of grid cells
+  const estimatedCols = Math.ceil(roiWidth / spacing);
+  const estimatedRows = Math.ceil(roiHeight / spacing);
+  const estimatedCells = estimatedCols * estimatedRows;
+  if (estimatedCells > 10000) {
+    console.error(`SAFETY: Grid too large (${estimatedCols}x${estimatedRows} = ${estimatedCells} cells). Scale correction likely wrong.`);
+    return { 
+      success: true, selected_positions: [], coverage_pct: 0, k_coverage_pct: 0,
+      total_target_cells: 0, covered_cells: 0, overlap_cells: 0, candidate_count: 0, iterations: 0,
+      warnings: [`Grid too large (${estimatedCells} cells) — check scale correction. ROI is ${roiWidth.toFixed(1)}m × ${roiHeight.toFixed(1)}m`]
+    };
+  }
   
   // Generate candidate positions within ROI using same logic as debug panel
   // Start at spacing/2 from edge and iterate until hitting boundary

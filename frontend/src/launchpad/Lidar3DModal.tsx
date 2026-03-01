@@ -1,0 +1,105 @@
+/**
+ * Lidar3DModal — Wraps the existing Layout3DPreview in a full-screen modal
+ * for the LaunchPad's 3D preview step. Does NOT modify the original component.
+ */
+
+import { useState, useEffect, useCallback } from 'react'
+import { X } from 'lucide-react'
+import Layout3DPreview from '../components/dwgImporter/Layout3DPreview'
+import * as api from './launchpadApi'
+
+interface Lidar3DModalProps {
+  layoutVersionId: string
+  importId?: string
+  onClose: () => void
+}
+
+export default function Lidar3DModal({ layoutVersionId, importId, onClose }: Lidar3DModalProps) {
+  const [lidarInstances, setLidarInstances] = useState<any[]>([])
+  const [lidarModels, setLidarModels] = useState<any[]>([])
+  const [scaleCorrection, setScaleCorrection] = useState(1.0)
+
+  // Load LiDAR data
+  useEffect(() => {
+    (async () => {
+      try {
+        const [instances, models] = await Promise.all([
+          api.listLidarInstances(layoutVersionId),
+          api.listLidarModels(),
+        ])
+        setLidarInstances(instances.map(inst => ({
+          id: inst.id,
+          x_m: inst.x_m,
+          z_m: inst.z_m,
+          y_m: inst.mount_y_m || 3,
+          mount_y_m: inst.mount_y_m || 3,
+          yaw_deg: 0,
+          model_id: inst.model_id,
+          source: inst.source,
+          range_m: models.find(m => m.id === inst.model_id)?.range_m || 20,
+        })))
+        setLidarModels(models)
+      } catch (err) {
+        console.error('[Lidar3DModal] Failed to load LiDAR data:', err)
+      }
+    })()
+  }, [layoutVersionId])
+
+  // Load scale correction from localStorage
+  useEffect(() => {
+    try {
+      const settings = JSON.parse(localStorage.getItem('launchpad-autoplace-settings') || '{}')
+      if (settings.scaleMultiplier) setScaleCorrection(settings.scaleMultiplier)
+    } catch { /* ignore */ }
+  }, [])
+
+  // Escape to close
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [onClose])
+
+  const handleBackdropClick = useCallback((e: React.MouseEvent) => {
+    if (e.target === e.currentTarget) onClose()
+  }, [onClose])
+
+  return (
+    <div
+      className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 backdrop-blur-sm"
+      onClick={handleBackdropClick}
+    >
+      <div
+        className="relative w-[92vw] h-[88vh] max-w-[1600px] bg-gray-950 border border-gray-700 rounded-xl shadow-2xl overflow-hidden flex flex-col"
+        onClick={e => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div className="flex items-center justify-between px-4 py-2 bg-gray-950 border-b border-gray-800 shrink-0">
+          <div className="flex items-center gap-3">
+            <span className="text-xs text-gray-400 font-medium">LiDAR 3D Preview</span>
+            <span className="text-[10px] text-gray-600">
+              {lidarInstances.length} sensors · scale {scaleCorrection}×
+            </span>
+          </div>
+          <button
+            onClick={onClose}
+            className="w-7 h-7 flex items-center justify-center text-gray-400 hover:text-white rounded-md hover:bg-gray-800 transition-colors"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+
+        {/* 3D Preview — full remaining space */}
+        <div className="flex-1 overflow-hidden">
+          <Layout3DPreview
+            layoutVersionId={layoutVersionId}
+            importId={importId}
+            lidarInstances={lidarInstances}
+            lidarModels={lidarModels}
+            scaleCorrection={scaleCorrection}
+          />
+        </div>
+      </div>
+    </div>
+  )
+}

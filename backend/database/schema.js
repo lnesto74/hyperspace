@@ -792,6 +792,25 @@ export function initDatabase() {
     );
 
     CREATE INDEX IF NOT EXISTS idx_provider_secrets_provider_id ON provider_secrets(provider_id);
+
+    -- ============================================
+    -- AI Fixture Classification Cache
+    -- Stores GPT-4o Vision classification results per DWG import
+    -- ============================================
+    CREATE TABLE IF NOT EXISTS ai_classify_cache (
+      id TEXT PRIMARY KEY,
+      import_id TEXT NOT NULL,
+      source_hash TEXT,
+      model TEXT NOT NULL DEFAULT 'gpt-4o',
+      result_json TEXT NOT NULL,
+      prompt_tokens INTEGER,
+      completion_tokens INTEGER,
+      latency_ms INTEGER,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (import_id) REFERENCES dwg_imports(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_ai_classify_cache_import_id ON ai_classify_cache(import_id);
   `);
 
   // Migration: Add DWG-related columns to venues table if they don't exist

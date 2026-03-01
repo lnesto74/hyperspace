@@ -644,6 +644,9 @@ export default function DwgImporterPage({ onClose, onLayoutGenerated }: DwgImpor
       setImportData(data)
       setGeneratedLayoutId(null)
       setShow3DPreview(false)
+      // Track the active import for LaunchPad (even before a layout is generated)
+      localStorage.setItem('launchpad-activeImportId', importId)
+      console.log(`[DwgImporter] Active import set → ${importId} (${data.filename})`)
       
       // Load existing mapping if any
       const mappingRes = await fetch(`${API_BASE}/api/dwg/import/${importId}/mapping`)
@@ -660,6 +663,10 @@ export default function DwgImporterPage({ onClose, onLayoutGenerated }: DwgImpor
           // Use the most recent active layout
           const activeLayout = layouts.find((l: any) => l.is_active) || layouts[0]
           setGeneratedLayoutId(activeLayout.id)
+          // Sync to localStorage so LaunchPad + DwgContext see the correct DWG
+          localStorage.setItem('venueDwg-selectedLayout', activeLayout.id)
+          window.dispatchEvent(new CustomEvent('dwgLayoutSelected', { detail: { layoutId: activeLayout.id } }))
+          console.log(`[DwgImporter] loadExistingImport synced layout → ${activeLayout.id}`)
           
           // Ensure venue is linked to this layout (may have been missed previously)
           if (venue?.id) {
@@ -801,6 +808,10 @@ export default function DwgImporterPage({ onClose, onLayoutGenerated }: DwgImpor
       }
       
       setGeneratedLayoutId(result.layout_version_id)
+      // Sync to localStorage so LaunchPad + DwgContext see the correct DWG
+      localStorage.setItem('venueDwg-selectedLayout', result.layout_version_id)
+      window.dispatchEvent(new CustomEvent('dwgLayoutSelected', { detail: { layoutId: result.layout_version_id } }))
+      console.log(`[DwgImporter] generateLayout synced layout → ${result.layout_version_id}`)
       onLayoutGenerated?.(result.layout_version_id)
       
       // Link this layout to the venue so Edge Commissioning can find it

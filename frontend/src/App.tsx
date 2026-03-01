@@ -33,8 +33,9 @@ import DoohEffectivenessPage from './components/dooh/DoohEffectivenessPage'
 import { BusinessReportingPage } from './features/businessReporting'
 import { ProfitRadarPage } from './features/profitRadar'
 import { ProfitRadarProvider } from './context/ProfitRadarContext'
+import { LaunchPadPanel, LaunchPadToggle, isLaunchPadEnabled, loadSession } from './launchpad'
 
-import { BarChart3, Bell, Thermometer, Zap, LayoutGrid, ShoppingCart, Monitor, Activity, PieChart, Clapperboard, Crosshair, Building2, LogOut, User } from 'lucide-react'
+import { BarChart3, Bell, Thermometer, Zap, LayoutGrid, ShoppingCart, Monitor, Activity, PieChart, Clapperboard, Crosshair, Building2, LogOut, User, Rocket } from 'lucide-react'
 import { useState, useEffect, createContext, useContext } from 'react'
 import { Routes, Route, useNavigate } from 'react-router-dom'
 import { useAuth } from './context/AuthContext'
@@ -45,7 +46,17 @@ import CompaniesPage from './components/admin/CompaniesPage'
 
 // App view mode context
 type ViewMode = 'main' | 'planogram' | 'dwgImporter' | 'lidarPlanner' | 'edgeCommissioning' | 'doohAnalytics' | 'doohEffectiveness' | 'businessReporting' | 'profitRadar'
-const ViewModeContext = createContext<{ mode: ViewMode; setMode: (m: ViewMode) => void }>({ mode: 'main', setMode: () => {} })
+const ViewModeContext = createContext<{
+  mode: ViewMode
+  setMode: (m: ViewMode) => void
+  launchPadOpen: boolean
+  setLaunchPadOpen: (open: boolean) => void
+}>({
+  mode: 'main',
+  setMode: () => {},
+  launchPadOpen: false,
+  setLaunchPadOpen: () => {},
+})
 export const useViewMode = () => useContext(ViewModeContext)
 
 function KPIPopupWrapper() {
@@ -75,7 +86,7 @@ function KPIPopupWrapper() {
 }
 
 function KPIOverlayToggle() {
-  const { showKPIOverlays, toggleKPIOverlays } = useRoi()
+  const { showKPIOverlays, toggleKPIOverlays, startDrawing: startRoiDrawing } = useRoi()
   const { venue } = useVenue()
   const { setMode } = useViewMode()
   const { dwgLayoutId } = useDwg()
@@ -86,11 +97,23 @@ function KPIOverlayToggle() {
   const [showSmartKpiModal, setShowSmartKpiModal] = useState(false)
   const [showCheckoutManager, setShowCheckoutManager] = useState(false)
   const [unreadCount, setUnreadCount] = useState(0)
+  const { launchPadOpen: showLaunchPad, setLaunchPadOpen: setShowLaunchPad } = useViewMode()
+  const launchPadSession = showLaunchPad ? loadSession() : null
+  const lpCompleted = launchPadSession?.steps.filter(s => s.status === 'done' || s.status === 'warning').length || 0
+  const lpTotal = launchPadSession?.steps.length || 8
   
-  // Debug: log dwgLayoutId
+  // Listen for LaunchPad step activation events (e.g. ROI drawing mode)
   useEffect(() => {
-    console.log(`[KPIOverlayToggle] dwgLayoutId from context: ${dwgLayoutId}`)
-  }, [dwgLayoutId])
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail
+      if (detail?.stepId === 'define_rois') {
+        console.log('[KPIOverlayToggle] LaunchPad activated ROI drawing mode')
+        startRoiDrawing()
+      }
+    }
+    window.addEventListener('launchpad-step-activate', handler)
+    return () => window.removeEventListener('launchpad-step-activate', handler)
+  }, [startRoiDrawing])
   
   // Fetch unread count for badge
   useEffect(() => {
@@ -302,6 +325,16 @@ function KPIOverlayToggle() {
           <Clapperboard className="w-4 h-4" />
         </button>
         
+        {/* LaunchPad Toggle */}
+        {isLaunchPadEnabled() && (
+          <LaunchPadToggle
+            isOpen={showLaunchPad}
+            onToggle={() => setShowLaunchPad(!showLaunchPad)}
+            completedSteps={lpCompleted}
+            totalSteps={lpTotal}
+          />
+        )}
+        
         {/* AI Narrator2 Button (Copilot) */}
         <Narrator2Toggle />
         
@@ -358,6 +391,8 @@ function KPIOverlayToggle() {
       <InsightModeOverlay />
       <StoryGridModal />
       
+      {/* LaunchPad Drawer — now rendered at MainApp level for cross-view visibility */}
+      
       {/* AI Narrator2 Drawer (Copilot) */}
       <Narrator2Drawer 
         onExecuteIntent={(intent) => {
@@ -394,15 +429,17 @@ function KPIOverlayToggle() {
 }
 
 function MainApp() {
+  const { venue } = useVenue()
   const [viewMode, setViewMode] = useState<ViewMode>('main')
   const [showLanding, setShowLanding] = useState(true)
+  const [launchPadOpen, setLaunchPadOpen] = useState(false)
   
   const handleDismissLanding = () => {
     setShowLanding(false)
   }
   
   return (
-    <ViewModeContext.Provider value={{ mode: viewMode, setMode: setViewMode }}>
+    <ViewModeContext.Provider value={{ mode: viewMode, setMode: setViewMode, launchPadOpen, setLaunchPadOpen }}>
       <PlanogramProvider>
         {/* DWG Importer View */}
         {viewMode === 'dwgImporter' && (
@@ -464,6 +501,29 @@ function MainApp() {
           <KPIPopupWrapper />
           <KPIOverlayToggle />
         </div>
+
+        {/* LaunchPad Drawer — rendered at top level so it works across all views */}
+        {isLaunchPadEnabled() && (
+          <LaunchPadPanel
+            isOpen={launchPadOpen}
+            onClose={() => setLaunchPadOpen(false)}
+            onDeepLink={(vm) => setViewMode(vm as ViewMode)}
+            venueId={venue?.id}
+            venueName={venue?.name}
+            currentViewMode={viewMode}
+          />
+        )}
+
+        {/* Floating "Return to LaunchPad" bar — visible on deep-linked views */}
+        {isLaunchPadEnabled() && launchPadOpen && viewMode !== 'main' && (
+          <button
+            onClick={() => setViewMode('main')}
+            className="fixed bottom-4 left-1/2 -translate-x-1/2 z-[60] flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium rounded-full shadow-lg shadow-indigo-500/25 transition-all"
+          >
+            <Rocket className="w-4 h-4" />
+            Return to LaunchPad
+          </button>
+        )}
       </PlanogramProvider>
     </ViewModeContext.Provider>
   )

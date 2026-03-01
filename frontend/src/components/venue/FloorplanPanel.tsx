@@ -568,10 +568,11 @@ export default function FloorplanPanel({ onOpenDwgImporter }: FloorplanPanelProp
                           const venueItem = venueList.find(v => v.id === fp.venueId)
                           
                           return (
-                            <button
+                            <div
                               key={fp.id}
+                              role="button"
+                              tabIndex={fp.has3D ? 0 : -1}
                               onClick={() => fp.has3D && handleSelectFloorplan(fp)}
-                              disabled={!fp.has3D}
                               className={`w-full text-left p-2.5 rounded-lg border transition-colors group ${
                                 isActive
                                   ? 'bg-highlight/10 border-highlight text-white'
@@ -616,7 +617,7 @@ export default function FloorplanPanel({ onOpenDwgImporter }: FloorplanPanelProp
                                   </button>
                                 )}
                               </div>
-                            </button>
+                            </div>
                           )
                         })
                       )}

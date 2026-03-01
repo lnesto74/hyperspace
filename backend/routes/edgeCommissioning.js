@@ -290,10 +290,12 @@ router.get('/edge/:edgeId/status', async (req, res) => {
   } catch (err) {
     console.error(`❌ Status fetch from edge ${req.params.edgeId} failed:`, err.message);
     
-    // Return offline status
+    // Return offline status with hostname fallback
     res.json({
       success: false,
       edgeId: req.params.edgeId,
+      hostname: req.params.edgeId,
+      tailscaleIp: null,
       online: false,
       error: err.message,
     });
