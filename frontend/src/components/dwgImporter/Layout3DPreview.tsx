@@ -59,6 +59,16 @@ interface SimulationResult {
   total_cells: number
 }
 
+interface FocusBounds {
+  minX: number; minY: number; maxX: number; maxY: number
+}
+
+interface FixtureClassification {
+  groupId: string
+  suggestedType: string
+  confidence: number
+}
+
 interface Layout3DPreviewProps {
   layoutVersionId: string
   importId?: string
@@ -67,6 +77,10 @@ interface Layout3DPreviewProps {
   lidarModels?: LidarModel[]
   scaleCorrection?: number
   simulationResult?: SimulationResult | null
+  /** Optional focus area in DXF coordinates — camera will center+zoom here */
+  focusBounds?: FocusBounds
+  /** Optional classifications to apply types to raw import fixtures */
+  classifications?: FixtureClassification[]
 }
 
 interface CustomModel {
@@ -84,7 +98,7 @@ const TYPE_COLORS: Record<string, number> = {
   default: 0x4b5563
 }
 
-export default function Layout3DPreview({ layoutVersionId, importId, lidarInstances = [], lidarModels = [], scaleCorrection = 1.0, simulationResult = null }: Layout3DPreviewProps) {
+export default function Layout3DPreview({ layoutVersionId, importId, lidarInstances = [], lidarModels = [], scaleCorrection = 1.0, simulationResult = null, focusBounds, classifications }: Layout3DPreviewProps) {
   console.log('Layout3DPreview render - lidarInstances:', lidarInstances.length, 'lidarModels:', lidarModels.length)
   
   const containerRef = useRef<HTMLDivElement>(null)
@@ -562,17 +576,26 @@ export default function Layout3DPreview({ layoutVersionId, importId, lidarInstan
               const rawFixtures = impData.fixtures || []
               console.log(`[Layout3DPreview] Loaded ${rawFixtures.length} raw fixtures from import`)
               if (rawFixtures.length > 0) {
+                // Build classification lookup: groupId → type
+                const classMap = new Map<string, string>()
+                if (classifications?.length) {
+                  classifications.forEach(c => classMap.set(c.groupId, c.suggestedType))
+                }
                 // Convert raw import fixtures to layout fixture format
-                const layoutFixtures: LayoutFixture[] = rawFixtures.map((fx: any) => ({
-                  id: fx.id,
-                  group_id: fx.group_id || fx.id,
-                  pose2d: fx.pose2d,
-                  footprint: fx.footprint,
-                  mapping: null,
-                  source: fx.source,
-                }))
+                const layoutFixtures: LayoutFixture[] = rawFixtures.map((fx: any) => {
+                  const classType = classMap.get(fx.group_id) || null
+                  return {
+                    id: fx.id,
+                    group_id: fx.group_id || fx.id,
+                    pose2d: fx.pose2d,
+                    footprint: fx.footprint,
+                    mapping: classType ? { catalog_asset_id: classType, type: classType } : null,
+                    source: fx.source,
+                  }
+                })
                 data.layout.fixtures = layoutFixtures
                 data.layout.total_count = layoutFixtures.length
+                console.log(`[Layout3DPreview] Applied ${classMap.size} classifications to ${layoutFixtures.length} fixtures`)
               }
             }
           } catch (fallbackErr) {
@@ -900,10 +923,26 @@ export default function Layout3DPreview({ layoutVersionId, importId, lidarInstan
     // Mark scene as built so async camera view fetch can apply when it arrives
     sceneBuiltRef.current = true
 
-    // Update camera to fit scene - try loading saved view first
+    // Update camera to fit scene
     if (cameraRef.current && controlsRef.current) {
-      // Try to load saved camera view
-      if (!loadSavedCameraView()) {
+      // If focusBounds provided (e.g. from ROI step), use those for a cinematic zoomed view
+      if (focusBounds) {
+        const fbCenterX = (focusBounds.minX + focusBounds.maxX) / 2 * effectiveScale - centerX
+        const fbCenterZ = (focusBounds.minY + focusBounds.maxY) / 2 * effectiveScale - centerZ
+        const fbWidth = (focusBounds.maxX - focusBounds.minX) * effectiveScale
+        const fbDepth = (focusBounds.maxY - focusBounds.minY) * effectiveScale
+        const fbSize = Math.max(fbWidth, fbDepth, 10) // min 10m to avoid too-close zoom
+
+        // Cinematic angled view — slightly elevated, looking at ROI center
+        cameraRef.current.position.set(
+          fbCenterX + fbSize * 0.6,
+          fbSize * 0.45,
+          fbCenterZ + fbSize * 0.6
+        )
+        controlsRef.current.target.set(fbCenterX, 0, fbCenterZ)
+        controlsRef.current.update()
+        console.log(`[3D] Camera focused on ROI bounds: center=(${fbCenterX.toFixed(1)}, ${fbCenterZ.toFixed(1)}), size=${fbSize.toFixed(1)}m`)
+      } else if (!loadSavedCameraView()) {
         // No saved view, use default based on content bounds
         const maxSize = useContentBounds ? maxContentSize : Math.max(rawBoundsWidth, rawBoundsDepth)
         
@@ -920,7 +959,7 @@ export default function Layout3DPreview({ layoutVersionId, importId, lidarInstan
       }
     }
 
-  }, [layoutData, showWireframe, loadModel, customModels, loadSavedCameraView, scaleCorrection])
+  }, [layoutData, showWireframe, loadModel, customModels, loadSavedCameraView, scaleCorrection, focusBounds])
 
   // Toggle fixtures layer visibility
   useEffect(() => {

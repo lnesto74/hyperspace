@@ -1362,6 +1362,8 @@ export default function LaunchPadPanel({
             layoutVersionId={dwgData.layoutVersionId}
             importId={dwgData.importId || undefined}
             onClose={() => setShow3DPreview(false)}
+            rois={geometry?.rois}
+            classifications={geometry?.classifications}
           />
         )
       })()}

@@ -246,11 +246,28 @@ function StatusStage({ stepId, session, onContinue }: {
 }
 
 /* ─── 3D Flythrough (inline, not modal) ─── */
-function Inline3DFlythrough({ layoutVersionId, importId }: { layoutVersionId: string; importId?: string }) {
+function Inline3DFlythrough({ layoutVersionId, importId, geometry }: { layoutVersionId: string; importId?: string; geometry?: DwgGeometry }) {
   const [lidarInstances, setLidarInstances] = useState<any[]>([])
   const [lidarModels, setLidarModels] = useState<any[]>([])
   const [scaleCorrection, setScaleCorrection] = useState(1.0)
   const [loaded, setLoaded] = useState(false)
+
+  // Compute focus bounds from ROIs (DXF coordinates)
+  const focusBounds = useMemo(() => {
+    const rois = geometry?.rois
+    if (!rois?.length) return undefined
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+    rois.forEach(roi => {
+      roi.vertices.forEach(v => {
+        minX = Math.min(minX, v.x)
+        minY = Math.min(minY, v.y)
+        maxX = Math.max(maxX, v.x)
+        maxY = Math.max(maxY, v.y)
+      })
+    })
+    if (!isFinite(minX)) return undefined
+    return { minX, minY, maxX, maxY }
+  }, [geometry?.rois])
 
   useEffect(() => {
     (async () => {
@@ -305,6 +322,8 @@ function Inline3DFlythrough({ layoutVersionId, importId }: { layoutVersionId: st
         lidarInstances={lidarInstances}
         lidarModels={lidarModels}
         scaleCorrection={scaleCorrection}
+        focusBounds={focusBounds}
+        classifications={geometry?.classifications}
       />
     </div>
   )
@@ -368,6 +387,7 @@ export default function LaunchPadStage({
         <Inline3DFlythrough
           layoutVersionId={dwgData.layoutVersionId}
           importId={dwgData.importId || undefined}
+          geometry={geometry}
         />
       )
     }

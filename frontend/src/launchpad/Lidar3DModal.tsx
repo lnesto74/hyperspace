@@ -3,18 +3,32 @@
  * for the LaunchPad's 3D preview step. Does NOT modify the original component.
  */
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import { X } from 'lucide-react'
 import Layout3DPreview from '../components/dwgImporter/Layout3DPreview'
 import * as api from './launchpadApi'
+
+interface RoiBounds {
+  minX: number; minY: number; maxX: number; maxY: number
+}
+
+interface Classification {
+  groupId: string
+  suggestedType: string
+  confidence: number
+}
 
 interface Lidar3DModalProps {
   layoutVersionId: string
   importId?: string
   onClose: () => void
+  /** ROI vertices for computing camera focus bounds */
+  rois?: Array<{ vertices: Array<{ x: number; y: number }> }>
+  /** Classifications to apply types to raw fixtures */
+  classifications?: Classification[]
 }
 
-export default function Lidar3DModal({ layoutVersionId, importId, onClose }: Lidar3DModalProps) {
+export default function Lidar3DModal({ layoutVersionId, importId, onClose, rois, classifications }: Lidar3DModalProps) {
   const [lidarInstances, setLidarInstances] = useState<any[]>([])
   const [lidarModels, setLidarModels] = useState<any[]>([])
   const [scaleCorrection, setScaleCorrection] = useState(1.0)
@@ -52,6 +66,22 @@ export default function Lidar3DModal({ layoutVersionId, importId, onClose }: Lid
       if (settings.scaleMultiplier) setScaleCorrection(settings.scaleMultiplier)
     } catch { /* ignore */ }
   }, [])
+
+  // Compute focus bounds from ROIs
+  const focusBounds = useMemo<RoiBounds | undefined>(() => {
+    if (!rois?.length) return undefined
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+    rois.forEach(roi => {
+      roi.vertices.forEach(v => {
+        minX = Math.min(minX, v.x)
+        minY = Math.min(minY, v.y)
+        maxX = Math.max(maxX, v.x)
+        maxY = Math.max(maxY, v.y)
+      })
+    })
+    if (!isFinite(minX)) return undefined
+    return { minX, minY, maxX, maxY }
+  }, [rois])
 
   // Escape to close
   useEffect(() => {
@@ -97,6 +127,8 @@ export default function Lidar3DModal({ layoutVersionId, importId, onClose }: Lid
             lidarInstances={lidarInstances}
             lidarModels={lidarModels}
             scaleCorrection={scaleCorrection}
+            focusBounds={focusBounds}
+            classifications={classifications}
           />
         </div>
       </div>
