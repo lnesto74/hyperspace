@@ -1223,6 +1223,51 @@ export function mergeAiClassifications(
   })
 }
 
+// ─── Venue Auto-Resolve ─────────────────────────────────────────
+// Ensures a venueId exists for the LaunchPad session.
+// If none provided, finds an existing venue or creates a default one.
+
+export async function ensureVenueId(currentVenueId?: string | null): Promise<{ venueId: string; venueName: string }> {
+  // Already have one
+  if (currentVenueId) {
+    try {
+      const res = await fetch(`${API_BASE}/api/venues/${currentVenueId}`)
+      if (res.ok) {
+        const data = await res.json()
+        return { venueId: currentVenueId, venueName: data.venue?.name || 'Store' }
+      }
+    } catch { /* venue ID invalid, fall through */ }
+  }
+
+  // Try to find an existing venue
+  try {
+    const res = await fetch(`${API_BASE}/api/venues`)
+    if (res.ok) {
+      const venues = await res.json()
+      if (Array.isArray(venues) && venues.length > 0) {
+        console.log('[LaunchPad] Auto-resolved venue:', venues[0].name, venues[0].id)
+        return { venueId: venues[0].id, venueName: venues[0].name }
+      }
+    }
+  } catch { /* no venues endpoint or error */ }
+
+  // No venues exist — create a default one
+  try {
+    const res = await fetch(`${API_BASE}/api/venues`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'Default Store', width: 30, depth: 20, height: 4, tileSize: 1 }),
+    })
+    if (res.ok) {
+      const data = await res.json()
+      console.log('[LaunchPad] Auto-created venue:', data.id)
+      return { venueId: data.id, venueName: data.name || 'Default Store' }
+    }
+  } catch { /* creation failed */ }
+
+  throw new Error('Could not find or create a venue')
+}
+
 export function buildGoLiveData(trackCount: number): GoLiveData {
   return {
     trackingSubscribed: true,

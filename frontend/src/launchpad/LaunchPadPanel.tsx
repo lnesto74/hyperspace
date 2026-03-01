@@ -98,6 +98,20 @@ export default function LaunchPadPanel({
     }
     setSession(s)
 
+    // Auto-resolve venue if none set (needed for ROI, etc.)
+    const effectiveVenueId = s.venueId || venueId
+    if (!effectiveVenueId) {
+      api.ensureVenueId(null).then(({ venueId: resolvedId, venueName: resolvedName }) => {
+        setSession(prev => {
+          if (!prev || prev.venueId) return prev
+          const updated = { ...prev, venueId: resolvedId, venueName: resolvedName }
+          saveSession(updated)
+          sessionRef.current = updated
+          return updated
+        })
+      }).catch(err => console.warn('[LaunchPad] Could not auto-resolve venue:', err))
+    }
+
     // Restore UI state
     const ui = loadUIState()
     if (ui.expandedStepId) setExpandedStepId(ui.expandedStepId as LaunchPadStepId)
