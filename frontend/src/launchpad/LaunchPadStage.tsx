@@ -148,27 +148,37 @@ function DwgDropZone({ venueId, onUploaded }: { venueId?: string | null; onUploa
   )
 }
 
-/* InlineViewport removed — using MiniDwgViewport directly for proper centering, zoom, and interactivity */
-
-/* ─── Prompt Card ─── */
-function PromptCard({ title, message, actions }: {
+/* ─── Action Stage (lightweight status card — opens existing modals for interactive work) ─── */
+function ActionStage({ icon, title, subtitle, isDone, isRunning, actions }: {
+  icon: React.ReactNode
   title: string
-  message: string
+  subtitle: string
+  isDone: boolean
+  isRunning: boolean
   actions: Array<{ label: string; onClick: () => void; primary?: boolean; icon?: React.ReactNode }>
 }) {
   return (
-    <div className="absolute bottom-6 left-1/2 -translate-x-1/2 w-[90%] max-w-md z-20 animate-in slide-in-from-bottom-4 duration-500">
-      <div className="bg-gray-900/95 backdrop-blur-md border border-gray-700 rounded-xl p-4 shadow-2xl">
-        <h3 className="text-sm font-semibold text-white mb-1">{title}</h3>
-        <p className="text-xs text-gray-400 mb-3">{message}</p>
-        <div className="flex gap-2">
+    <div className="flex flex-col items-center justify-center h-full gap-6 p-8">
+      <div className={`p-6 rounded-full transition-all duration-500 ${
+        isDone ? 'bg-green-500/10 text-green-400' :
+        isRunning ? 'bg-indigo-500/10 text-indigo-400 animate-pulse' :
+        'bg-indigo-500/10 text-indigo-400'
+      }`}>
+        {isDone ? <CheckCircle2 className="w-16 h-16" /> : icon}
+      </div>
+      <div className="text-center max-w-sm">
+        <h3 className="text-lg font-semibold text-white mb-1">{title}</h3>
+        <p className="text-sm text-gray-400">{subtitle}</p>
+      </div>
+      {actions.length > 0 && (
+        <div className="flex gap-3 mt-2">
           {actions.map((a, i) => (
             <button
               key={i}
               onClick={a.onClick}
-              className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium transition-all ${
+              className={`flex items-center gap-2 px-5 py-2.5 rounded-lg text-sm font-medium transition-all ${
                 a.primary
-                  ? 'bg-indigo-600 hover:bg-indigo-500 text-white'
+                  ? 'bg-indigo-600 hover:bg-indigo-500 text-white shadow-lg shadow-indigo-500/20'
                   : 'bg-gray-800 hover:bg-gray-700 text-gray-300 border border-gray-600'
               }`}
             >
@@ -177,10 +187,17 @@ function PromptCard({ title, message, actions }: {
             </button>
           ))}
         </div>
-      </div>
+      )}
+      {isRunning && (
+        <div className="flex items-center gap-2 mt-2">
+          <Loader2 className="w-4 h-4 text-indigo-400 animate-spin" />
+          <span className="text-xs text-indigo-300">Processing...</span>
+        </div>
+      )}
     </div>
   )
 }
+
 
 /* ─── Status Card (for edge/pairing/stream steps) ─── */
 function StatusStage({ stepId, session, onContinue }: {
@@ -380,90 +397,70 @@ export default function LaunchPadStage({
       }
 
       case 'map_fixtures': {
+        const groupCount = geometry?.classifications?.length || 0
+        const fixtureCount = geometry?.fixtures?.length || 0
+        const isDone = step?.status === 'done' || step?.status === 'warning'
         return (
-          <div className="relative h-full">
-            {geometry?.fixtures?.length && geometry?.bounds ? (
-              <MiniDwgViewport
-                fixtures={geometry.fixtures}
-                bounds={geometry.bounds}
-                classifications={geometry.classifications}
-                mode="classification"
-                height="100%"
-              />
-            ) : (
-              <div className="flex items-center justify-center h-full text-gray-500 text-sm">Loading geometry...</div>
-            )}
-            {autopilot.state === 'waiting_input' && autopilot.waitingFor === 'classification_review' && (
-              <PromptCard
-                title="Review Classification"
-                message={`${geometry?.classifications?.length || 0} fixture groups classified. Accept or refine?`}
-                actions={[
-                  { label: 'Classify by Example', onClick: onRejectClassification, icon: <Eye className="w-3.5 h-3.5" /> },
-                  { label: 'Accept', onClick: onAcceptClassification, primary: true, icon: <CheckCircle2 className="w-3.5 h-3.5" /> },
-                ]}
-              />
-            )}
-          </div>
+          <ActionStage
+            icon={<Boxes className="w-16 h-16" />}
+            title="Fixture Classification"
+            subtitle={isDone
+              ? `${groupCount} groups classified across ${fixtureCount} fixtures`
+              : autopilot.state === 'running'
+                ? 'Analyzing fixture groups...'
+                : `${fixtureCount} fixtures detected in ${groupCount} groups`}
+            isDone={isDone}
+            isRunning={autopilot.state === 'running'}
+            actions={autopilot.state === 'waiting_input' ? [
+              { label: 'Classify by Example', onClick: onRejectClassification, icon: <Eye className="w-4 h-4" /> },
+              { label: 'Accept Classification', onClick: onAcceptClassification, primary: true, icon: <CheckCircle2 className="w-4 h-4" /> },
+            ] : []}
+          />
         )
       }
 
       case 'define_rois': {
+        const roiCount = geometry?.rois?.length || 0
+        const isDone = step?.status === 'done' || step?.status === 'warning'
         return (
-          <div className="relative h-full">
-            {geometry?.fixtures?.length && geometry?.bounds ? (
-              <MiniDwgViewport
-                fixtures={geometry.fixtures}
-                bounds={geometry.bounds}
-                classifications={geometry.classifications}
-                rois={geometry.rois}
-                mode="rois"
-                height="100%"
-              />
-            ) : (
-              <div className="flex items-center justify-center h-full text-gray-500 text-sm">Loading geometry...</div>
-            )}
-            {autopilot.state === 'waiting_input' && autopilot.waitingFor === 'roi_drawing' && (
-              <PromptCard
-                title="Define ROI Zones"
-                message={geometry?.rois?.length
-                  ? `${geometry.rois.length} zones found. Accept or draw new zones?`
-                  : 'No ROI zones defined yet. Draw zones to define tracking regions.'}
-                actions={[
-                  { label: 'Draw Zones', onClick: onDrawRois, icon: <Layers className="w-3.5 h-3.5" /> },
-                  ...(geometry?.rois?.length ? [{ label: 'Accept', onClick: onAcceptRois, primary: true, icon: <CheckCircle2 className="w-3.5 h-3.5" /> }] : []),
-                ]}
-              />
-            )}
-          </div>
+          <ActionStage
+            icon={<Layers className="w-16 h-16" />}
+            title="ROI Zones"
+            subtitle={isDone
+              ? `${roiCount} zones defined`
+              : autopilot.state === 'running'
+                ? 'Checking ROI zones...'
+                : roiCount > 0
+                  ? `${roiCount} zones found. Review or draw new ones.`
+                  : 'No zones defined yet. Draw zones to define tracking regions.'}
+            isDone={isDone}
+            isRunning={autopilot.state === 'running'}
+            actions={autopilot.state === 'waiting_input' ? [
+              { label: 'Draw Zones', onClick: onDrawRois, icon: <Layers className="w-4 h-4" /> },
+              ...(roiCount > 0 ? [{ label: 'Accept Zones', onClick: onAcceptRois, primary: true, icon: <CheckCircle2 className="w-4 h-4" /> }] : []),
+            ] : []}
+          />
         )
       }
 
       case 'place_lidars': {
+        const lidarCount = geometry?.lidars?.length || 0
+        const isDone = step?.status === 'done' || step?.status === 'warning'
         return (
-          <div className="relative h-full">
-            {geometry?.fixtures?.length && geometry?.bounds ? (
-              <MiniDwgViewport
-                fixtures={geometry.fixtures}
-                bounds={geometry.bounds}
-                classifications={geometry.classifications}
-                rois={geometry.rois}
-                lidars={geometry.lidars}
-                mode="lidars"
-                height="100%"
-              />
-            ) : (
-              <div className="flex items-center justify-center h-full text-gray-500 text-sm">Loading geometry...</div>
-            )}
-            {autopilot.state === 'waiting_input' && (
-              <PromptCard
-                title="LiDAR Auto-Placement Complete"
-                message={`${geometry?.lidars?.length || 0} sensors placed. Accept placement?`}
-                actions={[
-                  { label: 'Accept & Preview 3D', onClick: onAcceptLidars, primary: true, icon: <Boxes className="w-3.5 h-3.5" /> },
-                ]}
-              />
-            )}
-          </div>
+          <ActionStage
+            icon={<Radar className="w-16 h-16" />}
+            title="LiDAR Placement"
+            subtitle={isDone
+              ? `${lidarCount} sensors placed`
+              : autopilot.state === 'running'
+                ? 'Auto-placing sensors...'
+                : `${lidarCount} sensors placed. Review placement.`}
+            isDone={isDone}
+            isRunning={autopilot.state === 'running'}
+            actions={autopilot.state === 'waiting_input' ? [
+              { label: 'Accept & Preview 3D', onClick: onAcceptLidars, primary: true, icon: <Boxes className="w-4 h-4" /> },
+            ] : []}
+          />
         )
       }
 

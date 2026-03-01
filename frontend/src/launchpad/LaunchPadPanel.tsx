@@ -857,12 +857,15 @@ export default function LaunchPadPanel({
           return
         }
         if (stepId === 'map_fixtures') {
-          // Auto-run AI enhance if available, then wait for review
+          // Auto-open the existing classify-by-example modal
           setAutopilot(prev => ({ ...prev, state: 'waiting_input', waitingFor: 'classification_review', stageMessage: null }))
+          setShowClassifyModal(true)
           return
         }
         if (stepId === 'define_rois') {
+          // Auto-open the existing ROI drawing modal
           setAutopilot(prev => ({ ...prev, state: 'waiting_input', waitingFor: 'roi_drawing', stageMessage: null }))
+          setShowRoiModal(true)
           return
         }
         if (stepId === 'place_lidars' && updatedStep?.status === 'ready') {
