@@ -257,12 +257,19 @@ export default function RoiDrawingModal({
     setCursorPos(null)
   }, [])
 
-  // Finish & save ROI
+  // Finish & save ROI — replaces all existing ROIs for this DWG layout
   const finishDrawing = useCallback(async () => {
     if (vertices.length < 3 || !venueId) return
     setSaving(true)
     try {
-      const name = roiName.trim() || `Zone ${savedRois.length + 1}`
+      // Delete all existing DWG-scoped ROIs first (LaunchPad = one coverage zone at a time)
+      for (const old of savedRois) {
+        if (old.id) {
+          try { await fetch(`${API_BASE}/api/roi/${old.id}`, { method: 'DELETE' }) } catch { /* ignore */ }
+        }
+      }
+
+      const name = roiName.trim() || 'LiDAR Coverage'
       // Convert vertices to {x, z} format as expected by the ROI system
       const apiVertices = vertices.map(v => ({ x: v.x, z: v.y }))
       const url = dwgLayoutId
@@ -275,8 +282,8 @@ export default function RoiDrawingModal({
       })
       if (!res.ok) throw new Error('Failed to save ROI')
       const saved = await res.json()
-      // Add to local list
-      setSavedRois(prev => [...prev, {
+      // Replace local list with just the new one
+      setSavedRois([{
         id: saved.id,
         name: saved.name,
         color: saved.color || roiColor,
@@ -292,7 +299,7 @@ export default function RoiDrawingModal({
     } finally {
       setSaving(false)
     }
-  }, [vertices, venueId, dwgLayoutId, roiName, roiColor, savedRois.length, onRoiChanged])
+  }, [vertices, venueId, dwgLayoutId, roiName, roiColor, savedRois, onRoiChanged])
 
   // Delete ROI
   const deleteRoi = useCallback(async (roiId: string) => {
