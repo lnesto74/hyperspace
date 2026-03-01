@@ -20,7 +20,7 @@ import {
 } from 'lucide-react'
 import type { LaunchPadSession, LaunchPadStepId, AutopilotContext, SelectDwgData } from './launchpadTypes'
 import type { DwgGeometry } from './LaunchPadStepper'
-import type { MiniFixture, MiniLidar, MiniClassification, MiniRoi } from './MiniDwgViewport'
+import MiniDwgViewport from './MiniDwgViewport'
 import Layout3DPreview from '../components/dwgImporter/Layout3DPreview'
 import * as api from './launchpadApi'
 
@@ -148,93 +148,7 @@ function DwgDropZone({ venueId, onUploaded }: { venueId?: string | null; onUploa
   )
 }
 
-/* ─── 2D Viewport (inline SVG, reuses DwgSvg logic without importing MiniDwgViewport) ─── */
-function InlineViewport({ fixtures, bounds, classifications, rois, lidars, label }: {
-  fixtures?: MiniFixture[]
-  bounds?: { minX: number; minY: number; maxX: number; maxY: number }
-  classifications?: MiniClassification[]
-  rois?: MiniRoi[]
-  lidars?: MiniLidar[]
-  label: string
-}) {
-  if (!fixtures?.length || !bounds) {
-    return (
-      <div className="flex items-center justify-center h-full text-gray-500 text-sm">
-        No geometry data available
-      </div>
-    )
-  }
-
-  const pad = 20
-  const vbMinX = bounds.minX - pad
-  const vbMinY = bounds.minY - pad
-  const vbW = (bounds.maxX - bounds.minX) + pad * 2
-  const vbH = (bounds.maxY - bounds.minY) + pad * 2
-
-  // Build a map from groupId → type for coloring
-  const clsMap = useMemo(() => {
-    const m: Record<string, string> = {}
-    classifications?.forEach(c => { m[c.groupId] = c.suggestedType })
-    return m
-  }, [classifications])
-
-  const getColor = (f: MiniFixture) => {
-    const t = clsMap[f.group_id || ''] || 'default'
-    const colors: Record<string, string> = {
-      shelf: '#6366f1', wall: '#64748b', checkout: '#22c55e',
-      entrance: '#f59e0b', pillar: '#78716c', digital_display: '#8b5cf6',
-      default: '#4b5563',
-    }
-    return colors[t] || colors.default
-  }
-
-  return (
-    <div className="relative w-full h-full">
-      <div className="absolute top-3 left-3 px-2 py-1 bg-gray-900/80 rounded text-[10px] text-gray-400 font-medium z-10">
-        {label}
-      </div>
-      <svg
-        viewBox={`${vbMinX} ${vbMinY} ${vbW} ${vbH}`}
-        className="w-full h-full"
-        style={{ background: '#0a0a0f' }}
-      >
-        {/* ROIs */}
-        {rois?.map((roi, i) => (
-          <polygon
-            key={roi.name + i}
-            points={roi.vertices.map(p => `${p.x},${p.y}`).join(' ')}
-            fill={roi.color + '18'}
-            stroke={roi.color}
-            strokeWidth={vbW * 0.002}
-            strokeDasharray={`${vbW * 0.005} ${vbW * 0.003}`}
-          />
-        ))}
-        {/* Fixtures */}
-        {fixtures.map(f => (
-          <rect
-            key={f.id}
-            x={f.x - f.w / 2}
-            y={f.y - f.d / 2}
-            width={f.w}
-            height={f.d}
-            transform={`rotate(${-(f.rot_deg || 0)} ${f.x} ${f.y})`}
-            fill={getColor(f)}
-            opacity={0.6}
-            rx={vbW * 0.001}
-          />
-        ))}
-        {/* LiDARs */}
-        {lidars?.map((l, i) => (
-          <g key={l.id || `lidar-${i}`}>
-            <circle cx={l.x} cy={l.z} r={l.range_m * 100} fill="rgba(56,189,248,0.06)" stroke="rgba(56,189,248,0.2)" strokeWidth={1} strokeDasharray="6 3" />
-            <circle cx={l.x} cy={l.z} r={8} fill="#38bdf8" opacity={0.9} />
-            <circle cx={l.x} cy={l.z} r={3} fill="white" />
-          </g>
-        ))}
-      </svg>
-    </div>
-  )
-}
+/* InlineViewport removed — using MiniDwgViewport directly for proper centering, zoom, and interactivity */
 
 /* ─── Prompt Card ─── */
 function PromptCard({ title, message, actions }: {
@@ -444,13 +358,14 @@ export default function LaunchPadStage({
     switch (activeStep) {
       case 'select_dwg': {
         const hasDwg = step?.status === 'done'
-        if (hasDwg && geometry) {
+        if (hasDwg && geometry?.fixtures?.length && geometry?.bounds) {
           return (
             <div className="relative h-full">
-              <InlineViewport
+              <MiniDwgViewport
                 fixtures={geometry.fixtures}
                 bounds={geometry.bounds}
-                label="Floor Plan Loaded"
+                mode="fixtures"
+                height="100%"
               />
               {autopilot.state === 'running' && (
                 <div className="absolute top-3 right-3 flex items-center gap-2 px-3 py-1.5 bg-green-500/10 border border-green-500/30 rounded-full z-10">
@@ -467,16 +382,21 @@ export default function LaunchPadStage({
       case 'map_fixtures': {
         return (
           <div className="relative h-full">
-            <InlineViewport
-              fixtures={geometry?.fixtures}
-              bounds={geometry?.bounds}
-              classifications={geometry?.classifications}
-              label={`Fixture Classification · ${Object.keys(geometry?.classifications || {}).length} groups`}
-            />
+            {geometry?.fixtures?.length && geometry?.bounds ? (
+              <MiniDwgViewport
+                fixtures={geometry.fixtures}
+                bounds={geometry.bounds}
+                classifications={geometry.classifications}
+                mode="classification"
+                height="100%"
+              />
+            ) : (
+              <div className="flex items-center justify-center h-full text-gray-500 text-sm">Loading geometry...</div>
+            )}
             {autopilot.state === 'waiting_input' && autopilot.waitingFor === 'classification_review' && (
               <PromptCard
                 title="Review Classification"
-                message={`${Object.keys(geometry?.classifications || {}).length} fixture groups classified. Accept or refine?`}
+                message={`${geometry?.classifications?.length || 0} fixture groups classified. Accept or refine?`}
                 actions={[
                   { label: 'Classify by Example', onClick: onRejectClassification, icon: <Eye className="w-3.5 h-3.5" /> },
                   { label: 'Accept', onClick: onAcceptClassification, primary: true, icon: <CheckCircle2 className="w-3.5 h-3.5" /> },
@@ -490,13 +410,18 @@ export default function LaunchPadStage({
       case 'define_rois': {
         return (
           <div className="relative h-full">
-            <InlineViewport
-              fixtures={geometry?.fixtures}
-              bounds={geometry?.bounds}
-              classifications={geometry?.classifications}
-              rois={geometry?.rois}
-              label={`ROI Zones · ${geometry?.rois?.length || 0} zones`}
-            />
+            {geometry?.fixtures?.length && geometry?.bounds ? (
+              <MiniDwgViewport
+                fixtures={geometry.fixtures}
+                bounds={geometry.bounds}
+                classifications={geometry.classifications}
+                rois={geometry.rois}
+                mode="rois"
+                height="100%"
+              />
+            ) : (
+              <div className="flex items-center justify-center h-full text-gray-500 text-sm">Loading geometry...</div>
+            )}
             {autopilot.state === 'waiting_input' && autopilot.waitingFor === 'roi_drawing' && (
               <PromptCard
                 title="Define ROI Zones"
@@ -516,14 +441,19 @@ export default function LaunchPadStage({
       case 'place_lidars': {
         return (
           <div className="relative h-full">
-            <InlineViewport
-              fixtures={geometry?.fixtures}
-              bounds={geometry?.bounds}
-              classifications={geometry?.classifications}
-              rois={geometry?.rois}
-              lidars={geometry?.lidars}
-              label={`LiDAR Placement · ${geometry?.lidars?.length || 0} sensors`}
-            />
+            {geometry?.fixtures?.length && geometry?.bounds ? (
+              <MiniDwgViewport
+                fixtures={geometry.fixtures}
+                bounds={geometry.bounds}
+                classifications={geometry.classifications}
+                rois={geometry.rois}
+                lidars={geometry.lidars}
+                mode="lidars"
+                height="100%"
+              />
+            ) : (
+              <div className="flex items-center justify-center h-full text-gray-500 text-sm">Loading geometry...</div>
+            )}
             {autopilot.state === 'waiting_input' && (
               <PromptCard
                 title="LiDAR Auto-Placement Complete"

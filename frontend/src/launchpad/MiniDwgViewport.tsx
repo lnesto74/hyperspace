@@ -51,7 +51,7 @@ interface MiniDwgViewportProps {
   classifications?: MiniClassification[]
   rois?: MiniRoi[]
   lidars?: MiniLidar[]
-  height?: number
+  height?: number | string
   mode: 'fixtures' | 'classification' | 'rois' | 'lidars'
   onLidarUpdate?: (id: string, x: number, z: number) => void
   onLidarAdd?: (x: number, z: number) => void
@@ -652,7 +652,7 @@ export default function MiniDwgViewport({
   classifications,
   rois,
   lidars,
-  height = 200,
+  height = 200 as number | string,
   mode,
   onLidarUpdate,
   onLidarAdd,
