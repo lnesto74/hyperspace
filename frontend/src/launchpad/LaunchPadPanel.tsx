@@ -611,10 +611,27 @@ export default function LaunchPadPanel({
     setShowClassifyModal(true)
   }, [])
 
-  // Open ROI drawing modal
-  const handleDrawRois = useCallback(() => {
+  // Open ROI drawing modal — resolve venue first if needed
+  const handleDrawRois = useCallback(async () => {
+    const currentVenueId = sessionRef.current?.venueId || venueId
+    if (!currentVenueId) {
+      try {
+        const { venueId: resolvedId, venueName: resolvedName } = await api.ensureVenueId(null)
+        setSession(prev => {
+          if (!prev) return prev
+          const updated = { ...prev, venueId: resolvedId, venueName: resolvedName }
+          saveSession(updated)
+          sessionRef.current = updated
+          return updated
+        })
+      } catch (err) {
+        console.error('[LaunchPad] Cannot open ROI modal — no venue:', err)
+        alert('No venue available. Please select a venue first.')
+        return
+      }
+    }
     setShowRoiModal(true)
-  }, [])
+  }, [venueId])
 
   // ROI changed — refresh geometry and re-check step
   const handleRoiChanged = useCallback(() => {
@@ -877,9 +894,9 @@ export default function LaunchPadPanel({
           return
         }
         if (stepId === 'define_rois') {
-          // Auto-open the existing ROI drawing modal
+          // Auto-open the existing ROI drawing modal (handleDrawRois resolves venue first)
           setAutopilot(prev => ({ ...prev, state: 'waiting_input', waitingFor: 'roi_drawing', stageMessage: null }))
-          setShowRoiModal(true)
+          await handleDrawRois()
           return
         }
         if (stepId === 'place_lidars' && updatedStep?.status === 'ready') {
@@ -1056,7 +1073,7 @@ export default function LaunchPadPanel({
             onAcceptClassification={handleStageAcceptClassification}
             onRejectClassification={handleStageRejectClassification}
             onAcceptRois={handleStageAcceptRois}
-            onDrawRois={() => setShowRoiModal(true)}
+            onDrawRois={handleDrawRois}
             onAcceptLidars={handleStageAcceptLidars}
             onContinue={handleStageContinue}
           />
