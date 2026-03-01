@@ -97,7 +97,6 @@ function KPIOverlayToggle() {
   const [showSmartKpiModal, setShowSmartKpiModal] = useState(false)
   const [showCheckoutManager, setShowCheckoutManager] = useState(false)
   const [unreadCount, setUnreadCount] = useState(0)
-  const _viewMode = useViewMode() // context still needed for setMode
   
   // Listen for LaunchPad step activation events (e.g. ROI drawing mode)
   useEffect(() => {
@@ -359,6 +358,9 @@ function KPIOverlayToggle() {
             <span className="w-2 h-2 bg-green-400 rounded-full animate-pulse" />
           )}
         </button>
+        
+        {/* User Menu */}
+        <UserMenu />
       </div>
       
       {/* Activity Ledger */}
@@ -524,22 +526,22 @@ function UserMenu() {
   if (!user) return null
   
   return (
-    <div className="fixed top-5 left-[248px] z-50">
+    <div className="relative">
       <button
         onClick={() => setOpen(!open)}
-        className="flex items-center gap-2 px-2 py-1.5 rounded-lg bg-gray-800/80 backdrop-blur-sm border border-gray-700/50 hover:border-gray-600 transition-all"
+        className="flex items-center justify-center w-10 h-10 rounded-lg shadow-lg transition-all bg-gray-800 hover:bg-gray-700 text-gray-300 border border-gray-600"
+        title={user.name || user.email}
       >
         {user.picture ? (
           <img src={user.picture} alt="" className="w-6 h-6 rounded-full" referrerPolicy="no-referrer" />
         ) : (
           <User className="w-4 h-4 text-gray-400" />
         )}
-        <span className="text-xs text-gray-300 max-w-[120px] truncate hidden sm:block">{user.name || user.email}</span>
       </button>
       {open && (
         <>
           <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
-          <div className="absolute right-0 top-full mt-1 w-56 bg-gray-900 border border-gray-700 rounded-xl shadow-xl z-50 py-1 overflow-hidden">
+          <div className="absolute right-0 bottom-full mb-2 w-56 bg-gray-900 border border-gray-700 rounded-xl shadow-xl z-50 py-1 overflow-hidden">
             <div className="px-3 py-2 border-b border-gray-800">
               <p className="text-sm text-white font-medium truncate">{user.name}</p>
               <p className="text-[11px] text-gray-500 truncate">{user.email}</p>
@@ -580,7 +582,6 @@ function AuthenticatedApp() {
                   <Narrator2Provider>
                     <ReplayInsightProvider>
                       <ProfitRadarProvider>
-                        <UserMenu />
                         <Routes>
                           <Route path="/companies" element={<CompaniesPage onClose={() => window.history.back()} />} />
                           <Route path="/*" element={<MainApp />} />
