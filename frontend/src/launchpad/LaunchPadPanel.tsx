@@ -1260,11 +1260,18 @@ export default function LaunchPadPanel({
       )}
 
       {/* Classify by Example Modal */}
-      {showClassifyModal && geometry && geometry.fixtures.length > 0 && (() => {
+      {showClassifyModal && (() => {
+        if (!geometry || geometry.fixtures.length === 0) {
+          console.warn('[LaunchPad] Classify modal: no geometry/fixtures, cannot open')
+          return null
+        }
         const dwgStep = session.steps.find(s => s.id === 'select_dwg')
         const dwgData = dwgStep?.data as SelectDwgData | null
-        const importId = dwgData?.importId
-        if (!importId) return null
+        const importId = dwgData?.importId || localStorage.getItem('launchpad-activeImportId')
+        if (!importId) {
+          console.warn('[LaunchPad] Classify modal: no importId available, cannot open')
+          return null
+        }
         return (
           <FixtureClassifyModal
             fixtures={geometry.fixtures}
@@ -1290,22 +1297,29 @@ export default function LaunchPadPanel({
       })()}
 
       {/* ROI Drawing Modal */}
-      {showRoiModal && session.venueId && geometry && (
-        <RoiDrawingModal
-          onClose={() => setShowRoiModal(false)}
-          fixtures={geometry.fixtures}
-          bounds={geometry.bounds}
-          classifications={geometry.classifications}
-          existingRois={geometry.rois || []}
-          venueId={session.venueId}
-          dwgLayoutId={(() => {
-            const dwgStep = session.steps.find(s => s.id === 'select_dwg')
-            const dwgData = dwgStep?.data as SelectDwgData | null
-            return dwgData?.layoutVersionId || undefined
-          })()}
-          onRoiChanged={handleRoiChanged}
-        />
-      )}
+      {showRoiModal && (() => {
+        const effectiveVenueId = session.venueId || venueId
+        if (!effectiveVenueId) {
+          console.warn('[LaunchPad] ROI modal: no venueId available, cannot open')
+          return null
+        }
+        return (
+          <RoiDrawingModal
+            onClose={() => setShowRoiModal(false)}
+            fixtures={geometry?.fixtures || []}
+            bounds={geometry?.bounds}
+            classifications={geometry?.classifications}
+            existingRois={geometry?.rois || []}
+            venueId={effectiveVenueId}
+            dwgLayoutId={(() => {
+              const dwgStep = session.steps.find(s => s.id === 'select_dwg')
+              const dwgData = dwgStep?.data as SelectDwgData | null
+              return dwgData?.layoutVersionId || undefined
+            })()}
+            onRoiChanged={handleRoiChanged}
+          />
+        )
+      })()}
 
       {/* 3D Preview Modal */}
       {show3DPreview && (() => {
