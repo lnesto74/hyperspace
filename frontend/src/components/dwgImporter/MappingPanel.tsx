@@ -7,6 +7,7 @@ interface MappingPanelProps {
   mapping: GroupMapping | undefined
   catalog: CatalogAsset[]
   onUpdateMapping: (mapping: GroupMapping | null) => void
+  unitScaleToM?: number
 }
 
 const ANCHOR_OPTIONS: { value: GroupMapping['anchor']; label: string }[] = [
@@ -26,13 +27,17 @@ const DEFAULT_MAPPING: GroupMapping = {
   rotation_offset_deg: 0
 }
 
-export default function MappingPanel({ group, mapping, catalog, onUpdateMapping }: MappingPanelProps) {
+export default function MappingPanel({ group, mapping, catalog, onUpdateMapping, unitScaleToM = 1 }: MappingPanelProps) {
   const [localMapping, setLocalMapping] = useState<GroupMapping>(DEFAULT_MAPPING)
 
-  // Sync local state with prop
+  // Sync local state with prop (merge with defaults to handle incomplete mappings from LaunchPad)
   useEffect(() => {
     if (mapping) {
-      setLocalMapping(mapping)
+      setLocalMapping({
+        ...DEFAULT_MAPPING,
+        ...mapping,
+        offset_m: { ...DEFAULT_MAPPING.offset_m, ...(mapping.offset_m || {}) },
+      })
     } else {
       setLocalMapping(DEFAULT_MAPPING)
     }
@@ -231,8 +236,9 @@ export default function MappingPanel({ group, mapping, catalog, onUpdateMapping 
             )}
             <div>
               Footprint: <span className="text-gray-300">
-                {group.size.w.toFixed(0)} × {group.size.d.toFixed(0)}
+                {(group.size.w * unitScaleToM).toFixed(3)}m × {(group.size.d * unitScaleToM).toFixed(3)}m
               </span>
+              <span className="text-gray-600 ml-1">({group.size.w.toFixed(0)} × {group.size.d.toFixed(0)} {unitScaleToM === 0.001 ? 'mm' : 'DXF'})</span>
             </div>
             <div>Instances: <span className="text-gray-300">{group.count}</span></div>
           </div>

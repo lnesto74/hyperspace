@@ -22,13 +22,17 @@ import type { LaunchPadSession, LaunchPadStepId, AutopilotContext, SelectDwgData
 import type { DwgGeometry } from './LaunchPadStepper'
 import MiniDwgViewport from './MiniDwgViewport'
 import Layout3DPreview from '../components/dwgImporter/Layout3DPreview'
+import CinematicBuildStage from './CinematicBuildStage'
 import * as api from './launchpadApi'
 
 /* ─── props ─── */
+export type StageMode = 'normal' | 'cinematic_build' | 'lidar_3d_preview'
+
 export interface LaunchPadStageProps {
   session: LaunchPadSession
   autopilot: AutopilotContext
   geometry?: DwgGeometry
+  stageMode: StageMode
   onDwgUploaded: (importId: string) => void
   onAcceptClassification: () => void
   onRejectClassification: () => void
@@ -36,6 +40,7 @@ export interface LaunchPadStageProps {
   onDrawRois: () => void
   onAcceptLidars: () => void
   onContinue: () => void
+  onSetStageMode: (mode: StageMode) => void
 }
 
 /* ─── helpers ─── */
@@ -356,6 +361,7 @@ export default function LaunchPadStage({
   session,
   autopilot,
   geometry,
+  stageMode,
   onDwgUploaded,
   onAcceptClassification,
   onRejectClassification,
@@ -363,6 +369,7 @@ export default function LaunchPadStage({
   onDrawRois,
   onAcceptLidars,
   onContinue,
+  onSetStageMode,
 }: LaunchPadStageProps) {
   const activeStep = autopilot.activeStepId
   const step = session.steps.find(s => s.id === activeStep)
@@ -383,14 +390,48 @@ export default function LaunchPadStage({
       return <CompletionStage />
     }
 
-    // 3D flythrough hero moment
-    if (show3D && dwgData?.layoutVersionId) {
+    // Cinematic build OR 3D preview with toggle
+    if ((stageMode === 'cinematic_build' || stageMode === 'lidar_3d_preview' || show3D) && dwgData?.layoutVersionId) {
+      const showCinematic = stageMode === 'cinematic_build' && geometry && geometry.fixtures.length > 0
       return (
-        <Inline3DFlythrough
-          layoutVersionId={dwgData.layoutVersionId}
-          importId={dwgData.importId || undefined}
-          geometry={geometry}
-        />
+        <div className="relative w-full h-full">
+          {showCinematic ? (
+            <CinematicBuildStage
+              geometry={geometry!}
+              layoutVersionId={dwgData.layoutVersionId}
+            />
+          ) : (
+            <Inline3DFlythrough
+              layoutVersionId={dwgData.layoutVersionId}
+              importId={dwgData.importId || undefined}
+              geometry={geometry}
+            />
+          )}
+
+          {/* Toggle between cinematic and 3D preview */}
+          <div className="absolute top-3 right-3 z-30 flex gap-1 bg-gray-900/70 rounded-lg p-0.5 backdrop-blur-sm border border-gray-700/50">
+            <button
+              onClick={() => onSetStageMode('cinematic_build')}
+              className={`px-3 py-1.5 text-[11px] font-medium rounded-md transition-all ${
+                showCinematic
+                  ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/30'
+                  : 'text-gray-400 hover:text-white hover:bg-gray-700/50'
+              }`}
+            >
+              Digital Twin
+            </button>
+            <button
+              onClick={() => onSetStageMode('lidar_3d_preview')}
+              className={`px-3 py-1.5 text-[11px] font-medium rounded-md transition-all ${
+                !showCinematic
+                  ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/30'
+                  : 'text-gray-400 hover:text-white hover:bg-gray-700/50'
+              }`}
+            >
+              3D Preview
+            </button>
+          </div>
+        </div>
       )
     }
 

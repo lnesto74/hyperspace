@@ -17,6 +17,7 @@ interface DetectedObject {
   name: string
   type: string
   position: { x: number; y: number; z: number }
+  maxDimension?: number | null
 }
 
 interface RoiConfig {
@@ -36,6 +37,7 @@ interface SmartKpiTemplate {
   roiConfig?: RoiConfig
   detectedCount?: number
   detectedObjects?: DetectedObject[]
+  sizeDistribution?: Record<string, number>
   canGenerate?: boolean
 }
 
@@ -142,6 +144,7 @@ export default function SmartKpiModal({ isOpen, onClose, dwgLayoutId: propDwgLay
   const [selectedTemplate, setSelectedTemplate] = useState<string | null>(null)
   const [previewRois, setPreviewRois] = useState<PreviewRoi[]>([])
   const [engagementDepth, setEngagementDepth] = useState(1.5)
+  const [minShelfSize, setMinShelfSize] = useState(2.0)
   
   // Tab state: 'generate', 'adjust', or 'custom'
   const [activeTab, setActiveTab] = useState<'generate' | 'adjust' | 'custom'>('generate')
@@ -223,6 +226,9 @@ export default function SmartKpiModal({ isOpen, onClose, dwgLayoutId: propDwgLay
       if (templateId === 'shelf-engagement' && depth !== undefined) {
         options.engagementDepth = depth
       }
+      if (templateId === 'shelf-engagement') {
+        options.minFixtureSize = minShelfSize
+      }
       
       // Pass dimension overrides if provided
       if (dimensions) {
@@ -249,7 +255,7 @@ export default function SmartKpiModal({ isOpen, onClose, dwgLayoutId: propDwgLay
     } finally {
       setLoading(false)
     }
-  }, [venue?.id, isDwgMode, dwgLayoutId])
+  }, [venue?.id, isDwgMode, dwgLayoutId, minShelfSize])
 
   const handleSelectTemplate = (templateId: string) => {
     setSelectedTemplate(templateId)
@@ -321,6 +327,7 @@ export default function SmartKpiModal({ isOpen, onClose, dwgLayoutId: propDwgLay
       const options: Record<string, unknown> = {}
       if (selectedTemplate === 'shelf-engagement') {
         options.engagementDepth = engagementDepth
+        options.minFixtureSize = minShelfSize
       }
       // Pass dimension overrides
       options.roiDimensions = roiDimensions
@@ -1000,6 +1007,66 @@ export default function SmartKpiModal({ isOpen, onClose, dwgLayoutId: propDwgLay
                           <span className="text-[10px] text-gray-500">
                             {selectedTemplateData?.roiConfig?.engagementDepthMax || 3.0}m
                           </span>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Min Shelf Size Filter for Shelf template */}
+                    {selectedTemplate === 'shelf-engagement' && selectedTemplateData?.detectedObjects && (
+                      <div className="bg-gray-800/50 border border-gray-700 rounded-lg p-3 mb-4">
+                        <div className="flex items-center justify-between mb-2">
+                          <label className="text-xs font-medium text-gray-300">
+                            Min Fixture Size
+                          </label>
+                          <span className="text-xs font-mono text-amber-400">
+                            ≥ {minShelfSize.toFixed(1)}m
+                          </span>
+                        </div>
+                        <input
+                          type="range"
+                          min={0}
+                          max={5}
+                          step={0.5}
+                          value={minShelfSize}
+                          onChange={(e) => {
+                            const newSize = parseFloat(e.target.value)
+                            setMinShelfSize(newSize)
+                          }}
+                          onMouseUp={() => {
+                            if (selectedTemplate === 'shelf-engagement') {
+                              previewTemplate(selectedTemplate, engagementDepth, roiDimensions)
+                            }
+                          }}
+                          onTouchEnd={() => {
+                            if (selectedTemplate === 'shelf-engagement') {
+                              previewTemplate(selectedTemplate, engagementDepth, roiDimensions)
+                            }
+                          }}
+                          className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-amber-500"
+                        />
+                        <div className="flex justify-between mt-1">
+                          <span className="text-[10px] text-gray-500">0m (all)</span>
+                          <span className="text-[10px] text-gray-500">5m</span>
+                        </div>
+                        {/* Live eligible count */}
+                        <div className="mt-2 pt-2 border-t border-gray-700/50">
+                          <div className="flex items-center justify-between">
+                            <span className="text-[10px] text-gray-400">Eligible fixtures:</span>
+                            <span className="text-xs font-mono text-green-400 font-medium">
+                              {selectedTemplateData.detectedObjects.filter(
+                                o => !o.maxDimension || o.maxDimension >= minShelfSize
+                              ).length}
+                              <span className="text-gray-500"> / {selectedTemplateData.detectedObjects.length}</span>
+                            </span>
+                          </div>
+                          <div className="flex items-center justify-between mt-0.5">
+                            <span className="text-[10px] text-gray-400">Zones (left + right):</span>
+                            <span className="text-xs font-mono text-blue-400">
+                              ~{selectedTemplateData.detectedObjects.filter(
+                                o => !o.maxDimension || o.maxDimension >= minShelfSize
+                              ).length * 2}
+                            </span>
+                          </div>
                         </div>
                       </div>
                     )}

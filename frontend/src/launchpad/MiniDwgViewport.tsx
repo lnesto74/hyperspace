@@ -10,7 +10,8 @@
  */
 
 import { useMemo, useState, useCallback, useRef, useEffect } from 'react'
-import { Maximize2, X, ZoomIn, ZoomOut, RotateCcw, Plus, Trash2, MousePointer } from 'lucide-react'
+import { Maximize2, X, ZoomIn, ZoomOut, RotateCcw, Plus, Trash2, MousePointer, List } from 'lucide-react'
+import { API_BASE } from '../config/api'
 
 // ─── Types ──────────────────────────────────────────────────────
 
@@ -56,6 +57,10 @@ interface MiniDwgViewportProps {
   onLidarUpdate?: (id: string, x: number, z: number) => void
   onLidarAdd?: (x: number, z: number) => void
   onLidarDelete?: (id: string) => void
+  /** Layout version ID for fetching LiDAR instances */
+  dwgLayoutId?: string
+  /** DXF unit → meters scale */
+  unitScaleToM?: number
 }
 
 // ─── Color Maps ─────────────────────────────────────────────────
@@ -285,14 +290,10 @@ function DwgSvg({ fixtures, rois, lidars, groupTypeMap, mode, vbX, vbY, vbW, vbH
             >
               {i + 1}
             </text>
-            {/* Invisible hit area for hover tooltip */}
+            {/* Invisible hit area for pointer events */}
             <circle cx={l.x} cy={l.z} r={dotR * 2.5}
-              fill="transparent" stroke="none"
-              onMouseEnter={(e) => onFixtureHover?.(null, e)}
-              onMouseLeave={() => onFixtureHover?.(null)}
-            >
-              <title>LiDAR #{i + 1}{'\n'}Position: ({l.x.toFixed(1)}, {l.z.toFixed(1)}){'\n'}Range: {l.range_m.toFixed(1)}</title>
-            </circle>
+              fill="transparent" stroke="none" pointerEvents="all"
+            />
           </g>
         )
       })}
@@ -320,15 +321,37 @@ interface ViewportModalProps extends DwgSvgProps {
   onLidarUpdate?: (id: string, x: number, z: number) => void
   onLidarAdd?: (x: number, z: number) => void
   onLidarDelete?: (id: string) => void
+  dwgLayoutId?: string
+  unitScaleToM?: number
 }
 
-function ViewportModal({ onClose, onLidarUpdate, onLidarAdd, onLidarDelete, ...svgProps }: ViewportModalProps) {
+function ViewportModal({ onClose, onLidarUpdate, onLidarAdd, onLidarDelete, dwgLayoutId, unitScaleToM = 0.001, ...svgProps }: ViewportModalProps) {
   const [zoom, setZoom] = useState(1)
   const [pan, setPan] = useState({ x: 0, y: 0 })
   const [dragging, setDragging] = useState(false)
   const dragStart = useRef({ x: 0, y: 0, panX: 0, panY: 0 })
   const containerRef = useRef<HTMLDivElement>(null)
   const isLidarMode = svgProps.mode === 'lidars'
+
+  // LiDAR Schedule panel state
+  const [showSchedule, setShowSchedule] = useState(false)
+  const [lidarInstances, setLidarInstances] = useState<Array<{ id: string; model_id: string; model_name?: string; x_m: number; z_m: number; mount_y_m: number; source?: string }>>([])
+  const [lidarModelsFull, setLidarModelsFull] = useState<Array<{ id: string; name: string; hfov_deg: number; vfov_deg: number; range_m: number; dome_mode?: boolean }>>([])
+
+  // Fetch full LiDAR data for schedule panel
+  useEffect(() => {
+    if (!isLidarMode || !dwgLayoutId) return
+    ;(async () => {
+      try {
+        const [instRes, modRes] = await Promise.all([
+          fetch(`${API_BASE}/api/lidar/instances?layout_version_id=${dwgLayoutId}`),
+          fetch(`${API_BASE}/api/lidar/models`),
+        ])
+        if (instRes.ok) setLidarInstances(await instRes.json())
+        if (modRes.ok) setLidarModelsFull(await modRes.json())
+      } catch { /* ignore */ }
+    })()
+  }, [isLidarMode, dwgLayoutId])
 
   // LiDAR interaction state
   const [activeTool, setActiveTool] = useState<'select' | 'add'>('select')
@@ -340,6 +363,44 @@ function ViewportModal({ onClose, onLidarUpdate, onLidarAdd, onLidarDelete, ...s
 
   // Sync local lidars with props
   useEffect(() => { setLocalLidars(svgProps.lidars || []) }, [svgProps.lidars])
+
+  // Compute ROI dimensions + LiDAR schedule in ROI-relative coords
+  // Uses localLidars (which updates on drag/delete/add) instead of static API data
+  const scheduleData = useMemo(() => {
+    if (!isLidarMode || localLidars.length === 0) return null
+    // ROI bounding box from SVG rois (DXF units)
+    const roiVerts = svgProps.rois?.[0]?.vertices
+    let originX_dxf = 0, originZ_dxf = 0, widthM = 0, heightM = 0, areaM2 = 0
+    if (roiVerts && roiVerts.length >= 3) {
+      const xs = roiVerts.map(v => v.x)
+      const ys = roiVerts.map(v => v.y)
+      const minX = Math.min(...xs), maxX = Math.max(...xs)
+      const minY = Math.min(...ys), maxY = Math.max(...ys)
+      originX_dxf = minX
+      originZ_dxf = minY
+      widthM = (maxX - minX) * unitScaleToM
+      heightM = (maxY - minY) * unitScaleToM
+      areaM2 = widthM * heightM
+    }
+    // Build model lookup from API-fetched instances for mount height / model_id
+    const instById = new Map(lidarInstances.map(inst => [inst.id, inst]))
+    const schedule = localLidars.map((l, i) => {
+      const inst = l.id ? instById.get(l.id) : undefined
+      const model = inst ? lidarModelsFull.find(m => m.id === inst.model_id) : lidarModelsFull[0]
+      return {
+        idx: i + 1,
+        label: `L-${String(i + 1).padStart(2, '0')}`,
+        x_m: Math.max(0, (l.x - originX_dxf) * unitScaleToM),
+        z_m: Math.max(0, (l.z - originZ_dxf) * unitScaleToM),
+        mount_y_m: inst?.mount_y_m || 3,
+        hfov_deg: model?.hfov_deg ?? 360,
+        vfov_deg: model?.vfov_deg ?? 90,
+        range_m: model?.range_m ?? l.range_m ?? 15,
+        modelName: model?.name || inst?.model_name || '—',
+      }
+    })
+    return { widthM, heightM, areaM2, schedule }
+  }, [isLidarMode, localLidars, lidarInstances, lidarModelsFull, svgProps.rois, unitScaleToM])
 
   // Tooltip state
   const [tooltip, setTooltip] = useState<{
@@ -389,7 +450,7 @@ function ViewportModal({ onClose, onLidarUpdate, onLidarAdd, onLidarDelete, ...s
     if (isLidarMode && activeTool === 'select' && localLidars.length > 0) {
       const world = screenToWorld(e.clientX, e.clientY)
       const sw = svgProps.sw / zoom
-      const hitRadius = sw * 8
+      const hitRadius = sw * 14
       for (let i = localLidars.length - 1; i >= 0; i--) {
         const l = localLidars[i]
         const dx = world.x - l.x, dy = world.y - l.z
@@ -418,8 +479,10 @@ function ViewportModal({ onClose, onLidarUpdate, onLidarAdd, onLidarDelete, ...s
       const scaleY = zoomedVb.h / rect.height
       const dx = (e.clientX - lidarDragStart.current.x) * scaleX
       const dy = (e.clientY - lidarDragStart.current.y) * scaleY
+      const dragRef = lidarDragStart.current
+      if (!dragRef) return
       setLocalLidars(prev => prev.map((l, i) => i === draggingLidarIdx
-        ? { ...l, x: lidarDragStart.current!.origX + dx, z: lidarDragStart.current!.origZ + dy }
+        ? { ...l, x: dragRef.origX + dx, z: dragRef.origZ + dy }
         : l
       ))
       return
@@ -428,7 +491,7 @@ function ViewportModal({ onClose, onLidarUpdate, onLidarAdd, onLidarDelete, ...s
     if (isLidarMode && !dragging) {
       const world = screenToWorld(e.clientX, e.clientY)
       const sw = svgProps.sw / zoom
-      const hitRadius = sw * 8
+      const hitRadius = sw * 14
       for (let i = localLidars.length - 1; i >= 0; i--) {
         const l = localLidars[i]
         const dx = world.x - l.x, dy = world.y - l.z
@@ -554,6 +617,17 @@ function ViewportModal({ onClose, onLidarUpdate, onLidarAdd, onLidarDelete, ...s
                 <div className="w-px h-5 bg-gray-800 mx-1" />
               </>
             )}
+            {/* Schedule panel toggle — only when we have LiDAR data */}
+            {isLidarMode && scheduleData && (
+              <>
+                <button
+                  onClick={() => setShowSchedule(s => !s)}
+                  className={`w-7 h-7 flex items-center justify-center rounded-md transition-colors ${showSchedule ? 'bg-blue-500/20 text-blue-400' : 'text-gray-400 hover:text-white hover:bg-gray-800'}`}
+                  title="LiDAR Schedule"
+                ><List className="w-3.5 h-3.5" /></button>
+                <div className="w-px h-5 bg-gray-800 mx-1" />
+              </>
+            )}
             <button onClick={() => setZoom(z => Math.min(50, z * 1.5))} className="w-7 h-7 flex items-center justify-center text-gray-400 hover:text-white rounded-md hover:bg-gray-800 transition-colors" title="Zoom In"><ZoomIn className="w-3.5 h-3.5" /></button>
             <button onClick={() => setZoom(z => Math.max(0.5, z / 1.5))} className="w-7 h-7 flex items-center justify-center text-gray-400 hover:text-white rounded-md hover:bg-gray-800 transition-colors" title="Zoom Out"><ZoomOut className="w-3.5 h-3.5" /></button>
             <button onClick={resetView} className="w-7 h-7 flex items-center justify-center text-gray-400 hover:text-white rounded-md hover:bg-gray-800 transition-colors" title="Reset View"><RotateCcw className="w-3.5 h-3.5" /></button>
@@ -562,41 +636,107 @@ function ViewportModal({ onClose, onLidarUpdate, onLidarAdd, onLidarDelete, ...s
           </div>
         </div>
 
-        {/* Interactive SVG area */}
-        <div
-          ref={containerRef}
-          className="flex-1 overflow-hidden"
-          style={{ cursor: cursorStyle }}
-          onWheel={handleWheel}
-          onMouseDown={handleMouseDown}
-          onMouseMove={handleMouseMove}
-          onMouseUp={handleMouseUp}
-        >
-          <DwgSvg
-            {...svgProps}
-            lidars={displayLidars}
-            vbX={zoomedVb.x}
-            vbY={zoomedVb.y}
-            vbW={zoomedVb.w}
-            vbH={zoomedVb.h}
-            sw={svgProps.sw / zoom}
-            className="w-full h-full"
-            onFixtureHover={handleFixtureHover}
-          />
-          {/* Selected LiDAR highlight ring */}
-          {isLidarMode && selectedLidarIdx !== null && localLidars[selectedLidarIdx] && (() => {
-            const l = localLidars[selectedLidarIdx]
-            const sw2 = svgProps.sw / zoom
-            return (
-              <svg
-                viewBox={`${zoomedVb.x} ${zoomedVb.y} ${zoomedVb.w} ${zoomedVb.h}`}
-                preserveAspectRatio="xMidYMid meet"
-                className="absolute inset-0 w-full h-full pointer-events-none"
-              >
-                <circle cx={l.x} cy={l.z} r={sw2 * 5} fill="none" stroke="#3b82f6" strokeWidth={sw2 * 1.5} strokeDasharray={`${sw2 * 2} ${sw2}`} />
-              </svg>
-            )
-          })()}
+        {/* Main content: SVG + optional schedule panel */}
+        <div className="flex-1 flex overflow-hidden">
+          {/* Interactive SVG area */}
+          <div
+            ref={containerRef}
+            className="flex-1 overflow-hidden relative"
+            style={{ cursor: cursorStyle }}
+            onWheel={handleWheel}
+            onMouseDown={handleMouseDown}
+            onMouseMove={handleMouseMove}
+            onMouseUp={handleMouseUp}
+          >
+            <DwgSvg
+              {...svgProps}
+              lidars={displayLidars}
+              vbX={zoomedVb.x}
+              vbY={zoomedVb.y}
+              vbW={zoomedVb.w}
+              vbH={zoomedVb.h}
+              sw={svgProps.sw / zoom}
+              className="w-full h-full"
+              onFixtureHover={handleFixtureHover}
+            />
+            {/* Selected LiDAR highlight ring */}
+            {isLidarMode && selectedLidarIdx !== null && localLidars[selectedLidarIdx] && (() => {
+              const l = localLidars[selectedLidarIdx]
+              const sw2 = svgProps.sw / zoom
+              return (
+                <svg
+                  viewBox={`${zoomedVb.x} ${zoomedVb.y} ${zoomedVb.w} ${zoomedVb.h}`}
+                  preserveAspectRatio="xMidYMid meet"
+                  className="absolute inset-0 w-full h-full pointer-events-none"
+                >
+                  <circle cx={l.x} cy={l.z} r={sw2 * 5} fill="none" stroke="#3b82f6" strokeWidth={sw2 * 1.5} strokeDasharray={`${sw2 * 2} ${sw2}`} />
+                </svg>
+              )
+            })()}
+          </div>
+
+          {/* LiDAR Schedule side panel */}
+          {showSchedule && scheduleData && (
+            <div className="w-[320px] shrink-0 border-l border-gray-800 bg-gray-950 overflow-y-auto">
+              {/* ROI Dimensions */}
+              {scheduleData.widthM > 0 && (
+                <div className="p-3 border-b border-gray-800">
+                  <div className="text-[10px] text-gray-500 uppercase tracking-wider font-medium mb-1.5">ROI Dimensions (meters)</div>
+                  <div className="grid grid-cols-3 gap-1.5">
+                    <div className="bg-gray-800/60 rounded px-2 py-1.5 text-center">
+                      <div className="text-[9px] text-gray-500">Width</div>
+                      <div className="text-[11px] text-white font-mono font-medium">{scheduleData.widthM.toFixed(1)}m</div>
+                    </div>
+                    <div className="bg-gray-800/60 rounded px-2 py-1.5 text-center">
+                      <div className="text-[9px] text-gray-500">Height</div>
+                      <div className="text-[11px] text-white font-mono font-medium">{scheduleData.heightM.toFixed(1)}m</div>
+                    </div>
+                    <div className="bg-gray-800/60 rounded px-2 py-1.5 text-center">
+                      <div className="text-[9px] text-gray-500">Area</div>
+                      <div className="text-[11px] text-white font-mono font-medium">{scheduleData.areaM2.toFixed(0)}m²</div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* LiDAR Schedule Table */}
+              <div className="p-3">
+                <div className="text-[10px] text-gray-500 uppercase tracking-wider font-medium mb-1">
+                  LiDAR Schedule <span className="text-blue-400 normal-case">({scheduleData.schedule.length} devices)</span>
+                </div>
+                <div className="bg-amber-900/20 border border-amber-700/30 rounded px-2 py-1 mb-2">
+                  <div className="text-[9px] text-amber-400 font-medium">Reference System</div>
+                  <div className="text-[9px] text-amber-300/80">Origin (0,0) at ROI min corner (SW). X→ right, Z↑ up.</div>
+                </div>
+                <table className="w-full text-[10px] whitespace-nowrap">
+                  <thead className="sticky top-0 bg-gray-950">
+                    <tr className="border-b border-gray-700">
+                      <th className="py-1 px-1.5 text-left text-gray-500 font-medium">ID</th>
+                      <th className="py-1 px-1.5 text-right text-gray-500 font-medium">X (m)</th>
+                      <th className="py-1 px-1.5 text-right text-gray-500 font-medium">Z (m)</th>
+                      <th className="py-1 px-1.5 text-right text-gray-500 font-medium">H (m)</th>
+                      <th className="py-1 px-1.5 text-right text-gray-500 font-medium">H-FOV</th>
+                      <th className="py-1 px-1.5 text-right text-gray-500 font-medium">Range</th>
+                      <th className="py-1 px-1.5 text-right text-gray-500 font-medium">Model</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {scheduleData.schedule.map(s => (
+                      <tr key={s.idx} className="border-b border-gray-800/50 hover:bg-gray-800/30">
+                        <td className="py-0.5 px-1.5 text-blue-400 font-medium">{s.label}</td>
+                        <td className="py-0.5 px-1.5 text-right font-mono text-white">{s.x_m.toFixed(2)}</td>
+                        <td className="py-0.5 px-1.5 text-right font-mono text-white">{s.z_m.toFixed(2)}</td>
+                        <td className="py-0.5 px-1.5 text-right font-mono text-gray-400">{s.mount_y_m.toFixed(1)}</td>
+                        <td className="py-0.5 px-1.5 text-right font-mono text-gray-400">{s.hfov_deg}°</td>
+                        <td className="py-0.5 px-1.5 text-right font-mono text-gray-400">{s.range_m}m</td>
+                        <td className="py-0.5 px-1.5 text-right text-gray-500 truncate max-w-[60px]" title={s.modelName}>{s.modelName}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Bottom bar */}
@@ -625,15 +765,27 @@ function ViewportModal({ onClose, onLidarUpdate, onLidarAdd, onLidarDelete, ...s
         </div>
       )}
       {/* Floating tooltip — LiDAR */}
-      {lidarTooltip && !draggingLidarIdx && (
-        <div className="fixed z-[110] pointer-events-none px-2.5 py-1.5 rounded-md bg-gray-900 border border-gray-700 shadow-lg text-[11px] leading-relaxed"
-          style={{ left: lidarTooltip.mouseX + 14, top: lidarTooltip.mouseY - 10 }}>
-          <div className="text-green-400 font-medium">LiDAR #{lidarTooltip.idx + 1}</div>
-          <div className="text-gray-500">Range: {lidarTooltip.lidar.range_m.toFixed(1)}m</div>
-          <div className="text-gray-500">Pos: ({lidarTooltip.lidar.x.toFixed(0)}, {lidarTooltip.lidar.z.toFixed(0)})</div>
-          {lidarTooltip.lidar.id && <div className="text-gray-600 text-[9px]">{lidarTooltip.lidar.id.slice(0, 8)}</div>}
-        </div>
-      )}
+      {lidarTooltip && !draggingLidarIdx && (() => {
+        const sEntry = scheduleData?.schedule[lidarTooltip.idx]
+        return (
+          <div className="fixed z-[110] pointer-events-none px-2.5 py-1.5 rounded-md bg-gray-900 border border-gray-700 shadow-lg text-[11px] leading-relaxed"
+            style={{ left: lidarTooltip.mouseX + 14, top: lidarTooltip.mouseY - 10 }}>
+            <div className="text-green-400 font-medium">{sEntry?.label || `LiDAR #${lidarTooltip.idx + 1}`}</div>
+            {sEntry ? (
+              <>
+                <div className="text-gray-400">X: <span className="text-white font-mono">{sEntry.x_m.toFixed(2)}m</span>  Z: <span className="text-white font-mono">{sEntry.z_m.toFixed(2)}m</span></div>
+                <div className="text-gray-500">H: {sEntry.mount_y_m.toFixed(1)}m · {sEntry.hfov_deg}° · Range {sEntry.range_m}m</div>
+                <div className="text-gray-500">{sEntry.modelName}</div>
+              </>
+            ) : (
+              <>
+                <div className="text-gray-500">Range: {lidarTooltip.lidar.range_m.toFixed(1)}m</div>
+                <div className="text-gray-500">Pos: ({lidarTooltip.lidar.x.toFixed(0)}, {lidarTooltip.lidar.z.toFixed(0)})</div>
+              </>
+            )}
+          </div>
+        )
+      })()}
     </div>
   )
 }
@@ -657,6 +809,8 @@ export default function MiniDwgViewport({
   onLidarUpdate,
   onLidarAdd,
   onLidarDelete,
+  dwgLayoutId,
+  unitScaleToM,
 }: MiniDwgViewportProps) {
   const [showModal, setShowModal] = useState(false)
   const openModal = useCallback(() => setShowModal(true), [])
@@ -761,7 +915,7 @@ export default function MiniDwgViewport({
       </div>
 
       {/* Full-screen modal */}
-      {showModal && <ViewportModal {...svgProps} onClose={closeModal} onLidarUpdate={onLidarUpdate} onLidarAdd={onLidarAdd} onLidarDelete={onLidarDelete} />}
+      {showModal && <ViewportModal {...svgProps} onClose={closeModal} onLidarUpdate={onLidarUpdate} onLidarAdd={onLidarAdd} onLidarDelete={onLidarDelete} dwgLayoutId={dwgLayoutId} unitScaleToM={unitScaleToM} />}
     </>
   )
 }

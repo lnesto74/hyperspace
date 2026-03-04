@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Fixture Debug</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,system-ui,sans-serif;background:#111;color:#ddd;display:flex;height:100vh;overflow:hidden}
+#map{flex:1;overflow:hidden;cursor:grab;position:relative;background:#0a0a14}
+#map:active{cursor:grabbing}
+#map svg{position:absolute;top:0;left:0}
+#info{position:absolute;top:10px;left:10px;background:#000c;padding:6px 12px;border-radius:6px;font-size:12px;color:#999;z-index:5;pointer-events:none}
+#panel{width:520px;display:flex;flex-direction:column;border-left:1px solid #333;background:#0d0d15}
+#panel-head{padding:10px 14px;border-bottom:1px solid #333;font-size:13px;font-weight:600}
+#panel-head span{font-weight:400;color:#888;font-size:11px;display:block;margin-top:2px}
+#filter{padding:6px 14px;border-bottom:1px solid #222}
+#filter input{width:100%;background:#1a1a2a;border:1px solid #333;color:#ddd;padding:5px 8px;border-radius:4px;font-size:12px}
+#filter input:focus{outline:none;border-color:#6366f1}
+#tbl-wrap{flex:1;overflow-y:auto}
+table{width:100%;border-collapse:collapse;font-size:12px}
+thead{position:sticky;top:0;background:#15152a;z-index:2}
+th{padding:7px 6px;text-align:left;color:#888;font-weight:500;border-bottom:1px solid #333;cursor:pointer;user-select:none}
+th:hover{color:#fff}
+td{padding:5px 6px;border-bottom:1px solid #1a1a2a}
+tr:hover td{background:#1a1a30}
+tr.hi td{background:#312e81!important}
+.n{color:#a5b4fc;font-weight:700;font-size:14px;text-align:center;width:36px}
+.t{font-size:11px;padding:1px 6px;border-radius:3px;display:inline-block}
+.t-shelf{background:#312e81;color:#a5b4fc}.t-wall{background:#1e293b;color:#94a3b8}.t-checkout{background:#14532d;color:#86efac}.t-entrance{background:#451a03;color:#fbbf24}.t-pillar{background:#292524;color:#a8a29e}.t-unmapped{background:#1c1917;color:#57534e}.t-digital_display{background:#3b0764;color:#c4b5fd}.t-custom{background:#1e293b;color:#94a3b8}
+.d{color:#999;font-variant-numeric:tabular-nums}
+::-webkit-scrollbar{width:5px}::-webkit-scrollbar-thumb{background:#444;border-radius:3px}
+</style>
+</head>
+<body>
+<div id="map">
+  <div id="info">Scroll to zoom · Drag to pan · Click fixture or row to highlight</div>
+  <svg id="svg" xmlns="http://www.w3.org/2000/svg"></svg>
+</div>
+<div id="panel">
+  <div id="panel-head">Fixtures in ROI<span id="summary">Loading...</span></div>
+  <div id="filter"><input id="q" placeholder="Search # or type..." /></div>
+  <div id="tbl-wrap">
+    <table><thead><tr>
+      <th data-s="idx" style="width:36px">#</th>
+      <th data-s="type">Type</th>
+      <th data-s="w">W(m)</th>
+      <th data-s="d">D(m)</th>
+      <th data-s="x">X(m)</th>
+      <th data-s="z">Z(m)</th>
+      <th data-s="rot">Rot°</th>
+      <th data-s="group">Group</th>
+    </tr></thead><tbody id="tb"></tbody></table>
+  </div>
+</div>
+<script>
+const API='http://localhost:3001';
+const COLORS={shelf:'#6366f1',wall:'#64748b',checkout:'#22c55e',entrance:'#f59e0b',pillar:'#78716c',digital_display:'#8b5cf6',custom:'#64748b',unmapped:'#4b5563'};
+let rows=[],sortK='idx',sortA=true,selId=null;
+
+// Pan/zoom state
+let vx=0,vy=0,vz=1; // viewX, viewY, zoom
+const svg=document.getElementById('svg');
+const mapEl=document.getElementById('map');
+
+function updTransform(){svg.style.transform=`translate(${vx}px,${vy}px) scale(${vz})`; svg.style.transformOrigin='0 0'}
+mapEl.addEventListener('wheel',e=>{e.preventDefault();const f=e.deltaY<0?1.15:1/1.15;const r=mapEl.getBoundingClientRect();const mx=e.clientX-r.left;const my=e.clientY-r.top;vx=mx-(mx-vx)*f;vy=my-(my-vy)*f;vz*=f;updTransform()},{passive:false});
+let drag=false,dx=0,dy=0;
+mapEl.addEventListener('mousedown',e=>{if(e.button===0){drag=true;dx=e.clientX-vx;dy=e.clientY-vy}});
+window.addEventListener('mousemove',e=>{if(drag){vx=e.clientX-dx;vy=e.clientY-dy;updTransform()}});
+window.addEventListener('mouseup',()=>{drag=false});
+
+async function main(){
+  // Auto-discover latest layout
+  let layoutId=null;
+  try{
+    const imps=await(await fetch(API+'/api/dwg/imports')).json();
+    if(imps.length){
+      const imp=imps[0];
+      const layouts=await(await fetch(API+'/api/dwg/import/'+imp.id+'/layouts')).json();
+      if(layouts.length) layoutId=layouts[0].id;
+    }
+  }catch(e){console.warn('auto-discover failed',e)}
+  if(!layoutId){layoutId=prompt('Layout version ID:');if(!layoutId)return}
+
+  const data=await(await fetch(API+'/api/dwg/layout/'+layoutId)).json();
+  const L=data.layout;
+  const fixtures=L.fixtures||[];
+  const roi=L.lidar_roi||null;
+  const roiDxf=L.lidar_roi_dxf||null;
+  const usm=L.unit_scale_to_m||0.001;
+  const B=L.bounds;
+
+  // scaleCorrection
+  let sc=1;
+  try{const r=await fetch(API+'/api/dwg/layout/'+layoutId);/* already have data */}catch{}
+  // Try to get from URL param or default
+  const urlSc=new URLSearchParams(location.search).get('sc');
+  if(urlSc) sc=parseFloat(urlSc);
+  else{
+    // Try common values: check if ROI dimensions make sense
+    // If roi exists in meters and bounds exist, we can infer
+    if(roi&&roi.length>=3){
+      const roiW=Math.max(...roi.map(v=>v.x))-Math.min(...roi.map(v=>v.x));
+      if(roiW>10) sc=1; // ROI already in reasonable meters
+      else sc=10; // probably needs 10x
+    }
+  }
+  const es=usm*sc;
+  document.getElementById('info').textContent=`unit_scale=${usm} × scaleCorrection=${sc} = ${es} | Scroll=zoom Drag=pan Click=highlight`;
+
+  // ROI in meters (absolute, not centered)
+  let roiM=null;
+  if(roi&&roi.length>=3){roiM=roi.map(v=>({x:v.x,z:v.z}))}
+  else if(roiDxf&&roiDxf.length>=3){roiM=roiDxf.map(v=>({x:v.x*es,z:v.z*es}))}
+
+  function inPoly(px,pz,poly){
+    let inside=false;
+    for(let i=0,j=poly.length-1;i<poly.length;j=i++){
+      const xi=poly[i].x,zi=poly[i].z,xj=poly[j].x,zj=poly[j].z;
+      if((zi>pz)!==(zj>pz)&&px<(xj-xi)*(pz-zi)/(zj-zi)+xi)inside=!inside;
+    }
+    return inside;
+  }
+
+  // Build rows — positions in absolute meters (no centering, matches ROI coords)
+  let idx=0;
+  fixtures.forEach(f=>{
+    const fp=f.footprint,p=f.pose2d;
+    const w=fp.w*es,d=fp.d*es;
+    const x=p.x*es,z=p.y*es;
+    const rot=p.rot_deg||0;
+    const type=f.mapping?.type||'unmapped';
+    const inside=roiM?inPoly(x,z,roiM):true;
+    if(!inside)return; // only ROI fixtures
+    idx++;
+    let polyPts=null;
+    if(fp.points&&fp.points.length>=3) polyPts=fp.points.map(pt=>({x:pt.x*es,z:pt.y*es}));
+    rows.push({idx,id:f.id,group:f.group_id,type,w,d,x,z,rot,polyPts});
+  });
+
+  // ROI bounds for auto-fit
+  let minX=Infinity,maxX=-Infinity,minZ=Infinity,maxZ=-Infinity;
+  if(roiM){roiM.forEach(v=>{minX=Math.min(minX,v.x);maxX=Math.max(maxX,v.x);minZ=Math.min(minZ,v.z);maxZ=Math.max(maxZ,v.z)})}
+  rows.forEach(r=>{
+    if(r.polyPts)r.polyPts.forEach(p=>{minX=Math.min(minX,p.x);maxX=Math.max(maxX,p.x);minZ=Math.min(minZ,p.z);maxZ=Math.max(maxZ,p.z)});
+    else{minX=Math.min(minX,r.x-r.w/2);maxX=Math.max(maxX,r.x+r.w/2);minZ=Math.min(minZ,r.z-r.d/2);maxZ=Math.max(maxZ,r.z+r.d/2)}
+  });
+  const pad=20,rngX=maxX-minX||1,rngZ=maxZ-minZ||1;
+  const mapR=mapEl.getBoundingClientRect();
+  const fitScale=Math.min((mapR.width-pad*2)/rngX,(mapR.height-pad*2)/rngZ);
+
+  // World→SVG coords
+  function sx(x){return pad+(x-minX)*fitScale}
+  function sz(z){return pad+(z-minZ)*fitScale}
+
+  const svgW=rngX*fitScale+pad*2, svgH=rngZ*fitScale+pad*2;
+  svg.setAttribute('width',svgW);svg.setAttribute('height',svgH);
+  svg.setAttribute('viewBox',`0 0 ${svgW} ${svgH}`);
+
+  let html='';
+
+  // Grid 5m
+  const gs=5;
+  for(let gx=Math.ceil(minX/gs)*gs;gx<=maxX;gx+=gs)html+=`<line x1="${sx(gx)}" y1="${sz(minZ)}" x2="${sx(gx)}" y2="${sz(maxZ)}" stroke="#1a1a2a" stroke-width="0.5"/><text x="${sx(gx)}" y="${sz(maxZ)+12}" fill="#333" font-size="8" text-anchor="middle">${gx.toFixed(0)}</text>`;
+  for(let gz=Math.ceil(minZ/gs)*gs;gz<=maxZ;gz+=gs)html+=`<line x1="${sx(minX)}" y1="${sz(gz)}" x2="${sx(maxX)}" y2="${sz(gz)}" stroke="#1a1a2a" stroke-width="0.5"/>`;
+
+  // ROI
+  if(roiM&&roiM.length>=3){
+    const pts=roiM.map(v=>`${sx(v.x)},${sz(v.z)}`).join(' ');
+    html+=`<polygon points="${pts}" fill="rgba(245,158,11,0.06)" stroke="#f59e0b" stroke-width="2" stroke-dasharray="6 3"/>`;
+    html+=`<text x="${sx(roiM[0].x)+4}" y="${sz(roiM[0].z)-4}" fill="#f59e0b" font-size="10" font-weight="bold">ROI</text>`;
+  }
+
+  // Fixtures
+  rows.forEach(r=>{
+    const c=COLORS[r.type]||COLORS.unmapped;
+    const gid=`f-${r.idx}`;
+    if(r.polyPts&&r.polyPts.length>=3){
+      const pts=r.polyPts.map(p=>`${sx(p.x)},${sz(p.z)}`).join(' ');
+      html+=`<polygon id="${gid}" points="${pts}" fill="${c}33" stroke="${c}" stroke-width="1.5" class="fx" data-idx="${r.idx}" style="cursor:pointer"/>`;
+    }else{
+      const cx=sx(r.x),cz=sz(r.z),hw=r.w*fitScale/2,hd=r.d*fitScale/2;
+      html+=`<g id="${gid}" transform="translate(${cx},${cz}) rotate(${-r.rot})" class="fx" data-idx="${r.idx}" style="cursor:pointer">`;
+      html+=`<rect x="${-hw}" y="${-hd}" width="${hw*2}" height="${hd*2}" fill="${c}33" stroke="${c}" stroke-width="1.5"/>`;
+      html+=`</g>`;
+    }
+    // Label — BIG number
+    const lx=r.polyPts?sx(r.polyPts.reduce((s,p)=>s+p.x,0)/r.polyPts.length):sx(r.x);
+    const lz=r.polyPts?sz(r.polyPts.reduce((s,p)=>s+p.z,0)/r.polyPts.length):sz(r.z);
+    html+=`<text x="${lx}" y="${lz+4}" fill="#fff" font-size="11" font-weight="700" text-anchor="middle" pointer-events="none" class="lbl" data-idx="${r.idx}">${r.idx}</text>`;
+    // Dimension annotation below number
+    html+=`<text x="${lx}" y="${lz+14}" fill="#888" font-size="7" text-anchor="middle" pointer-events="none" class="dim-lbl" data-idx="${r.idx}">${r.w.toFixed(2)}×${r.d.toFixed(2)}</text>`;
+  });
+
+  svg.innerHTML=html;
+
+  // Auto-fit: center view
+  vz=1;vx=(mapR.width-svgW)/2;vy=(mapR.height-svgH)/2;
+  updTransform();
+
+  // Click fixtures in SVG
+  svg.querySelectorAll('.fx').forEach(el=>{
+    el.addEventListener('click',e=>{e.stopPropagation();selectFixture(parseInt(el.dataset.idx))});
+  });
+
+  // Summary
+  const roiW=roiM?(maxX-Math.min(...roiM.map(v=>v.x))).toFixed(1):'?';
+  document.getElementById('summary').textContent=`${rows.length} fixtures inside ROI · ROI: ${rngX.toFixed(1)}m × ${rngZ.toFixed(1)}m · scale=${es}`;
+
+  renderTable();
+  document.getElementById('q').addEventListener('input',e=>renderTable(e.target.value.toLowerCase()));
+  document.querySelectorAll('th[data-s]').forEach(th=>th.addEventListener('click',()=>{
+    const k=th.dataset.s;if(sortK===k)sortA=!sortA;else{sortK=k;sortA=true}renderTable(document.getElementById('q').value.toLowerCase());
+  }));
+}
+
+function renderTable(f=''){
+  let r=rows;
+  if(f)r=r.filter(x=>String(x.idx).includes(f)||x.type.includes(f)||x.group.includes(f));
+  r=[...r].sort((a,b)=>{let va=a[sortK],vb=b[sortK];if(typeof va==='string')return sortA?va.localeCompare(vb):vb.localeCompare(va);return sortA?va-vb:vb-va});
+  document.getElementById('tb').innerHTML=r.map(r=>`
+    <tr class="${selId===r.idx?'hi':''}" data-idx="${r.idx}" onclick="selectFixture(${r.idx})" style="cursor:pointer">
+      <td class="n">${r.idx}</td>
+      <td><span class="t t-${r.type}">${r.type}</span></td>
+      <td class="d">${r.w.toFixed(3)}</td>
+      <td class="d">${r.d.toFixed(3)}</td>
+      <td class="d">${r.x.toFixed(2)}</td>
+      <td class="d">${r.z.toFixed(2)}</td>
+      <td class="d">${r.rot.toFixed(0)}</td>
+      <td style="color:#555;font-size:10px" title="${r.group}">${r.group.substring(0,10)}</td>
+    </tr>
+  `).join('');
+}
+
+function selectFixture(idx){
+  selId=selId===idx?null:idx;
+  // Highlight SVG
+  svg.querySelectorAll('.fx').forEach(el=>{
+    const isIt=parseInt(el.dataset.idx)===selId;
+    el.style.strokeWidth=isIt?'3':'1.5';
+    el.style.filter=isIt?'drop-shadow(0 0 6px #fff)':'none';
+  });
+  svg.querySelectorAll('.lbl').forEach(el=>{
+    const isIt=parseInt(el.dataset.idx)===selId;
+    el.setAttribute('font-size',isIt?'16':'11');
+    el.setAttribute('fill',isIt?'#fbbf24':'#fff');
+  });
+  svg.querySelectorAll('.dim-lbl').forEach(el=>{
+    const isIt=parseInt(el.dataset.idx)===selId;
+    el.setAttribute('font-size',isIt?'10':'7');
+    el.setAttribute('fill',isIt?'#fbbf24':'#888');
+  });
+  // Highlight table row
+  document.querySelectorAll('#tb tr').forEach(tr=>{
+    tr.classList.toggle('hi',parseInt(tr.dataset.idx)===selId);
+  });
+  // Scroll table row into view
+  if(selId){const tr=document.querySelector(`#tb tr[data-idx="${selId}"]`);if(tr)tr.scrollIntoView({block:'center',behavior:'smooth'})}
+}
+
+main().catch(e=>{document.getElementById('info').textContent='Error: '+e.message;console.error(e)});
+</script>
+</body>
+</html>

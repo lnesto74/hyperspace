@@ -27,8 +27,11 @@ interface DwgBootstrapResult {
   lidarDraft: unknown[]
   transform: {
     effectiveScale: number
+    scaleCorrection?: number
     centerOffset: { x: number; z: number }
-    bounds: { minX: number; maxX: number; minZ: number; maxZ: number }
+    shift?: { x: number; z: number }
+    venueSize?: { width: number; depth: number }
+    bounds?: { minX: number; maxX: number; minZ: number; maxZ: number }
   }
   dwgMetadata: {
     layoutVersionId: string
@@ -203,6 +206,7 @@ export function VenueProvider({ children }: { children: ReactNode }) {
         updatedAt: now,
         scene_source: 'dwg',
         dwg_layout_version_id: bootstrap.dwgMetadata.layoutVersionId,
+        dwg_transform_json: JSON.stringify({ scaleCorrection: bootstrap.transform?.scaleCorrection || scaleCorrection }),
       }
       
       // Step 3: Update objects with the new venue ID and apply default colors
@@ -248,13 +252,89 @@ export function VenueProvider({ children }: { children: ReactNode }) {
       const res = await fetch(`/api/venues/${id}`)
       if (!res.ok) throw new Error('Failed to load venue')
       const data = await res.json()
-      setVenue(data.venue)
-      setObjects(data.objects || [])
+      
+      const loadedVenue = data.venue
+      const loadedObjects = data.objects || []
+      
+      // ── AUTO-REBOOTSTRAP: Fix DWG venues ──
+      // Re-bootstrap when bootstrap version is outdated or data is missing.
+      // Bump CURRENT_BOOTSTRAP_VERSION when bootstrap logic changes.
+      const CURRENT_BOOTSTRAP_VERSION = 4  // v4: fixed scaleCorrection from layout DB
+      const isDwg = loadedVenue.scene_source === 'dwg' || !!loadedVenue.dwg_layout_version_id
+      const isAbsurd = Math.max(loadedVenue.width || 0, loadedVenue.depth || 0) > 500
+      const lacksPolygonData = loadedObjects.length > 0 && !loadedObjects.some(
+        (o: any) => o.metadata?.dwg_footprint_points?.length > 0
+      )
+      const firstDwgObj = loadedObjects.find((o: any) => o.metadata?.source === 'dwg')
+      const storedVersion = firstDwgObj?.metadata?.dwg_bootstrap_version || 0
+      const isOutdated = storedVersion < CURRENT_BOOTSTRAP_VERSION
+      const needsRebootstrap = isAbsurd || lacksPolygonData || isOutdated
+      
+      if (isDwg && needsRebootstrap && loadedVenue.dwg_layout_version_id) {
+        console.log(`[VenueContext] DWG venue needs rebootstrap (absurd=${isAbsurd}, lacksPolygon=${lacksPolygonData}, dims=${loadedVenue.width}×${loadedVenue.depth}m). Rebootstrapping...`)
+        try {
+          // Read scaleCorrection from localStorage (same as DwgImporterPage)
+          let sc = 1.0
+          for (const key of Object.keys(localStorage)) {
+            if (key.startsWith('dwg-autoplace-settings-')) {
+              try {
+                const parsed = JSON.parse(localStorage.getItem(key) || '{}')
+                if (parsed.scaleCorrection) { sc = parsed.scaleCorrection; break }
+              } catch { /* ignore */ }
+            }
+          }
+          
+          const bsUrl = `/api/dwg/layout/${loadedVenue.dwg_layout_version_id}/as-venue-bootstrap?scaleCorrection=${sc}`
+          const bsRes = await fetch(bsUrl)
+          if (bsRes.ok) {
+            const bs = await bsRes.json()
+            console.log(`[VenueContext] Rebootstrap: ${bs.venueDefaults.width}×${bs.venueDefaults.depth}m, ${bs.objectsDraft.length} objects`)
+            
+            // Update venue dimensions in-place (keep same ID)
+            const fixedVenue = {
+              ...loadedVenue,
+              width: bs.venueDefaults.width,
+              depth: bs.venueDefaults.depth,
+              dwg_transform_json: JSON.stringify({ scaleCorrection: bs.transform?.scaleCorrection || sc }),
+              updatedAt: new Date().toISOString(),
+            }
+            
+            // Apply default colors to new objects
+            const fixedObjects = bs.objectsDraft.map((obj: VenueObject) => ({
+              ...obj,
+              venueId: id,
+              color: obj.color || DEFAULT_OBJECT_COLORS[obj.type as keyof typeof DEFAULT_OBJECT_COLORS] || DEFAULT_OBJECT_COLORS.custom,
+            }))
+            
+            // Save fixed data to backend
+            await fetch(`/api/venues/${id}`, {
+              method: 'PUT',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ venue: fixedVenue, objects: fixedObjects }),
+            })
+            
+            setVenue(fixedVenue)
+            setObjects(fixedObjects)
+            setSelectedObjectId(null)
+            if (onPlacementsLoaded && data.placements) {
+              onPlacementsLoaded(data.placements)
+            }
+            addToast('success', `Rebootstrapped DWG venue: ${fixedVenue.width}×${fixedVenue.depth}m, ${fixedObjects.length} objects`)
+            return
+          }
+        } catch (rebootErr) {
+          console.warn('[VenueContext] Rebootstrap failed, loading original data:', rebootErr)
+        }
+      }
+      
+      // Normal load path
+      setVenue(loadedVenue)
+      setObjects(loadedObjects)
       setSelectedObjectId(null)
       if (onPlacementsLoaded && data.placements) {
         onPlacementsLoaded(data.placements)
       }
-      addToast('success', `Loaded venue: ${data.venue.name}`)
+      addToast('success', `Loaded venue: ${loadedVenue.name}`)
     } catch (err) {
       addToast('error', `Failed to load venue: ${err}`)
     } finally {

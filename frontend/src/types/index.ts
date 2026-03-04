@@ -10,6 +10,7 @@ export interface Venue {
   updatedAt: string;
   scene_source?: 'manual' | 'dwg';
   dwg_layout_version_id?: string;
+  dwg_transform_json?: string;
 }
 
 export interface VenueObject {
@@ -21,6 +22,15 @@ export interface VenueObject {
   rotation: Vector3;
   scale: Vector3;
   color?: string;
+  metadata?: {
+    source?: string;
+    dwg_fixture_id?: string;
+    dwg_layout_version_id?: string;
+    dwg_footprint_points?: { x: number; z: number }[] | null;
+    dwg_center_x?: number;
+    dwg_center_z?: number;
+    [key: string]: any;
+  } | null;
 }
 
 export type ObjectType = 'shelf' | 'wall' | 'checkout' | 'entrance' | 'pillar' | 'custom' | 'digital_display' | 'radio';

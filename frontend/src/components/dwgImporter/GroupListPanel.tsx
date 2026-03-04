@@ -13,6 +13,7 @@ interface GroupListPanelProps {
   onDeleteGroup?: (groupId: string) => void
   customNames?: Record<string, string>
   onUpdateName?: (groupId: string, name: string) => void
+  unitScaleToM?: number
 }
 
 export default function GroupListPanel({ 
@@ -24,7 +25,8 @@ export default function GroupListPanel({
   hoveredFixtureId,
   onDeleteGroup,
   customNames = {},
-  onUpdateName
+  onUpdateName,
+  unitScaleToM = 1
 }: GroupListPanelProps) {
   const listRef = useRef<HTMLDivElement>(null)
   const groupRefs = useRef<Map<string, HTMLButtonElement>>(new Map())
@@ -229,7 +231,7 @@ export default function GroupListPanel({
                     <div>Layer: <span className="text-gray-400">{group.layer}</span></div>
                     <div>
                       Size: <span className="text-gray-400">
-                        {group.size.w.toFixed(0)} × {group.size.d.toFixed(0)}
+                        {(group.size.w * unitScaleToM).toFixed(3)}m × {(group.size.d * unitScaleToM).toFixed(3)}m
                       </span>
                     </div>
                     {mapping && (

@@ -12,22 +12,27 @@ import * as api from './launchpadApi'
 
 // ─── Constants ───────────────────────────────────────────────────
 
-const FIXTURE_TYPES = [
-  { id: 'shelf', label: 'Shelf / Gondola', color: '#60a5fa' },
-  { id: 'fridge', label: 'Fridge / Refrigeration', color: '#22d3ee' },
-  { id: 'wall', label: 'Wall / Perimeter', color: '#9ca3af' },
-  { id: 'checkout', label: 'Checkout / Cashier', color: '#c084fc' },
-  { id: 'entrance', label: 'Entrance', color: '#34d399' },
-  { id: 'pillar', label: 'Pillar', color: '#94a3b8' },
-  { id: 'digital_display', label: 'Digital Display', color: '#a78bfa' },
-  { id: 'custom', label: 'Custom / Other', color: '#fbbf24' },
-] as const
+// Color map shared between LaunchPad and DWG Importer for visual consistency
+const TYPE_COLOR_MAP: Record<string, string> = {
+  shelf: '#60a5fa',
+  fridge: '#22d3ee',
+  wall: '#9ca3af',
+  checkout: '#c084fc',
+  entrance: '#34d399',
+  pillar: '#94a3b8',
+  digital_display: '#a78bfa',
+  radio: '#06b6d4',
+  custom: '#fbbf24',
+}
 
-type FixtureType = typeof FIXTURE_TYPES[number]['id']
+type FixtureType = string
 
-const TYPE_COLOR_MAP: Record<string, string> = Object.fromEntries(
-  FIXTURE_TYPES.map(t => [t.id, t.color])
-)
+interface CatalogAssetItem {
+  id: string
+  name: string
+  type: string
+  hasCustomModel: boolean
+}
 
 const GEOMETRY_TOLERANCE = 0.05 // 5% size tolerance for geometry matching
 
@@ -116,6 +121,26 @@ export default function FixtureClassifyModal({
   onClose,
   onSave,
 }: FixtureClassifyModalProps) {
+  // Load catalog assets from API (same source as DWG Importer MappingPanel)
+  const [catalogAssets, setCatalogAssets] = useState<CatalogAssetItem[]>([])
+  useEffect(() => {
+    api.getCatalogAssets().then(assets => {
+      setCatalogAssets(assets)
+    }).catch(err => {
+      console.warn('[FixtureClassify] Failed to load catalog:', err)
+      // Fallback to hardcoded types if API fails
+      setCatalogAssets([
+        { id: 'shelf', name: 'Shelf', type: 'shelf', hasCustomModel: false },
+        { id: 'wall', name: 'Wall', type: 'wall', hasCustomModel: false },
+        { id: 'checkout', name: 'Checkout', type: 'checkout', hasCustomModel: false },
+        { id: 'entrance', name: 'Entrance', type: 'entrance', hasCustomModel: false },
+        { id: 'pillar', name: 'Pillar', type: 'pillar', hasCustomModel: false },
+        { id: 'digital_display', name: 'Digital Display', type: 'digital_display', hasCustomModel: false },
+        { id: 'custom', name: 'Custom', type: 'custom', hasCustomModel: false },
+      ])
+    })
+  }, [])
+
   // Classification state: fixtureId → type
   const [fixtureTypes, setFixtureTypes] = useState<Map<string, FixtureType>>(() => {
     const map = new Map<string, FixtureType>()
@@ -456,19 +481,20 @@ export default function FixtureClassifyModal({
                 </div>
 
                 <div>
-                  <div className="text-[10px] text-gray-500 uppercase tracking-wider mb-2">Assign Type</div>
+                  <div className="text-[10px] text-gray-500 uppercase tracking-wider mb-2">Assign Type (3D Asset)</div>
                   <div className="space-y-1">
-                    {FIXTURE_TYPES.map(t => (
+                    {catalogAssets.map(asset => (
                       <button
-                        key={t.id}
-                        onClick={() => handleAssignType(t.id)}
+                        key={asset.id}
+                        onClick={() => handleAssignType(asset.type)}
                         className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-md text-[11px] text-gray-300 hover:bg-gray-800 transition-colors text-left"
                       >
                         <span
                           className="w-3 h-3 rounded-sm shrink-0"
-                          style={{ background: t.color }}
+                          style={{ background: TYPE_COLOR_MAP[asset.type] || '#fbbf24' }}
                         />
-                        {t.label}
+                        {asset.name}
+                        {asset.hasCustomModel && <span className="text-[9px] text-indigo-400 ml-auto">(3D)</span>}
                       </button>
                     ))}
                   </div>
@@ -485,13 +511,13 @@ export default function FixtureClassifyModal({
           <div className="p-4 flex-1 overflow-y-auto">
             <div className="text-[10px] text-gray-500 uppercase tracking-wider mb-2">Legend</div>
             <div className="space-y-1">
-              {FIXTURE_TYPES.map(t => {
-                const count = Array.from(fixtureTypes.values()).filter(v => v === t.id).length
+              {catalogAssets.map(asset => {
+                const count = Array.from(fixtureTypes.values()).filter(v => v === asset.type).length
                 if (count === 0) return null
                 return (
-                  <div key={t.id} className="flex items-center gap-2 text-[10px]">
-                    <span className="w-2.5 h-2.5 rounded-sm shrink-0" style={{ background: t.color }} />
-                    <span className="text-gray-400 flex-1">{t.label}</span>
+                  <div key={asset.id} className="flex items-center gap-2 text-[10px]">
+                    <span className="w-2.5 h-2.5 rounded-sm shrink-0" style={{ background: TYPE_COLOR_MAP[asset.type] || '#fbbf24' }} />
+                    <span className="text-gray-400 flex-1">{asset.name}</span>
                     <span className="text-gray-600">{count}</span>
                   </div>
                 )

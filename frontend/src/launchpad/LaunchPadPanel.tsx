@@ -28,6 +28,7 @@ import Lidar3DModal from './Lidar3DModal'
 import RoiDrawingModal from './RoiDrawingModal'
 import FixtureClassifyModal from './FixtureClassifyModal'
 import LaunchPadStage from './LaunchPadStage'
+import type { StageMode } from './LaunchPadStage'
 
 interface LaunchPadPanelProps {
   isOpen: boolean
@@ -69,6 +70,10 @@ export default function LaunchPadPanel({
   })
   const [lidarModels, setLidarModels] = useState<Array<{ id: string; name: string; range_m: number; dome_mode: boolean }>>([])
   const [showStage, setShowStage] = useState(false)
+  const [stageMode, setStageMode] = useState<StageMode>('normal')
+  const [cinematicBuildEnabled] = useState<boolean>(() => {
+    try { return localStorage.getItem('launchpad-cinematicBuild') !== 'false' } catch { return true }
+  })
   const [autopilot, setAutopilot] = useState<AutopilotContext>({
     state: 'idle',
     activeStepId: null,
@@ -457,6 +462,7 @@ export default function LaunchPadPanel({
   // Inline DWG import selection — user picks a DWG right from the drawer
   const handleSelectImport = useCallback(async (importId: string) => {
     if (!session) return
+    let updatedSession = session
     setIsChecking(true)
     try {
       // CRITICAL: clear old layout selection FIRST so checkStep doesn't
@@ -484,6 +490,7 @@ export default function LaunchPadPanel({
         const best = layouts.find(l => l.is_active) || layouts[0]
         localStorage.setItem('venueDwg-selectedLayout', best.id)
         window.dispatchEvent(new CustomEvent('dwgLayoutSelected', { detail: { layoutId: best.id } }))
+
       }
 
       // Force geometry re-fetch by clearing the cached importId
@@ -491,7 +498,7 @@ export default function LaunchPadPanel({
 
       // Reset all steps and re-run cascade with fresh data
       const resetSession: LaunchPadSession = {
-        ...session,
+        ...updatedSession,
         steps: session.steps.map(s => ({
           ...s, status: 'ready' as const, data: null, error: null, warnings: []
         })),
@@ -539,6 +546,7 @@ export default function LaunchPadPanel({
     setAiEnhanced(false)
     setAutopilot({ state: 'idle', activeStepId: null, waitingFor: null, stageMessage: null, show3DFlythrough: false })
     setShowStage(false)
+    setStageMode('normal')
   }, [venueId, venueName])
 
   // AI Enhance — call GPT-4o Vision to improve fixture classifications
@@ -591,6 +599,33 @@ export default function LaunchPadPanel({
               confidence: c.confidence,
             })),
           })
+        }
+
+        // Persist merged classifications to dwg_mappings so DWG Importer stays in sync
+        try {
+          const groupMappings: Record<string, { type: string; catalog_asset_id: string; anchor: string; scale_multiplier: number; rotation_offset_deg: number }> = {}
+          for (const c of merged) {
+            if (c.suggestedType && !groupMappings[c.groupId]) {
+              groupMappings[c.groupId] = {
+                type: c.suggestedType,
+                catalog_asset_id: c.suggestedType,
+                anchor: 'center',
+                scale_multiplier: 1,
+                rotation_offset_deg: 0,
+              }
+            }
+          }
+          await api.saveMapping(importId, { group_mappings: groupMappings })
+          console.log(`[LaunchPad] AI classifications saved to dwg_mappings (${Object.keys(groupMappings).length} groups)`)
+
+          // Regenerate layout + refresh venue objects
+          const effectiveVenueId = session.venueId || venueId
+          if (effectiveVenueId) {
+            const refreshResult = await api.refreshVenueFromLayout(importId, effectiveVenueId)
+            console.log(`[LaunchPad] Venue refreshed after AI enhance: ${refreshResult.objectCount} objects`)
+          }
+        } catch (syncErr: any) {
+          console.warn('[LaunchPad] AI classification sync failed:', syncErr.message)
         }
       }
 
@@ -945,6 +980,7 @@ export default function LaunchPadPanel({
   // Stage callbacks
   const handleStageDwgUploaded = useCallback(async (importId: string) => {
     if (!session) return
+    let updatedSession = session
     try {
       // Register the new import so checkStep can find it
       localStorage.setItem('launchpad-activeImportId', importId)
@@ -956,6 +992,16 @@ export default function LaunchPadPanel({
         const result = await api.generateLayout(importId, effectiveVenueId || undefined)
         localStorage.setItem('venueDwg-selectedLayout', result.layout_version_id)
         window.dispatchEvent(new CustomEvent('dwgLayoutSelected', { detail: { layoutId: result.layout_version_id } }))
+
+        // Create a NEW venue from this layout (no company = Unassigned Venues)
+        // NEVER pass an existing venueId — always a fresh venue for a fresh DWG upload
+        try {
+          const bootstrapped = await api.bootstrapVenueFromLayout(result.layout_version_id)
+          updatedSession = { ...updatedSession, venueId: bootstrapped.venueId, venueName: bootstrapped.venueName }
+          console.log(`[LaunchPad] Created new venue: ${bootstrapped.venueName} (${bootstrapped.venueId}) with ${bootstrapped.objectCount} objects`)
+        } catch (bErr: any) {
+          console.warn('[LaunchPad] Venue creation failed (non-fatal):', bErr.message)
+        }
       } catch (err) {
         console.warn('[LaunchPad] Auto-generate layout after upload failed:', err)
       }
@@ -963,7 +1009,7 @@ export default function LaunchPadPanel({
       // Force geometry re-fetch and run full check
       lastGeometryImportId.current = null
       initialCheckDone.current = false
-      const updated = await runFullCheck(session)
+      const updated = await runFullCheck(updatedSession)
       setSession(updated)
       saveSession(updated)
       sessionRef.current = updated
@@ -1000,19 +1046,47 @@ export default function LaunchPadPanel({
   }, [advanceAutopilot])
 
   const handleStageAcceptLidars = useCallback(() => {
-    // Show 3D flythrough hero moment
-    setAutopilot(prev => ({
-      ...prev,
-      state: 'waiting_input',
-      show3DFlythrough: true,
-      waitingFor: 'manual',
-      stageMessage: null,
-    }))
+    if (cinematicBuildEnabled) {
+      // Show cinematic build animation first, then transition to 3D preview
+      setStageMode('cinematic_build')
+      setAutopilot(prev => ({
+        ...prev,
+        state: 'paused',
+        show3DFlythrough: true,
+        waitingFor: null,
+        stageMessage: null,
+      }))
+    } else {
+      // Skip cinematic, go straight to 3D preview
+      setStageMode('lidar_3d_preview')
+      setAutopilot(prev => ({
+        ...prev,
+        state: 'waiting_input',
+        show3DFlythrough: true,
+        waitingFor: 'manual',
+        stageMessage: null,
+      }))
+    }
+  }, [cinematicBuildEnabled])
+
+  const handleSetStageMode = useCallback((mode: StageMode) => {
+    setStageMode(mode)
+    // When switching to 3D preview, ensure autopilot is in the right state
+    if (mode === 'lidar_3d_preview') {
+      setAutopilot(prev => ({
+        ...prev,
+        state: 'waiting_input',
+        show3DFlythrough: true,
+        waitingFor: 'manual',
+        stageMessage: null,
+      }))
+    }
   }, [])
 
   const handleStageContinue = useCallback(() => {
     const currentIdx = STEP_ORDER.indexOf(autopilot.activeStepId || 'select_dwg')
     const nextStepId = STEP_ORDER[currentIdx + 1]
+    setStageMode('normal')
     if (nextStepId) {
       setAutopilot(prev => ({
         ...prev,
@@ -1066,6 +1140,7 @@ export default function LaunchPadPanel({
             session={session}
             autopilot={autopilot}
             geometry={geometry}
+            stageMode={stageMode}
             onDwgUploaded={handleStageDwgUploaded}
             onAcceptClassification={handleStageAcceptClassification}
             onRejectClassification={handleStageRejectClassification}
@@ -1073,6 +1148,7 @@ export default function LaunchPadPanel({
             onDrawRois={handleDrawRois}
             onAcceptLidars={handleStageAcceptLidars}
             onContinue={handleStageContinue}
+            onSetStageMode={handleSetStageMode}
           />
         </div>
       )}
@@ -1260,6 +1336,16 @@ export default function LaunchPadPanel({
             onLidarAdd={handleLidarAdd}
             onLidarDelete={handleLidarDelete}
             onOpen3DPreview={() => setShow3DPreview(true)}
+            dwgLayoutId={(() => {
+              const dwgStep = session.steps.find(s => s.id === 'select_dwg')
+              const dwgData = dwgStep?.data as SelectDwgData | null
+              return dwgData?.layoutVersionId || undefined
+            })()}
+            unitScaleToM={(() => {
+              const stored = localStorage.getItem('launchpad-autoplace-settings')
+              const settings = stored ? JSON.parse(stored) : {}
+              return (settings.scaleMultiplier || 1) * 0.001
+            })()}
           />
         </div>
       )}
@@ -1306,10 +1392,22 @@ export default function LaunchPadPanel({
             importId={importId}
             existingClassifications={geometry.classifications}
             onClose={() => setShowClassifyModal(false)}
-            onSave={(classifications) => {
+            onSave={async (classifications) => {
               setShowClassifyModal(false)
               // Update geometry with new classifications
               setGeometry(prev => prev ? { ...prev, classifications } : prev)
+
+              // Regenerate layout + refresh venue objects so MainViewport matches LaunchPad 3D
+              const effectiveVenueId = session?.venueId || venueId
+              if (importId && effectiveVenueId) {
+                try {
+                  const result = await api.refreshVenueFromLayout(importId, effectiveVenueId)
+                  console.log(`[LaunchPad] Venue refreshed after classification: ${result.objectCount} objects`)
+                } catch (err: any) {
+                  console.warn('[LaunchPad] Venue refresh after classification failed:', err.message)
+                }
+              }
+
               // Re-check map_fixtures step
               if (session) {
                 setIsChecking(true)
@@ -1345,6 +1443,11 @@ export default function LaunchPadPanel({
               return dwgData?.layoutVersionId || undefined
             })()}
             onRoiChanged={handleRoiChanged}
+            unitScaleToM={(() => {
+              const stored = localStorage.getItem('launchpad-autoplace-settings')
+              const settings = stored ? JSON.parse(stored) : {}
+              return (settings.scaleMultiplier || 1) * 0.001
+            })()}
           />
         )
       })()}

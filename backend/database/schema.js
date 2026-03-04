@@ -274,6 +274,7 @@ export function initDatabase() {
       venue_id TEXT,
       name TEXT,
       layout_json TEXT NOT NULL,
+      scale_correction REAL NOT NULL DEFAULT 1.0,
       is_active INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       FOREIGN KEY (import_id) REFERENCES dwg_imports(id) ON DELETE CASCADE,
@@ -892,6 +893,18 @@ export function initDatabase() {
     // Table may not exist yet, that's fine
   }
 
+  // Migration: Add metadata_json to venue_objects (DWG polygon footprints)
+  try {
+    const voColumns = db.prepare("PRAGMA table_info(venue_objects)").all();
+    const voColumnNames = voColumns.map(c => c.name);
+    if (voColumnNames.length > 0 && !voColumnNames.includes('metadata_json')) {
+      db.exec("ALTER TABLE venue_objects ADD COLUMN metadata_json TEXT DEFAULT NULL");
+      console.log('📦 Migration: Added metadata_json column to venue_objects');
+    }
+  } catch (migrationErr) {
+    // Table may not exist yet, that's fine
+  }
+
   // Migration: Add HER columns to edge_deploy_history
   try {
     const deployHistoryColumns = db.prepare("PRAGMA table_info(edge_deploy_history)").all();
@@ -929,6 +942,10 @@ export function initDatabase() {
     if (layoutVersionColumnNames.length > 0 && !layoutVersionColumnNames.includes('lidar_roi_json')) {
       db.exec("ALTER TABLE dwg_layout_versions ADD COLUMN lidar_roi_json TEXT DEFAULT NULL");
       console.log('📦 Migration: Added lidar_roi_json column to dwg_layout_versions');
+    }
+    if (layoutVersionColumnNames.length > 0 && !layoutVersionColumnNames.includes('scale_correction')) {
+      db.exec("ALTER TABLE dwg_layout_versions ADD COLUMN scale_correction REAL NOT NULL DEFAULT 1.0");
+      console.log('📦 Migration: Added scale_correction column to dwg_layout_versions');
     }
   } catch (migrationErr) {
     // Table may not exist yet, that's fine
@@ -1019,7 +1036,10 @@ export const venueQueries = {
   
   update: (db, id, venue) => {
     const stmt = db.prepare(`
-      UPDATE venues SET name = ?, width = ?, depth = ?, height = ?, tile_size = ?, updated_at = ?
+      UPDATE venues SET name = ?, width = ?, depth = ?, height = ?, tile_size = ?,
+        scene_source = COALESCE(?, scene_source),
+        dwg_layout_version_id = COALESCE(?, dwg_layout_version_id),
+        updated_at = ?
       WHERE id = ?
     `);
     return stmt.run(
@@ -1028,6 +1048,8 @@ export const venueQueries = {
       venue.depth,
       venue.height,
       venue.tileSize,
+      venue.scene_source || null,
+      venue.dwg_layout_version_id || null,
       new Date().toISOString(),
       id
     );
@@ -1049,21 +1071,23 @@ export const objectQueries = {
       rotation: { x: row.rotation_x, y: row.rotation_y, z: row.rotation_z },
       scale: { x: row.scale_x, y: row.scale_y, z: row.scale_z },
       color: row.color,
+      metadata: row.metadata_json ? JSON.parse(row.metadata_json) : null,
     }));
   },
   
   create: (db, obj) => {
     const stmt = db.prepare(`
       INSERT INTO venue_objects (id, venue_id, type, name, position_x, position_y, position_z, 
-        rotation_x, rotation_y, rotation_z, scale_x, scale_y, scale_z, color)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        rotation_x, rotation_y, rotation_z, scale_x, scale_y, scale_z, color, metadata_json)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     return stmt.run(
       obj.id, obj.venueId, obj.type, obj.name,
       obj.position.x, obj.position.y, obj.position.z,
       obj.rotation.x, obj.rotation.y, obj.rotation.z,
       obj.scale.x, obj.scale.y, obj.scale.z,
-      obj.color
+      obj.color,
+      obj.metadata ? JSON.stringify(obj.metadata) : null
     );
   },
   

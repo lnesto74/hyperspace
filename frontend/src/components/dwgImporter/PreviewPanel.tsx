@@ -346,6 +346,9 @@ export default function PreviewPanel({
   const [fpCropStart, setFpCropStart] = useState<{ x: number; y: number } | null>(null)
   const [fpCropCurrent, setFpCropCurrent] = useState<{ x: number; y: number } | null>(null)
 
+  // 2D hover tooltip state
+  const [tooltip2D, setTooltip2D] = useState<{ x: number; y: number; fixture: any } | null>(null)
+
   // Save autoplace settings whenever they change
   useEffect(() => {
     const settings = {
@@ -640,6 +643,8 @@ export default function PreviewPanel({
       baseScale,
       offsetX: offsetX + panOffset.x,
       offsetY: offsetY + panOffset.y,
+      baseOffsetX: offsetX,
+      baseOffsetY: offsetY,
       bounds,
       unit_scale_to_m
     }
@@ -883,6 +888,28 @@ export default function PreviewPanel({
     if (!isDragging && onHoverFixture && viewMode !== 'floorplan' && activeTool !== 'move_floorplan' && activeTool !== 'calibrate_floorplan' && activeTool !== 'crop_floorplan') {
       const fixture = findFixtureAt(pos.x, pos.y)
       onHoverFixture(fixture?.id || null)
+      if (fixture) {
+        const effectiveScale = importData.unit_scale_to_m * scaleCorrection
+        setTooltip2D({
+          x: pos.x,
+          y: pos.y,
+          fixture: {
+            id: fixture.id,
+            groupId: fixture.group_id,
+            type: mappings[fixture.group_id]?.type || 'unmapped',
+            w: (fixture.footprint.w * effectiveScale).toFixed(3),
+            d: (fixture.footprint.d * effectiveScale).toFixed(3),
+            kind: fixture.footprint.kind || 'rect',
+            nPts: fixture.footprint.points?.length || 0,
+            posX: (fixture.pose2d.x * effectiveScale).toFixed(2),
+            posY: (fixture.pose2d.y * effectiveScale).toFixed(2),
+            rotDeg: (fixture.pose2d.rot_deg || 0).toFixed(1),
+            layer: fixture.source?.layer || '',
+          }
+        })
+      } else {
+        setTooltip2D(null)
+      }
     }
     
     if (!isDragging) return
@@ -920,7 +947,7 @@ export default function PreviewPanel({
     } else if (activeTool === 'crop_floorplan' && fpCropStart) {
       setFpCropCurrent(pos)
     }
-  }, [isDragging, getMousePos, dragStart, dragStartOffset, activeTool, selectionRect, onHoverFixture, findFixtureAt, fpCropStart, viewMode, floorplan, fpDragStart, fpDragStartTransform, fromScreen, draggingLidarId, lidarDragStart, lidarDragOriginal, importData.unit_scale_to_m, scaleCorrection])
+  }, [isDragging, getMousePos, dragStart, dragStartOffset, activeTool, selectionRect, onHoverFixture, findFixtureAt, fpCropStart, viewMode, floorplan, fpDragStart, fpDragStartTransform, fromScreen, draggingLidarId, lidarDragStart, lidarDragOriginal, importData.unit_scale_to_m, scaleCorrection, mappings])
 
   const handleMouseUp = useCallback((e: React.MouseEvent) => {
     // LiDAR drag is handled by the global mouseup listener (which also persists to DB)
@@ -992,26 +1019,86 @@ export default function PreviewPanel({
     setSelectionRect(null)
   }, [activeTool, selectionRect, findFixturesInRect, selectedFixtureIds, onSelectFixtures, floorplan, fpDragStart, saveFloorplanTransform, fpCropStart, fpCropCurrent, fromScreen])
 
+  // Zoom toward a specific screen point, correctly accounting for baseOffset
+  const zoomTowardPoint = useCallback((screenX: number, screenY: number, newZoom: number) => {
+    const clampedZoom = Math.max(0.1, Math.min(200, newZoom))
+    const zoomRatio = clampedZoom / zoom
+    const { baseOffsetX, baseOffsetY } = viewTransform
+    // Correct formula: adjust pan so the point under (screenX, screenY) stays fixed
+    const newPanX = (screenX - baseOffsetX) * (1 - zoomRatio) + panOffset.x * zoomRatio
+    const newPanY = (screenY - baseOffsetY) * (1 - zoomRatio) + panOffset.y * zoomRatio
+    setZoom(clampedZoom)
+    setPanOffset({ x: newPanX, y: newPanY })
+  }, [zoom, panOffset, viewTransform])
+
+  // Zoom toward viewport center (for button clicks)
+  const zoomTowardCenter = useCallback((factor: number) => {
+    zoomTowardPoint(dimensions.width / 2, dimensions.height / 2, zoom * factor)
+  }, [zoomTowardPoint, dimensions, zoom])
+
   // Zoom with mouse wheel - zoom towards cursor
   const handleWheel = useCallback((e: React.WheelEvent) => {
     e.preventDefault()
     const pos = getMousePos(e)
     const zoomFactor = e.deltaY > 0 ? 0.9 : 1.1
-    const newZoom = Math.max(0.1, Math.min(20, zoom * zoomFactor))
-    
-    // Zoom towards mouse cursor
-    const zoomRatio = newZoom / zoom
-    const newPanX = pos.x - (pos.x - panOffset.x) * zoomRatio
-    const newPanY = pos.y - (pos.y - panOffset.y) * zoomRatio
-    
-    setZoom(newZoom)
-    setPanOffset({ x: newPanX, y: newPanY })
-  }, [getMousePos, zoom, panOffset])
+    zoomTowardPoint(pos.x, pos.y, zoom * zoomFactor)
+  }, [getMousePos, zoom, zoomTowardPoint])
 
   const resetView = useCallback(() => {
     setZoom(1)
     setPanOffset({ x: 0, y: 0 })
   }, [])
+
+  // Zoom to fit the ROI polygon in the viewport
+  const zoomToRoi = useCallback(() => {
+    if (!lidarRoi || lidarRoi.length < 3) return
+    // ROI vertices are in DXF units (x, z where z maps to DXF Y)
+    let rMinX = Infinity, rMinY = Infinity, rMaxX = -Infinity, rMaxY = -Infinity
+    lidarRoi.forEach(v => {
+      rMinX = Math.min(rMinX, v.x)
+      rMaxX = Math.max(rMaxX, v.x)
+      rMinY = Math.min(rMinY, v.z)
+      rMaxY = Math.max(rMaxY, v.z)
+    })
+    const roiW = (rMaxX - rMinX) * importData.unit_scale_to_m
+    const roiH = (rMaxY - rMinY) * importData.unit_scale_to_m
+    if (roiW < 0.01 || roiH < 0.01) return
+
+    const targetZoom = Math.min(
+      (dimensions.width - 100) / roiW / viewTransform.baseScale,
+      (dimensions.height - 100) / roiH / viewTransform.baseScale,
+      200
+    )
+    // Compute pan to center ROI - need to compute screen pos at targetZoom
+    const roiCenterX = (rMinX + rMaxX) / 2
+    const roiCenterY = (rMinY + rMaxY) / 2
+    const { bounds, unit_scale_to_m } = importData
+    const { baseOffsetX, baseOffsetY } = viewTransform
+    const scale = viewTransform.baseScale * targetZoom
+    // toScreen formula with panOffset=0: screenX = ((x - minX) * usm) * scale + baseOffsetX
+    const screenX = ((roiCenterX - bounds.minX) * unit_scale_to_m) * scale + baseOffsetX
+    const screenY = dimensions.height - (((roiCenterY - bounds.minY) * unit_scale_to_m) * scale) - baseOffsetY
+    const panX = dimensions.width / 2 - screenX
+    const panY = dimensions.height / 2 - screenY
+
+    setZoom(targetZoom)
+    setPanOffset({ x: panX, y: panY })
+  }, [lidarRoi, importData, dimensions, viewTransform])
+
+  // Auto-center on ROI when no saved view exists and ROI is available
+  const hasAutoFitRoiRef = useRef(false)
+  useEffect(() => {
+    if (hasAutoFitRoiRef.current) return
+    if (!lidarRoi || lidarRoi.length < 3) return
+    if (hasSavedView) return
+    if (dimensions.width < 100 || dimensions.height < 100) return
+    // Only auto-fit if view is still at defaults (zoom=1, pan=0,0)
+    if (zoom === 1 && panOffset.x === 0 && panOffset.y === 0) {
+      hasAutoFitRoiRef.current = true
+      // Defer to next frame so viewTransform is computed with correct dimensions
+      requestAnimationFrame(() => zoomToRoi())
+    }
+  }, [lidarRoi, hasSavedView, dimensions, zoom, panOffset, zoomToRoi])
 
   const zoomToFit = useCallback(() => {
     if (selectedFixtureIds.size === 0) {
@@ -1039,7 +1126,7 @@ export default function PreviewPanel({
     const targetZoom = Math.min(
       (dimensions.width - 100) / width / viewTransform.baseScale,
       (dimensions.height - 100) / height / viewTransform.baseScale,
-      5
+      200
     )
     
     // Calculate pan to center selection
@@ -1303,14 +1390,14 @@ export default function PreviewPanel({
           <Focus className="w-4 h-4" />
         </button>
         <button
-          onClick={() => setZoom(prev => Math.min(20, prev * 1.2))}
+          onClick={() => zoomTowardCenter(1.3)}
           className="p-1.5 text-gray-400 hover:text-white rounded hover:bg-gray-700 transition-colors"
           title="Zoom In"
         >
           <ZoomIn className="w-4 h-4" />
         </button>
         <button
-          onClick={() => setZoom(prev => Math.max(0.1, prev * 0.8))}
+          onClick={() => zoomTowardCenter(0.7)}
           className="p-1.5 text-gray-400 hover:text-white rounded hover:bg-gray-700 transition-colors"
           title="Zoom Out"
         >
@@ -2247,7 +2334,18 @@ export default function PreviewPanel({
             const d = toScreenSize(fixture.footprint.d)
             const rotation = -fixture.pose2d.rot_deg
 
-            // Determine color based on state
+            // Determine color based on state — type-specific colors for mapped fixtures
+            const TYPE_FILL: Record<string, string> = {
+              shelf: '#4f46e5', wall: '#475569', checkout: '#16a34a',
+              entrance: '#d97706', pillar: '#57534e', digital_display: '#7c3aed',
+              fridge: '#0891b2', radio: '#334155', custom: '#64748b',
+            }
+            const TYPE_STROKE: Record<string, string> = {
+              shelf: '#818cf8', wall: '#94a3b8', checkout: '#4ade80',
+              entrance: '#fbbf24', pillar: '#a8a29e', digital_display: '#a78bfa',
+              fridge: '#22d3ee', radio: '#64748b', custom: '#94a3b8',
+            }
+            const mappedType = mappings[fixture.group_id]?.type
             let fillColor = '#1e293b' // Dark slate
             let strokeColor = '#475569'
             let strokeWidth = 1
@@ -2260,9 +2358,9 @@ export default function PreviewPanel({
               fillColor = '#7c3aed' // Purple for hovered
               strokeColor = '#a78bfa'
               strokeWidth = 2
-            } else if (isMapped) {
-              fillColor = '#047857' // Green for mapped
-              strokeColor = '#10b981'
+            } else if (isMapped && mappedType) {
+              fillColor = TYPE_FILL[mappedType] || TYPE_FILL.custom
+              strokeColor = TYPE_STROKE[mappedType] || TYPE_STROKE.custom
             }
 
             if (fixture.footprint.kind === 'poly' && fixture.footprint.points.length > 2) {
@@ -2579,7 +2677,69 @@ export default function PreviewPanel({
             </marker>
           </defs>
         </svg>
+
+        {/* 2D Hover Tooltip */}
+        {tooltip2D && (
+          <div
+            className="absolute z-20 pointer-events-none bg-gray-900/95 border border-gray-600 rounded-lg shadow-xl px-3 py-2 text-xs font-mono"
+            style={{ left: tooltip2D.x + 12, top: tooltip2D.y - 10, maxWidth: 300 }}
+          >
+            <div className="flex items-center gap-2 mb-1">
+              <span className="font-bold text-white text-sm">{tooltip2D.fixture.type}</span>
+              <span className="text-gray-400">({tooltip2D.fixture.kind}{tooltip2D.fixture.nPts > 0 ? `, ${tooltip2D.fixture.nPts}pts` : ''})</span>
+            </div>
+            <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 text-gray-300">
+              <span className="text-gray-500">Size:</span>
+              <span>{tooltip2D.fixture.w}m × {tooltip2D.fixture.d}m</span>
+              <span className="text-gray-500">Position:</span>
+              <span>({tooltip2D.fixture.posX}, {tooltip2D.fixture.posY})m</span>
+              <span className="text-gray-500">Rotation:</span>
+              <span>{tooltip2D.fixture.rotDeg}°</span>
+              <span className="text-gray-500">Group:</span>
+              <span className="text-blue-400 truncate">{tooltip2D.fixture.groupId}</span>
+              {tooltip2D.fixture.layer && <>
+                <span className="text-gray-500">Layer:</span>
+                <span className="text-gray-400 truncate">{tooltip2D.fixture.layer}</span>
+              </>}
+            </div>
+          </div>
+        )}
       </div>
+
+      {/* Mapping Legend — shown when any fixtures are mapped */}
+      {(viewMode === 'dwg' || viewMode === 'overlay') && !lidarMode && (() => {
+        const typeCounts: Record<string, number> = {}
+        importData.fixtures.forEach(f => {
+          const t = mappings[f.group_id]?.type
+          if (t) typeCounts[t] = (typeCounts[t] || 0) + 1
+        })
+        const legendFill: Record<string, string> = {
+          shelf: '#4f46e5', wall: '#475569', checkout: '#16a34a',
+          entrance: '#d97706', pillar: '#57534e', digital_display: '#7c3aed',
+          fridge: '#0891b2', radio: '#334155', custom: '#64748b',
+        }
+        const entries = Object.entries(typeCounts).sort((a, b) => b[1] - a[1])
+        const unmapped = importData.fixtures.filter(f => !mappings[f.group_id]).length
+        if (entries.length === 0) return null
+        return (
+          <div className="absolute bottom-10 left-3 bg-gray-900/85 backdrop-blur-sm rounded-lg px-2.5 py-2 border border-gray-700/50 z-20 text-[10px]">
+            {entries.map(([type, count]) => (
+              <div key={type} className="flex items-center gap-1.5 py-0.5">
+                <span className="w-2.5 h-2.5 rounded-sm inline-block" style={{ background: legendFill[type] || '#64748b' }} />
+                <span className="text-gray-300 capitalize">{type.replace('_', ' ')}</span>
+                <span className="text-gray-500 ml-auto pl-2">{count}</span>
+              </div>
+            ))}
+            {unmapped > 0 && (
+              <div className="flex items-center gap-1.5 py-0.5 border-t border-gray-700/50 mt-1 pt-1">
+                <span className="w-2.5 h-2.5 rounded-sm inline-block" style={{ background: '#1e293b' }} />
+                <span className="text-gray-500">Unmapped</span>
+                <span className="text-gray-500 ml-auto pl-2">{unmapped}</span>
+              </div>
+            )}
+          </div>
+        )
+      })()}
 
       {/* Info Bar */}
       <div className="h-8 border-t border-border-dark flex items-center px-3 text-xs text-gray-500 bg-panel-bg gap-3">

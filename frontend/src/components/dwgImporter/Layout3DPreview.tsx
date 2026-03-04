@@ -133,6 +133,12 @@ export default function Layout3DPreview({ layoutVersionId, importId, lidarInstan
   const [showLayersPanel, setShowLayersPanel] = useState(false)
   const floorplanMeshRef = useRef<THREE.Mesh | null>(null)
 
+  // Hover tooltip state
+  const [tooltip, setTooltip] = useState<{ x: number; y: number; data: any } | null>(null)
+  const tooltipWorldPosRef = useRef<THREE.Vector3 | null>(null)
+  const tooltipDivRef = useRef<HTMLDivElement>(null)
+  const fixturePositionsRef = useRef<Array<{ pos: THREE.Vector3; info: any }>>([])
+
   // Toggle pan mode - swap left mouse button behavior
   const togglePanMode = useCallback(() => {
     if (!controlsRef.current) return
@@ -379,11 +385,17 @@ export default function Layout3DPreview({ layoutVersionId, importId, lidarInstan
 
     // Renderer
     const renderer = new THREE.WebGLRenderer({ antialias: true })
-    renderer.setSize(width, height)
     renderer.setPixelRatio(window.devicePixelRatio)
+    renderer.setSize(width, height, false) // false = don't set CSS styles
     renderer.shadowMap.enabled = true
     renderer.autoClear = false // Required for multi-viewport rendering
-    container.appendChild(renderer.domElement)
+    // Force canvas to always fill container via absolute positioning
+    const canvasEl = renderer.domElement
+    canvasEl.style.position = 'absolute'
+    canvasEl.style.inset = '0'
+    canvasEl.style.width = '100%'
+    canvasEl.style.height = '100%'
+    container.appendChild(canvasEl)
     rendererRef.current = renderer
 
     // Controls
@@ -509,6 +521,17 @@ export default function Layout3DPreview({ layoutVersionId, importId, lidarInstan
       animationIdRef.current = requestAnimationFrame(animate)
       controls.update()
       
+      // Update tooltip position by projecting 3D world pos to screen
+      if (tooltipWorldPosRef.current && tooltipDivRef.current) {
+        const projected = tooltipWorldPosRef.current.clone().project(camera)
+        const w = container.clientWidth
+        const h = container.clientHeight
+        const sx = (projected.x * 0.5 + 0.5) * w
+        const sy = (-projected.y * 0.5 + 0.5) * h
+        tooltipDivRef.current.style.left = `${sx + 12}px`
+        tooltipDivRef.current.style.top = `${sy - 10}px`
+      }
+      
       // Clear and render main scene
       renderer.setViewport(0, 0, renderer.domElement.width, renderer.domElement.height)
       renderer.setScissorTest(false)
@@ -529,18 +552,89 @@ export default function Layout3DPreview({ layoutVersionId, importId, lidarInstan
     }
     animate()
 
-    // Handle resize
+    // Handle resize — use ResizeObserver for reliable tracking
     const handleResize = () => {
       const w = container.clientWidth
       const h = container.clientHeight
+      if (w === 0 || h === 0) return
       camera.aspect = w / h
       camera.updateProjectionMatrix()
-      renderer.setSize(w, h)
+      renderer.setSize(w, h, false) // false = preserve our CSS sizing
     }
-    window.addEventListener('resize', handleResize)
+    const resizeObserver = new ResizeObserver(handleResize)
+    resizeObserver.observe(container)
+
+    // Hover tooltip — screen-space proximity: project each fixture to screen, find closest to mouse
+    let rafPending = false
+    let lastMouseScreenX = 0, lastMouseScreenY = 0
+    const TOOLTIP_PIXEL_THRESHOLD = 30 // max pixel distance from fixture center to trigger tooltip
+    const _projVec = new THREE.Vector3()
+
+    const doHoverCheck = () => {
+      rafPending = false
+      const cam = cameraRef.current
+      if (!cam) return
+
+      const positions = fixturePositionsRef.current
+      if (positions.length === 0) { tooltipWorldPosRef.current = null; setTooltip(null); return }
+
+      const cw = container.clientWidth
+      const ch = container.clientHeight
+      if (cw === 0 || ch === 0) return
+
+      let bestDist = Infinity
+      let bestInfo: any = null
+      let bestPos: THREE.Vector3 | null = null
+      let bestSx = 0, bestSy = 0
+
+      for (const fp of positions) {
+        // Project fixture's 3D position to screen pixels
+        _projVec.copy(fp.pos).project(cam)
+        // Skip if behind camera
+        if (_projVec.z > 1) continue
+        const sx = (_projVec.x * 0.5 + 0.5) * cw
+        const sy = (-_projVec.y * 0.5 + 0.5) * ch
+        const dx = sx - lastMouseScreenX
+        const dy = sy - lastMouseScreenY
+        const dist = dx * dx + dy * dy
+        if (dist < bestDist) {
+          bestDist = dist
+          bestInfo = fp.info
+          bestPos = fp.pos
+          bestSx = sx
+          bestSy = sy
+        }
+      }
+
+      const pixelDist = Math.sqrt(bestDist)
+      if (pixelDist < TOOLTIP_PIXEL_THRESHOLD && bestInfo && bestPos) {
+        tooltipWorldPosRef.current = bestPos.clone()
+        setTooltip({ x: bestSx, y: bestSy, data: bestInfo })
+      } else {
+        tooltipWorldPosRef.current = null
+        setTooltip(null)
+      }
+    }
+    const handleMouseMove = (e: MouseEvent) => {
+      const rect = container.getBoundingClientRect()
+      lastMouseScreenX = e.clientX - rect.left
+      lastMouseScreenY = e.clientY - rect.top
+      if (!rafPending) {
+        rafPending = true
+        requestAnimationFrame(doHoverCheck)
+      }
+    }
+    const handleMouseLeave = () => {
+      tooltipWorldPosRef.current = null
+      setTooltip(null)
+    }
+    container.addEventListener('mousemove', handleMouseMove)
+    container.addEventListener('mouseleave', handleMouseLeave)
 
     return () => {
-      window.removeEventListener('resize', handleResize)
+      resizeObserver.disconnect()
+      container.removeEventListener('mousemove', handleMouseMove)
+      container.removeEventListener('mouseleave', handleMouseLeave)
       cancelAnimationFrame(animationIdRef.current)
       renderer.dispose()
       container.removeChild(renderer.domElement)
@@ -627,6 +721,9 @@ export default function Layout3DPreview({ layoutVersionId, importId, lidarInstan
 
     const group = fixturesGroupRef.current
     
+    // Clear fixture positions for tooltip proximity fallback
+    fixturePositionsRef.current = []
+
     // Clear existing fixtures
     while (group.children.length > 0) {
       const child = group.children[0]
@@ -653,8 +750,21 @@ export default function Layout3DPreview({ layoutVersionId, importId, lidarInstan
       }
     }
 
-    const { fixtures, unit_scale_to_m, bounds } = layoutData
+    const { fixtures: allFixtures, unit_scale_to_m, bounds } = layoutData
     const scene = sceneRef.current
+    
+    // Filter out noise types and specific oversized groups that clutter the 3D scene
+    const HIDDEN_TYPES = new Set(['pillar', 'entrance'])
+    const HIDDEN_GROUPS = new Set(['grp_8c6e7b', 'grp_1867a6', 'grp_915c41', 'grp_aba5ea'])
+    const fixtures = allFixtures.filter(f => {
+      const type = f.mapping?.type
+      if (type && HIDDEN_TYPES.has(type)) return false
+      if (f.group_id && HIDDEN_GROUPS.has(f.group_id)) return false
+      return true
+    })
+    if (fixtures.length < allFixtures.length) {
+      console.log(`[3D Filter] Removed ${allFixtures.length - fixtures.length} noise fixtures (pillar/entrance with no geometry). Rendering ${fixtures.length}/${allFixtures.length}`)
+    }
     
     // Center offset - use scaleCorrection to match LiDAR coordinate system
     const effectiveScale = unit_scale_to_m * scaleCorrection
@@ -772,13 +882,25 @@ export default function Layout3DPreview({ layoutVersionId, importId, lidarInstan
         // Angle of first edge - negate for Three.js Y-up coordinate system
         rotationRad = -Math.atan2(edgeDy, edgeDx)
         
-        // Calculate bounding box in local coordinates to get proper w/d
-        const minX = Math.min(...footprint.points.map(p => p.x))
-        const maxX = Math.max(...footprint.points.map(p => p.x))
-        const minY = Math.min(...footprint.points.map(p => p.y))
-        const maxY = Math.max(...footprint.points.map(p => p.y))
-        w = (maxX - minX) * effectiveScale
-        d = (maxY - minY) * effectiveScale
+        // Compute oriented bounding box (OBB) aligned to first edge
+        // This gives correct w/d that match the polygon's actual orientation
+        const edgeLen = Math.sqrt(edgeDx * edgeDx + edgeDy * edgeDy)
+        const ux = edgeLen > 0 ? edgeDx / edgeLen : 1  // unit vector along edge
+        const uy = edgeLen > 0 ? edgeDy / edgeLen : 0
+        let minProj = Infinity, maxProj = -Infinity
+        let minPerp = Infinity, maxPerp = -Infinity
+        for (const pt of footprint.points) {
+          const dx = pt.x - centroidX
+          const dy = pt.y - centroidY
+          const proj = dx * ux + dy * uy      // along edge
+          const perp = -dx * uy + dy * ux     // perpendicular to edge
+          minProj = Math.min(minProj, proj)
+          maxProj = Math.max(maxProj, proj)
+          minPerp = Math.min(minPerp, perp)
+          maxPerp = Math.max(maxPerp, perp)
+        }
+        w = (maxProj - minProj) * effectiveScale  // extent along first edge
+        d = (maxPerp - minPerp) * effectiveScale  // extent perpendicular to first edge
       } else {
         // Fallback to pose2d and footprint dimensions
         x = pose2d.x * effectiveScale - centerX
@@ -804,6 +926,29 @@ export default function Layout3DPreview({ layoutVersionId, importId, lidarInstan
         console.log(`    rotation: y=${(rotationRad * 180 / Math.PI).toFixed(1)}°`)
       }
       
+      // Register fixture position for proximity-based tooltip fallback
+      const fixtureInfo = {
+        id: fixture.id,
+        groupId: fixture.group_id,
+        type: mapping?.type || 'unmapped',
+        catalogAsset: mapping?.catalog_asset_id || 'none',
+        w: +w.toFixed(2),
+        d: +d.toFixed(2),
+        h: +h.toFixed(2),
+        vol: +(w * d * h).toFixed(2),
+        kind: footprint.kind || 'rect',
+        nPts: footprint.points?.length || 0,
+        posX: +x.toFixed(2),
+        posZ: +z.toFixed(2),
+        rotDeg: +(rotationRad * 180 / Math.PI).toFixed(1),
+      }
+      fixturePositionsRef.current.push({ pos: new THREE.Vector3(x, h / 2, z), info: fixtureInfo })
+
+      // Dump to console for debug
+      if (mapping?.type === 'checkout') {
+        console.log(`%c CHECKOUT #${idx}: ${fixture.id}  →  W=${w.toFixed(3)}m  D=${d.toFixed(3)}m  H=${h.toFixed(3)}m  pos=(${x.toFixed(2)}, ${z.toFixed(2)})`, 'color:#22c55e;font-size:14px;font-weight:bold')
+      }
+
       // Color based on type
       const type = mapping?.type || 'default'
       const catalogAssetId = mapping?.catalog_asset_id || type
@@ -822,21 +967,59 @@ export default function Layout3DPreview({ layoutVersionId, importId, lidarInstan
         }
         
         if (model) {
-          // Scale model to fit the footprint
+          // Scale model to fit the footprint, auto-rotate 90° if aspect ratios disagree
           const originalSize = model.userData.originalSize as THREE.Vector3
+          let extraRot = 0
           if (originalSize) {
-            const scaleX = w / originalSize.x
-            const scaleZ = d / originalSize.z
-            const scaleY = Math.min(scaleX, scaleZ) // Preserve aspect ratio for height
-            model.scale.set(scaleX, scaleY, scaleZ)
+            const modelAspect = originalSize.x / originalSize.z
+            const wireAspect = w / d
+            // If model is long along X but wireframe is long along Z (or vice versa), rotate 90°
+            const needsSwap = (modelAspect > 1.2) !== (wireAspect > 1.2) &&
+                              Math.abs(modelAspect - 1) > 0.15 && Math.abs(wireAspect - 1) > 0.15
+            if (needsSwap) {
+              extraRot = Math.PI / 2
+              const scaleX = d / originalSize.x  // swap: wireframe depth → model X
+              const scaleZ = w / originalSize.z  // swap: wireframe width → model Z
+              const scaleY = Math.min(scaleX, scaleZ)
+              model.scale.set(scaleX, scaleY, scaleZ)
+            } else {
+              const scaleX = w / originalSize.x
+              const scaleZ = d / originalSize.z
+              const scaleY = Math.min(scaleX, scaleZ)
+              model.scale.set(scaleX, scaleY, scaleZ)
+            }
           }
           
           model.position.set(x, 0, z)
-          model.rotation.y = rotationRad
+          model.rotation.y = rotationRad + extraRot
           model.userData.fixtureId = fixture.id
+          model.userData.fixtureInfo = fixtureInfo
           group.add(model)
+        } else if (footprint.points && footprint.points.length >= 3) {
+          // Polygon fixture: extrude actual polygon shape so 3D mesh matches wireframe
+          const shape = new THREE.Shape()
+          const pts = footprint.points.map((pt: {x: number, y: number}) => ({
+            sx: pt.x * effectiveScale - centerX - x,   // relative to centroid X
+            sy: -(pt.y * effectiveScale - centerZ - z)  // relative to centroid Z, negated for rotateX
+          }))
+          shape.moveTo(pts[0].sx, pts[0].sy)
+          for (let i = 1; i < pts.length; i++) {
+            shape.lineTo(pts[i].sx, pts[i].sy)
+          }
+          shape.closePath()
+
+          const geometry = new THREE.ExtrudeGeometry(shape, { depth: h, bevelEnabled: false })
+          geometry.rotateX(-Math.PI / 2) // Rotate so extrusion goes upward (Y axis)
+          const material = new THREE.MeshStandardMaterial({ color, roughness: 0.7, metalness: 0.1 })
+          const mesh = new THREE.Mesh(geometry, material)
+          mesh.position.set(x, 0, z)
+          mesh.castShadow = true
+          mesh.receiveShadow = true
+          mesh.userData.fixtureId = fixture.id
+          mesh.userData.fixtureInfo = fixtureInfo
+          group.add(mesh)
         } else {
-          // Fallback: Create box mesh
+          // Rect fixture: simple box
           const geometry = new THREE.BoxGeometry(w, h, d)
           const material = new THREE.MeshStandardMaterial({ 
             color, 
@@ -850,6 +1033,7 @@ export default function Layout3DPreview({ layoutVersionId, importId, lidarInstan
           mesh.castShadow = true
           mesh.receiveShadow = true
           mesh.userData.fixtureId = fixture.id
+          mesh.userData.fixtureInfo = fixtureInfo
           
           group.add(mesh)
         }
@@ -925,37 +1109,39 @@ export default function Layout3DPreview({ layoutVersionId, importId, lidarInstan
 
     // Update camera to fit scene
     if (cameraRef.current && controlsRef.current) {
-      // If focusBounds provided (e.g. from ROI step), use those for a cinematic zoomed view
-      if (focusBounds) {
-        const fbCenterX = (focusBounds.minX + focusBounds.maxX) / 2 * effectiveScale - centerX
-        const fbCenterZ = (focusBounds.minY + focusBounds.maxY) / 2 * effectiveScale - centerZ
-        const fbWidth = (focusBounds.maxX - focusBounds.minX) * effectiveScale
-        const fbDepth = (focusBounds.maxY - focusBounds.minY) * effectiveScale
-        const fbSize = Math.max(fbWidth, fbDepth, 10) // min 10m to avoid too-close zoom
+      // Priority: (1) saved camera view, (2) focusBounds from ROI, (3) default content bounds
+      if (!loadSavedCameraView()) {
+        if (focusBounds) {
+          const fbCenterX = (focusBounds.minX + focusBounds.maxX) / 2 * effectiveScale - centerX
+          const fbCenterZ = (focusBounds.minY + focusBounds.maxY) / 2 * effectiveScale - centerZ
+          const fbWidth = (focusBounds.maxX - focusBounds.minX) * effectiveScale
+          const fbDepth = (focusBounds.maxY - focusBounds.minY) * effectiveScale
+          const fbSize = Math.max(fbWidth, fbDepth, 10) // min 10m to avoid too-close zoom
 
-        // Cinematic angled view — slightly elevated, looking at ROI center
-        cameraRef.current.position.set(
-          fbCenterX + fbSize * 0.6,
-          fbSize * 0.45,
-          fbCenterZ + fbSize * 0.6
-        )
-        controlsRef.current.target.set(fbCenterX, 0, fbCenterZ)
-        controlsRef.current.update()
-        console.log(`[3D] Camera focused on ROI bounds: center=(${fbCenterX.toFixed(1)}, ${fbCenterZ.toFixed(1)}), size=${fbSize.toFixed(1)}m`)
-      } else if (!loadSavedCameraView()) {
-        // No saved view, use default based on content bounds
-        const maxSize = useContentBounds ? maxContentSize : Math.max(rawBoundsWidth, rawBoundsDepth)
-        
-        // Position camera relative to content center for proper rotation
-        cameraRef.current.position.set(
-          contentCenterX + maxSize * 0.8, 
-          maxSize * 0.6, 
-          contentCenterZ + maxSize * 0.8
-        )
-        // Set rotation target to content center (not origin) for intuitive rotation
-        controlsRef.current.target.set(contentCenterX, 0, contentCenterZ)
-        controlsRef.current.update()
-        console.log(`[3D] Camera target set to content center: (${contentCenterX.toFixed(1)}, 0, ${contentCenterZ.toFixed(1)})`)
+          // Elevated angled view — far enough to see entire ROI
+          cameraRef.current.position.set(
+            fbCenterX + fbSize * 0.8,
+            fbSize * 0.7,
+            fbCenterZ + fbSize * 0.8
+          )
+          controlsRef.current.target.set(fbCenterX, 0, fbCenterZ)
+          controlsRef.current.update()
+          console.log(`[3D] Camera focused on ROI bounds: center=(${fbCenterX.toFixed(1)}, ${fbCenterZ.toFixed(1)}), size=${fbSize.toFixed(1)}m`)
+        } else {
+          // No saved view and no ROI, use default based on content bounds
+          const maxSize = useContentBounds ? maxContentSize : Math.max(rawBoundsWidth, rawBoundsDepth)
+          
+          // Position camera relative to content center for proper rotation
+          cameraRef.current.position.set(
+            contentCenterX + maxSize * 0.8, 
+            maxSize * 0.6, 
+            contentCenterZ + maxSize * 0.8
+          )
+          // Set rotation target to content center (not origin) for intuitive rotation
+          controlsRef.current.target.set(contentCenterX, 0, contentCenterZ)
+          controlsRef.current.update()
+          console.log(`[3D] Camera target set to content center: (${contentCenterX.toFixed(1)}, 0, ${contentCenterZ.toFixed(1)})`)
+        }
       }
     }
 
@@ -999,14 +1185,6 @@ export default function Layout3DPreview({ layoutVersionId, importId, lidarInstan
     }
     
     if (lidarInstances.length === 0) {
-      console.log('No LiDAR instances to render')
-      // Add a test marker at origin to verify rendering works
-      const testGeometry = new THREE.SphereGeometry(1, 16, 16)
-      const testMaterial = new THREE.MeshStandardMaterial({ color: 0xff0000 })
-      const testSphere = new THREE.Mesh(testGeometry, testMaterial)
-      testSphere.position.set(0, 3, 0)
-      group.add(testSphere)
-      console.log('Added test sphere at origin')
       return
     }
     
@@ -1561,6 +1739,39 @@ export default function Layout3DPreview({ layoutVersionId, importId, lidarInstan
           )}
         </div>
         
+        {/* Hover Tooltip — anchored to fixture's projected 3D position */}
+        {tooltip && (
+          <div
+            ref={tooltipDivRef}
+            className="absolute z-20 pointer-events-none bg-gray-900/95 border border-gray-600 rounded-lg shadow-xl px-3 py-2 text-xs font-mono"
+            style={{ left: tooltip.x + 12, top: tooltip.y - 10, maxWidth: 320 }}
+          >
+            <div className="flex items-center gap-2 mb-1">
+              <span className="font-bold text-white text-sm">{tooltip.data.type}</span>
+              <span className="text-gray-400">({tooltip.data.kind}{tooltip.data.nPts > 0 ? `, ${tooltip.data.nPts}pts` : ''})</span>
+            </div>
+            <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 text-gray-300">
+              <span className="text-gray-500">Size:</span>
+              <span>{tooltip.data.w}m × {tooltip.data.d}m × {tooltip.data.h}m</span>
+              <span className="text-gray-500">Volume:</span>
+              <span className={tooltip.data.vol > 100 ? 'text-red-400 font-bold' : ''}>{tooltip.data.vol} m³</span>
+              <span className="text-gray-500">Position:</span>
+              <span>({tooltip.data.posX}, {tooltip.data.posZ})</span>
+              <span className="text-gray-500">Rotation:</span>
+              <span>{tooltip.data.rotDeg}°</span>
+              <span className="text-gray-500">Group:</span>
+              <span className="text-blue-400">{tooltip.data.groupId}</span>
+              <span className="text-gray-500">Asset:</span>
+              <span>{tooltip.data.catalogAsset}</span>
+              <span className="text-gray-500">ID:</span>
+              <span className="text-gray-400 truncate">{tooltip.data.id}</span>
+            </div>
+            {tooltip.data.vol > 100 && (
+              <div className="mt-1 text-red-400 text-[10px]">⚠ Oversized — likely noise/annotation</div>
+            )}
+          </div>
+        )}
+
         {isLoading && (
           <div className="absolute inset-0 flex items-center justify-center bg-gray-900/80">
             <div className="text-white">Loading 3D layout...</div>

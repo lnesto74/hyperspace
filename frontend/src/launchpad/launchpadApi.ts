@@ -111,6 +111,7 @@ export async function listImportLayouts(importId: string): Promise<Array<{
   import_id: string
   name: string
   is_active: boolean
+  venue_id?: string | null
 }>> {
   const res = await fetch(`${API_BASE}/api/dwg/import/${importId}/layouts`)
   if (!res.ok) return []
@@ -169,6 +170,190 @@ export async function generateLayout(importId: string, venueId?: string): Promis
   })
   if (!res.ok) throw new Error('Failed to generate layout')
   return res.json()
+}
+
+/**
+ * Bootstrap a venue from a DWG layout version.
+ * Only creates a NEW venue — NEVER overwrites an existing one.
+ * If existingVenueId is provided and that venue already exists, returns it as-is.
+ */
+export async function bootstrapVenueFromLayout(layoutVersionId: string, existingVenueId?: string): Promise<{
+  venueId: string
+  venueName: string
+  objectCount: number
+}> {
+  // SAFETY: If an existing venue is provided, check if it already exists in DB.
+  // If it does, NEVER overwrite it — just return its info and link the layout.
+  if (existingVenueId) {
+    try {
+      const checkRes = await fetch(`${API_BASE}/api/venues/${existingVenueId}`)
+      if (checkRes.ok) {
+        const existing = await checkRes.json()
+        console.log(`[LaunchPad] Venue "${existing.venue?.name}" already exists — skipping bootstrap, preserving data`)
+        // Just link layout to this existing venue (non-destructive)
+        await fetch(`${API_BASE}/api/dwg/layout/${layoutVersionId}/link-venue`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ venue_id: existingVenueId }),
+        }).catch(() => {})
+        return {
+          venueId: existingVenueId,
+          venueName: existing.venue?.name || 'Venue',
+          objectCount: existing.objects?.length || 0,
+        }
+      }
+    } catch { /* venue doesn't exist — proceed to create */ }
+  }
+
+  // 1. Get bootstrap data (stateless — doesn't create anything)
+  // Read scaleCorrection from localStorage (set by DWG Importer PreviewPanel)
+  let scaleCorrection = 1.0
+  try {
+    // Try all possible storage keys for autoplace settings
+    for (const key of Object.keys(localStorage)) {
+      if (key.startsWith('dwg-autoplace-settings-')) {
+        const s = JSON.parse(localStorage.getItem(key) || '{}')
+        if (s.scaleCorrection && s.scaleCorrection !== 1.0) {
+          scaleCorrection = s.scaleCorrection
+          break
+        }
+      }
+    }
+  } catch { /* ignore */ }
+  const bootstrapRes = await fetch(`${API_BASE}/api/dwg/layout/${layoutVersionId}/as-venue-bootstrap?scaleCorrection=${scaleCorrection}`)
+  if (!bootstrapRes.ok) throw new Error('Failed to fetch DWG bootstrap data')
+  const bootstrap = await bootstrapRes.json()
+
+  // 2. Generate a NEW venue ID — never reuse an existing one
+  const venueId = crypto.randomUUID()
+  // Derive a clean venue name from the DWG filename (strip ".dwg", " Layout" suffix)
+  const rawName = (bootstrap.dwgMetadata?.layoutName || 'DWG Venue') as string
+  const venueName = rawName.replace(/\.dwg\b/i, '').replace(/\s*Layout$/i, '').trim() || 'DWG Venue'
+
+  // 3. Build venue + objects payload
+  const DEFAULT_COLORS: Record<string, string> = {
+    shelf: '#4a9eff', wall: '#6b7280', checkout: '#22c55e', entrance: '#f59e0b',
+    pillar: '#9ca3af', digital_display: '#a855f7', radio: '#06b6d4', custom: '#8b5cf6',
+  }
+  const venue = {
+    id: venueId,
+    name: venueName,
+    width: bootstrap.venueDefaults.width,
+    depth: bootstrap.venueDefaults.depth,
+    height: bootstrap.venueDefaults.height,
+    tileSize: bootstrap.venueDefaults.tileSize,
+    scene_source: 'dwg',
+    dwg_layout_version_id: layoutVersionId,
+    dwg_transform_json: JSON.stringify({ scaleCorrection: bootstrap.transform?.scaleCorrection || scaleCorrection }),
+  }
+  const objects = (bootstrap.objectsDraft || []).map((obj: Record<string, unknown>) => ({
+    ...obj,
+    venueId,
+    color: (obj.color as string) || DEFAULT_COLORS[(obj.type as string)] || DEFAULT_COLORS.custom,
+  }))
+
+  // 4. Create new venue + objects (PUT with new UUID = always a create)
+  const saveRes = await fetch(`${API_BASE}/api/venues/${venueId}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ venue, objects }),
+  })
+  if (!saveRes.ok) throw new Error('Failed to save venue from DWG bootstrap')
+
+  // 5. Link layout to venue
+  await fetch(`${API_BASE}/api/venues/${venueId}/dwg-layout`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ dwg_layout_version_id: layoutVersionId }),
+  }).catch(() => {})
+
+  // 6. Also update layout_version's venue_id in dwg_layout_versions
+  await fetch(`${API_BASE}/api/dwg/layout/${layoutVersionId}/link-venue`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ venue_id: venueId }),
+  }).catch(() => {})
+
+  console.log(`[LaunchPad] Created NEW venue "${venueName}" (${venueId}) with ${objects.length} objects`)
+  return { venueId, venueName, objectCount: objects.length }
+}
+
+/**
+ * Refresh an existing venue's objects from its DWG layout.
+ * Call this after fixture classifications/mappings change to keep venue objects in sync.
+ * 1. Regenerates layout (picks up latest dwg_mappings)
+ * 2. Fetches new bootstrap data from regenerated layout
+ * 3. PUTs updated objects to the existing venue
+ */
+export async function refreshVenueFromLayout(
+  importId: string,
+  venueId: string,
+  venueNameOverride?: string
+): Promise<{ layoutVersionId: string; objectCount: number }> {
+  // 1. Regenerate layout with current mappings
+  const genResult = await generateLayout(importId, venueId)
+  const newLayoutId = genResult.layout_version_id
+  console.log(`[LaunchPad] Regenerated layout ${newLayoutId} for venue ${venueId}`)
+
+  // 2. Get bootstrap data from new layout (pass scaleCorrection from localStorage)
+  let sc = 1.0
+  try {
+    for (const key of Object.keys(localStorage)) {
+      if (key.startsWith('dwg-autoplace-settings-')) {
+        const s = JSON.parse(localStorage.getItem(key) || '{}')
+        if (s.scaleCorrection && s.scaleCorrection !== 1.0) { sc = s.scaleCorrection; break }
+      }
+    }
+  } catch { /* ignore */ }
+  const bootstrapRes = await fetch(`${API_BASE}/api/dwg/layout/${newLayoutId}/as-venue-bootstrap?scaleCorrection=${sc}`)
+  if (!bootstrapRes.ok) throw new Error('Failed to fetch bootstrap data after regeneration')
+  const bootstrap = await bootstrapRes.json()
+
+  // 3. Build objects payload
+  const DEFAULT_COLORS: Record<string, string> = {
+    shelf: '#4a9eff', wall: '#6b7280', checkout: '#22c55e', entrance: '#f59e0b',
+    pillar: '#9ca3af', digital_display: '#a855f7', radio: '#06b6d4', custom: '#8b5cf6',
+    fridge: '#06b6d4',
+  }
+  const objects = (bootstrap.objectsDraft || []).map((obj: Record<string, unknown>) => ({
+    ...obj,
+    venueId,
+    color: (obj.color as string) || DEFAULT_COLORS[(obj.type as string)] || DEFAULT_COLORS.custom,
+  }))
+
+  // 4. Update venue dimensions + objects (PUT replaces all objects)
+  const venue: Record<string, unknown> = {
+    id: venueId,
+    width: bootstrap.venueDefaults.width,
+    depth: bootstrap.venueDefaults.depth,
+    height: bootstrap.venueDefaults.height,
+    tileSize: bootstrap.venueDefaults.tileSize,
+    scene_source: 'dwg',
+    dwg_layout_version_id: newLayoutId,
+    dwg_transform_json: JSON.stringify({ scaleCorrection: bootstrap.transform?.scaleCorrection || sc }),
+  }
+  if (venueNameOverride) venue.name = venueNameOverride
+
+  const saveRes = await fetch(`${API_BASE}/api/venues/${venueId}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ venue, objects }),
+  })
+  if (!saveRes.ok) throw new Error('Failed to update venue objects')
+
+  // 5. Link layout to venue
+  await fetch(`${API_BASE}/api/dwg/layout/${newLayoutId}/link-venue`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ venue_id: venueId }),
+  }).catch(() => {})
+
+  // 6. Update localStorage so Layout3DPreview uses new layout
+  localStorage.setItem('venueDwg-selectedLayout', newLayoutId)
+  window.dispatchEvent(new CustomEvent('dwgLayoutSelected', { detail: { layoutId: newLayoutId } }))
+
+  console.log(`[LaunchPad] Refreshed venue ${venueId}: ${objects.length} objects from layout ${newLayoutId}`)
+  return { layoutVersionId: newLayoutId, objectCount: objects.length }
 }
 
 export async function getCatalogAssets(): Promise<Array<{
@@ -604,8 +789,26 @@ export async function buildMapFixturesData(importId: string): Promise<MapFixture
     points: f.footprint.points,
   }))
 
-  const classifications = classifyFixtureGroups(details.groups, fixturePositions)
-  const mappedGroups = Object.keys(groupMappings).length
+  // Run heuristic classification as a baseline
+  const heuristicClassifications = classifyFixtureGroups(details.groups, fixturePositions)
+
+  // Override with existing dwg_mappings from DB (ground truth from DWG Importer)
+  // This ensures LaunchPad always shows the same types as the manual DWG Importer
+  const classifications = heuristicClassifications.map(c => {
+    const dbMapping = groupMappings[c.groupId]
+    if (dbMapping && dbMapping.type) {
+      return {
+        ...c,
+        suggestedType: dbMapping.type as FixtureType,
+        confidence: 1.0,
+        reason: `Mapped in DWG Importer: ${dbMapping.type}`,
+        accepted: true,
+      }
+    }
+    return c
+  })
+
+  const mappedGroups = classifications.filter(c => c.accepted || groupMappings[c.groupId]).length
 
   return {
     totalGroups: details.groups.length,

@@ -671,16 +671,27 @@ export class SmartKpiService {
   // Helper: Get venue objects
   getVenueObjects(venueId) {
     const rows = this.db.prepare('SELECT * FROM venue_objects WHERE venue_id = ?').all(venueId);
-    return rows.map(row => ({
-      id: row.id,
-      venueId: row.venue_id,
-      type: row.type,
-      name: row.name,
-      position: { x: row.position_x, y: row.position_y, z: row.position_z },
-      rotation: { x: row.rotation_x, y: row.rotation_y, z: row.rotation_z },
-      scale: { x: row.scale_x, y: row.scale_y, z: row.scale_z },
-      color: row.color,
-    }));
+    return rows.map(row => {
+      // Parse metadata to get source field (critical for DWG fixture detection)
+      let metadata = null;
+      if (row.metadata_json) {
+        try {
+          metadata = JSON.parse(row.metadata_json);
+        } catch (e) {}
+      }
+      return {
+        id: row.id,
+        venueId: row.venue_id,
+        type: row.type,
+        name: row.name,
+        position: { x: row.position_x, y: row.position_y, z: row.position_z },
+        rotation: { x: row.rotation_x, y: row.rotation_y, z: row.rotation_z },
+        scale: { x: row.scale_x, y: row.scale_y, z: row.scale_z },
+        color: row.color,
+        source: metadata?.source || null,  // 'dwg' for DWG fixtures, null for manual
+        metadata,
+      };
+    });
   }
 
   // Helper: Get venue
@@ -810,12 +821,16 @@ export class SmartKpiService {
       return { error: 'Venue not found', availableKpis: [] };
     }
 
-    const dwgData = this.getDwgLayoutFixtures(layoutId, venue);
-    if (!dwgData) {
-      return { error: 'DWG layout not found', availableKpis: [] };
+    // Use venue_objects (which have correct scale from bootstrap) instead of raw DWG layout
+    const venueObjects = this.getVenueObjects(venueId);
+    const fixtures = venueObjects && venueObjects.length > 0
+      ? venueObjects
+      : (() => { const d = this.getDwgLayoutFixtures(layoutId, venue); return d ? d.fixtures : []; })();
+    
+    if (!fixtures || fixtures.length === 0) {
+      return { error: 'No fixtures found', availableKpis: [] };
     }
 
-    const { fixtures } = dwgData;
     const availableKpis = [];
     const detectedObjects = {};
 
@@ -825,6 +840,21 @@ export class SmartKpiService {
       
       if (matchingFixtures.length > 0) {
         detectedObjects[templateId] = matchingFixtures;
+        
+        // Compute size distribution for fixtures with scale data
+        const sizeDistribution = {};
+        matchingFixtures.forEach(f => {
+          if (f.scale) {
+            const maxDim = Math.max(f.scale.x || 0, f.scale.z || 0);
+            const bucket = maxDim < 0.5 ? '<0.5m'
+              : maxDim < 1.0 ? '0.5-1m'
+              : maxDim < 2.0 ? '1-2m'
+              : maxDim < 3.0 ? '2-3m'
+              : '>3m';
+            sizeDistribution[bucket] = (sizeDistribution[bucket] || 0) + 1;
+          }
+        });
+        
         availableKpis.push({
           ...template,
           detectedCount: matchingFixtures.length,
@@ -833,7 +863,9 @@ export class SmartKpiService {
             name: f.name,
             type: f.type,
             position: f.position,
+            maxDimension: f.scale ? Math.max(f.scale.x || 0, f.scale.z || 0) : null,
           })),
+          sizeDistribution,
           canGenerate: true,
         });
       }
@@ -853,8 +885,11 @@ export class SmartKpiService {
 
   /**
    * Find DWG fixtures matching a template's criteria
+   * @param {Object} options - Optional filters: { minFixtureSize: number }
    */
-  findMatchingDwgFixtures(fixtures, template) {
+  findMatchingDwgFixtures(fixtures, template, options = {}) {
+    const minSize = options.minFixtureSize || 0;
+    
     return fixtures.filter(fixture => {
       // Check fixture type from mapping
       const typeMatch = template.objectTypes.includes(fixture.type);
@@ -865,7 +900,18 @@ export class SmartKpiService {
         fixture.type.toLowerCase().includes(pattern.toLowerCase())
       );
       
-      return typeMatch || nameMatch;
+      if (!(typeMatch || nameMatch)) return false;
+      
+      // Apply minimum size filter if specified
+      if (minSize > 0 && fixture.scale) {
+        const maxDim = Math.max(
+          fixture.scale.x || 0,
+          fixture.scale.z || 0
+        );
+        if (maxDim < minSize) return false;
+      }
+      
+      return true;
     });
   }
 
@@ -895,7 +941,8 @@ export class SmartKpiService {
     
     console.log(`[SmartKPI DWG] Using ${venueObjects.length} venue_objects for ROI generation`);
 
-    const matchingFixtures = this.findMatchingDwgFixtures(venueObjects, template);
+    const matchingFixtures = this.findMatchingDwgFixtures(venueObjects, template, options);
+    console.log(`[SmartKPI DWG] ${matchingFixtures.length} fixtures match template "${templateId}" (minFixtureSize=${options.minFixtureSize || 'none'})`);
 
     if (matchingFixtures.length === 0) {
       return { error: 'No matching fixtures found', rois: [] };

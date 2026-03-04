@@ -498,20 +498,16 @@ function generateLayoutJson(importData, mapping) {
     groupSizeMap[g.group_id] = g.size || { w: 0, d: 0 };
   });
 
-  // Only include fixtures that have a mapping (are paired)
-  const layoutFixtures = fixtures
-    .filter(fixture => {
-      const groupMapping = groupMappings[fixture.group_id];
-      return groupMapping && groupMapping.catalog_asset_id;
-    })
-    .map(fixture => {
-      const groupMapping = groupMappings[fixture.group_id];
+  // Include ALL fixtures — mapped ones get their mapping, unmapped get type 'custom'
+  // This ensures the layout (and resulting venue) always shows every DWG fixture
+  const layoutFixtures = fixtures.map(fixture => {
+      const groupMapping = groupMappings[fixture.group_id] || null;
       const groupSize = groupSizeMap[fixture.group_id] || { w: 0, d: 0 };
       
       // Use group size if fixture footprint is empty
-      const footprint = (fixture.footprint.w > 0 && fixture.footprint.d > 0)
+      const footprint = (fixture.footprint && fixture.footprint.w > 0 && fixture.footprint.d > 0)
         ? fixture.footprint
-        : { ...fixture.footprint, w: groupSize.w, d: groupSize.d };
+        : { ...(fixture.footprint || {}), w: groupSize.w || 1000, d: groupSize.d || 1000 };
       
       return {
         id: fixture.id,
@@ -520,12 +516,12 @@ function generateLayoutJson(importData, mapping) {
         pose2d: fixture.pose2d,
         footprint: footprint,
         group_size: groupSize,
-        mapping: groupMapping
+        mapping: groupMapping || { type: 'custom' }
       };
     });
   
-  // Count paired vs unpaired
-  const pairedCount = layoutFixtures.length;
+  // Count paired (explicitly mapped with catalog_asset_id) vs total
+  const pairedCount = layoutFixtures.filter(f => f.mapping?.catalog_asset_id).length;
   const totalCount = fixtures.length;
   
   return {
@@ -824,46 +820,86 @@ export default function createDwgImportRoutes(db) {
       // Generate layout JSON
       const layoutJson = generateLayoutJson(importData, mapping);
       
-      // Find existing layout version for this import (to migrate data from)
-      const existingLayout = db.prepare(
-        'SELECT id FROM dwg_layout_versions WHERE import_id = ? ORDER BY created_at DESC LIMIT 1'
-      ).get(req.params.import_id);
-      const oldLayoutId = existingLayout?.id || null;
+      // ── SINGLE SOURCE OF TRUTH ──
+      // Find ALL existing layout versions for this import.
+      // Instead of creating a new layout each time (which splits enrichment data),
+      // UPDATE the most recent one in-place so lidar_roi_json, camera views,
+      // LiDAR instances, and ROIs all stay on the same row/ID.
+      const allLayouts = db.prepare(
+        'SELECT id, lidar_roi_json, camera_view_json, camera_view_2d_json FROM dwg_layout_versions WHERE import_id = ? ORDER BY created_at DESC'
+      ).all(req.params.import_id);
       
-      // Create layout version
-      const layoutVersionId = uuidv4();
+      let layoutVersionId;
       const now = new Date().toISOString();
       
-      db.prepare(`
-        INSERT INTO dwg_layout_versions (id, import_id, mapping_id, venue_id, name, layout_json, is_active, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(
-        layoutVersionId,
-        req.params.import_id,
-        mappingRow?.id || null,
-        req.body.venue_id || imp.venue_id,
-        req.body.name || `Layout ${now}`,
-        JSON.stringify(layoutJson),
-        1,
-        now
-      );
-      
-      // Migrate LiDAR instances from old layout version to new one
-      if (oldLayoutId) {
-        const migratedLidars = db.prepare(
-          'UPDATE lidar_instances SET layout_version_id = ? WHERE layout_version_id = ?'
-        ).run(layoutVersionId, oldLayoutId);
-        if (migratedLidars.changes > 0) {
-          console.log(`📦 Migrated ${migratedLidars.changes} LiDAR instances to new layout version`);
-        }
+      if (allLayouts.length > 0) {
+        // UPDATE the most recent layout in-place — preserves enrichment + keeps same ID
+        const target = allLayouts[0];
+        layoutVersionId = target.id;
         
-        // Migrate ROIs from old layout version to new one
-        const migratedRois = db.prepare(
-          'UPDATE regions_of_interest SET dwg_layout_id = ? WHERE dwg_layout_id = ?'
-        ).run(layoutVersionId, oldLayoutId);
-        if (migratedRois.changes > 0) {
-          console.log(`📦 Migrated ${migratedRois.changes} ROIs to new layout version`);
+        db.prepare(`
+          UPDATE dwg_layout_versions 
+          SET layout_json = ?, mapping_id = ?, venue_id = COALESCE(?, venue_id),
+              name = COALESCE(?, name), is_active = 1
+          WHERE id = ?
+        `).run(
+          JSON.stringify(layoutJson),
+          mappingRow?.id || null,
+          req.body.venue_id || imp.venue_id,
+          req.body.name || null,
+          target.id
+        );
+        console.log(`📦 Updated layout ${layoutVersionId.substring(0,8)} in-place (single source of truth)`);
+        
+        // Consolidate orphaned data from any older duplicate layouts
+        const olderLayouts = allLayouts.slice(1);
+        for (const old of olderLayouts) {
+          // Migrate LiDAR instances
+          const ml = db.prepare('UPDATE lidar_instances SET layout_version_id = ? WHERE layout_version_id = ?')
+            .run(layoutVersionId, old.id);
+          if (ml.changes > 0) console.log(`📦 Consolidated ${ml.changes} LiDAR instances from ${old.id.substring(0,8)}`);
+          
+          // Migrate ROIs
+          const mr = db.prepare('UPDATE regions_of_interest SET dwg_layout_id = ? WHERE dwg_layout_id = ?')
+            .run(layoutVersionId, old.id);
+          if (mr.changes > 0) console.log(`📦 Consolidated ${mr.changes} ROIs from ${old.id.substring(0,8)}`);
+          
+          // Copy enrichment if target is missing it
+          if (!target.lidar_roi_json && old.lidar_roi_json) {
+            db.prepare('UPDATE dwg_layout_versions SET lidar_roi_json = ? WHERE id = ?').run(old.lidar_roi_json, layoutVersionId);
+            target.lidar_roi_json = old.lidar_roi_json;
+            console.log(`📦 Recovered lidar_roi_json from ${old.id.substring(0,8)}`);
+          }
+          if (!target.camera_view_json && old.camera_view_json) {
+            db.prepare('UPDATE dwg_layout_versions SET camera_view_json = ? WHERE id = ?').run(old.camera_view_json, layoutVersionId);
+            target.camera_view_json = old.camera_view_json;
+          }
+          if (!target.camera_view_2d_json && old.camera_view_2d_json) {
+            db.prepare('UPDATE dwg_layout_versions SET camera_view_2d_json = ? WHERE id = ?').run(old.camera_view_2d_json, layoutVersionId);
+            target.camera_view_2d_json = old.camera_view_2d_json;
+          }
+          
+          // Deactivate old duplicate
+          db.prepare('UPDATE dwg_layout_versions SET is_active = 0 WHERE id = ?').run(old.id);
         }
+      } else {
+        // First time — INSERT new layout version
+        layoutVersionId = uuidv4();
+        const sc = parseFloat(req.body.scale_correction) || 1.0;
+        db.prepare(`
+          INSERT INTO dwg_layout_versions (id, import_id, mapping_id, venue_id, name, layout_json, scale_correction, is_active, created_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(
+          layoutVersionId,
+          req.params.import_id,
+          mappingRow?.id || null,
+          req.body.venue_id || imp.venue_id,
+          req.body.name || `Layout ${now}`,
+          JSON.stringify(layoutJson),
+          sc,
+          1,
+          now
+        );
       }
       
       // Update import status
@@ -871,7 +907,7 @@ export default function createDwgImportRoutes(db) {
       
       res.json({
         layout_version_id: layoutVersionId,
-        previous_layout_id: oldLayoutId,
+        previous_layout_id: allLayouts.length > 1 ? allLayouts[1].id : null,
         layout: layoutJson
       });
       
@@ -898,6 +934,26 @@ export default function createDwgImportRoutes(db) {
       
       const layoutData = JSON.parse(layout.layout_json || '{}');
       
+      // Overlay CURRENT dwg_mappings on layout fixtures so 3D preview shows latest types
+      if (layout.import_id && layoutData.fixtures?.length) {
+        const liveMappingRow = db.prepare('SELECT mapping_json FROM dwg_mappings WHERE import_id = ?').get(layout.import_id);
+        if (liveMappingRow?.mapping_json) {
+          try {
+            const liveMappings = JSON.parse(liveMappingRow.mapping_json);
+            const groupMappings = liveMappings.group_mappings || {};
+            if (Object.keys(groupMappings).length > 0) {
+              layoutData.fixtures = layoutData.fixtures.map(f => {
+                const liveMapping = groupMappings[f.group_id];
+                if (liveMapping) {
+                  return { ...f, mapping: liveMapping };
+                }
+                return f;
+              });
+            }
+          } catch (e) { /* ignore parse errors */ }
+        }
+      }
+      
       // Use stored_bounds if available (preserves original center for LiDAR positioning)
       if (layoutData.stored_bounds) {
         const sb = layoutData.stored_bounds;
@@ -909,6 +965,15 @@ export default function createDwgImportRoutes(db) {
         };
         console.log('[DWG API] Using stored_bounds for center calculation');
       }
+      
+      // Also fetch ROI from regions_of_interest (DXF units — canonical source)
+      let roiDxfVertices = null;
+      try {
+        const roiRow = db.prepare('SELECT vertices FROM regions_of_interest WHERE dwg_layout_id = ? LIMIT 1').get(layout.id);
+        if (roiRow?.vertices) {
+          roiDxfVertices = JSON.parse(roiRow.vertices);
+        }
+      } catch (e) { /* ignore */ }
       
       res.json({
         layout_version_id: layout.id,
@@ -922,6 +987,7 @@ export default function createDwgImportRoutes(db) {
         camera_view: layout.camera_view_json ? JSON.parse(layout.camera_view_json) : null,
         camera_view_2d: layout.camera_view_2d_json ? JSON.parse(layout.camera_view_2d_json) : null,
         lidar_roi: layout.lidar_roi_json ? JSON.parse(layout.lidar_roi_json) : null,
+        lidar_roi_dxf: roiDxfVertices,
       });
       
     } catch (err) {
@@ -935,7 +1001,7 @@ export default function createDwgImportRoutes(db) {
    */
   router.patch('/layout/:layout_version_id/view', (req, res) => {
     try {
-      const { camera_view, camera_view_2d, lidar_roi } = req.body;
+      const { camera_view, camera_view_2d, lidar_roi, scale_correction } = req.body;
       const updates = [];
       const params = [];
       
@@ -950,6 +1016,11 @@ export default function createDwgImportRoutes(db) {
       if (lidar_roi !== undefined) {
         updates.push('lidar_roi_json = ?');
         params.push(lidar_roi ? JSON.stringify(lidar_roi) : null);
+      }
+      if (scale_correction !== undefined && typeof scale_correction === 'number') {
+        updates.push('scale_correction = ?');
+        params.push(scale_correction);
+        console.log(`[DWG View] Saving scale_correction=${scale_correction} for layout ${req.params.layout_version_id}`);
       }
       
       if (updates.length === 0) {
@@ -968,15 +1039,75 @@ export default function createDwgImportRoutes(db) {
 
   /**
    * GET /api/dwg/import/:import_id/layouts - List layouts for an import
+   * Auto-consolidates duplicate layouts: migrates LiDAR instances, ROIs,
+   * and enrichment columns to the most recent layout, deactivates the rest.
    */
   router.get('/import/:import_id/layouts', (req, res) => {
     try {
       const layouts = db.prepare(`
-        SELECT id, import_id, venue_id, name, is_active, created_at 
+        SELECT id, import_id, venue_id, name, is_active, created_at,
+               lidar_roi_json, camera_view_json, camera_view_2d_json
         FROM dwg_layout_versions 
         WHERE import_id = ?
         ORDER BY created_at DESC
       `).all(req.params.import_id);
+      
+      // Auto-consolidate if duplicate layouts exist
+      if (layouts.length > 1) {
+        const target = layouts[0];
+        const others = layouts.slice(1);
+        let consolidated = false;
+        
+        for (const old of others) {
+          // Migrate LiDAR instances from old → target
+          const ml = db.prepare('UPDATE lidar_instances SET layout_version_id = ? WHERE layout_version_id = ?')
+            .run(target.id, old.id);
+          if (ml.changes > 0) {
+            console.log(`🔄 Auto-consolidated ${ml.changes} LiDAR instances from ${old.id.substring(0,8)} → ${target.id.substring(0,8)}`);
+            consolidated = true;
+          }
+          
+          // Migrate ROIs from old → target
+          const mr = db.prepare('UPDATE regions_of_interest SET dwg_layout_id = ? WHERE dwg_layout_id = ?')
+            .run(target.id, old.id);
+          if (mr.changes > 0) {
+            console.log(`🔄 Auto-consolidated ${mr.changes} ROIs from ${old.id.substring(0,8)} → ${target.id.substring(0,8)}`);
+            consolidated = true;
+          }
+          
+          // Copy enrichment columns if target is missing them
+          if (!target.lidar_roi_json && old.lidar_roi_json) {
+            db.prepare('UPDATE dwg_layout_versions SET lidar_roi_json = ? WHERE id = ?').run(old.lidar_roi_json, target.id);
+            target.lidar_roi_json = old.lidar_roi_json;
+            console.log(`🔄 Recovered lidar_roi_json from ${old.id.substring(0,8)}`);
+            consolidated = true;
+          }
+          if (!target.camera_view_json && old.camera_view_json) {
+            db.prepare('UPDATE dwg_layout_versions SET camera_view_json = ? WHERE id = ?').run(old.camera_view_json, target.id);
+            target.camera_view_json = old.camera_view_json;
+            consolidated = true;
+          }
+          if (!target.camera_view_2d_json && old.camera_view_2d_json) {
+            db.prepare('UPDATE dwg_layout_versions SET camera_view_2d_json = ? WHERE id = ?').run(old.camera_view_2d_json, target.id);
+            target.camera_view_2d_json = old.camera_view_2d_json;
+            consolidated = true;
+          }
+          
+          // Deactivate old duplicate
+          if (old.is_active) {
+            db.prepare('UPDATE dwg_layout_versions SET is_active = 0 WHERE id = ?').run(old.id);
+          }
+        }
+        
+        // Ensure target is active
+        if (!target.is_active) {
+          db.prepare('UPDATE dwg_layout_versions SET is_active = 1 WHERE id = ?').run(target.id);
+        }
+        
+        if (consolidated) {
+          console.log(`🔄 Layout consolidation complete for import ${req.params.import_id.substring(0,8)}: ${layouts.length} → 1 active layout`);
+        }
+      }
       
       res.json(layouts.map(l => ({
         id: l.id,
@@ -1358,8 +1489,6 @@ export default function createDwgImportRoutes(db) {
   router.get('/layout/:layoutVersionId/as-venue-bootstrap', (req, res) => {
     try {
       const { layoutVersionId } = req.params;
-      // Allow scaleCorrection to be passed as query param (from localStorage on frontend)
-      const scaleCorrection = parseFloat(req.query.scaleCorrection) || 1.0;
       
       // Get the layout
       const layout = db.prepare('SELECT * FROM dwg_layout_versions WHERE id = ?').get(layoutVersionId);
@@ -1367,9 +1496,45 @@ export default function createDwgImportRoutes(db) {
         return res.status(404).json({ error: 'Layout version not found' });
       }
       
+      // Read scaleCorrection: DB (authoritative) > query param (fallback) > 1.0 (default)
+      const dbScaleCorrection = layout.scale_correction;
+      const queryScaleCorrection = parseFloat(req.query.scaleCorrection) || 1.0;
+      const scaleCorrection = (dbScaleCorrection && dbScaleCorrection !== 1.0) ? dbScaleCorrection : queryScaleCorrection;
+      console.log(`[DWG Bootstrap] scaleCorrection: db=${dbScaleCorrection}, query=${queryScaleCorrection}, using=${scaleCorrection}`);
+      
+      // Write back used scaleCorrection to layout DB if it differs (self-healing)
+      if (scaleCorrection !== 1.0 && scaleCorrection !== dbScaleCorrection) {
+        db.prepare('UPDATE dwg_layout_versions SET scale_correction = ? WHERE id = ?').run(scaleCorrection, layoutVersionId);
+        console.log(`[DWG Bootstrap] Wrote back scale_correction=${scaleCorrection} to layout ${layoutVersionId}`);
+      }
+      
       const layoutData = JSON.parse(layout.layout_json || '{}');
-      const fixtures = layoutData.fixtures || [];
+      let fixtures = layoutData.fixtures || [];
       const unitScale = layoutData.unit_scale_to_m || 0.001;
+      
+      // Overlay CURRENT dwg_mappings on top of stale layout_json fixture types
+      // This ensures bootstrap always uses the latest classifications from DWG Importer
+      if (layout.import_id) {
+        const mappingRow = db.prepare('SELECT mapping_json FROM dwg_mappings WHERE import_id = ?').get(layout.import_id);
+        if (mappingRow?.mapping_json) {
+          try {
+            const currentMappings = JSON.parse(mappingRow.mapping_json);
+            const groupMappings = currentMappings.group_mappings || {};
+            if (Object.keys(groupMappings).length > 0) {
+              fixtures = fixtures.map(f => {
+                const liveMapping = groupMappings[f.group_id];
+                if (liveMapping) {
+                  return { ...f, mapping: liveMapping };
+                }
+                return f;
+              });
+              console.log(`[DWG Bootstrap] Overlaid ${Object.keys(groupMappings).length} live dwg_mappings on ${fixtures.length} fixtures`);
+            }
+          } catch (e) {
+            console.warn('[DWG Bootstrap] Failed to parse dwg_mappings:', e.message);
+          }
+        }
+      }
       
       // Get LiDAR instances for this layout
       const lidarInstances = db.prepare('SELECT * FROM lidar_instances WHERE layout_version_id = ?').all(layoutVersionId);
@@ -1381,7 +1546,6 @@ export default function createDwgImportRoutes(db) {
       const effectiveScale = unitScale * scaleCorrection;
       
       // Use RAW DWG bounds for center offset (SAME as Layout3DPreview)
-      // Layout3DPreview uses layoutData.bounds, not computed fixture bounds
       const rawBounds = layoutData.bounds || { minX: 0, maxX: 20000, minY: 0, maxY: 15000 };
       const centerX = ((rawBounds.minX + rawBounds.maxX) / 2) * effectiveScale;
       const centerZ = ((rawBounds.minY + rawBounds.maxY) / 2) * effectiveScale;
@@ -1389,48 +1553,142 @@ export default function createDwgImportRoutes(db) {
       console.log(`[DWG Bootstrap] Raw bounds: minX=${rawBounds.minX}, maxX=${rawBounds.maxX}, minY=${rawBounds.minY}, maxY=${rawBounds.maxY}`);
       console.log(`[DWG Bootstrap] Center offset: ${centerX.toFixed(3)}, ${centerZ.toFixed(3)}`);
       
-      // Calculate content bounds from fixtures (for venue sizing, not centering)
-      let fMinX = Infinity, fMaxX = -Infinity, fMinY = Infinity, fMaxY = -Infinity;
+      // ── ROI-AWARE VENUE SIZING + SPATIAL FILTER ──
+      const roiJson = layout.lidar_roi_json;
+      let roiVertices = null;
+      if (roiJson) {
+        try {
+          roiVertices = typeof roiJson === 'string' ? JSON.parse(roiJson) : roiJson;
+          if (!Array.isArray(roiVertices) || roiVertices.length < 3) roiVertices = null;
+        } catch (e) { roiVertices = null; }
+      }
       
+      // Also fetch ROI in DXF units from regions_of_interest (for spatial filtering)
+      let roiDxfVertices = null;
+      try {
+        const roiRow = db.prepare('SELECT vertices FROM regions_of_interest WHERE dwg_layout_id = ? LIMIT 1').get(layoutVersionId);
+        if (roiRow?.vertices) {
+          const parsed = typeof roiRow.vertices === 'string' ? JSON.parse(roiRow.vertices) : roiRow.vertices;
+          if (Array.isArray(parsed) && parsed.length >= 3) roiDxfVertices = parsed;
+        }
+      } catch (e) { /* ignore */ }
+      
+      // Point-in-polygon test for ROI spatial filtering
+      function pointInPolygon(px, py, polygon) {
+        let inside = false;
+        for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+          const xi = polygon[i].x, yi = polygon[i].z || polygon[i].y || 0;
+          const xj = polygon[j].x, yj = polygon[j].z || polygon[j].y || 0;
+          if (((yi > py) !== (yj > py)) && (px < (xj - xi) * (py - yi) / (yj - yi) + xi)) {
+            inside = !inside;
+          }
+        }
+        return inside;
+      }
+      
+      // Spatial ROI filter: keep only fixtures inside the ROI polygon
+      if (roiDxfVertices && roiDxfVertices.length >= 3) {
+        const beforeFilter = fixtures.length;
+        fixtures = fixtures.filter(f => {
+          const points = f.footprint?.points || [];
+          let fx, fy;
+          if (points.length >= 3) {
+            fx = points.reduce((s, p) => s + p.x, 0) / points.length;
+            fy = points.reduce((s, p) => s + p.y, 0) / points.length;
+          } else if (f.pose2d) {
+            fx = f.pose2d.x;
+            fy = f.pose2d.y;
+          } else {
+            return false;
+          }
+          return pointInPolygon(fx, fy, roiDxfVertices);
+        });
+        console.log(`[DWG Bootstrap] ROI spatial filter: ${beforeFilter} → ${fixtures.length} fixtures (inside ROI polygon)`);
+      } else if (roiVertices) {
+        // Fallback: filter using meter-space ROI vertices
+        const beforeFilter = fixtures.length;
+        fixtures = fixtures.filter(f => {
+          const points = f.footprint?.points || [];
+          let fx, fy;
+          if (points.length >= 3) {
+            fx = points.reduce((s, p) => s + p.x, 0) / points.length * effectiveScale;
+            fy = points.reduce((s, p) => s + p.y, 0) / points.length * effectiveScale;
+          } else if (f.pose2d) {
+            fx = f.pose2d.x * effectiveScale;
+            fy = f.pose2d.y * effectiveScale;
+          } else {
+            return false;
+          }
+          // roiVertices are {x, z} in meters
+          return pointInPolygon(fx, fy, roiVertices.map(v => ({ x: v.x, z: v.z })));
+        });
+        console.log(`[DWG Bootstrap] ROI spatial filter (meters): ${beforeFilter} → ${fixtures.length} fixtures`);
+      }
+      
+      // Calculate content bounds from fixtures (for venue sizing)
+      let fMinX = Infinity, fMaxX = -Infinity, fMinY = Infinity, fMaxY = -Infinity;
       fixtures.forEach(f => {
         const { footprint, pose2d } = f;
         const points = footprint?.points || [];
         if (points.length > 0) {
           points.forEach(pt => {
-            fMinX = Math.min(fMinX, pt.x);
-            fMaxX = Math.max(fMaxX, pt.x);
-            fMinY = Math.min(fMinY, pt.y);
-            fMaxY = Math.max(fMaxY, pt.y);
+            fMinX = Math.min(fMinX, pt.x); fMaxX = Math.max(fMaxX, pt.x);
+            fMinY = Math.min(fMinY, pt.y); fMaxY = Math.max(fMaxY, pt.y);
           });
         } else if (pose2d) {
           const hw = (footprint?.w || 1000) / 2;
           const hd = (footprint?.d || 1000) / 2;
-          fMinX = Math.min(fMinX, pose2d.x - hw);
-          fMaxX = Math.max(fMaxX, pose2d.x + hw);
-          fMinY = Math.min(fMinY, pose2d.y - hd);
-          fMaxY = Math.max(fMaxY, pose2d.y + hd);
+          fMinX = Math.min(fMinX, pose2d.x - hw); fMaxX = Math.max(fMaxX, pose2d.x + hw);
+          fMinY = Math.min(fMinY, pose2d.y - hd); fMaxY = Math.max(fMaxY, pose2d.y + hd);
         }
       });
+      if (!isFinite(fMinX)) { fMinX = 0; fMaxX = 20000; fMinY = 0; fMaxY = 15000; }
       
-      // Handle empty fixtures case
-      if (!isFinite(fMinX)) {
-        fMinX = 0; fMaxX = 20000; fMinY = 0; fMaxY = 15000; // Default 20x15m in mm
+      const padding = 4; // 4m padding on each side
+      let venueWidth, venueDepth;
+      
+      if (roiVertices) {
+        // Use ROI bounds for venue dimensions (tighter than all-fixture bounds)
+        const roiXs = roiVertices.map(v => v.x);
+        const roiZs = roiVertices.map(v => v.z);
+        const roiWidth = Math.max(...roiXs) - Math.min(...roiXs);
+        const roiDepth = Math.max(...roiZs) - Math.min(...roiZs);
+        venueWidth = Math.ceil(roiWidth + padding * 2);
+        venueDepth = Math.ceil(roiDepth + padding * 2);
+        console.log(`[DWG Bootstrap] Using ROI bounds: ${roiWidth.toFixed(1)}m × ${roiDepth.toFixed(1)}m → venue ${venueWidth}m × ${venueDepth}m`);
+      } else {
+        // Fallback: compute from filtered fixture bounds
+        const contentWidth = (fMaxX - fMinX) * effectiveScale;
+        const contentDepth = (fMaxY - fMinY) * effectiveScale;
+        venueWidth = Math.ceil(contentWidth + padding * 2);
+        venueDepth = Math.ceil(contentDepth + padding * 2);
+        console.log(`[DWG Bootstrap] No ROI — using fixture bounds: ${contentWidth.toFixed(1)}m × ${contentDepth.toFixed(1)}m → venue ${venueWidth}m × ${venueDepth}m`);
       }
       
-      // Calculate venue dimensions from content bounds (in meters)
-      const contentWidth = (fMaxX - fMinX) * effectiveScale;
-      const contentDepth = (fMaxY - fMinY) * effectiveScale;
-      
-      // Add padding for venue size
-      const padding = 4; // 4m padding on each side
-      const venueWidth = Math.ceil(contentWidth + padding * 2);
-      const venueDepth = Math.ceil(contentDepth + padding * 2);
-      
-      // Calculate content center offset (where objects are centered after DWG transform)
-      // Layout3DPreview centers content at contentCenterX/Z, but MainViewport floor is at (venueWidth/2, venueDepth/2)
-      // We need to shift objects so they're centered on the venue floor
+      // Content center offset (where objects are centered after DWG transform)
+      // MUST match Layout3DPreview.tsx: positions = DXF * effectiveScale - centerX
       const contentCenterX = ((fMinX + fMaxX) / 2) * effectiveScale - centerX;
       const contentCenterZ = ((fMinY + fMaxY) / 2) * effectiveScale - centerZ;
+      
+      // ── TYPE-BASED FILTERING ──
+      // Remove noise fixture types that clutter the 3D scene (same as Layout3DPreview)
+      const HIDDEN_TYPES = new Set(['pillar', 'entrance']);
+      const HIDDEN_GROUPS = new Set(['grp_8c6e7b', 'grp_1867a6', 'grp_915c41', 'grp_aba5ea']);
+      const beforeTypeFilter = fixtures.length;
+      fixtures = fixtures.filter(f => {
+        const type = f.mapping?.type;
+        if (type && HIDDEN_TYPES.has(type)) return false;
+        if (f.group_id && HIDDEN_GROUPS.has(f.group_id)) return false;
+        return true;
+      });
+      if (beforeTypeFilter !== fixtures.length) {
+        console.log(`[DWG Bootstrap] Type filter: ${beforeTypeFilter} → ${fixtures.length} fixtures (removed pillar/entrance/oversized)`);
+      }
+
+      // NOTE: No junk filter — match Layout3DPreview behavior exactly.
+      // Layout3DPreview renders all non-hidden fixtures without area/name filtering.
+
+      // Venue floor center and shift to position objects correctly
       const venueFloorCenterX = venueWidth / 2;
       const venueFloorCenterZ = venueDepth / 2;
       const shiftX = venueFloorCenterX - contentCenterX;
@@ -1441,6 +1699,7 @@ export default function createDwgImportRoutes(db) {
       console.log(`[DWG Bootstrap] Shift offset: (${shiftX.toFixed(2)}, ${shiftZ.toFixed(2)})`);
       
       // Convert fixtures to VenueObjects
+      // MATCH EXACTLY Layout3DPreview.tsx: positions = DXF * effectiveScale - centerX
       const objectsDraft = fixtures.map((fixture, idx) => {
         const { pose2d, footprint, mapping, source, id: fixtureId } = fixture;
         const points = footprint?.points || [];
@@ -1449,7 +1708,6 @@ export default function createDwgImportRoutes(db) {
         
         // MATCH EXACTLY Layout3DPreview.tsx logic
         if (points.length >= 3) {
-          // Use centroid of polygon points (same as Layout3DPreview)
           const sumX = points.reduce((sum, pt) => sum + pt.x, 0);
           const sumY = points.reduce((sum, pt) => sum + pt.y, 0);
           const centroidX = sumX / points.length;
@@ -1457,12 +1715,10 @@ export default function createDwgImportRoutes(db) {
           x = centroidX * effectiveScale - centerX;
           z = centroidY * effectiveScale - centerZ;
           
-          // Calculate rotation from first edge direction (same as Layout3DPreview)
           const p0 = points[0];
           const p1 = points[1];
           const edgeDx = p1.x - p0.x;
           const edgeDy = p1.y - p0.y;
-          // Negate for Three.js Y-up coordinate system
           rotationY = -Math.atan2(edgeDy, edgeDx);
           
           // Calculate bounding box for dimensions
@@ -1474,21 +1730,21 @@ export default function createDwgImportRoutes(db) {
           depth = (maxPtY - minPtY) * effectiveScale;
         } else {
           // Fallback to pose2d and footprint dimensions
-          x = pose2d.x * effectiveScale - centerX;
-          z = pose2d.y * effectiveScale - centerZ;
-          rotationY = -(pose2d?.rot_deg || 0) * Math.PI / 180; // Negate like Layout3DPreview
+          x = (pose2d?.x || 0) * effectiveScale - centerX;
+          z = (pose2d?.y || 0) * effectiveScale - centerZ;
+          rotationY = -((pose2d?.rot_deg || 0) * Math.PI / 180);
           width = (footprint?.w || 1000) * effectiveScale;
           depth = (footprint?.d || 1000) * effectiveScale;
         }
         
-        // Ensure minimum size
-        if (width < 0.1) width = 1;
-        if (depth < 0.1) depth = 1;
-        
-        const height = fixture.customHeight || mapping?.height || Math.max(0.5, Math.min(width, depth) * 0.5);
-        
         // Determine object type from mapping
         const type = mapping?.type || 'custom';
+        
+        // Ensure minimum size (generic fallback only)
+        if (width < 0.1) width = 0.1;
+        if (depth < 0.1) depth = 0.1;
+        
+        const height = fixture.customHeight || mapping?.height || Math.max(0.5, Math.min(width, depth) * 0.5);
         
         // Generate NEW UUID for VenueObject (never reuse DWG fixture ID)
         const venueObjectId = uuidv4();
@@ -1501,6 +1757,10 @@ export default function createDwgImportRoutes(db) {
           console.log(`  - Final position: x=${(x + shiftX).toFixed(3)}, z=${(z + shiftZ).toFixed(3)} (after shift)`);
           console.log(`  - Computed scale: width=${width.toFixed(3)}, height=${height.toFixed(3)}, depth=${depth.toFixed(3)}`);
           console.log(`  - Computed rotation: ${(rotationY * 180 / Math.PI).toFixed(1)}°`);
+        }
+        // Checkout diagnostic — compare with Layout3DPreview console output
+        if (type === 'checkout') {
+          console.log(`%c[DWG Bootstrap] CHECKOUT #${idx}: ${fixtureId}  →  W=${width.toFixed(3)}m  D=${depth.toFixed(3)}m  H=${height.toFixed(3)}m  pos=(${(x + shiftX).toFixed(2)}, ${(z + shiftZ).toFixed(2)})`, 'color:green;font-weight:bold');
         }
         
         // Apply shift to center objects on venue floor
@@ -1518,8 +1778,16 @@ export default function createDwgImportRoutes(db) {
           color: null, // Will use default color from VenueContext
           metadata: {
             source: 'dwg',
+            dwg_bootstrap_version: 4, // v4: fixed scaleCorrection from layout DB
             dwg_fixture_id: fixtureId,
-            dwg_layout_version_id: layoutVersionId
+            dwg_layout_version_id: layoutVersionId,
+            // Store DWG polygon footprint for 3D rendering (extruded shapes + wireframes)
+            dwg_footprint_points: points.length >= 3 ? points.map(pt => ({
+              x: pt.x * effectiveScale - centerX + shiftX,
+              z: pt.y * effectiveScale - centerZ + shiftZ
+            })) : null,
+            dwg_center_x: finalX,
+            dwg_center_z: finalZ,
           }
         };
       });
@@ -1528,8 +1796,7 @@ export default function createDwgImportRoutes(db) {
       const lidarDraft = lidarInstances.map(inst => {
         const model = modelMap.get(inst.model_id);
         
-        // Position with center offset applied (same as Layout3DPreview)
-        // Also apply shift to center on venue floor
+        // LiDAR positions are in meters — apply center offset (same as Layout3DPreview) + shift
         const x = inst.x_m - centerX + shiftX;
         const z = inst.z_m - centerZ + shiftZ;
         const mountHeight = inst.mount_y_m || 3;
@@ -1566,13 +1833,10 @@ export default function createDwgImportRoutes(db) {
         lidarDraft,
         transform: {
           effectiveScale,
+          scaleCorrection,
           centerOffset: { x: centerX, z: centerZ },
-          bounds: {
-            minX: fMinX * effectiveScale,
-            maxX: fMaxX * effectiveScale,
-            minZ: fMinY * effectiveScale,
-            maxZ: fMaxY * effectiveScale
-          }
+          shift: { x: shiftX, z: shiftZ },
+          venueSize: { width: venueWidth, depth: venueDepth }
         },
         dwgMetadata: {
           layoutVersionId,
@@ -1583,6 +1847,35 @@ export default function createDwgImportRoutes(db) {
       
     } catch (err) {
       console.error('DWG venue bootstrap error:', err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  /**
+   * PATCH /api/dwg/layout/:layoutVersionId/link-venue - Link a layout version to a venue
+   * Updates venue_id on dwg_layout_versions AND on dwg_imports
+   */
+  router.patch('/layout/:layoutVersionId/link-venue', (req, res) => {
+    try {
+      const { layoutVersionId } = req.params;
+      const { venue_id } = req.body;
+
+      const layout = db.prepare('SELECT * FROM dwg_layout_versions WHERE id = ?').get(layoutVersionId);
+      if (!layout) {
+        return res.status(404).json({ error: 'Layout version not found' });
+      }
+
+      db.prepare('UPDATE dwg_layout_versions SET venue_id = ? WHERE id = ?').run(venue_id || null, layoutVersionId);
+
+      // Also update the parent import's venue_id
+      if (layout.import_id) {
+        db.prepare('UPDATE dwg_imports SET venue_id = ? WHERE id = ?').run(venue_id || null, layout.import_id);
+      }
+
+      console.log(`🔗 Layout ${layoutVersionId} linked to venue: ${venue_id}`);
+      res.json({ success: true, venue_id });
+    } catch (err) {
+      console.error('Link venue error:', err);
       res.status(500).json({ error: err.message });
     }
   });

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback } from 'react'
+import { useEffect, useRef, useState, useCallback, useMemo } from 'react'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { CSS2DRenderer, CSS2DObject } from 'three/examples/jsm/renderers/CSS2DRenderer.js'
@@ -24,7 +24,10 @@ const COLORS = {
   checkout: 0x22c55e,
   entrance: 0xf59e0b,
   pillar: 0x78716c,
-  custom: 0x8b5cf6,
+  digital_display: 0x8b5cf6,
+  fridge: 0x26c6da,
+  radio: 0x455a64,
+  custom: 0x78909c,
   lidarOnline: 0x22c55e,
   lidarOffline: 0x6b7280,
   lidarConnecting: 0xf59e0b,
@@ -222,6 +225,21 @@ export default function MainViewport({
   const [showSlotArrows, setShowSlotArrows] = useState(false)
   const slotArrowsRef = useRef<THREE.Group | null>(null)
   
+  // Object hover tooltip
+  const [hoveredObjectTooltip, setHoveredObjectTooltip] = useState<{
+    name: string
+    type: string
+    width: number
+    height: number
+    depth: number
+    posX: number
+    posZ: number
+    id: string
+    mouseX: number
+    mouseY: number
+  } | null>(null)
+  const hoveredObjectIdRef = useRef<string | null>(null)
+
   // SKU Debug hover highlight
   const [hoveredSkuShelf, setHoveredSkuShelf] = useState<{
     shelfId: string
@@ -643,7 +661,7 @@ export default function MainViewport({
     sceneRef.current = scene
 
     // Camera
-    const camera = new THREE.PerspectiveCamera(60, width / height, 0.1, 1000)
+    const camera = new THREE.PerspectiveCamera(60, width / height, 0.1, 10000)
     camera.position.set(15, 15, 15)
     cameraRef.current = camera
 
@@ -683,8 +701,8 @@ export default function MainViewport({
     controls.enableDamping = true
     controls.dampingFactor = 0.05
     controls.maxPolarAngle = Math.PI / 2.1
-    controls.minDistance = 5
-    controls.maxDistance = 100
+    controls.minDistance = 1
+    controls.maxDistance = 500
     controlsRef.current = controls
 
     // Lighting
@@ -1162,6 +1180,51 @@ export default function MainViewport({
           hoveredLidarId = newHoveredId
         }
         
+        // Check if hovering over an object (for debug tooltip)
+        const objectMeshes = Array.from(objectMeshesRef.current.values())
+        const allObjMeshes: THREE.Object3D[] = []
+        objectMeshes.forEach(obj => {
+          if (obj instanceof THREE.Group) {
+            obj.traverse(child => { if (child instanceof THREE.Mesh) allObjMeshes.push(child) })
+          } else {
+            allObjMeshes.push(obj)
+          }
+        })
+        const objHits = raycasterRef.current.intersectObjects(allObjMeshes)
+        let hovObjId: string | null = null
+        if (objHits.length > 0) {
+          let cur: THREE.Object3D | null = objHits[0].object
+          while (cur) {
+            if (cur.userData.objectId) { hovObjId = cur.userData.objectId; break }
+            cur = cur.parent
+          }
+        }
+        if (hovObjId !== hoveredObjectIdRef.current) {
+          hoveredObjectIdRef.current = hovObjId
+          if (hovObjId) {
+            const obj = objectsRef.current.find(o => o.id === hovObjId)
+            if (obj) {
+              setHoveredObjectTooltip({
+                name: obj.name || '(unnamed)',
+                type: obj.type || 'custom',
+                width: obj.scale?.x ?? 0,
+                height: obj.scale?.y ?? 0,
+                depth: obj.scale?.z ?? 0,
+                posX: obj.position?.x ?? 0,
+                posZ: obj.position?.z ?? 0,
+                id: obj.id,
+                mouseX: event.clientX,
+                mouseY: event.clientY,
+              })
+            }
+          } else {
+            setHoveredObjectTooltip(null)
+          }
+        } else if (hovObjId && hoveredObjectIdRef.current) {
+          // Update mouse position for existing tooltip
+          setHoveredObjectTooltip(prev => prev ? { ...prev, mouseX: event.clientX, mouseY: event.clientY } : null)
+        }
+
         // Check if hovering over an ROI zone
         const roiGroups = Array.from(roiMeshesRef.current.values())
         const roiMeshes = roiGroups.flatMap(g => g.children.filter(c => c instanceof THREE.Mesh && c.userData.roiId && !c.userData.isRoiVertex))
@@ -1354,6 +1417,9 @@ export default function MainViewport({
 
     // Mouse up - end drag and snap to grid
     const handleMouseUp = (event: MouseEvent) => {
+      // Clear object hover tooltip
+      hoveredObjectIdRef.current = null
+      setHoveredObjectTooltip(null)
       // Handle click selection (no drag occurred - threshold not crossed)
       if (pendingDragRef.current && !isDraggingRef.current) {
         const pending = pendingDragRef.current
@@ -1701,6 +1767,81 @@ export default function MainViewport({
     }
   }, [])
 
+  // Compute effective scene bounds for DWG venues (shared by grid/floor + camera presets)
+  const dwgSceneBounds = useMemo(() => {
+    if (!venue) return null
+    const isDwg = venue.scene_source === 'dwg' || !!venue.dwg_layout_version_id
+    if (!isDwg) return null
+
+    const vw = venue.width || 50
+    const vd = venue.depth || 50
+    // Sanity limit: no coordinate should exceed 2× venue dimensions
+    const saneLimit = Math.max(vw, vd) * 2
+
+    // Priority 1: Percentile-based object bounds (most reliable — direct from bootstrap)
+    if (objects.length > 5) {
+      const inBounds = objects.filter(o =>
+        o.position.x >= -saneLimit && o.position.x <= saneLimit &&
+        o.position.z >= -saneLimit && o.position.z <= saneLimit
+      )
+      if (inBounds.length > 5) {
+        const sortedX = inBounds.map(o => o.position.x).sort((a, b) => a - b)
+        const sortedZ = inBounds.map(o => o.position.z).sort((a, b) => a - b)
+        const p10 = Math.floor(inBounds.length * 0.10)
+        const p90 = Math.floor(inBounds.length * 0.90)
+        const oMinX = sortedX[p10], oMaxX = sortedX[p90]
+        const oMinZ = sortedZ[p10], oMaxZ = sortedZ[p90]
+        const objW = oMaxX - oMinX
+        const objD = oMaxZ - oMinZ
+        const size = Math.max(objW, objD, 5)
+        return {
+          centerX: (oMinX + oMaxX) / 2,
+          centerZ: (oMinZ + oMaxZ) / 2,
+          floorW: size * 2,
+          floorD: size * 2,
+          source: 'objects-p10-p90',
+        }
+      }
+    }
+
+    // Priority 2: ROI bounds with sanity filter (ROIs can have corrupted coordinates)
+    if (regions.length > 0) {
+      const saneVertices: { x: number; z: number }[] = []
+      regions.forEach(roi => {
+        roi.vertices.forEach(v => {
+          if (Math.abs(v.x) <= saneLimit && Math.abs(v.z) <= saneLimit) {
+            saneVertices.push(v)
+          }
+        })
+      })
+      if (saneVertices.length > 2) {
+        const roiMinX = Math.min(...saneVertices.map(v => v.x))
+        const roiMaxX = Math.max(...saneVertices.map(v => v.x))
+        const roiMinZ = Math.min(...saneVertices.map(v => v.z))
+        const roiMaxZ = Math.max(...saneVertices.map(v => v.z))
+        const roiW = roiMaxX - roiMinX
+        const roiD = roiMaxZ - roiMinZ
+        const size = Math.max(roiW, roiD, 5)
+        return {
+          centerX: (roiMinX + roiMaxX) / 2,
+          centerZ: (roiMinZ + roiMaxZ) / 2,
+          floorW: size * 2,
+          floorD: size * 2,
+          source: 'roi-sane',
+        }
+      }
+    }
+
+    // Fallback: use venue dimensions (capped at 200m)
+    return {
+      centerX: Math.min(vw, 200) / 2,
+      centerZ: Math.min(vd, 200) / 2,
+      floorW: Math.min(vw, 200),
+      floorD: Math.min(vd, 200),
+      source: 'capped',
+    }
+  }, [venue, regions, objects])
+
   // Update grid and floor when venue changes
   useEffect(() => {
     if (!sceneRef.current || !venue) return
@@ -1710,16 +1851,30 @@ export default function MainViewport({
     if (gridRef.current) scene.remove(gridRef.current)
     if (floorRef.current) scene.remove(floorRef.current)
 
-    // Create grid
-    const gridSize = Math.max(venue.width, venue.depth)
-    const divisions = Math.ceil(gridSize / venue.tileSize)
+    // For DWG venues, use content-based bounds; for manual venues, use full dimensions
+    let floorW = venue.width
+    let floorD = venue.depth
+    let centerX = venue.width / 2
+    let centerZ = venue.depth / 2
+
+    if (dwgSceneBounds) {
+      floorW = dwgSceneBounds.floorW
+      floorD = dwgSceneBounds.floorD
+      centerX = dwgSceneBounds.centerX
+      centerZ = dwgSceneBounds.centerZ
+      console.log(`[MainViewport] DWG venue — ${dwgSceneBounds.source}: floor ${floorW.toFixed(1)}×${floorD.toFixed(1)}m, center (${centerX.toFixed(1)}, ${centerZ.toFixed(1)})`)
+    }
+
+    // Create grid — same as Layout3DPreview
+    const gridSize = Math.max(floorW, floorD)
+    const divisions = Math.min(Math.ceil(gridSize), 200)
     const grid = new THREE.GridHelper(gridSize, divisions, COLORS.gridCenter, COLORS.grid)
-    grid.position.set(venue.width / 2, 0.01, venue.depth / 2)
+    grid.position.set(centerX, 0.01, centerZ)
     scene.add(grid)
     gridRef.current = grid
 
-    // Create floor
-    const floorGeometry = new THREE.PlaneGeometry(venue.width, venue.depth)
+    // Create floor — same as Layout3DPreview
+    const floorGeometry = new THREE.PlaneGeometry(floorW * 1.2, floorD * 1.2)
     const floorMaterial = new THREE.MeshStandardMaterial({ 
       color: COLORS.floor,
       roughness: 0.9,
@@ -1727,16 +1882,23 @@ export default function MainViewport({
     })
     const floor = new THREE.Mesh(floorGeometry, floorMaterial)
     floor.rotation.x = -Math.PI / 2
-    floor.position.set(venue.width / 2, 0, venue.depth / 2)
+    floor.position.set(centerX, 0, centerZ)
     floor.receiveShadow = true
     scene.add(floor)
     floorRef.current = floor
 
-    // Update camera target
-    if (controlsRef.current) {
-      controlsRef.current.target.set(venue.width / 2, 0, venue.depth / 2)
+    // Camera — replicate Layout3DPreview focusBounds logic
+    if (controlsRef.current && cameraRef.current) {
+      const viewSize = Math.max(floorW, floorD)
+      cameraRef.current.position.set(
+        centerX + viewSize * 0.8,
+        viewSize * 0.7,
+        centerZ + viewSize * 0.8
+      )
+      controlsRef.current.target.set(centerX, 0, centerZ)
+      controlsRef.current.update()
     }
-  }, [venue?.width, venue?.depth, venue?.tileSize])
+  }, [venue?.width, venue?.depth, venue?.tileSize, venue?.scene_source, venue?.dwg_layout_version_id, dwgSceneBounds])
 
   // 3D Logo Billboard on back wall
   useEffect(() => {
@@ -1824,9 +1986,11 @@ export default function MainViewport({
     
     const camera = cameraRef.current
     const controls = controlsRef.current
-    const centerX = venue.width / 2
-    const centerZ = venue.depth / 2
-    const maxDim = Math.max(venue.width, venue.depth)
+    
+    // For DWG venues, center on content bounds instead of full venue dimensions
+    const centerX = dwgSceneBounds ? dwgSceneBounds.centerX : venue.width / 2
+    const centerZ = dwgSceneBounds ? dwgSceneBounds.centerZ : venue.depth / 2
+    const maxDim = dwgSceneBounds ? Math.max(dwgSceneBounds.floorW, dwgSceneBounds.floorD) : Math.max(venue.width, venue.depth)
     
     // Set target to center
     controls.target.set(centerX, 0, centerZ)
@@ -1850,15 +2014,15 @@ export default function MainViewport({
         break
       case 'perspective':
       default:
-        // Default perspective view
-        camera.position.set(maxDim * 0.8, maxDim * 0.6, maxDim * 0.8)
+        // Default perspective — offset from center (matches Digital Twin camera)
+        camera.position.set(centerX + maxDim * 0.6, maxDim * 0.45, centerZ + maxDim * 0.6)
         camera.up.set(0, 1, 0)
         break
     }
     
     camera.lookAt(centerX, 0, centerZ)
     controls.update()
-  }, [cameraView, venue?.width, venue?.depth, venue?.height])
+  }, [cameraView, venue?.width, venue?.depth, venue?.height, dwgSceneBounds])
 
   // Update lighting when settings change
   useEffect(() => {
@@ -2158,11 +2322,49 @@ export default function MainViewport({
   useEffect(() => {
     if (!sceneRef.current) return
     const scene = sceneRef.current
-    const existingIds = new Set(objects.map(o => o.id))
+    
+    // For DWG venues, hide noise types AND filter to ROI area only
+    const isDwgVenue = venue?.scene_source === 'dwg' || !!venue?.dwg_layout_version_id
+    const isAbsurdVenue = venue ? Math.max(venue.width, venue.depth) > 500 : false
+    const HIDDEN_VENUE_TYPES = new Set(['pillar', 'entrance'])
+    let visibleObjects = objects
+    if (isDwgVenue) {
+      visibleObjects = objects.filter(o => !HIDDEN_VENUE_TYPES.has(o.type))
+      // For absurd venues, also filter to objects within/near the ROI
+      if (isAbsurdVenue && regions.length > 0) {
+        let roiMinX = Infinity, roiMaxX = -Infinity, roiMinZ = Infinity, roiMaxZ = -Infinity
+        regions.forEach(roi => {
+          roi.vertices.forEach(v => {
+            roiMinX = Math.min(roiMinX, v.x)
+            roiMaxX = Math.max(roiMaxX, v.x)
+            roiMinZ = Math.min(roiMinZ, v.z)
+            roiMaxZ = Math.max(roiMaxZ, v.z)
+          })
+        })
+        if (isFinite(roiMinX)) {
+          const margin = Math.max(roiMaxX - roiMinX, roiMaxZ - roiMinZ) * 0.3
+          const before = visibleObjects.length
+          visibleObjects = visibleObjects.filter(o => 
+            o.position.x >= roiMinX - margin && o.position.x <= roiMaxX + margin &&
+            o.position.z >= roiMinZ - margin && o.position.z <= roiMaxZ + margin
+          )
+          if (visibleObjects.length < before) {
+            console.log(`[MainViewport] ROI filter: ${before} → ${visibleObjects.length} objects (within ROI + ${margin.toFixed(0)}m margin)`)
+          }
+        }
+      }
+    }
+    const existingIds = new Set(visibleObjects.map(o => o.id))
 
-    // Remove deleted objects
+    // Remove deleted objects (and newly-hidden noise types)
     objectMeshesRef.current.forEach((obj3d, id) => {
       if (!existingIds.has(id)) {
+        // Also remove associated wireframe line for DWG polygon objects
+        if (obj3d.userData.wireLineRef) {
+          scene.remove(obj3d.userData.wireLineRef)
+          obj3d.userData.wireLineRef.geometry?.dispose()
+          obj3d.userData.wireLineRef.material?.dispose()
+        }
         scene.remove(obj3d)
         obj3d.traverse(child => {
           if (child instanceof THREE.Mesh) {
@@ -2178,27 +2380,110 @@ export default function MainViewport({
       }
     })
 
+    // ── DWG TYPE COLORS (matches Layout3DPreview exactly) ──
+    const DWG_TYPE_COLORS: Record<string, number> = {
+      shelf: 0x6366f1,
+      wall: 0x64748b,
+      checkout: 0x22c55e,
+      entrance: 0xf59e0b,
+      pillar: 0x78716c,
+      digital_display: 0x8b5cf6,
+      fridge: 0x26c6da,
+      custom: 0x4b5563, // Gray (NOT purple!) — matches Layout3DPreview 'default'
+      default: 0x4b5563,
+    }
+
+    // ── DIAGNOSTIC: dump checkout dimensions from DB (compare with Layout3DPreview) ──
+    if (isDwgVenue && visibleObjects.length > 0) {
+      const checkouts = visibleObjects.filter(o => o.type === 'checkout')
+      if (checkouts.length > 0) {
+        console.log(`%c[MainViewport] ═══ CHECKOUT FIXTURES FROM DB (${checkouts.length} total) ═══`, 'color:#ff6b6b;font-size:14px;font-weight:bold')
+        checkouts.forEach((c, i) => {
+          console.log(`%c  CHECKOUT #${i}: ${c.id}  →  scale.x=${c.scale.x.toFixed(3)}  scale.y=${c.scale.y.toFixed(3)}  scale.z=${c.scale.z.toFixed(3)}  pos=(${c.position.x.toFixed(2)}, ${c.position.z.toFixed(2)})  rot=${(c.rotation.y * 180 / Math.PI).toFixed(1)}°`, 'color:#ff6b6b;font-size:12px')
+        })
+        console.log(`%c  Venue dimensions: ${venue?.width}m × ${venue?.depth}m`, 'color:#ff6b6b;font-size:12px;font-weight:bold')
+      }
+    }
+    // Diagnostic: log type breakdown for DWG venues
+    if (isDwgVenue && visibleObjects.length > 0) {
+      const typeCounts: Record<string, { count: number; withPolygon: number; withoutPolygon: number }> = {}
+      visibleObjects.forEach(o => {
+        const t = o.type || 'unknown'
+        if (!typeCounts[t]) typeCounts[t] = { count: 0, withPolygon: 0, withoutPolygon: 0 }
+        typeCounts[t].count++
+        if (o.metadata?.dwg_footprint_points?.length) typeCounts[t].withPolygon++
+        else typeCounts[t].withoutPolygon++
+      })
+      console.table(typeCounts)
+      console.log(`[MainViewport] DWG venue: ${visibleObjects.length} visible objects`)
+    }
+
     // Add/update objects
     const createOrUpdateObject = async (obj: typeof objects[0]) => {
       let obj3d = objectMeshesRef.current.get(obj.id)
       const customModel = customModels.get(obj.type)
+      const isDwg = isDwgVenue && obj.metadata?.source === 'dwg'
+      const polyPts = obj.metadata?.dwg_footprint_points
 
       if (!obj3d) {
-        const targetColor = obj.color ? parseInt(obj.color.replace('#', ''), 16) : COLORS[obj.type as keyof typeof COLORS] || COLORS.custom
+        // Color: for DWG venues use Layout3DPreview colors; for manual use existing COLORS
+        const targetColor = isDwg
+          ? (DWG_TYPE_COLORS[obj.type] || DWG_TYPE_COLORS.default)
+          : (obj.color ? parseInt(obj.color.replace('#', ''), 16) : COLORS[obj.type as keyof typeof COLORS] || COLORS.custom)
 
-        if (customModel) {
-          // Load custom 3D model (GLTF/GLB/OBJ) - add cache buster
+        // ── DWG POLYGON EXTRUSION (matches Layout3DPreview exactly) ──
+        if (isDwg && polyPts && polyPts.length >= 3) {
+          const cx = obj.position.x  // centroid X (already in venue coords)
+          const cz = obj.position.z  // centroid Z
+          const h = obj.scale.y      // height from bootstrap
+
+          // Build THREE.Shape from polygon (relative to centroid, negated Z for rotateX)
+          const shape = new THREE.Shape()
+          const rel = polyPts.map(pt => ({
+            sx: pt.x - cx,
+            sy: -(pt.z - cz)
+          }))
+          shape.moveTo(rel[0].sx, rel[0].sy)
+          for (let i = 1; i < rel.length; i++) shape.lineTo(rel[i].sx, rel[i].sy)
+          shape.closePath()
+
+          const extrudeGeom = new THREE.ExtrudeGeometry(shape, { depth: h, bevelEnabled: false })
+          extrudeGeom.rotateX(-Math.PI / 2) // Extrude upward (Y axis)
+          const mat = new THREE.MeshStandardMaterial({ color: targetColor, roughness: 0.7, metalness: 0.1 })
+          const mesh = new THREE.Mesh(extrudeGeom, mat)
+          mesh.position.set(cx, 0, cz)
+          mesh.castShadow = true
+          mesh.receiveShadow = true
+          mesh.userData.objectId = obj.id
+          mesh.userData.isDwgPolygon = true
+
+          // Add ground-plane wireframe outline (cyan, like Layout3DPreview)
+          const wirePoints = polyPts.map(pt => new THREE.Vector3(pt.x, 0.02, pt.z))
+          wirePoints.push(wirePoints[0].clone()) // close loop
+          const wireGeom = new THREE.BufferGeometry().setFromPoints(wirePoints)
+          const wireMat = new THREE.LineBasicMaterial({ color: 0x00ffff, linewidth: 2 })
+          const wireLine = new THREE.Line(wireGeom, wireMat)
+          wireLine.userData.isEdgeLines = true
+          // wireframe in world coords — don't parent to mesh (mesh has offset)
+          scene.add(wireLine)
+          // Store reference so we can remove it later
+          mesh.userData.wireLineRef = wireLine
+
+          scene.add(mesh)
+          objectMeshesRef.current.set(obj.id, mesh)
+          obj3d = mesh
+
+        } else if (customModel) {
+          // Load custom 3D model (GLTF/GLB/OBJ)
           const cacheBuster = `?t=${Date.now()}`
           const loaded = await loadModel(obj.type, `${API_BASE}${customModel.file_path}${cacheBuster}`)
           if (loaded) {
-            // Check if this object type should be translucent (walls, shelves)
             const isTranslucentType = obj.type === 'wall' || obj.type === 'shelf'
             const isObjFile = customModel.original_name?.toLowerCase().endsWith('.obj')
             
             loaded.traverse(child => {
               if (child instanceof THREE.Mesh) {
                 if (isObjFile || isTranslucentType) {
-                  // Apply translucent material for walls/shelves, or solid for OBJ files
                   child.material = new THREE.MeshStandardMaterial({
                     color: isTranslucentType ? 0x88aabb : targetColor,
                     roughness: isTranslucentType ? 0.3 : 0.7,
@@ -2206,16 +2491,13 @@ export default function MainViewport({
                     transparent: isTranslucentType,
                     opacity: isTranslucentType ? 0.25 : 1.0,
                     side: isTranslucentType ? THREE.DoubleSide : THREE.FrontSide,
-                    depthWrite: !isTranslucentType, // Prevent z-fighting flickering
+                    depthWrite: !isTranslucentType,
                   })
                   
-                  // Add edge lines for translucent objects
                   if (isTranslucentType && child.geometry) {
                     const edges = new THREE.EdgesGeometry(child.geometry)
                     const lineMaterial = new THREE.LineBasicMaterial({ 
-                      color: 0x99ccdd,
-                      transparent: true,
-                      opacity: 0.6,
+                      color: 0x99ccdd, transparent: true, opacity: 0.6,
                     })
                     const edgeLines = new THREE.LineSegments(edges, lineMaterial)
                     edgeLines.userData.isEdgeLines = true
@@ -2229,31 +2511,26 @@ export default function MainViewport({
             loaded.userData.objectId = obj.id
             loaded.userData.isCustomModel = true
             loaded.userData.isTranslucent = isTranslucentType
-            // Set render order for transparent objects to render after opaque
-            if (isTranslucentType) {
-              loaded.renderOrder = 1
-            }
+            if (isTranslucentType) loaded.renderOrder = 1
             scene.add(loaded)
             objectMeshesRef.current.set(obj.id, loaded)
             obj3d = loaded
           }
         }
         
-        // Fallback to box geometry if no custom model or loading failed
+        // Fallback to box geometry
         if (!obj3d) {
           const geometry = new THREE.BoxGeometry(1, 1, 1)
-          
-          // Check if this object type should be translucent (walls, shelves)
-          const isTranslucentType = obj.type === 'wall' || obj.type === 'shelf'
+          const isTranslucentType = isDwg || obj.type === 'wall' || obj.type === 'shelf'
           
           const material = new THREE.MeshStandardMaterial({
-            color: isTranslucentType ? 0x88aabb : targetColor, // Light blue-grey for translucent
-            roughness: isTranslucentType ? 0.3 : 0.7,
-            metalness: isTranslucentType ? 0.1 : 0.1,
+            color: targetColor,
+            roughness: 0.7,
+            metalness: 0.1,
             transparent: isTranslucentType,
             opacity: isTranslucentType ? 0.25 : 1.0,
             side: isTranslucentType ? THREE.DoubleSide : THREE.FrontSide,
-            depthWrite: !isTranslucentType, // Prevent z-fighting flickering
+            depthWrite: !isTranslucentType,
           })
           
           const mesh = new THREE.Mesh(geometry, material)
@@ -2261,18 +2538,13 @@ export default function MainViewport({
           mesh.receiveShadow = true
           mesh.userData.objectId = obj.id
           mesh.userData.isTranslucent = isTranslucentType
-          // Set render order for transparent objects to render after opaque
-          if (isTranslucentType) {
-            mesh.renderOrder = 1
-          }
+          if (isTranslucentType) mesh.renderOrder = 1
           
-          // Add edge lines for translucent objects (glass-like effect)
-          if (isTranslucentType) {
+          // Add wireframe edges for all DWG objects (or wall/shelf in manual mode)
+          if (isTranslucentType || isDwg) {
             const edges = new THREE.EdgesGeometry(geometry)
             const lineMaterial = new THREE.LineBasicMaterial({ 
-              color: 0x99ccdd,
-              transparent: true,
-              opacity: 0.6,
+              color: isDwg ? 0x00ffff : 0x99ccdd, transparent: true, opacity: 0.6,
             })
             const edgeLines = new THREE.LineSegments(edges, lineMaterial)
             edgeLines.userData.isEdgeLines = true
@@ -2286,44 +2558,43 @@ export default function MainViewport({
       }
 
       // Update transform
-      obj3d.rotation.set(obj.rotation.x, obj.rotation.y, obj.rotation.z)
-      
-      // Calculate Y position to place object base on floor
-      let yOffset = obj.scale.y / 2 // Default for box geometry (centered origin)
-      
-      // Check if this is a DWG-sourced venue (needs special GLTF scaling)
-      const isDwgVenue = venueRef.current?.scene_source === 'dwg'
-      
-      if (obj3d.userData.isCustomModel && obj3d.userData.originalSize && isDwgVenue) {
-        // For DWG venues with GLTF models, scale relative to original size (same as Layout3DPreview)
-        const originalSize = obj3d.userData.originalSize as THREE.Vector3
-        const scaleX = obj.scale.x / originalSize.x
-        const scaleZ = obj.scale.z / originalSize.z
-        const scaleY = obj.scale.y / originalSize.y
-        obj3d.scale.set(scaleX, scaleY, scaleZ)
-        
-        // Compute bounding box after scaling to find the bottom
-        const box = new THREE.Box3().setFromObject(obj3d)
-        yOffset = -box.min.y
-      } else if (obj3d.userData.isCustomModel) {
-        // For manual mode with GLTF models, apply scale and compute bounding box for yOffset
-        obj3d.scale.set(obj.scale.x, obj.scale.y, obj.scale.z)
-        const box = new THREE.Box3().setFromObject(obj3d)
-        yOffset = -box.min.y
+      if (obj3d.userData.isDwgPolygon) {
+        // DWG polygon meshes: position is centroid, no rotation needed (shape is in world coords)
+        obj3d.position.set(obj.position.x, 0, obj.position.z)
+        obj3d.scale.set(1, 1, 1)
       } else {
-        // For box geometry, scale is the actual size
-        obj3d.scale.set(obj.scale.x, obj.scale.y, obj.scale.z)
+        obj3d.rotation.set(obj.rotation.x, obj.rotation.y, obj.rotation.z)
+        
+        let yOffset = obj.scale.y / 2
+        const isDwgVenueCheck = venueRef.current?.scene_source === 'dwg'
+        
+        if (obj3d.userData.isCustomModel && obj3d.userData.originalSize && isDwgVenueCheck) {
+          const originalSize = obj3d.userData.originalSize as THREE.Vector3
+          const scaleX = obj.scale.x / originalSize.x
+          const scaleZ = obj.scale.z / originalSize.z
+          const scaleY = obj.scale.y / originalSize.y
+          obj3d.scale.set(scaleX, scaleY, scaleZ)
+          const box = new THREE.Box3().setFromObject(obj3d)
+          yOffset = -box.min.y
+        } else if (obj3d.userData.isCustomModel) {
+          obj3d.scale.set(obj.scale.x, obj.scale.y, obj.scale.z)
+          const box = new THREE.Box3().setFromObject(obj3d)
+          yOffset = -box.min.y
+        } else {
+          obj3d.scale.set(obj.scale.x, obj.scale.y, obj.scale.z)
+        }
+        
+        obj3d.position.set(obj.position.x, yOffset, obj.position.z)
       }
-      
-      obj3d.position.set(obj.position.x, yOffset, obj.position.z)
 
       // Update material color and selection state
-      const isTranslucentType = obj.type === 'wall' || obj.type === 'shelf'
-      const targetColor = isTranslucentType ? 0x88aabb : (obj.color ? parseInt(obj.color.replace('#', ''), 16) : COLORS[obj.type as keyof typeof COLORS])
+      const isTranslucentType = isDwg || obj.type === 'wall' || obj.type === 'shelf'
+      const targetColor = isDwg
+        ? (DWG_TYPE_COLORS[obj.type] || DWG_TYPE_COLORS.default)
+        : (isTranslucentType ? 0x88aabb : (obj.color ? parseInt(obj.color.replace('#', ''), 16) : COLORS[obj.type as keyof typeof COLORS]))
       obj3d.traverse(child => {
         if (child instanceof THREE.Mesh) {
           const mat = child.material as THREE.MeshStandardMaterial
-          // Only update color if not edge lines
           if (!child.userData.isEdgeLines) {
             mat.color.setHex(targetColor)
           }
@@ -2338,8 +2609,8 @@ export default function MainViewport({
       })
     }
 
-    objects.forEach(obj => createOrUpdateObject(obj))
-  }, [objects, selectedObjectId, customModels, loadModel])
+    visibleObjects.forEach(obj => createOrUpdateObject(obj))
+  }, [objects, selectedObjectId, customModels, loadModel, venue?.scene_source, venue?.dwg_layout_version_id, venue?.width, venue?.depth, regions])
 
   // Update LiDAR placements
   useEffect(() => {
@@ -2945,7 +3216,6 @@ export default function MainViewport({
     })
 
     // Add/update ROIs
-    console.log(`[MainViewport] Rendering ${regions.length} ROIs`)
     regions.forEach((roi, idx) => {
       if (roi.vertices.length < 3) return
       
@@ -3024,15 +3294,17 @@ export default function MainViewport({
       const outline = new THREE.Line(outlineGeometry, outlineMaterial)
       group.add(outline)
 
-      // Vertex handles (spheres at each vertex)
+      // Vertex handles (spheres at each vertex) — use ORIGINAL vertices for data consistency
       const handles: THREE.Mesh[] = []
+      const handleSize = 0.15
       roi.vertices.forEach((v, i) => {
-        const handleGeometry = new THREE.SphereGeometry(0.15, 16, 8)
+        const handleGeometry = new THREE.SphereGeometry(handleSize, 16, 8)
         const handleMaterial = new THREE.MeshBasicMaterial({
           color: isSelected ? 0x3b82f6 : 0xffffff,
         })
         const handle = new THREE.Mesh(handleGeometry, handleMaterial)
-        handle.position.set(v.x, 0.15, v.z)
+        // Position handles at display coordinates
+        handle.position.set(roi.vertices[i].x, handleSize, roi.vertices[i].z)
         handle.userData.roiId = roi.id
         handle.userData.vertexIndex = i
         handle.userData.isRoiVertex = true
@@ -3061,14 +3333,14 @@ export default function MainViewport({
       labelDiv.textContent = roi.name
       labelDiv.dataset.roiId = roi.id
       const label = new CSS2DObject(labelDiv)
-      // Position label at centroid
+      // Position at display centroid
       const cx = roi.vertices.reduce((s, v) => s + v.x, 0) / roi.vertices.length
       const cz = roi.vertices.reduce((s, v) => s + v.z, 0) / roi.vertices.length
       label.position.set(cx, 0.5, cz)
       label.userData.roiId = roi.id
       group.add(label)
     })
-  }, [regions, selectedRoiId])
+  }, [regions, selectedRoiId, venue?.scene_source, venue?.dwg_layout_version_id, objects])
 
   // Render drawing preview
   useEffect(() => {
@@ -3321,10 +3593,13 @@ export default function MainViewport({
         cameraRef.current.position.set(distance, venue.height / 2, 0)
         controlsRef.current.target.set(0, venue.height / 2, 0)
         break
-      case 'reset':
-        cameraRef.current.position.set(venue.width * 0.8, venue.height * 2, venue.depth * 0.8)
-        controlsRef.current.target.set(0, 0, 0)
+      case 'reset': {
+        const cx = venue.width / 2, cz = venue.depth / 2
+        const md = Math.max(venue.width, venue.depth)
+        cameraRef.current.position.set(cx + md * 0.6, md * 0.45, cz + md * 0.6)
+        controlsRef.current.target.set(cx, 0, cz)
         break
+      }
     }
     
     cameraRef.current.updateProjectionMatrix()
@@ -3860,6 +4135,35 @@ export default function MainViewport({
           onAutoSlotPositions={setAutoSlotPositions}
         />
         
+        {/* Object Hover Tooltip */}
+        {hoveredObjectTooltip && (
+          <div
+            className="fixed z-50 pointer-events-none bg-gray-900/95 border border-gray-600 rounded-lg shadow-xl px-3 py-2 text-xs text-gray-200 max-w-[300px]"
+            style={{
+              left: hoveredObjectTooltip.mouseX + 16,
+              top: hoveredObjectTooltip.mouseY - 10,
+            }}
+          >
+            <div className="font-semibold text-white truncate">{hoveredObjectTooltip.name}</div>
+            <div className="flex gap-3 mt-1">
+              <span className="text-gray-400">Type:</span>
+              <span className="font-medium" style={{ color: {
+                shelf: '#818cf8', wall: '#94a3b8', checkout: '#4ade80', entrance: '#fbbf24',
+                pillar: '#a8a29e', digital_display: '#a78bfa', custom: '#94a3b8'
+              }[hoveredObjectTooltip.type] || '#94a3b8' }}>{hoveredObjectTooltip.type}</span>
+            </div>
+            <div className="flex gap-3">
+              <span className="text-gray-400">Size:</span>
+              <span>{hoveredObjectTooltip.width.toFixed(1)} × {hoveredObjectTooltip.depth.toFixed(1)} × {hoveredObjectTooltip.height.toFixed(1)}m</span>
+            </div>
+            <div className="flex gap-3">
+              <span className="text-gray-400">Pos:</span>
+              <span>({hoveredObjectTooltip.posX.toFixed(1)}, {hoveredObjectTooltip.posZ.toFixed(1)})</span>
+            </div>
+            <div className="text-gray-500 text-[10px] mt-1 truncate">ID: {hoveredObjectTooltip.id.slice(0, 8)}</div>
+          </div>
+        )}
+
         {/* Floating Layers Panel - Top Left */}
         <div className="absolute top-14 left-3 z-10">
           <button

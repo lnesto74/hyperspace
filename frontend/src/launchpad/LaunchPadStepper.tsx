@@ -75,6 +75,10 @@ interface LaunchPadStepperProps {
   onLidarDelete?: (id: string) => void
   /** Open 3D preview modal */
   onOpen3DPreview?: () => void
+  /** Layout version ID for LiDAR schedule */
+  dwgLayoutId?: string
+  /** DXF unit → meters scale */
+  unitScaleToM?: number
 }
 
 /* ─── style helpers ─── */
@@ -154,6 +158,7 @@ export default function LaunchPadStepper({
   onAiEnhance, aiEnhancing, aiEnhanced, onDrawRois, onAutoPlace, autoPlacing, onClassifyByExample,
   autoPlaceSettings, onAutoPlaceSettingsChange, lidarModels,
   onLidarUpdate, onLidarAdd, onLidarDelete, onOpen3DPreview,
+  dwgLayoutId, unitScaleToM,
 }: LaunchPadStepperProps) {
   return (
     <div className="grid pr-3" style={{ gridTemplateColumns: '40px 1fr' }}>
@@ -230,6 +235,8 @@ export default function LaunchPadStepper({
                     onLidarAdd={onLidarAdd}
                     onLidarDelete={onLidarDelete}
                     onOpen3DPreview={onOpen3DPreview}
+                    dwgLayoutId={dwgLayoutId}
+                    unitScaleToM={unitScaleToM}
                   />
                 </div>
               )}
@@ -262,7 +269,7 @@ const FIXTURE_TYPE_LABELS: Record<string, string> = {
 
 /* ─── expanded detail card ─── */
 
-function StepDetailCard({ step, onRun, onOpen, availableImports, onSelectImport, geometry, onAiEnhance, aiEnhancing, aiEnhanced, onDrawRois, onAutoPlace, autoPlacing, onClassifyByExample, autoPlaceSettings, onAutoPlaceSettingsChange, lidarModels, onLidarUpdate, onLidarAdd, onLidarDelete, onOpen3DPreview }: {
+function StepDetailCard({ step, onRun, onOpen, availableImports, onSelectImport, geometry, onAiEnhance, aiEnhancing, aiEnhanced, onDrawRois, onAutoPlace, autoPlacing, onClassifyByExample, autoPlaceSettings, onAutoPlaceSettingsChange, lidarModels, onLidarUpdate, onLidarAdd, onLidarDelete, onOpen3DPreview, dwgLayoutId, unitScaleToM }: {
   step: LaunchPadStep
   onRun: () => void
   onOpen: () => void
@@ -283,6 +290,8 @@ function StepDetailCard({ step, onRun, onOpen, availableImports, onSelectImport,
   onLidarAdd?: (x: number, z: number) => void
   onLidarDelete?: (id: string) => void
   onOpen3DPreview?: () => void
+  dwgLayoutId?: string
+  unitScaleToM?: number
 }) {
   return (
     <div className="space-y-2.5">
@@ -321,6 +330,8 @@ function StepDetailCard({ step, onRun, onOpen, availableImports, onSelectImport,
         onLidarDelete={onLidarDelete}
         onOpen3DPreview={onOpen3DPreview}
         lidarModels={lidarModels}
+        dwgLayoutId={dwgLayoutId}
+        unitScaleToM={unitScaleToM}
       />
 
       <div className="flex gap-2 pt-0.5">
@@ -345,7 +356,7 @@ function StepDetailCard({ step, onRun, onOpen, availableImports, onSelectImport,
 
 // ─── Step Data Display (Rich Inline Content) ────────────────────
 
-function StepDataDisplay({ step, availableImports, onSelectImport, geometry, onAiEnhance, aiEnhancing, aiEnhanced, onDrawRois, onAutoPlace, autoPlacing, onClassifyByExample, autoPlaceSettings, onAutoPlaceSettingsChange, lidarModels, onLidarUpdate, onLidarAdd, onLidarDelete, onOpen3DPreview }: {
+function StepDataDisplay({ step, availableImports, onSelectImport, geometry, onAiEnhance, aiEnhancing, aiEnhanced, onDrawRois, onAutoPlace, autoPlacing, onClassifyByExample, autoPlaceSettings, onAutoPlaceSettingsChange, lidarModels, onLidarUpdate, onLidarAdd, onLidarDelete, onOpen3DPreview, dwgLayoutId, unitScaleToM }: {
   step: LaunchPadStep
   availableImports?: DwgImportItem[]
   onSelectImport?: (importId: string) => void
@@ -364,6 +375,8 @@ function StepDataDisplay({ step, availableImports, onSelectImport, geometry, onA
   onLidarAdd?: (x: number, z: number) => void
   onLidarDelete?: (id: string) => void
   onOpen3DPreview?: () => void
+  dwgLayoutId?: string
+  unitScaleToM?: number
 }) {
   if (!step.data && step.id !== 'select_dwg' && step.id !== 'define_rois' && step.id !== 'place_lidars' && step.id !== 'map_fixtures') return null
   const data = step.data as unknown as Record<string, unknown>
@@ -663,6 +676,8 @@ function StepDataDisplay({ step, availableImports, onSelectImport, geometry, onA
               onLidarUpdate={onLidarUpdate}
               onLidarAdd={onLidarAdd}
               onLidarDelete={onLidarDelete}
+              dwgLayoutId={dwgLayoutId}
+              unitScaleToM={unitScaleToM}
             />
           )}
           {/* 3D Preview button */}

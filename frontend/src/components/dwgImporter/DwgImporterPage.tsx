@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { FileUp, Box, ArrowLeft, AlertCircle, CheckCircle2, Loader2, Eye, Box as Box3D } from 'lucide-react'
 import { useVenue } from '../../context/VenueContext'
 import UploadCard from './UploadCard'
@@ -167,6 +167,21 @@ export default function DwgImporterPage({ onClose, onLayoutGenerated }: DwgImpor
       }
     }
   }, [show3DPreview, autoplaceStorageKey, scaleCorrection])
+
+  // Persist scaleCorrection to layout DB so bootstrap always has it
+  useEffect(() => {
+    if (generatedLayoutId && scaleCorrection !== 1.0) {
+      fetch(`${API_BASE}/api/dwg/layout/${generatedLayoutId}/view`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ scale_correction: scaleCorrection }),
+      }).then(() => {
+        console.log(`[DwgImporter] Saved scale_correction=${scaleCorrection} to layout ${generatedLayoutId}`)
+      }).catch(err => {
+        console.warn('[DwgImporter] Failed to save scale_correction to DB:', err)
+      })
+    }
+  }, [scaleCorrection, generatedLayoutId])
   
   // LiDAR mode state - selectedLidarModelId persisted to localStorage using generatedLayoutId
   const [lidarMode, setLidarMode] = useState(false)
@@ -177,6 +192,19 @@ export default function DwgImporterPage({ onClose, onLayoutGenerated }: DwgImpor
   const [simulationResult, setSimulationResult] = useState<SimulationResult | null>(null)
   const [isSimulating, setIsSimulating] = useState(false)
   const [lidarRoi, setLidarRoiState] = useState<{ x: number; z: number }[] | null>(null)
+  
+  // Compute focus bounds from ROI for 3D preview camera auto-sizing
+  const roiFocusBounds = useMemo(() => {
+    if (!lidarRoi || lidarRoi.length < 3) return undefined
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+    lidarRoi.forEach(v => {
+      minX = Math.min(minX, v.x)
+      minY = Math.min(minY, v.z)
+      maxX = Math.max(maxX, v.x)
+      maxY = Math.max(maxY, v.z)
+    })
+    return isFinite(minX) ? { minX, minY, maxX, maxY } : undefined
+  }, [lidarRoi])
   
   // Persist selected LiDAR model whenever it changes (using generatedLayoutId as key)
   useEffect(() => {
@@ -252,11 +280,13 @@ export default function DwgImporterPage({ onClose, onLayoutGenerated }: DwgImpor
     }
   }, [featureEnabled])
 
-  // Fetch LiDAR data once when layout is available (eagerly, regardless of view mode)
-  const lidarDataLoadedForLayout = useRef<string | null>(null)
+  // Fetch LiDAR models + instances when layout is available (models are GLOBAL — no venue needed)
+  const lidarDataLoadedKey = useRef<string | null>(null)
   useEffect(() => {
-    if (!generatedLayoutId || lidarDataLoadedForLayout.current === generatedLayoutId) return
-    lidarDataLoadedForLayout.current = generatedLayoutId
+    if (!generatedLayoutId) return
+    const key = `${generatedLayoutId}::${venue?.id || 'no-venue'}`
+    if (lidarDataLoadedKey.current === key) return
+    lidarDataLoadedKey.current = key
 
     const fetchLidarData = async () => {
       try {
@@ -264,7 +294,7 @@ export default function DwgImporterPage({ onClose, onLayoutGenerated }: DwgImpor
         const savedModelStorageKey = `dwg-selected-lidar-model-${generatedLayoutId}`
         const savedModelId = localStorage.getItem(savedModelStorageKey)
         
-        // Fetch models
+        // Fetch models (global — no venue needed)
         const modelsRes = await fetch(`${API_BASE}/api/lidar/models`)
         if (modelsRes.ok) {
           const models = await modelsRes.json()
@@ -277,23 +307,83 @@ export default function DwgImporterPage({ onClose, onLayoutGenerated }: DwgImpor
             setSelectedLidarModelId(models[0].id)
           }
         }
-        // Fetch instances for this layout
+        // Fetch instances for this layout (keyed by layout, not venue)
+        let hasInstances = false
         const instancesRes = await fetch(`${API_BASE}/api/lidar/instances?layout_version_id=${generatedLayoutId}`)
         if (instancesRes.ok) {
           const instances = await instancesRes.json()
           console.log('Fetched LiDAR instances:', instances.length)
           setLidarInstances(instances)
+          hasInstances = instances.length > 0
         }
-        // Fetch ROIs for this layout
+        // Fetch ROIs — try DB endpoint first (needs venue), fallback to lidar_roi_json on layout
+        let hasRoi = false
+        console.log(`[ROI Load] venue?.id=${venue?.id}, generatedLayoutId=${generatedLayoutId}`)
         if (venue?.id) {
-          const roiRes = await fetch(`${API_BASE}/api/venues/${venue.id}/dwg/${generatedLayoutId}/roi`)
-          if (roiRes.ok) {
-            const rois = await roiRes.json()
-            if (rois.length > 0) {
-              setLidarRoiState(rois[0].vertices)
-              console.log('Fetched ROI from database:', rois[0].vertices.length, 'vertices')
+          try {
+            const roiRes = await fetch(`${API_BASE}/api/venues/${venue.id}/dwg/${generatedLayoutId}/roi`)
+            if (roiRes.ok) {
+              const rois = await roiRes.json()
+              console.log(`[ROI Load] DB path returned ${rois.length} ROIs`)
+              if (rois.length > 0) {
+                setLidarRoiState(rois[0].vertices)
+                hasRoi = true
+                console.log('[ROI Load] Using DB ROI (DXF units):', rois[0].vertices.length, 'vertices, first:', rois[0].vertices[0])
+              }
+            } else {
+              console.log('[ROI Load] DB endpoint returned status:', roiRes.status)
             }
-          }
+          } catch (e) { console.log('[ROI Load] DB path error:', e) }
+        } else {
+          console.log('[ROI Load] No venue — skipping DB path')
+        }
+        // Fallback: load ROI from layout endpoint (no venue needed)
+        // Prefer lidar_roi_dxf (DXF units from regions_of_interest — no conversion)
+        // Fall back to lidar_roi (meters from lidar_roi_json — needs conversion)
+        if (!hasRoi) {
+          try {
+            const layoutRes = await fetch(`${API_BASE}/api/dwg/layout/${generatedLayoutId}`)
+            if (layoutRes.ok) {
+              const layoutData = await layoutRes.json()
+              
+              // Priority 1: lidar_roi_dxf — already in DXF units, use directly
+              if (layoutData.lidar_roi_dxf && Array.isArray(layoutData.lidar_roi_dxf) && layoutData.lidar_roi_dxf.length >= 3) {
+                setLidarRoiState(layoutData.lidar_roi_dxf)
+                hasRoi = true
+                console.log('[ROI Load] Using lidar_roi_dxf (DXF units, no conversion):', layoutData.lidar_roi_dxf.length, 'vertices, first:', layoutData.lidar_roi_dxf[0])
+              }
+              // Priority 2: lidar_roi — meters, convert to DXF
+              else if (layoutData.lidar_roi) {
+                let roiVerts = typeof layoutData.lidar_roi === 'string'
+                  ? JSON.parse(layoutData.lidar_roi)
+                  : layoutData.lidar_roi
+                if (Array.isArray(roiVerts) && roiVerts.length >= 3) {
+                  // Read effectiveScale = unit_scale_to_m × scaleCorrection
+                  const rawScale = importData?.unit_scale_to_m || 0.001
+                  const fname = importData?.filename || 'default'
+                  let sc = 1.0
+                  try {
+                    const s = localStorage.getItem(`dwg-autoplace-settings-${fname}`)
+                    if (s) sc = JSON.parse(s).scaleCorrection || 1.0
+                  } catch {}
+                  const effScale = rawScale * sc
+                  if (effScale > 0) {
+                    roiVerts = roiVerts.map((v: { x: number; z: number }) => ({
+                      x: v.x / effScale,
+                      z: v.z / effScale,
+                    }))
+                  }
+                  console.log(`[ROI Load] Converted lidar_roi meters→DXF (effScale=${effScale}):`, roiVerts.length, 'vertices, first:', roiVerts[0])
+                  setLidarRoiState(roiVerts)
+                  hasRoi = true
+                }
+              }
+            }
+          } catch { /* ignore */ }
+        }
+        // Auto-enable LiDAR mode if instances or ROI already exist
+        if (hasInstances || hasRoi) {
+          setLidarMode(true)
         }
       } catch (err) {
         console.error('Failed to fetch LiDAR data:', err)
@@ -302,48 +392,69 @@ export default function DwgImporterPage({ onClose, onLayoutGenerated }: DwgImpor
     fetchLidarData()
   }, [generatedLayoutId, venue?.id])
 
-  // ROI handler - save to database
+  // ROI handler - save to layout version (always) + ROI DB table (when venue available)
+  // ROI vertices in DwgImporter are always in DXF units.
+  // lidar_roi_json must store METERS (used by as-venue-bootstrap).
+  // regions_of_interest stores DXF units (used by DWG Importer).
   const handleSetLidarRoi = useCallback(async (roi: { x: number; z: number }[] | null) => {
     setLidarRoiState(roi)
-    if (!venue?.id || !generatedLayoutId) return
+    if (!generatedLayoutId) return
     
     try {
-      if (roi && roi.length >= 3) {
-        // Delete existing ROIs for this layout first
-        const existingRes = await fetch(`${API_BASE}/api/venues/${venue.id}/dwg/${generatedLayoutId}/roi`)
-        if (existingRes.ok) {
-          const existing = await existingRes.json()
-          for (const r of existing) {
-            await fetch(`${API_BASE}/api/roi/${r.id}`, { method: 'DELETE' })
+      // Convert DXF → meters for lidar_roi_json (as-venue-bootstrap expects meters)
+      // effectiveScale = unit_scale_to_m × scaleCorrection (e.g. 0.001 × 10 = 0.01)
+      const effScale = (importData?.unit_scale_to_m || 0.001) * scaleCorrection
+      const roiInMeters = roi && roi.length >= 3
+        ? roi.map(v => ({ x: v.x * effScale, z: v.z * effScale }))
+        : null
+      console.log(`[ROI Save] DXF→meters effScale=${effScale}, first DXF:`, roi?.[0], 'first meters:', roiInMeters?.[0])
+      
+      await fetch(`${API_BASE}/api/dwg/layout/${generatedLayoutId}/view`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ lidar_roi: roiInMeters })
+      })
+      console.log('Saved ROI to lidar_roi_json (meters):', roiInMeters ? roiInMeters.length + ' vertices' : 'cleared')
+      
+      // Save to ROI DB table in DXF units (for DWG Importer + MainViewport KPI overlays)
+      if (venue?.id) {
+        if (roi && roi.length >= 3) {
+          // Delete existing ROIs for this layout first
+          const existingRes = await fetch(`${API_BASE}/api/venues/${venue.id}/dwg/${generatedLayoutId}/roi`)
+          if (existingRes.ok) {
+            const existing = await existingRes.json()
+            for (const r of existing) {
+              await fetch(`${API_BASE}/api/roi/${r.id}`, { method: 'DELETE' })
+            }
           }
-        }
-        // Create new ROI
-        await fetch(`${API_BASE}/api/venues/${venue.id}/dwg/${generatedLayoutId}/roi`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            name: 'LiDAR Coverage ROI',
-            vertices: roi,
-            color: '#f59e0b',
-            opacity: 0.5
+          // Create new ROI (DXF units)
+          await fetch(`${API_BASE}/api/venues/${venue.id}/dwg/${generatedLayoutId}/roi`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              name: 'LiDAR Coverage ROI',
+              vertices: roi,
+              color: '#f59e0b',
+              opacity: 0.5
+            })
           })
-        })
-        console.log('Saved ROI to database:', roi.length, 'vertices')
-      } else if (roi === null) {
-        // Delete all ROIs for this layout
-        const existingRes = await fetch(`${API_BASE}/api/venues/${venue.id}/dwg/${generatedLayoutId}/roi`)
-        if (existingRes.ok) {
-          const existing = await existingRes.json()
-          for (const r of existing) {
-            await fetch(`${API_BASE}/api/roi/${r.id}`, { method: 'DELETE' })
+          console.log('Saved ROI to database (DXF units):', roi.length, 'vertices')
+        } else if (roi === null) {
+          // Delete all ROIs for this layout
+          const existingRes = await fetch(`${API_BASE}/api/venues/${venue.id}/dwg/${generatedLayoutId}/roi`)
+          if (existingRes.ok) {
+            const existing = await existingRes.json()
+            for (const r of existing) {
+              await fetch(`${API_BASE}/api/roi/${r.id}`, { method: 'DELETE' })
+            }
           }
+          console.log('Deleted ROI from database')
         }
-        console.log('Deleted ROI from database')
       }
     } catch (err) {
       console.error('Failed to save ROI:', err)
     }
-  }, [venue?.id, generatedLayoutId])
+  }, [venue?.id, generatedLayoutId, importData?.unit_scale_to_m, scaleCorrection])
 
   // LiDAR handlers
   const handleAddLidarInstance = useCallback(async (x: number, z: number) => {
@@ -778,7 +889,8 @@ export default function DwgImporterPage({ onClose, onLayoutGenerated }: DwgImpor
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           venue_id: venue?.id,
-          name: `${importData.filename} Layout`
+          name: `${importData.filename} Layout`,
+          scale_correction: scaleCorrection,
         })
       })
       
@@ -814,13 +926,52 @@ export default function DwgImporterPage({ onClose, onLayoutGenerated }: DwgImpor
       console.log(`[DwgImporter] generateLayout synced layout → ${result.layout_version_id}`)
       onLayoutGenerated?.(result.layout_version_id)
       
-      // Link this layout to the venue so Edge Commissioning can find it
+      // Link this layout to the venue and refresh venue objects
       if (venue?.id) {
         fetch(`${API_BASE}/api/venues/${venue.id}/dwg-layout`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ dwg_layout_version_id: result.layout_version_id })
         }).catch(err => console.error('Failed to link layout to venue:', err))
+
+        // Refresh venue objects from new layout so MainViewport matches 3D preview
+        try {
+          const sc = (() => { try { const s = localStorage.getItem(`dwg-autoplace-settings-${importData?.filename || 'default'}`); return s ? JSON.parse(s).scaleCorrection || 1.0 : 1.0; } catch { return 1.0; } })()
+          const bsRes = await fetch(`${API_BASE}/api/dwg/layout/${result.layout_version_id}/as-venue-bootstrap?scaleCorrection=${sc}`)
+          if (bsRes.ok) {
+            const bootstrap = await bsRes.json()
+            const DEFAULT_COLORS: Record<string, string> = {
+              shelf: '#4a9eff', wall: '#6b7280', checkout: '#22c55e', entrance: '#f59e0b',
+              pillar: '#9ca3af', digital_display: '#a855f7', radio: '#06b6d4', custom: '#8b5cf6', fridge: '#06b6d4',
+            }
+            const objects = (bootstrap.objectsDraft || []).map((obj: any) => ({
+              ...obj,
+              venueId: venue.id,
+              color: obj.color || DEFAULT_COLORS[obj.type] || DEFAULT_COLORS.custom,
+            }))
+            await fetch(`${API_BASE}/api/venues/${venue.id}`, {
+              method: 'PUT',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                venue: {
+                  id: venue.id,
+                  name: venue.name,
+                  width: bootstrap.venueDefaults.width,
+                  depth: bootstrap.venueDefaults.depth,
+                  height: bootstrap.venueDefaults.height,
+                  tileSize: bootstrap.venueDefaults.tileSize || 1,
+                  scene_source: 'dwg',
+                  dwg_layout_version_id: result.layout_version_id,
+                  dwg_transform_json: JSON.stringify({ scaleCorrection: bootstrap.transform?.scaleCorrection || sc }),
+                },
+                objects,
+              }),
+            })
+            console.log(`[DwgImporter] Venue ${venue.id} refreshed: ${objects.length} objects`)
+          }
+        } catch (refreshErr) {
+          console.warn('[DwgImporter] Venue refresh after generate failed:', refreshErr)
+        }
       }
       
     } catch (err: any) {
@@ -972,6 +1123,7 @@ export default function DwgImporterPage({ onClose, onLayoutGenerated }: DwgImpor
               selectedGroupId={selectedGroupId}
               onSelectGroup={setSelectedGroupId}
               hoveredFixtureId={hoveredFixtureId}
+              unitScaleToM={importData.unit_scale_to_m * scaleCorrection}
               onDeleteGroup={(groupId: string) => {
                 // Delete all fixtures in this group
                 const fixtureIds = importData.fixtures
@@ -1024,6 +1176,7 @@ export default function DwgImporterPage({ onClose, onLayoutGenerated }: DwgImpor
                   lidarInstances={lidarInstances}
                   lidarModels={lidarModels}
                   scaleCorrection={scaleCorrection}
+                  focusBounds={roiFocusBounds}
                 />
               ) : (
                 <PreviewPanel
@@ -1078,6 +1231,7 @@ export default function DwgImporterPage({ onClose, onLayoutGenerated }: DwgImpor
                 mapping={selectedGroupId ? mappings[selectedGroupId] : undefined}
                 catalog={catalog}
                 onUpdateMapping={(mapping: GroupMapping | null) => selectedGroupId && updateMapping(selectedGroupId, mapping)}
+                unitScaleToM={importData.unit_scale_to_m * scaleCorrection}
               />
             </div>
           )}

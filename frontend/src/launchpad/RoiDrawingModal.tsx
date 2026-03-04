@@ -32,6 +32,8 @@ interface RoiDrawingModalProps {
   dwgLayoutId?: string
   /** Called after a ROI is saved or deleted so parent can refresh */
   onRoiChanged: () => void
+  /** DXF unit → meters conversion factor */
+  unitScaleToM?: number
 }
 
 interface SavedRoi {
@@ -58,15 +60,20 @@ const TYPE_COLORS: Record<string, string> = {
 
 export default function RoiDrawingModal({
   onClose, fixtures, bounds: propBounds, classifications, existingRois,
-  venueId, dwgLayoutId, onRoiChanged,
+  venueId, dwgLayoutId, onRoiChanged, unitScaleToM = 0.001,
 }: RoiDrawingModalProps) {
-  // Drawing state
+  // Drawing state: isDrawing = adding vertices, isClosed = polygon closed (editing/reshaping)
   const [isDrawing, setIsDrawing] = useState(false)
+  const [isClosed, setIsClosed] = useState(false)
   const [vertices, setVertices] = useState<Array<{ x: number; y: number }>>([])
   const [roiName, setRoiName] = useState('')
   const [roiColor, setRoiColor] = useState(ROI_COLORS[0])
+  const [editingRoiId, setEditingRoiId] = useState<string | null>(null) // ID of saved ROI being edited
   const [cursorPos, setCursorPos] = useState<{ x: number; y: number } | null>(null)
   const [saving, setSaving] = useState(false)
+  const [snapIdx, setSnapIdx] = useState<number | null>(null) // index of vertex cursor is snapping to
+  const [dragVertexIdx, setDragVertexIdx] = useState<number | null>(null) // vertex being dragged
+  const wasVertexInteraction = useRef(false) // suppress click after vertex mouseUp
 
   // Saved ROIs (loaded from API for delete support)
   const [savedRois, setSavedRois] = useState<SavedRoi[]>([])
@@ -171,17 +178,43 @@ export default function RoiDrawingModal({
     return { x: svgPt.x, y: svgPt.y }
   }, [])
 
-  // Click handler — add vertex or start panning
+  // Snap radius in SVG units (scales with zoom so it feels consistent)
+  const snapRadius = useMemo(() => Math.max(baseVbW, baseVbH) * 0.012 / zoom, [baseVbW, baseVbH, zoom])
+
+  // Click handler — add vertex or snap-close to editing mode
   const handleSvgClick = useCallback((e: React.MouseEvent) => {
-    if (!isDrawing || dragging) return
+    // Suppress click that fires after a vertex drag mouseUp
+    if (wasVertexInteraction.current) { wasVertexInteraction.current = false; return }
+    if (!isDrawing || isClosed || dragging || dragVertexIdx !== null) return
     const pt = screenToSvg(e.clientX, e.clientY)
     if (!pt) return
-    setVertices(prev => [...prev, pt])
-  }, [isDrawing, dragging, screenToSvg])
 
-  // Mouse move — track cursor for line preview
+    // Magnetic snap: if near first vertex and we have 3+, close the polygon → editing mode
+    if (vertices.length >= 3) {
+      const dx = pt.x - vertices[0].x, dy = pt.y - vertices[0].y
+      if (Math.hypot(dx, dy) < snapRadius) {
+        setIsClosed(true)
+        setCursorPos(null)
+        setSnapIdx(null)
+        return
+      }
+    }
+
+    // Snap to any existing vertex (avoid near-duplicates)
+    for (let i = 0; i < vertices.length; i++) {
+      const dx = pt.x - vertices[i].x, dy = pt.y - vertices[i].y
+      if (Math.hypot(dx, dy) < snapRadius) {
+        return // too close to existing vertex, skip
+      }
+    }
+
+    setVertices(prev => [...prev, pt])
+  }, [isDrawing, isClosed, dragging, dragVertexIdx, screenToSvg, vertices, snapRadius])
+
+  // Mouse move — track cursor, snap detection, vertex drag
   const handleMouseMove = useCallback((e: React.MouseEvent) => {
-    if (dragging) {
+    // Pan drag
+    if (dragging && dragVertexIdx === null) {
       const container = containerRef.current
       if (!container) return
       const rect = container.getBoundingClientRect()
@@ -192,22 +225,64 @@ export default function RoiDrawingModal({
       setPan({ x: dragStart.current.panX - dx, y: dragStart.current.panY - dy })
       return
     }
-    if (isDrawing) {
+
+    // Vertex drag in progress (works in both drawing and closed/editing mode)
+    if (dragVertexIdx !== null) {
+      const pt = screenToSvg(e.clientX, e.clientY)
+      if (pt) {
+        setVertices(prev => prev.map((v, i) => i === dragVertexIdx ? pt : v))
+      }
+      return
+    }
+
+    // Only show cursor preview line in drawing mode (not closed)
+    if (isDrawing && !isClosed) {
       const pt = screenToSvg(e.clientX, e.clientY)
       setCursorPos(pt)
-    }
-  }, [isDrawing, dragging, screenToSvg, zoom, baseVbW, baseVbH])
 
-  // Pan start (middle mouse or when not drawing)
+      // Detect snap target
+      if (pt && vertices.length >= 3) {
+        const dx = pt.x - vertices[0].x, dy = pt.y - vertices[0].y
+        if (Math.hypot(dx, dy) < snapRadius) {
+          setSnapIdx(0)
+          return
+        }
+      }
+      setSnapIdx(null)
+    }
+  }, [isDrawing, isClosed, dragging, dragVertexIdx, screenToSvg, zoom, baseVbW, baseVbH, vertices, snapRadius])
+
+  // Pan start (middle mouse or when not in active drawing) + vertex drag start
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
-    if (e.button === 1 || (e.button === 0 && !isDrawing)) {
+    const canPan = !isDrawing || isClosed // can pan when not drawing, or when polygon is closed (editing)
+    if (e.button === 1 || (e.button === 0 && canPan)) {
       setDragging(true)
       dragStart.current = { x: e.clientX, y: e.clientY, panX: pan.x, panY: pan.y }
       e.preventDefault()
     }
-  }, [isDrawing, pan])
+  }, [isDrawing, isClosed, pan])
 
-  const handleMouseUp = useCallback(() => setDragging(false), [])
+  // Start dragging a vertex (called from vertex circle onMouseDown)
+  // Special case: clicking vertex 0 with 3+ vertices during drawing → close polygon
+  const handleVertexDragStart = useCallback((e: React.MouseEvent, idx: number) => {
+    e.stopPropagation()
+    e.preventDefault()
+    if (idx === 0 && isDrawing && !isClosed && vertices.length >= 3) {
+      wasVertexInteraction.current = true
+      setIsClosed(true)
+      setCursorPos(null)
+      setSnapIdx(null)
+      return
+    }
+    wasVertexInteraction.current = true
+    setDragVertexIdx(idx)
+  }, [isDrawing, isClosed, vertices.length])
+
+  const handleMouseUp = useCallback(() => {
+    if (dragVertexIdx !== null) wasVertexInteraction.current = true
+    setDragging(false)
+    setDragVertexIdx(null)
+  }, [dragVertexIdx])
 
   // Wheel zoom
   const handleWheel = useCallback((e: React.WheelEvent) => {
@@ -216,9 +291,9 @@ export default function RoiDrawingModal({
     setZoom(z => Math.max(0.5, Math.min(50, z * factor)))
   }, [])
 
-  // Close drag on window mouseup
+  // Close drag on window mouseup (panning + vertex drag)
   useEffect(() => {
-    const up = () => setDragging(false)
+    const up = () => { setDragging(false); setDragVertexIdx(null) }
     window.addEventListener('mouseup', up)
     return () => window.removeEventListener('mouseup', up)
   }, [])
@@ -227,17 +302,18 @@ export default function RoiDrawingModal({
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
-        if (isDrawing) { setIsDrawing(false); setVertices([]); setCursorPos(null) }
+        if (isDrawing || isClosed) { setIsDrawing(false); setIsClosed(false); setVertices([]); setCursorPos(null); setEditingRoiId(null) }
         else onClose()
       }
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
-  }, [isDrawing, onClose])
+  }, [isDrawing, isClosed, onClose])
 
   // Start drawing
   const startDrawing = useCallback(() => {
     setIsDrawing(true)
+    setIsClosed(false)
     setVertices([])
     setCursorPos(null)
     const nextIdx = savedRois.length + existingRois.length
@@ -253,19 +329,40 @@ export default function RoiDrawingModal({
   // Cancel drawing
   const cancelDrawing = useCallback(() => {
     setIsDrawing(false)
+    setIsClosed(false)
     setVertices([])
+    setCursorPos(null)
+    setEditingRoiId(null)
+  }, [])
+
+  // Edit an existing saved ROI — load its vertices into editing mode
+  const editSavedRoi = useCallback((roi: SavedRoi) => {
+    setVertices([...roi.vertices])
+    setRoiName(roi.name)
+    setRoiColor(roi.color || ROI_COLORS[0])
+    setEditingRoiId(roi.id)
+    setIsDrawing(true)
+    setIsClosed(true)
     setCursorPos(null)
   }, [])
 
-  // Finish & save ROI — replaces all existing ROIs for this DWG layout
-  const finishDrawing = useCallback(async () => {
+  // Save ROI — replaces all existing ROIs for this DWG layout
+  const saveAndClose = useCallback(async () => {
     if (vertices.length < 3 || !venueId) return
+    setIsDrawing(false)
+    setIsClosed(false)
+    setCursorPos(null)
+    setEditingRoiId(null)
     setSaving(true)
     try {
-      // Delete all existing DWG-scoped ROIs first (LaunchPad = one coverage zone at a time)
-      for (const old of savedRois) {
-        if (old.id) {
-          try { await fetch(`${API_BASE}/api/roi/${old.id}`, { method: 'DELETE' }) } catch { /* ignore */ }
+      // If editing an existing ROI, delete only that one; otherwise delete all
+      if (editingRoiId) {
+        try { await fetch(`${API_BASE}/api/roi/${editingRoiId}`, { method: 'DELETE' }) } catch { /* ignore */ }
+      } else {
+        for (const old of savedRois) {
+          if (old.id) {
+            try { await fetch(`${API_BASE}/api/roi/${old.id}`, { method: 'DELETE' }) } catch { /* ignore */ }
+          }
         }
       }
 
@@ -282,24 +379,31 @@ export default function RoiDrawingModal({
       })
       if (!res.ok) throw new Error('Failed to save ROI')
       const saved = await res.json()
-      // Replace local list with just the new one
-      setSavedRois([{
+      // Update local list: replace edited ROI or replace all
+      const newRoi = {
         id: saved.id,
         name: saved.name,
         color: saved.color || roiColor,
-        vertices: vertices, // keep in {x,y} DXF coords
-      }])
+        vertices: vertices,
+      }
+      if (editingRoiId) {
+        setSavedRois(prev => prev.map(r => r.id === editingRoiId ? newRoi : r))
+      } else {
+        setSavedRois([newRoi])
+      }
       setIsDrawing(false)
       setVertices([])
       setCursorPos(null)
       onRoiChanged()
+      // Auto-close modal after successful save
+      onClose()
     } catch (err) {
       console.error('[RoiDrawingModal] Save failed:', err)
       alert('Failed to save ROI. Check console for details.')
     } finally {
       setSaving(false)
     }
-  }, [vertices, venueId, dwgLayoutId, roiName, roiColor, savedRois, onRoiChanged])
+  }, [vertices, venueId, dwgLayoutId, roiName, roiColor, savedRois, editingRoiId, onRoiChanged, onClose])
 
   // Delete ROI
   const deleteRoi = useCallback(async (roiId: string) => {
@@ -316,13 +420,26 @@ export default function RoiDrawingModal({
   const resetView = useCallback(() => { setZoom(1); setPan({ x: 0, y: 0 }) }, [])
 
   // All ROIs to display (saved from API + any existing from geometry that aren't in savedRois)
+  // Hide the ROI currently being edited (it's shown via the vertices state)
   const displayRois = useMemo(() => {
     const savedIds = new Set(savedRois.map(r => r.name))
     const fromGeometry = existingRois
       .filter(r => !savedIds.has(r.name))
       .map(r => ({ id: '', name: r.name, color: r.color, vertices: r.vertices }))
-    return [...savedRois, ...fromGeometry]
-  }, [savedRois, existingRois])
+    const all = [...savedRois, ...fromGeometry]
+    return editingRoiId ? all.filter(r => r.id !== editingRoiId) : all
+  }, [savedRois, existingRois, editingRoiId])
+
+  // ROI dimensions in meters
+  const roiInfo = useMemo(() => {
+    const roiVerts = (isClosed && vertices.length >= 3) ? vertices : (displayRois[0]?.vertices || [])
+    if (roiVerts.length < 3) return null
+    const xs = roiVerts.map(v => v.x)
+    const ys = roiVerts.map(v => v.y)
+    const widthM = (Math.max(...xs) - Math.min(...xs)) * unitScaleToM
+    const heightM = (Math.max(...ys) - Math.min(...ys)) * unitScaleToM
+    return { widthM, heightM, areaM2: widthM * heightM }
+  }, [displayRois, vertices, isClosed, unitScaleToM])
 
   return (
     <div
@@ -338,10 +455,16 @@ export default function RoiDrawingModal({
           <div className="flex items-center gap-3">
             <span className="text-xs text-gray-400 font-medium">Draw ROI Zones</span>
             <span className="text-[10px] text-gray-600">{Math.round(zoom * 100)}%</span>
-            {isDrawing && (
+            {isDrawing && !isClosed && (
               <span className="text-[10px] text-amber-400 flex items-center gap-1">
                 <MousePointer2 className="w-3 h-3 animate-pulse" />
                 Click to add points · {vertices.length} vertex{vertices.length !== 1 ? 'es' : ''}
+              </span>
+            )}
+            {isClosed && (
+              <span className="text-[10px] text-green-400 flex items-center gap-1">
+                <Check className="w-3 h-3" />
+                Polygon closed · Drag vertices to adjust · Then Save & Close
               </span>
             )}
           </div>
@@ -360,7 +483,7 @@ export default function RoiDrawingModal({
           <div
             ref={containerRef}
             className="flex-1 overflow-hidden"
-            style={{ cursor: isDrawing ? 'crosshair' : (dragging ? 'grabbing' : 'grab') }}
+            style={{ cursor: (isDrawing && !isClosed) ? 'crosshair' : (dragging ? 'grabbing' : 'grab') }}
             onWheel={handleWheel}
             onMouseDown={handleMouseDown}
             onMouseMove={handleMouseMove}
@@ -406,33 +529,45 @@ export default function RoiDrawingModal({
                   <g key={`roi-${i}`}>
                     <polygon points={pts} fill={c} fillOpacity={0.15} stroke={c} strokeWidth={sw * 3 / zoom} strokeOpacity={0.8} strokeLinejoin="round" />
                     <text x={cx} y={cy} fill={c} fontSize={Math.max(vb.w, vb.h) * 0.022} textAnchor="middle" dominantBaseline="middle" fontWeight="600" opacity={0.9}>{roi.name}</text>
-                    {/* Vertex dots */}
+                    {/* Vertex dots — click to edit */}
                     {roi.vertices.map((v, vi) => (
-                      <circle key={vi} cx={v.x} cy={v.y} r={sw * 3 / zoom} fill={c} fillOpacity={0.9} stroke="#000" strokeWidth={sw / zoom} />
+                      <circle key={vi} cx={v.x} cy={v.y} r={sw * 4 / zoom} fill={c} fillOpacity={0.9} stroke="#000" strokeWidth={sw / zoom}
+                        style={{ cursor: (!isDrawing && !isClosed && roi.id) ? 'pointer' : 'default' }}
+                        onMouseDown={e => {
+                          if (!isDrawing && !isClosed && roi.id) {
+                            e.stopPropagation()
+                            e.preventDefault()
+                            editSavedRoi(roi)
+                          }
+                        }}
+                      />
                     ))}
                   </g>
                 )
               })}
 
-              {/* Drawing-in-progress polygon */}
-              {isDrawing && vertices.length > 0 && (
+              {/* Drawing-in-progress polygon (both drawing and closed/editing phases) */}
+              {(isDrawing || isClosed) && vertices.length > 0 && (
                 <g>
                   {/* Filled polygon preview (if 3+ vertices) */}
                   {vertices.length >= 3 && (
                     <polygon
                       points={vertices.map(v => `${v.x},${v.y}`).join(' ')}
-                      fill={roiColor} fillOpacity={0.15}
-                      stroke="none"
+                      fill={roiColor} fillOpacity={isClosed ? 0.2 : 0.15}
+                      stroke={isClosed ? roiColor : 'none'}
+                      strokeWidth={isClosed ? sw * 3 / zoom : 0}
+                      strokeOpacity={0.8}
+                      strokeLinejoin="round"
                     />
                   )}
-                  {/* Edge lines */}
-                  {vertices.map((v, i) => {
+                  {/* Edge lines (only in drawing mode, closed mode uses polygon stroke) */}
+                  {!isClosed && vertices.map((v, i) => {
                     if (i === 0) return null
                     const prev = vertices[i - 1]
                     return <line key={`edge-${i}`} x1={prev.x} y1={prev.y} x2={v.x} y2={v.y} stroke={roiColor} strokeWidth={sw * 2.5 / zoom} strokeOpacity={0.9} />
                   })}
-                  {/* Closing line to first vertex (if 3+ vertices) */}
-                  {vertices.length >= 3 && (
+                  {/* Closing line to first vertex (dashed, only in drawing mode) */}
+                  {!isClosed && vertices.length >= 3 && (
                     <line
                       x1={vertices[vertices.length - 1].x} y1={vertices[vertices.length - 1].y}
                       x2={vertices[0].x} y2={vertices[0].y}
@@ -440,8 +575,8 @@ export default function RoiDrawingModal({
                       strokeDasharray={`${sw * 4 / zoom} ${sw * 2 / zoom}`}
                     />
                   )}
-                  {/* Cursor preview line */}
-                  {cursorPos && vertices.length > 0 && (
+                  {/* Cursor preview line (only in drawing mode, not closed) */}
+                  {!isClosed && cursorPos && vertices.length > 0 && (
                     <line
                       x1={vertices[vertices.length - 1].x} y1={vertices[vertices.length - 1].y}
                       x2={cursorPos.x} y2={cursorPos.y}
@@ -449,11 +584,21 @@ export default function RoiDrawingModal({
                       strokeDasharray={`${sw * 3 / zoom} ${sw * 2 / zoom}`}
                     />
                   )}
-                  {/* Vertex dots */}
+                  {/* Snap indicator ring on first vertex (only in drawing mode) */}
+                  {!isClosed && vertices.length >= 3 && snapIdx === 0 && (
+                    <circle cx={vertices[0].x} cy={vertices[0].y} r={snapRadius}
+                      fill="none" stroke="#fff" strokeWidth={sw * 2 / zoom}
+                      strokeDasharray={`${sw * 3 / zoom} ${sw * 2 / zoom}`}
+                      opacity={0.7}
+                    />
+                  )}
+                  {/* Vertex dots — draggable */}
                   {vertices.map((v, i) => (
                     <circle key={`vx-${i}`} cx={v.x} cy={v.y} r={sw * 4 / zoom}
-                      fill={i === 0 ? '#fff' : roiColor} fillOpacity={0.9}
+                      fill={i === 0 ? (snapIdx === 0 ? '#4ade80' : '#fff') : roiColor} fillOpacity={0.9}
                       stroke={roiColor} strokeWidth={sw * 1.5 / zoom}
+                      style={{ cursor: 'grab' }}
+                      onMouseDown={e => handleVertexDragStart(e, i)}
                     />
                   ))}
                 </g>
@@ -465,14 +610,16 @@ export default function RoiDrawingModal({
           <div className="w-64 border-l border-gray-800 bg-gray-900 flex flex-col shrink-0">
             {/* Drawing controls */}
             <div className="p-3 border-b border-gray-800 space-y-2.5">
-              {isDrawing ? (
+              {(isDrawing || isClosed) ? (
                 <>
-                  <div className="flex items-center gap-2 text-amber-400 text-xs font-medium">
-                    <Pencil className="w-3.5 h-3.5" />
-                    Drawing Mode
+                  <div className="flex items-center gap-2 text-xs font-medium" style={{ color: isClosed ? '#4ade80' : '#fbbf24' }}>
+                    {isClosed ? <Check className="w-3.5 h-3.5" /> : <Pencil className="w-3.5 h-3.5" />}
+                    {isClosed ? 'Editing Mode' : 'Drawing Mode'}
                   </div>
                   <p className="text-[10px] text-gray-500 leading-relaxed">
-                    Click on the floor plan to add vertices. Need at least 3 points to create a zone.
+                    {isClosed
+                      ? 'Drag vertices to adjust the shape. Then Save & Close.'
+                      : 'Click on the floor plan to add vertices. Click near first vertex to close.'}
                   </p>
                   <div>
                     <label className="text-[10px] text-gray-500 mb-1 block">Zone Name</label>
@@ -501,13 +648,15 @@ export default function RoiDrawingModal({
                     Vertices: {vertices.length}
                   </div>
                   <div className="flex gap-1.5">
-                    <button
-                      onClick={undoVertex}
-                      disabled={vertices.length === 0}
-                      className="flex-1 h-7 flex items-center justify-center gap-1 text-[11px] border border-gray-700 rounded-md text-gray-400 hover:text-white hover:border-gray-600 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-                    >
-                      <Undo2 className="w-3 h-3" /> Undo
-                    </button>
+                    {!isClosed && (
+                      <button
+                        onClick={undoVertex}
+                        disabled={vertices.length === 0}
+                        className="flex-1 h-7 flex items-center justify-center gap-1 text-[11px] border border-gray-700 rounded-md text-gray-400 hover:text-white hover:border-gray-600 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                      >
+                        <Undo2 className="w-3 h-3" /> Undo
+                      </button>
+                    )}
                     <button
                       onClick={cancelDrawing}
                       className="flex-1 h-7 flex items-center justify-center gap-1 text-[11px] border border-red-500/40 rounded-md text-red-400 hover:bg-red-500/10 transition-colors"
@@ -516,12 +665,12 @@ export default function RoiDrawingModal({
                     </button>
                   </div>
                   <button
-                    onClick={finishDrawing}
-                    disabled={vertices.length < 3 || saving}
-                    className="w-full h-8 flex items-center justify-center gap-1.5 bg-amber-600 hover:bg-amber-500 disabled:bg-gray-700 disabled:text-gray-500 text-white text-xs font-medium rounded-md transition-colors"
+                    onClick={saveAndClose}
+                    disabled={!isClosed || vertices.length < 3 || saving}
+                    className="w-full h-8 flex items-center justify-center gap-1.5 bg-green-600 hover:bg-green-500 disabled:bg-gray-700 disabled:text-gray-500 text-white text-xs font-medium rounded-md transition-colors"
                   >
                     <Check className="w-3.5 h-3.5" />
-                    {saving ? 'Saving...' : `Finish (${vertices.length} pts)`}
+                    {saving ? 'Saving...' : isClosed ? `Save & Close (${vertices.length} pts)` : 'Close polygon first'}
                   </button>
                 </>
               ) : (
@@ -566,9 +715,30 @@ export default function RoiDrawingModal({
               ))}
             </div>
 
+            {/* ROI Dimensions */}
+            {roiInfo && !isDrawing && (
+              <div className="border-t border-gray-800 p-3 shrink-0">
+                <div className="text-[10px] text-gray-500 uppercase tracking-wider font-medium mb-1.5">ROI Dimensions (meters)</div>
+                <div className="grid grid-cols-3 gap-1.5">
+                  <div className="bg-gray-800/60 rounded px-2 py-1.5 text-center">
+                    <div className="text-[9px] text-gray-500">Width</div>
+                    <div className="text-[11px] text-white font-mono font-medium">{roiInfo.widthM.toFixed(1)}m</div>
+                  </div>
+                  <div className="bg-gray-800/60 rounded px-2 py-1.5 text-center">
+                    <div className="text-[9px] text-gray-500">Height</div>
+                    <div className="text-[11px] text-white font-mono font-medium">{roiInfo.heightM.toFixed(1)}m</div>
+                  </div>
+                  <div className="bg-gray-800/60 rounded px-2 py-1.5 text-center">
+                    <div className="text-[9px] text-gray-500">Area</div>
+                    <div className="text-[11px] text-white font-mono font-medium">{roiInfo.areaM2.toFixed(0)}m²</div>
+                  </div>
+                </div>
+              </div>
+            )}
+
             {/* Footer hint */}
             <div className="px-3 py-2 border-t border-gray-800 text-[9px] text-gray-600">
-              {isDrawing ? 'Click to place vertices · Esc to cancel' : 'Scroll to zoom · Drag to pan'}
+              {isDrawing || isClosed ? 'Click to place vertices · Esc to cancel' : 'Click vertex to edit · Scroll to zoom · Drag to pan'}
             </div>
           </div>
         </div>
