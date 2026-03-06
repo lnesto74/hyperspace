@@ -410,13 +410,39 @@ router.post('/autoplace', async (req, res) => {
       seed = Date.now() % 100000
     } = req.body;
     
-    console.log('Auto-place request:', { 
+    console.log('\n========== [BACKEND AutoPlace DEBUG] START ==========');
+    console.log('[BACKEND AutoPlace] Request params:', { 
       layout_version_id, 
       model_id, 
-      roi_vertices: roi_vertices?.length,
+      roi_vertices_count: roi_vertices?.length,
       overlap_mode,
-      k_required 
+      k_required,
+      mount_y_m,
+      coverage_target_pct,
+      sample_spacing_m
     });
+    if (roi_vertices && roi_vertices.length > 0) {
+      console.log('[BACKEND AutoPlace] ROI vertices received:', JSON.stringify(roi_vertices));
+      const rxs = roi_vertices.map(v => v.x);
+      const rzs = roi_vertices.map(v => v.z);
+      console.log('[BACKEND AutoPlace] ROI bounds:', {
+        minX: Math.min(...rxs).toFixed(3),
+        maxX: Math.max(...rxs).toFixed(3),
+        minZ: Math.min(...rzs).toFixed(3),
+        maxZ: Math.max(...rzs).toFixed(3),
+        width: (Math.max(...rxs) - Math.min(...rxs)).toFixed(3),
+        depth: (Math.max(...rzs) - Math.min(...rzs)).toFixed(3),
+      });
+      const area = (Math.max(...rxs) - Math.min(...rxs)) * (Math.max(...rzs) - Math.min(...rzs));
+      if (area < 10) {
+        console.warn('[BACKEND AutoPlace] ⚠️ ROI area is VERY SMALL (<10 m²) - check unit scaling!');
+      }
+      if (area > 100000) {
+        console.warn('[BACKEND AutoPlace] ⚠️ ROI area is VERY LARGE (>100000 m²) - check unit scaling!');
+      }
+    } else {
+      console.warn('[BACKEND AutoPlace] No ROI vertices provided!');
+    }
     
     if (!layout_version_id) {
       return res.status(400).json({ error: 'layout_version_id is required' });
@@ -659,7 +685,7 @@ router.post('/autoplace', async (req, res) => {
       })
     );
     
-    res.json({
+    const response = {
       run_id: runId,
       instances: createdInstances,
       coverage_pct: placement.coverage_pct || 0,
@@ -673,9 +699,18 @@ router.post('/autoplace', async (req, res) => {
       solver_status: placement.solver_status || 'greedy',
       seed,
       effective_radius_m: placement.effective_radius_m
+    };
+    console.log('[BACKEND AutoPlace] Final response:', {
+      run_id: runId,
+      instanceCount: createdInstances.length,
+      coverage_pct: response.coverage_pct,
+      warnings: response.warnings,
     });
+    console.log('========== [BACKEND AutoPlace DEBUG] END ==========\n');
+    res.json(response);
   } catch (err) {
-    console.error('Error running auto-placement:', err);
+    console.error('[BACKEND AutoPlace] ERROR:', err);
+    console.log('========== [BACKEND AutoPlace DEBUG] END (ERROR) ==========\n');
     res.status(500).json({ error: 'Failed to run auto-placement', details: err.message });
   }
 });

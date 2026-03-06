@@ -58,6 +58,7 @@ export async function listDwgLayouts(venueId?: string): Promise<Array<{
   import_id: string
   venue_id: string | null
   name: string
+  dwg_filename?: string | null
   is_active: boolean
   created_at: string
 }>> {
@@ -1006,34 +1007,72 @@ export async function autoPlaceWithRois(
   dwgLayoutId?: string,
   settings: AutoPlaceSettings = DEFAULT_AUTOPLACE_SETTINGS,
 ): Promise<PlaceLidarsData> {
-  // 1) Get layout details for unit_scale_to_m
-  const layout = await getLayoutDetails(layoutVersionId)
-  const baseUnitScale = layout.layout?.unit_scale_to_m || 0.001
-  const unitScale = baseUnitScale * settings.scaleMultiplier
-  console.log(`[AutoPlace] baseUnitScale=${baseUnitScale}, scaleMultiplier=${settings.scaleMultiplier}, effectiveScale=${unitScale}`)
+  console.log('\n========== [AutoPlace DEBUG] START ==========')
+  console.log('[AutoPlace DEBUG] Input params:', { layoutVersionId, venueId, dwgLayoutId })
+  console.log('[AutoPlace DEBUG] Settings:', settings)
 
-  // 2) Fetch ROIs scoped to this DWG layout ONLY (LaunchPad coverage zones)
+  // 0) Get unit scale from layout to convert ROI vertices from DXF units → meters
+  let unitScaleToM = 0.001 // default: mm → m
+  try {
+    const layoutDetails = await getLayoutDetails(layoutVersionId)
+    unitScaleToM = layoutDetails.layout?.unit_scale_to_m || 0.001
+    console.log(`[AutoPlace DEBUG] Layout unit_scale_to_m: ${unitScaleToM}`)
+  } catch (e) {
+    console.warn('[AutoPlace DEBUG] Could not fetch layout details, using default unit_scale_to_m=0.001')
+  }
+  // Apply scaleMultiplier from settings (user's scale correction)
+  const effectiveScale = unitScaleToM * (settings.scaleMultiplier || 1)
+  console.log(`[AutoPlace DEBUG] Effective scale (unitScale × scaleMultiplier): ${unitScaleToM} × ${settings.scaleMultiplier} = ${effectiveScale}`)
+
+  // 1) Fetch ROIs scoped to this DWG layout ONLY (LaunchPad coverage zones)
   // Never use venue-level KPI ROIs (Checkout Service/Queue, etc.) for LiDAR placement
   const rois = await listRois(venueId, dwgLayoutId)
-  console.log(`[AutoPlace] listRois(venueId=${venueId}, dwgLayoutId=${dwgLayoutId}) → ${rois.length} ROIs`)
+  console.log(`[AutoPlace DEBUG] listRois(venueId=${venueId}, dwgLayoutId=${dwgLayoutId}) → ${rois.length} ROIs`)
+  console.log('[AutoPlace DEBUG] Raw ROIs from API:', JSON.stringify(rois, null, 2))
   if (rois.length === 0) {
     throw new Error('No coverage zones defined — draw zones first in the Define ROIs step')
   }
 
-  // 3) Parse all ROI vertices and convert from DXF units to meters
+  // 2) Parse all ROI vertices - they are stored in DXF units, need to convert to meters
   const allVerticesMeters: Array<{ x: number; z: number }> = []
   for (const roi of rois) {
+    console.log(`[AutoPlace DEBUG] Processing ROI "${roi.name}":`, { color: roi.color, rawVertices: roi.vertices })
     let parsed: Array<{ x?: number; z?: number; y?: number }>
     try {
       parsed = typeof roi.vertices === 'string' ? JSON.parse(roi.vertices) : roi.vertices
-    } catch { continue }
-    if (!Array.isArray(parsed) || parsed.length < 3) continue
+      console.log(`[AutoPlace DEBUG]   Parsed vertices (DXF units):`, parsed)
+    } catch (e) {
+      console.error(`[AutoPlace DEBUG]   FAILED to parse vertices:`, e)
+      continue
+    }
+    if (!Array.isArray(parsed) || parsed.length < 3) {
+      console.warn(`[AutoPlace DEBUG]   Skipping ROI - not enough vertices (${parsed?.length || 0})`)
+      continue
+    }
 
     for (const v of parsed) {
-      const dxfX = v.x ?? 0
-      const dxfZ = v.z ?? v.y ?? 0
-      allVerticesMeters.push({ x: dxfX * unitScale, z: dxfZ * unitScale })
+      // Convert from DXF units to meters
+      const xDxf = v.x ?? 0
+      const zDxf = v.z ?? v.y ?? 0
+      const xMeters = xDxf * effectiveScale
+      const zMeters = zDxf * effectiveScale
+      allVerticesMeters.push({ x: xMeters, z: zMeters })
     }
+    console.log(`[AutoPlace DEBUG]   Added ${parsed.length} vertices (converted to m), total now: ${allVerticesMeters.length}`)
+  }
+
+  console.log('[AutoPlace DEBUG] All vertices (meters after conversion):', allVerticesMeters)
+  if (allVerticesMeters.length > 0) {
+    const xs = allVerticesMeters.map(v => v.x)
+    const zs = allVerticesMeters.map(v => v.z)
+    console.log('[AutoPlace DEBUG] Vertex bounds (m):', {
+      minX: Math.min(...xs).toFixed(3),
+      maxX: Math.max(...xs).toFixed(3),
+      minZ: Math.min(...zs).toFixed(3),
+      maxZ: Math.max(...zs).toFixed(3),
+      rangeX: (Math.max(...xs) - Math.min(...xs)).toFixed(3),
+      rangeZ: (Math.max(...zs) - Math.min(...zs)).toFixed(3),
+    })
   }
 
   if (allVerticesMeters.length < 3) {
@@ -1042,13 +1081,31 @@ export async function autoPlaceWithRois(
 
   // 4) Compute convex hull of all ROI vertices (merged bounding polygon)
   const hullVertices = convexHull(allVerticesMeters)
-  console.log(`[LaunchPad AutoPlace] ${rois.length} ROIs, ${allVerticesMeters.length} total vertices → ${hullVertices.length} hull vertices`)
-  console.log('[LaunchPad AutoPlace] Hull bounds (m):', {
-    minX: Math.min(...hullVertices.map(v => v.x)).toFixed(2),
-    maxX: Math.max(...hullVertices.map(v => v.x)).toFixed(2),
-    minZ: Math.min(...hullVertices.map(v => v.z)).toFixed(2),
-    maxZ: Math.max(...hullVertices.map(v => v.z)).toFixed(2),
-  })
+  console.log(`[AutoPlace DEBUG] Convex hull: ${allVerticesMeters.length} input vertices → ${hullVertices.length} hull vertices`)
+  console.log('[AutoPlace DEBUG] Hull vertices:', hullVertices)
+  if (hullVertices.length > 0) {
+    const hxs = hullVertices.map(v => v.x)
+    const hzs = hullVertices.map(v => v.z)
+    const hullWidth = Math.max(...hxs) - Math.min(...hxs)
+    const hullDepth = Math.max(...hzs) - Math.min(...hzs)
+    const hullArea = hullWidth * hullDepth
+    console.log('[AutoPlace DEBUG] Hull bounds (m):', {
+      minX: Math.min(...hxs).toFixed(3),
+      maxX: Math.max(...hxs).toFixed(3),
+      minZ: Math.min(...hzs).toFixed(3),
+      maxZ: Math.max(...hzs).toFixed(3),
+      width: hullWidth.toFixed(3),
+      depth: hullDepth.toFixed(3),
+      approxArea: hullArea.toFixed(3),
+    })
+    // Sanity check: warn if area is suspiciously small or large
+    if (hullArea < 10) {
+      console.warn('[AutoPlace DEBUG] ⚠️ Hull area is VERY SMALL (<10 m²) - possible unit scaling issue!')
+    }
+    if (hullArea > 100000) {
+      console.warn('[AutoPlace DEBUG] ⚠️ Hull area is VERY LARGE (>100000 m²) - possible unit scaling issue!')
+    }
+  }
 
   // 5) Get LiDAR model
   let modelId = settings.modelId
@@ -1056,13 +1113,12 @@ export async function autoPlaceWithRois(
     // Fallback: pick first available model
     try {
       const models = await listLidarModels()
-      console.log(`[AutoPlace] Available LiDAR models:`, models.map(m => ({ id: m.id, name: m.name, range_m: m.range_m })))
+      console.log(`[AutoPlace DEBUG] Available LiDAR models:`, models.map(m => ({ id: m.id, name: m.name, range_m: m.range_m })))
       if (models.length > 0) modelId = models[0].id
-    } catch (e) { console.warn('[AutoPlace] No LiDAR models found:', e) }
+    } catch (e) { console.warn('[AutoPlace DEBUG] No LiDAR models found:', e) }
   }
 
-  console.log(`[AutoPlace] unitScale=${unitScale}, modelId=${modelId}`)
-  console.log(`[AutoPlace] Hull vertices (meters):`, hullVertices)
+  console.log(`[AutoPlace DEBUG] Selected modelId: ${modelId}`)
 
   // 6) Call autoplace
   const autoplaceParams = {
@@ -1074,10 +1130,26 @@ export async function autoPlaceWithRois(
     mount_y_m: settings.mountHeightM,
     sample_spacing_m: settings.sampleSpacingM,
   }
-  console.log(`[AutoPlace] Calling runAutoplace with:`, autoplaceParams)
-  const result = await runAutoplace(autoplaceParams)
-
-  console.log(`[LaunchPad AutoPlace] Result: ${result.instances.length} LiDARs, ${(result.coverage_pct * 100).toFixed(1)}% coverage`)
+  console.log(`[AutoPlace DEBUG] Calling runAutoplace with params:`, JSON.stringify(autoplaceParams, null, 2))
+  
+  let result
+  try {
+    result = await runAutoplace(autoplaceParams)
+    console.log(`[AutoPlace DEBUG] runAutoplace SUCCESS:`, {
+      instanceCount: result.instances.length,
+      coveragePct: (result.coverage_pct * 100).toFixed(1) + '%',
+      kCoveragePct: (result.k_coverage_pct * 100).toFixed(1) + '%',
+      solverStatus: result.solver_status,
+      warnings: result.warnings,
+    })
+    if (result.instances.length > 0) {
+      console.log('[AutoPlace DEBUG] Placed LiDAR positions (m):', result.instances.map(i => ({ id: i.id, x: i.x_m.toFixed(2), z: i.z_m.toFixed(2) })))
+    }
+  } catch (err: any) {
+    console.error('[AutoPlace DEBUG] runAutoplace FAILED:', err.message)
+    throw err
+  }
+  console.log('========== [AutoPlace DEBUG] END ==========\n')
 
   // 7) Rebuild step data
   return buildPlaceLidarsData(layoutVersionId)
