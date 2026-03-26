@@ -58,6 +58,8 @@ app.hyspace.app {
         X-Content-Type-Options nosniff
         X-Frame-Options SAMEORIGIN
         Referrer-Policy strict-origin-when-cross-origin
+        # Allow Google OAuth popup to communicate with parent window
+        Cross-Origin-Opener-Policy same-origin-allow-popups
     }
 
     # Logging with rotation (prevent disk fill)
