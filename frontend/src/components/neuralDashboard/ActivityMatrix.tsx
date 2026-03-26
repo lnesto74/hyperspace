@@ -7,44 +7,51 @@
 
 import { useMemo, useRef, useEffect } from 'react'
 import { useTracking } from '../../context/TrackingContext'
-import { useRoi } from '../../context/RoiContext'
 
 const GRID_COLS = 24
 const GRID_ROWS = 16
 const DOT_SIZE = 8
 const DOT_GAP = 2
 
+interface Bounds {
+  minX: number
+  maxX: number
+  minZ: number
+  maxZ: number
+}
+
 export default function ActivityMatrix() {
   const { tracks } = useTracking()
-  const { regions } = useRoi()
   const canvasRef = useRef<HTMLCanvasElement>(null)
   
-  // Cache for last known good grid (prevents drop to empty on MQTT disconnect)
+  // Cache for last known good grid and bounds (prevents drop on MQTT disconnect)
   const cachedGridRef = useRef<number[][] | null>(null)
-  const cachedBoundsRef = useRef<{ minX: number; maxX: number; minZ: number; maxZ: number } | null>(null)
+  const cachedBoundsRef = useRef<Bounds | null>(null)
   const prevTrackCountRef = useRef(0)
   
-  // Compute bounds from ROI vertices (actual tracked area)
-  const bounds = useMemo(() => {
-    if (regions.length === 0) return null
+  // Compute bounds from actual track positions (the real coverage area)
+  const bounds = useMemo((): Bounds | null => {
+    if (tracks.size === 0) {
+      // Return cached bounds if tracks dropped to 0
+      return cachedBoundsRef.current
+    }
     
     let minX = Infinity, maxX = -Infinity
     let minZ = Infinity, maxZ = -Infinity
     
-    regions.forEach(roi => {
-      roi.vertices.forEach(v => {
-        if (v.x < minX) minX = v.x
-        if (v.x > maxX) maxX = v.x
-        if (v.z < minZ) minZ = v.z
-        if (v.z > maxZ) maxZ = v.z
-      })
+    tracks.forEach(track => {
+      const pos = track.venuePosition
+      if (pos.x < minX) minX = pos.x
+      if (pos.x > maxX) maxX = pos.x
+      if (pos.z < minZ) minZ = pos.z
+      if (pos.z > maxZ) maxZ = pos.z
     })
     
-    // Add small padding (5%)
-    const padX = (maxX - minX) * 0.05
-    const padZ = (maxZ - minZ) * 0.05
+    // Add padding (10%) to avoid edge clipping
+    const padX = Math.max((maxX - minX) * 0.1, 1)
+    const padZ = Math.max((maxZ - minZ) * 0.1, 1)
     
-    const newBounds = { 
+    const newBounds: Bounds = { 
       minX: minX - padX, 
       maxX: maxX + padX, 
       minZ: minZ - padZ, 
@@ -54,7 +61,7 @@ export default function ActivityMatrix() {
     // Cache bounds for MQTT disconnect resilience
     cachedBoundsRef.current = newBounds
     return newBounds
-  }, [regions])
+  }, [tracks])
   
   // Build occupancy grid from track positions with caching
   const gridData = useMemo(() => {
@@ -68,20 +75,18 @@ export default function ActivityMatrix() {
     
     const grid: number[][] = Array(GRID_ROWS).fill(null).map(() => Array(GRID_COLS).fill(0))
     
-    // Use current bounds or cached bounds
-    const activeBounds = bounds || cachedBoundsRef.current
-    if (!activeBounds) return grid
+    if (!bounds) return grid
     
-    const width = activeBounds.maxX - activeBounds.minX
-    const height = activeBounds.maxZ - activeBounds.minZ
+    const width = bounds.maxX - bounds.minX
+    const height = bounds.maxZ - bounds.minZ
     const cellWidth = width / GRID_COLS
     const cellHeight = height / GRID_ROWS
     
     tracks.forEach(track => {
       const pos = track.venuePosition
-      // Map track position to grid cell using ROI bounds
-      const col = Math.floor((pos.x - activeBounds.minX) / cellWidth)
-      const row = Math.floor((pos.z - activeBounds.minZ) / cellHeight)
+      // Map track position to grid cell using track-derived bounds
+      const col = Math.floor((pos.x - bounds.minX) / cellWidth)
+      const row = Math.floor((pos.z - bounds.minZ) / cellHeight)
       
       if (col >= 0 && col < GRID_COLS && row >= 0 && row < GRID_ROWS) {
         grid[row][col] += 1
