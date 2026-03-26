@@ -159,9 +159,10 @@ export default function JourneyFlowStream() {
           const yOffset = idx * 2
           
           // Color based on velocity (moving = cooler, stopped = warmer)
+          const vel = typeof bar.velocity === 'number' && !isNaN(bar.velocity) ? bar.velocity : 0
           const saturation = 70
-          const lightness = 50 + bar.velocity * 10
-          const hueShift = bar.velocity < 0.5 ? 30 : 0 // warmer when stopped
+          const lightness = Math.max(40, Math.min(70, 50 + vel * 10))
+          const hueShift = vel < 0.5 ? 30 : 0 // warmer when stopped
           const color = `hsl(${(bar.hue + hueShift) % 360}, ${saturation}%, ${lightness}%)`
           
           // Draw bar with gradient
