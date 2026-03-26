@@ -32,9 +32,11 @@ WORKDIR /app
 # - libsqlite3-0: for better-sqlite3 native module
 # - curl: for Tailscale install script
 # - tailscale: for device discovery (TailscaleService.js shells out to `tailscale status --json`)
+# - libredwg-tools: for DWG to DXF conversion (dwgread command)
 RUN apt-get update && apt-get install -y \
     libsqlite3-0 \
     curl \
+    libredwg-tools \
     && curl -fsSL https://tailscale.com/install.sh | sh \
     && rm -rf /var/lib/apt/lists/*
 
