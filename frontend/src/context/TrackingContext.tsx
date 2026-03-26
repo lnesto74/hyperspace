@@ -4,9 +4,9 @@ import { Track, TrackWithTrail, LidarStatus } from '../types'
 import { useVenue } from './VenueContext'
 import { API_BASE } from '../config/api'
 
-const MAX_TRAIL_LENGTH = 100 // ~10 seconds at 10Hz
-const TRACK_TTL_MS = 5000 // 5 seconds before track is removed
-const CLEANUP_INTERVAL_MS = 1000 // Cleanup stale tracks every 1 second
+const MAX_TRAIL_LENGTH = 50 // ~5 seconds at 10Hz (reduced from 100 to save memory)
+const TRACK_TTL_MS = 3000 // 3 seconds before track is removed (faster cleanup)
+const CLEANUP_INTERVAL_MS = 500 // Cleanup stale tracks every 0.5 seconds
 
 interface TrackingContextType {
   tracks: Map<string, TrackWithTrail>
