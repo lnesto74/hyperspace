@@ -69,12 +69,11 @@ export default function AppShell({ onOpenDwgImporter, onOpenEdgeCommissioning, s
   const [showTrackingPopup, setShowTrackingPopup] = useState(false)
   const [lighting, setLighting] = useState<LightingSettings>(defaultLighting)
   const [tracking, setTracking] = useState<TrackingSettings>(defaultTracking)
-  const [neuralDashboardEnabled, setNeuralDashboardEnabled] = useState(false)
   const { venue, selectedObjectId, objects } = useVenue()
   const { selectedPlacementId, placements } = useLidar()
   const { dwgLayoutId: selectedDwgLayoutId } = useDwg()
   const { intentFieldEnabled, setIntentFieldEnabled } = useProfitRadar()
-  const { launchPadOpen: lpOpen, setLaunchPadOpen: setLpOpen } = useViewMode()
+  const { launchPadOpen: lpOpen, setLaunchPadOpen: setLpOpen, neuralDashboardEnabled, setNeuralDashboardEnabled } = useViewMode()
   
   // Determine if we're in DWG venue mode
   const isDwgMode = activeTab === 'venueDwg' && selectedDwgLayoutId !== null

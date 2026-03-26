@@ -51,11 +51,15 @@ const ViewModeContext = createContext<{
   setMode: (m: ViewMode) => void
   launchPadOpen: boolean
   setLaunchPadOpen: (open: boolean) => void
+  neuralDashboardEnabled: boolean
+  setNeuralDashboardEnabled: (enabled: boolean) => void
 }>({
   mode: 'main',
   setMode: () => {},
   launchPadOpen: false,
   setLaunchPadOpen: () => {},
+  neuralDashboardEnabled: false,
+  setNeuralDashboardEnabled: () => {},
 })
 export const useViewMode = () => useContext(ViewModeContext)
 
@@ -88,7 +92,7 @@ function KPIPopupWrapper() {
 function KPIOverlayToggle() {
   const { showKPIOverlays, toggleKPIOverlays, startDrawing: startRoiDrawing } = useRoi()
   const { venue } = useVenue()
-  const { setMode } = useViewMode()
+  const { setMode, neuralDashboardEnabled } = useViewMode()
   const { dwgLayoutId } = useDwg()
   const { openStoryGrid, explainKpi, selectEpisode, selectedEpisode } = useReplayInsight()
   const { openNarrator, askQuestion } = useNarrator2()
@@ -226,7 +230,8 @@ function KPIOverlayToggle() {
         dwgLayoutId={dwgLayoutId}
       />
       
-      {/* Button Group above Footer */}
+      {/* Button Group above Footer - hidden in Neural Dashboard mode */}
+      {!neuralDashboardEnabled && (
       <div className="fixed bottom-16 right-4 z-30 flex items-center gap-2">
         {/* Smart KPI Button */}
         <button
@@ -353,6 +358,7 @@ function KPIOverlayToggle() {
         {/* User Menu */}
         <UserMenu />
       </div>
+      )}
       
       {/* Activity Ledger */}
       {venue && (
@@ -413,6 +419,7 @@ function MainApp() {
   const [viewMode, setViewModeInternal] = useState<ViewMode>('main')
   const [showLanding, setShowLanding] = useState(true)
   const [launchPadOpen, setLaunchPadOpen] = useState(false)
+  const [neuralDashboardEnabled, setNeuralDashboardEnabled] = useState(false)
   
   // FLOW-DEBUG: Wrap setViewMode to log navigation
   const setViewMode = (newMode: ViewMode) => {
@@ -473,7 +480,7 @@ function MainApp() {
   }, [viewMode, venue?.id, loadVenue])
   
   return (
-    <ViewModeContext.Provider value={{ mode: viewMode, setMode: setViewMode, launchPadOpen, setLaunchPadOpen }}>
+    <ViewModeContext.Provider value={{ mode: viewMode, setMode: setViewMode, launchPadOpen, setLaunchPadOpen, neuralDashboardEnabled, setNeuralDashboardEnabled }}>
       <PlanogramProvider>
         {/* DWG Importer View */}
         {viewMode === 'dwgImporter' && (

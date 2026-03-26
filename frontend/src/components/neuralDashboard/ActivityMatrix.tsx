@@ -7,7 +7,6 @@
 
 import { useMemo, useRef, useEffect } from 'react'
 import { useTracking } from '../../context/TrackingContext'
-import { useRoi } from '../../context/RoiContext'
 import { useVenue } from '../../context/VenueContext'
 
 const GRID_COLS = 24
@@ -20,8 +19,20 @@ export default function ActivityMatrix() {
   const { venue } = useVenue()
   const canvasRef = useRef<HTMLCanvasElement>(null)
   
-  // Build occupancy grid from track positions
+  // Cache for last known good grid (prevents drop to empty on MQTT disconnect)
+  const cachedGridRef = useRef<number[][] | null>(null)
+  const prevTrackCountRef = useRef(0)
+  
+  // Build occupancy grid from track positions with caching
   const gridData = useMemo(() => {
+    const currentCount = tracks.size
+    
+    // If tracks suddenly dropped to 0, use cached grid
+    if (currentCount === 0 && prevTrackCountRef.current > 0 && cachedGridRef.current) {
+      return cachedGridRef.current
+    }
+    prevTrackCountRef.current = currentCount
+    
     const grid: number[][] = Array(GRID_ROWS).fill(null).map(() => Array(GRID_COLS).fill(0))
     
     if (!venue) return grid
@@ -39,6 +50,11 @@ export default function ActivityMatrix() {
         grid[row][col] += 1
       }
     })
+    
+    // Cache the grid if we have tracks
+    if (currentCount > 0) {
+      cachedGridRef.current = grid
+    }
     
     return grid
   }, [tracks, venue])

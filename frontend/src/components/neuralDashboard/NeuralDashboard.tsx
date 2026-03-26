@@ -8,11 +8,10 @@
  * Q4: Real-Time Charts (bottom-right)
  */
 
-import { useState, useEffect, useMemo } from 'react'
+import { useMemo, useRef } from 'react'
 import { useTracking } from '../../context/TrackingContext'
 import { useRoi } from '../../context/RoiContext'
 import { useVenue } from '../../context/VenueContext'
-import { API_BASE } from '../../config/api'
 import LiveMetricsPanel from './LiveMetricsPanel'
 import ActivityMatrix from './ActivityMatrix'
 import TrendChart from './TrendChart'
@@ -24,13 +23,24 @@ interface NeuralDashboardProps {
 export default function NeuralDashboard({ children }: NeuralDashboardProps) {
   const { tracks } = useTracking()
   const { regions } = useRoi()
-  const { venue } = useVenue()
+  useVenue() // For future use
   
-  // Aggregate metrics from tracks
+  // Cache for last known good metrics (prevents drop to 0 on MQTT disconnect)
+  const cachedMetricsRef = useRef({
+    totalPax: 0,
+    peakOccupancy: 0,
+    activeZones: 0,
+    avgOccupancy: 0,
+  })
+  
+  // Aggregate metrics from tracks with caching
   const metrics = useMemo(() => {
     const totalPax = tracks.size
-    let totalEntries = 0
-    let peakOccupancy = totalPax
+    
+    // If we suddenly drop to 0, use cached values (MQTT disconnect)
+    if (totalPax === 0 && cachedMetricsRef.current.totalPax > 0) {
+      return cachedMetricsRef.current
+    }
     
     // Count tracks per zone
     const zoneOccupancy = new Map<string, number>()
@@ -45,16 +55,19 @@ export default function NeuralDashboard({ children }: NeuralDashboardProps) {
       })
     })
     
-    return {
-      totalPax,
-      totalEntries,
-      peakOccupancy,
-      zoneOccupancy,
-      activeZones: Array.from(zoneOccupancy.entries()).filter(([_, count]) => count > 0).length,
-      avgOccupancy: zoneOccupancy.size > 0 
-        ? Array.from(zoneOccupancy.values()).reduce((a, b) => a + b, 0) / zoneOccupancy.size 
-        : 0,
-    }
+    const activeZones = Array.from(zoneOccupancy.entries()).filter(([_, count]) => count > 0).length
+    const avgOccupancy = zoneOccupancy.size > 0 
+      ? Array.from(zoneOccupancy.values()).reduce((a, b) => a + b, 0) / zoneOccupancy.size 
+      : 0
+    
+    // Update peak if current is higher
+    const peakOccupancy = Math.max(totalPax, cachedMetricsRef.current.peakOccupancy)
+    
+    // Cache the new values
+    const newMetrics = { totalPax, peakOccupancy, activeZones, avgOccupancy }
+    cachedMetricsRef.current = newMetrics
+    
+    return newMetrics
   }, [tracks, regions])
 
   return (

@@ -5,7 +5,7 @@
  * Inspired by "Training Metrics" chart style.
  */
 
-import { useState, useEffect, useRef, useMemo } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useTracking } from '../../context/TrackingContext'
 
 const CHART_POINTS = 60 // 60 data points (last 60 seconds)
@@ -23,10 +23,17 @@ export default function TrendChart() {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const prevTracksRef = useRef(0)
   
-  // Update history with current occupancy
+  // Update history with current occupancy (with caching to prevent MQTT disconnect drops)
   useEffect(() => {
     const interval = setInterval(() => {
       const currentCount = tracks.size
+      
+      // Skip if tracks suddenly dropped to 0 (likely MQTT disconnect)
+      // Use last known value instead
+      if (currentCount === 0 && prevTracksRef.current > 0) {
+        return // Don't update - keep showing last values
+      }
+      
       const flow = currentCount - prevTracksRef.current
       prevTracksRef.current = currentCount
       
@@ -150,7 +157,6 @@ export default function TrendChart() {
   }, [history])
   
   // Current stats
-  const currentOccupancy = history.length > 0 ? history[history.length - 1].occupancy : 0
   const avgOccupancy = history.length > 0 
     ? (history.reduce((sum, d) => sum + d.occupancy, 0) / history.length).toFixed(1)
     : '0'
