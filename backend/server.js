@@ -443,15 +443,21 @@ app.post('/api/edge-simulator/config', async (req, res) => {
       }
     }
     
-    const serverHost = tailscaleIp || 'localhost';
-    const backendUrl = `http://${serverHost}:${PORT}`;
-    const mqttBroker = `mqtt://${serverHost}:1883`;
+    // In production (no Tailscale), use BACKEND_PUBLIC_URL or don't override
+    // Only auto-inject URLs when Tailscale is available (dev environment)
+    const configWithUrls = { ...req.body };
     
-    const configWithUrls = {
-      ...req.body,
-      backendUrl,
-      mqttBroker,
-    };
+    if (tailscaleIp) {
+      // Dev: auto-inject URLs based on Tailscale IP
+      configWithUrls.backendUrl = `http://${tailscaleIp}:${PORT}`;
+      configWithUrls.mqttBroker = `mqtt://${tailscaleIp}:1883`;
+    } else if (process.env.BACKEND_PUBLIC_URL) {
+      // Production: use explicit public URL if set
+      const publicHost = new URL(process.env.BACKEND_PUBLIC_URL).hostname;
+      configWithUrls.backendUrl = `http://${publicHost}:${PORT}`;
+      configWithUrls.mqttBroker = `mqtt://${publicHost}:1883`;
+    }
+    // Otherwise: don't override - let edge server use its persisted config
     
     const edgeUrl = getEdgeUrl(req);
     const response = await fetch(`${edgeUrl}/api/config`, {
