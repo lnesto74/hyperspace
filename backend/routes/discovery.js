@@ -33,5 +33,15 @@ export default function discoveryRoutes(tailscaleService, mockGenerator) {
     res.json(device);
   });
 
+  // Get this machine's (backend server's) Tailscale IP
+  router.get('/self', async (req, res) => {
+    try {
+      const self = await tailscaleService.getSelfIp();
+      res.json(self);
+    } catch (error) {
+      res.status(500).json({ error: 'Failed to get self IP', message: error.message });
+    }
+  });
+
   return router;
 }

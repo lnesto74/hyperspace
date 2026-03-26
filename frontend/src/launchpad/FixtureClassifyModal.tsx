@@ -131,6 +131,7 @@ export default function FixtureClassifyModal({
       // Fallback to hardcoded types if API fails
       setCatalogAssets([
         { id: 'shelf', name: 'Shelf', type: 'shelf', hasCustomModel: false },
+        { id: 'fridge', name: 'Fridge', type: 'fridge', hasCustomModel: false },
         { id: 'wall', name: 'Wall', type: 'wall', hasCustomModel: false },
         { id: 'checkout', name: 'Checkout', type: 'checkout', hasCustomModel: false },
         { id: 'entrance', name: 'Entrance', type: 'entrance', hasCustomModel: false },

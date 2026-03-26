@@ -28,7 +28,7 @@ interface LidarCommissioningWizardProps {
 type WizardStep = 'intro' | 'waiting' | 'scanning' | 'found' | 'configuring' | 'rebooting' | 'verifying' | 'done' | 'complete'
 
 const DEFAULT_LIDAR_IP = '192.168.1.200'
-const IP_START = 201
+const DEFAULT_IP_START = 201
 
 export default function LidarCommissioningWizard({
   venueId,
@@ -43,43 +43,113 @@ export default function LidarCommissioningWizard({
   const [commissionedLidars, setCommissionedLidars] = useState<CommissionedLidar[]>([])
   const [currentLidarNumber, setCurrentLidarNumber] = useState(1)
   const [currentIp, setCurrentIp] = useState<string | null>(null)
+  const [foundLidarInfo, setFoundLidarInfo] = useState<{ vendor?: string; model?: string; configurable?: boolean } | null>(null)
   const [targetIp, setTargetIp] = useState<string>(DEFAULT_LIDAR_IP) // For manual IP entry
   const [nextAvailableIp, setNextAvailableIp] = useState<string>('192.168.1.201')
   const [error, setError] = useState<string | null>(null)
   const [scanAttempts, setScanAttempts] = useState(0)
   const [isLoading, setIsLoading] = useState(true)
   const [showManualIp, setShowManualIp] = useState(false)
+  const [startingOctet, setStartingOctet] = useState<number>(DEFAULT_IP_START) // Configurable starting IP octet
+  const [msopPort, setMsopPort] = useState<number>(6699) // RoboSense default MSOP port
+  const [difopPort, setDifopPort] = useState<number>(7788) // RoboSense default DIFOP port
+  const [usedIps, setUsedIps] = useState<Set<string>>(new Set())
+  const [usedMsopPorts, setUsedMsopPorts] = useState<Set<number>>(new Set())
+  const [usedDifopPorts, setUsedDifopPorts] = useState<Set<number>>(new Set())
 
   const progress = (commissionedLidars.length / totalPlacements) * 100
   const isComplete = commissionedLidars.length >= totalPlacements
+  
+  // Validation: check if current values conflict with existing
+  const ipConflict = usedIps.has(nextAvailableIp)
+  const msopConflict = usedMsopPorts.has(msopPort)
+  const difopConflict = usedDifopPorts.has(difopPort)
+  const hasConflict = ipConflict || msopConflict || difopConflict
 
-  // Load existing commissioned LiDARs and next available IP on mount
+  // Load existing commissioned LiDARs, inventory, and calculate next available IP/ports
   useEffect(() => {
     const loadData = async () => {
       try {
-        // Load existing commissioned LiDARs
+        // Load existing commissioned LiDARs from database
         const lidarsRes = await fetch(`${API_BASE}/api/edge-commissioning/commissioned-lidars?venueId=${venueId}&edgeId=${edgeId}`)
         const lidarsData = await lidarsRes.json()
         
-        if (lidarsData.lidars) {
-          const existing = lidarsData.lidars.map((l: any) => ({
-            id: l.id,
-            lidarId: `lidar-${l.assignedIp.replace(/\./g, '-')}`,
-            assignedIp: l.assignedIp,
-            label: l.label || `LiDAR-${l.assignedIp.split('.').pop()}`,
+        // Also fetch inventory to detect externally-configured LiDARs
+        const invRes = await fetch(`${API_BASE}/api/edge-commissioning/inventory?edgeId=${edgeId}&tailscaleIp=${edgeTailscaleIp}`)
+        const invData = await invRes.json()
+        
+        // Merge: use inventory as truth for online LiDARs, supplement with DB records
+        const dbLidars = lidarsData.lidars || []
+        const invLidars = invData.inventory || []
+        
+        // Create map of all detected LiDARs (excluding default 192.168.1.200)
+        const allLidars: CommissionedLidar[] = []
+        const seenIps = new Set<string>()
+        const usedMsopPorts = new Set<number>()
+        const usedDifopPorts = new Set<number>()
+        
+        // Add inventory LiDARs (online, may have been configured externally)
+        for (const inv of invLidars) {
+          if (inv.ip === '192.168.1.200') continue // Skip factory default IP
+          if (seenIps.has(inv.ip)) continue
+          seenIps.add(inv.ip)
+          
+          // Track used ports
+          if (inv.msopPort) usedMsopPorts.add(inv.msopPort)
+          if (inv.difopPort) usedDifopPorts.add(inv.difopPort)
+          
+          // Check if this IP is in DB
+          const dbRecord = dbLidars.find((d: any) => d.assignedIp === inv.ip)
+          
+          allLidars.push({
+            id: dbRecord?.id || `inv-${inv.ip}`,
+            lidarId: `lidar-${inv.ip.replace(/\./g, '-')}`,
+            assignedIp: inv.ip,
+            label: dbRecord?.label || `LiDAR-${inv.ip.split('.').pop()}`,
             status: 'done' as const,
-            commissionedAt: l.commissionedAt,
-          }))
-          setCommissionedLidars(existing)
-          setCurrentLidarNumber(existing.length + 1)
+            commissionedAt: dbRecord?.commissionedAt || new Date().toISOString(),
+          })
         }
-
-        // Get next available IP
-        const ipRes = await fetch(`${API_BASE}/api/edge-commissioning/next-available-ip?venueId=${venueId}`)
-        const ipData = await ipRes.json()
-        if (ipData.nextIp) {
-          setNextAvailableIp(ipData.nextIp)
+        
+        // Add DB records not in inventory (offline but commissioned)
+        for (const db of dbLidars) {
+          if (seenIps.has(db.assignedIp)) continue
+          seenIps.add(db.assignedIp)
+          
+          allLidars.push({
+            id: db.id,
+            lidarId: `lidar-${db.assignedIp.replace(/\./g, '-')}`,
+            assignedIp: db.assignedIp,
+            label: db.label || `LiDAR-${db.assignedIp.split('.').pop()}`,
+            status: 'done' as const,
+            commissionedAt: db.commissionedAt,
+          })
         }
+        
+        setCommissionedLidars(allLidars)
+        setCurrentLidarNumber(allLidars.length + 1)
+        
+        // Store used IPs and ports for validation
+        const ipSet = new Set(allLidars.map(l => l.assignedIp))
+        setUsedIps(ipSet)
+        setUsedMsopPorts(usedMsopPorts)
+        setUsedDifopPorts(usedDifopPorts)
+        
+        // Calculate next available IP based on all detected LiDARs
+        const usedOctets = allLidars.map(l => parseInt(l.assignedIp.split('.').pop() || '0', 10))
+        let nextOctet = startingOctet
+        while (usedOctets.includes(nextOctet) && nextOctet <= 254) nextOctet++
+        setNextAvailableIp(`192.168.1.${nextOctet}`)
+        
+        // Calculate next available ports
+        let nextMsop = 6699
+        while (usedMsopPorts.has(nextMsop)) nextMsop++
+        setMsopPort(nextMsop)
+        
+        let nextDifop = 7788
+        while (usedDifopPorts.has(nextDifop)) nextDifop++
+        setDifopPort(nextDifop)
+        
       } catch (err) {
         console.error('Failed to load commissioned lidars:', err)
       } finally {
@@ -87,7 +157,7 @@ export default function LidarCommissioningWizard({
       }
     }
     loadData()
-  }, [venueId, edgeId])
+  }, [venueId, edgeId, edgeTailscaleIp, startingOctet])
 
   // Scan for LiDAR at target IP
   const scanForLidar = useCallback(async () => {
@@ -112,6 +182,11 @@ export default function LidarCommissioningWizard({
         const foundLidar = data.lidars.find((l: any) => l.ip === targetIp)
         if (foundLidar) {
           setCurrentIp(targetIp)
+          setFoundLidarInfo({
+            vendor: foundLidar.vendor || 'Unknown',
+            model: foundLidar.model || 'Unknown',
+            configurable: foundLidar.configurable !== false, // Default true for RoboSense
+          })
           setStep('found')
           return
         }
@@ -140,7 +215,8 @@ export default function LidarCommissioningWizard({
           assignedIp,
           label,
           originalIp: currentIp,
-          vendor: 'RoboSense',
+          vendor: foundLidarInfo?.vendor || 'RoboSense',
+          model: foundLidarInfo?.model,
         }),
       })
     } catch (err) {
@@ -148,10 +224,11 @@ export default function LidarCommissioningWizard({
     }
   }
 
-  // Refresh next available IP
-  const refreshNextIp = async () => {
+  // Refresh next available IP (uses startingOctet)
+  const refreshNextIp = async (startOctet?: number) => {
     try {
-      const res = await fetch(`${API_BASE}/api/edge-commissioning/next-available-ip?venueId=${venueId}`)
+      const octet = startOctet ?? startingOctet
+      const res = await fetch(`${API_BASE}/api/edge-commissioning/next-available-ip?venueId=${venueId}&startOctet=${octet}`)
       const data = await res.json()
       if (data.nextIp) {
         setNextAvailableIp(data.nextIp)
@@ -169,7 +246,13 @@ export default function LidarCommissioningWizard({
     setError(null)
 
     try {
-      const res = await fetch(`${API_BASE}/api/edge-commissioning/proxy-set-ip`, {
+      // Use different endpoint based on vendor
+      const isLsLidar = foundLidarInfo?.vendor === 'LSLidar'
+      const endpoint = isLsLidar 
+        ? `${API_BASE}/api/edge-commissioning/proxy-lslidar-config`
+        : `${API_BASE}/api/edge-commissioning/proxy-set-ip`
+      
+      const res = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -177,17 +260,21 @@ export default function LidarCommissioningWizard({
           tailscaleIp: edgeTailscaleIp,
           currentIp: currentIp,
           newIp: nextAvailableIp,
+          // Vendor-specific port options
+          msopPort: isLsLidar ? 2345 : msopPort,
+          difopPort: isLsLidar ? 2346 : difopPort,
         }),
       })
 
       const data = await res.json()
 
-      if (data.success) {
+      if (data.success || data.ok) {
         setStep('rebooting')
-        // Wait for LiDAR to reboot
-        setTimeout(() => verifyNewIp(), 15000)
+        // LS Lidar reboots faster (~5s), RoboSense takes ~15s
+        const rebootTime = isLsLidar ? 5000 : 15000
+        setTimeout(() => verifyNewIp(), rebootTime)
       } else {
-        setError(data.message || 'Failed to configure LiDAR')
+        setError(data.message || data.error || 'Failed to configure LiDAR')
         setStep('found')
       }
     } catch (err: any) {
@@ -325,6 +412,76 @@ export default function LidarCommissioningWizard({
                     </div>
                   )}
 
+                  {/* Starting IP Configuration */}
+                  <div className="bg-gray-700/50 rounded-lg p-3 mb-4">
+                    <label className="block text-xs text-gray-400 mb-1">Starting IP Address (last octet)</label>
+                    <div className="flex items-center gap-2">
+                      <span className="text-gray-500 text-sm">192.168.1.</span>
+                      <input
+                        type="number"
+                        min="1"
+                        max="254"
+                        value={startingOctet}
+                        onChange={(e) => {
+                          const val = parseInt(e.target.value, 10)
+                          if (!isNaN(val) && val >= 1 && val <= 254) {
+                            setStartingOctet(val)
+                            refreshNextIp(val)
+                          }
+                        }}
+                        className="w-20 px-2 py-1 bg-gray-800 border border-gray-600 rounded text-white text-center"
+                      />
+                      <span className="text-xs text-gray-500">
+                        Next: <span className={`font-mono ${ipConflict ? 'text-red-400' : 'text-blue-400'}`}>{nextAvailableIp}</span>
+                        {ipConflict && <span className="text-red-400 ml-1">⚠ In use</span>}
+                      </span>
+                    </div>
+                    {ipConflict && (
+                      <p className="text-xs text-red-400 mt-1">⚠ IP already assigned. Adjust starting octet.</p>
+                    )}
+                  </div>
+
+                  {/* RoboSense Port Configuration */}
+                  <div className="bg-gray-700/50 rounded-lg p-3 mb-4">
+                    <label className="block text-xs text-gray-400 mb-2">RoboSense Port Configuration</label>
+                    <div className="flex items-center gap-4">
+                      <div className="flex items-center gap-2">
+                        <span className="text-gray-500 text-xs">MSOP:</span>
+                        <input
+                          type="text"
+                          inputMode="numeric"
+                          value={msopPort}
+                          onChange={(e) => {
+                            const val = parseInt(e.target.value, 10)
+                            if (!isNaN(val)) setMsopPort(val)
+                            else if (e.target.value === '') setMsopPort(6699)
+                          }}
+                          className={`w-20 px-2 py-1 bg-gray-800 border rounded text-white text-center text-sm ${msopConflict ? 'border-red-500' : 'border-gray-600'}`}
+                        />
+                        {msopConflict && <span className="text-red-400 text-xs">⚠ In use</span>}
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-gray-500 text-xs">DIFOP:</span>
+                        <input
+                          type="text"
+                          inputMode="numeric"
+                          value={difopPort}
+                          onChange={(e) => {
+                            const val = parseInt(e.target.value, 10)
+                            if (!isNaN(val)) setDifopPort(val)
+                            else if (e.target.value === '') setDifopPort(7788)
+                          }}
+                          className={`w-20 px-2 py-1 bg-gray-800 border rounded text-white text-center text-sm ${difopConflict ? 'border-red-500' : 'border-gray-600'}`}
+                        />
+                        {difopConflict && <span className="text-red-400 text-xs">⚠ In use</span>}
+                      </div>
+                    </div>
+                    <p className="text-xs text-gray-500 mt-1">Default: MSOP 6699, DIFOP 7788 (LS Lidar uses fixed ports)</p>
+                    {(msopConflict || difopConflict) && (
+                      <p className="text-xs text-red-400 mt-1">⚠ Port already assigned to another LiDAR. Choose a different port.</p>
+                    )}
+                  </div>
+
                   <div className="bg-gray-700/50 rounded-lg p-4 text-left text-sm text-gray-300 mb-6">
                     <p className="font-medium text-white mb-2">Before you start:</p>
                     <ul className="space-y-1 list-disc list-inside">
@@ -345,7 +502,8 @@ export default function LidarCommissioningWizard({
                   ) : (
                     <button
                       onClick={() => setStep('waiting')}
-                      className="w-full py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium flex items-center justify-center gap-2"
+                      disabled={hasConflict}
+                      className={`w-full py-3 text-white rounded-lg font-medium flex items-center justify-center gap-2 ${hasConflict ? 'bg-gray-600 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700'}`}
                     >
                       {commissionedLidars.length > 0 ? 'Continue Commissioning' : 'Start Commissioning'}
                       <ArrowRight className="w-4 h-4" />
@@ -427,23 +585,39 @@ export default function LidarCommissioningWizard({
             <div className="text-center">
               <CheckCircle2 className="w-12 h-12 mx-auto text-green-400 mb-4" />
               <h3 className="text-lg font-medium text-white mb-2">LiDAR Found!</h3>
-              <p className="text-gray-400 text-sm mb-4">
+              <p className="text-gray-400 text-sm mb-2">
                 Found LiDAR at {currentIp}
               </p>
+              {foundLidarInfo && (
+                <p className="text-blue-400 text-sm mb-4 font-medium">
+                  {foundLidarInfo.vendor} {foundLidarInfo.model !== 'Unknown' ? foundLidarInfo.model : ''}
+                </p>
+              )}
 
               <div className="bg-gray-700/50 rounded-lg p-4 mb-6">
                 <div className="flex items-center justify-between text-sm">
                   <span className="text-gray-400">Current IP:</span>
                   <span className="font-mono text-amber-400">{currentIp}</span>
                 </div>
-                <div className="flex items-center justify-center my-2">
-                  <ArrowRight className="w-4 h-4 text-gray-500" />
-                </div>
-                <div className="flex items-center justify-between text-sm">
-                  <span className="text-gray-400">New IP:</span>
-                  <span className="font-mono text-green-400">{nextAvailableIp}</span>
-                </div>
+                {foundLidarInfo?.configurable !== false && (
+                  <>
+                    <div className="flex items-center justify-center my-2">
+                      <ArrowRight className="w-4 h-4 text-gray-500" />
+                    </div>
+                    <div className="flex items-center justify-between text-sm">
+                      <span className="text-gray-400">New IP:</span>
+                      <span className="font-mono text-green-400">{nextAvailableIp}</span>
+                    </div>
+                  </>
+                )}
               </div>
+
+              {foundLidarInfo?.configurable === false && (
+                <div className="bg-amber-900/30 border border-amber-700 rounded-lg p-3 mb-4 text-sm text-amber-300 flex items-start gap-2">
+                  <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
+                  <span>This LiDAR cannot be reconfigured via web interface. Use vendor software to change IP.</span>
+                </div>
+              )}
 
               {error && (
                 <div className="bg-red-900/30 border border-red-700 rounded-lg p-3 mb-4 text-sm text-red-300 flex items-start gap-2">
@@ -452,13 +626,35 @@ export default function LidarCommissioningWizard({
                 </div>
               )}
 
-              <button
-                onClick={configureLidar}
-                className="w-full py-3 bg-green-600 hover:bg-green-700 text-white rounded-lg font-medium flex items-center justify-center gap-2"
-              >
-                <Wifi className="w-4 h-4" />
-                Assign New IP Address
-              </button>
+              {foundLidarInfo?.configurable !== false ? (
+                <button
+                  onClick={configureLidar}
+                  className="w-full py-3 bg-green-600 hover:bg-green-700 text-white rounded-lg font-medium flex items-center justify-center gap-2"
+                >
+                  <Wifi className="w-4 h-4" />
+                  Assign New IP Address
+                </button>
+              ) : (
+                <button
+                  onClick={() => {
+                    // Skip IP change, just register the LiDAR with its current IP
+                    const label = `LiDAR-${currentIp?.split('.').pop()}`
+                    saveCommissionedLidar(currentIp!, label)
+                    setCommissionedLidars(prev => [...prev, {
+                      lidarId: `lidar-${currentIp?.replace(/\./g, '-')}`,
+                      assignedIp: currentIp!,
+                      label,
+                      status: 'done',
+                    }])
+                    setCurrentLidarNumber(prev => prev + 1)
+                    setStep('done')
+                  }}
+                  className="w-full py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium flex items-center justify-center gap-2"
+                >
+                  <Check className="w-4 h-4" />
+                  Register LiDAR at Current IP
+                </button>
+              )}
             </div>
           )}
 

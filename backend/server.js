@@ -346,62 +346,122 @@ app.get('/api/health', (req, res) => {
 });
 
 // Edge Simulator Control (via Tailscale)
-const EDGE_SERVER_URL = process.env.EDGE_SERVER_URL || 'http://100.78.174.103:8080';
+const DEFAULT_EDGE_SERVER_URL = process.env.EDGE_SERVER_URL || 'http://100.78.174.103:8080';
+const EDGE_PORT = 8080;
+
+// Helper: Get edge URL from request query param or use default
+function getEdgeUrl(req) {
+  const edgeIp = req.query.edgeIp || req.body?.edgeIp;
+  if (edgeIp) {
+    // Validate it looks like an IP
+    if (/^[0-9.]+$/.test(edgeIp) || /^[0-9a-f:]+$/i.test(edgeIp)) {
+      return `http://${edgeIp}:${EDGE_PORT}`;
+    }
+  }
+  return DEFAULT_EDGE_SERVER_URL;
+}
 
 app.get('/api/edge-simulator/status', async (req, res) => {
+  const edgeUrl = getEdgeUrl(req);
   try {
-    const response = await fetch(`${EDGE_SERVER_URL}/api/status`, { timeout: 5000 });
+    const response = await fetch(`${edgeUrl}/api/status`, { timeout: 5000 });
     const data = await response.json();
-    res.json({ connected: true, ...data });
+    res.json({ connected: true, edgeUrl, ...data });
   } catch (err) {
-    res.json({ connected: false, isRunning: false, error: err.message });
+    res.json({ connected: false, isRunning: false, edgeUrl, error: err.message });
   }
 });
 
 app.post('/api/edge-simulator/start', async (req, res) => {
+  const edgeUrl = getEdgeUrl(req);
   try {
-    const response = await fetch(`${EDGE_SERVER_URL}/api/start`, { method: 'POST' });
+    const response = await fetch(`${edgeUrl}/api/start`, { method: 'POST' });
     const data = await response.json();
-    console.log('🎯 Edge simulator started:', data);
-    res.json({ success: true, ...data });
+    console.log('🎯 Edge simulator started on', edgeUrl, ':', data);
+    res.json({ success: true, edgeUrl, ...data });
   } catch (err) {
     console.error('❌ Failed to start edge simulator:', err.message);
-    res.status(500).json({ success: false, error: err.message });
+    res.status(500).json({ success: false, edgeUrl, error: err.message });
   }
 });
 
 app.post('/api/edge-simulator/stop', async (req, res) => {
+  const edgeUrl = getEdgeUrl(req);
   try {
-    const response = await fetch(`${EDGE_SERVER_URL}/api/stop`, { method: 'POST' });
+    const response = await fetch(`${edgeUrl}/api/stop`, { method: 'POST' });
     const data = await response.json();
-    console.log('🛑 Edge simulator stopped:', data);
-    res.json({ success: true, ...data });
+    console.log('🛑 Edge simulator stopped on', edgeUrl, ':', data);
+    res.json({ success: true, edgeUrl, ...data });
   } catch (err) {
     console.error('❌ Failed to stop edge simulator:', err.message);
-    res.status(500).json({ success: false, error: err.message });
+    res.status(500).json({ success: false, edgeUrl, error: err.message });
   }
 });
 
 app.get('/api/edge-simulator/config', async (req, res) => {
+  const edgeUrl = getEdgeUrl(req);
   try {
-    const response = await fetch(`${EDGE_SERVER_URL}/api/config`);
+    const response = await fetch(`${edgeUrl}/api/config`);
     const data = await response.json();
-    res.json({ connected: true, ...data });
+    res.json({ connected: true, edgeUrl, ...data });
   } catch (err) {
-    res.json({ connected: false, error: err.message });
+    res.json({ connected: false, edgeUrl, error: err.message });
   }
 });
 
 app.post('/api/edge-simulator/config', async (req, res) => {
   try {
-    const response = await fetch(`${EDGE_SERVER_URL}/api/config`, {
+    // Always inject correct backendUrl and mqttBroker based on this server's Tailscale IP
+    // This prevents stale Tailscale IPs from breaking the simulator
+    const os = await import('os');
+    const nets = os.networkInterfaces();
+    let tailscaleIp = null;
+    
+    // Find Tailscale interface (utun* on macOS, tailscale* on Linux)
+    for (const [name, addrs] of Object.entries(nets)) {
+      if (name.startsWith('utun') || name.startsWith('tailscale')) {
+        for (const addr of addrs) {
+          if (addr.family === 'IPv4' && addr.address.startsWith('100.')) {
+            tailscaleIp = addr.address;
+            break;
+          }
+        }
+      }
+      if (tailscaleIp) break;
+    }
+    
+    // Fallback: search all interfaces for 100.x.x.x
+    if (!tailscaleIp) {
+      for (const addrs of Object.values(nets)) {
+        for (const addr of addrs) {
+          if (addr.family === 'IPv4' && addr.address.startsWith('100.')) {
+            tailscaleIp = addr.address;
+            break;
+          }
+        }
+        if (tailscaleIp) break;
+      }
+    }
+    
+    const serverHost = tailscaleIp || 'localhost';
+    const backendUrl = `http://${serverHost}:${PORT}`;
+    const mqttBroker = `mqtt://${serverHost}:1883`;
+    
+    const configWithUrls = {
+      ...req.body,
+      backendUrl,
+      mqttBroker,
+    };
+    
+    const edgeUrl = getEdgeUrl(req);
+    const response = await fetch(`${edgeUrl}/api/config`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(req.body),
+      body: JSON.stringify(configWithUrls),
     });
     const data = await response.json();
-    console.log('⚙️ Edge simulator config updated:', req.body);
-    res.json({ success: true, ...data });
+    console.log('⚙️ Edge simulator config updated on', edgeUrl, ':', configWithUrls);
+    res.json({ success: true, edgeUrl, ...data });
   } catch (err) {
     console.error('❌ Failed to update edge config:', err.message);
     res.status(500).json({ success: false, error: err.message });
@@ -409,30 +469,33 @@ app.post('/api/edge-simulator/config', async (req, res) => {
 });
 
 app.get('/api/edge-simulator/diagnostics', async (req, res) => {
+  const edgeUrl = getEdgeUrl(req);
   try {
-    const response = await fetch(`${EDGE_SERVER_URL}/api/diagnostics`);
+    const response = await fetch(`${edgeUrl}/api/diagnostics`);
     const data = await response.json();
-    res.json({ connected: true, ...data });
+    res.json({ connected: true, edgeUrl, ...data });
   } catch (err) {
-    res.json({ connected: false, error: err.message });
+    res.json({ connected: false, edgeUrl, error: err.message });
   }
 });
 
 app.get('/api/edge-simulator/debug/agents', async (req, res) => {
+  const edgeUrl = getEdgeUrl(req);
   try {
-    const response = await fetch(`${EDGE_SERVER_URL}/api/debug/agents`);
+    const response = await fetch(`${edgeUrl}/api/debug/agents`);
     const data = await response.json();
-    res.json({ connected: true, ...data });
+    res.json({ connected: true, edgeUrl, ...data });
   } catch (err) {
-    res.json({ connected: false, error: err.message });
+    res.json({ connected: false, edgeUrl, error: err.message });
   }
 });
 
 // Checkout Manager API proxies
 // Merges: lane status from edge simulator + queueCount from MQTT trajectories (source of truth)
 app.get('/api/edge-simulator/checkout/status', async (req, res) => {
+  const edgeUrl = getEdgeUrl(req);
   try {
-    const response = await fetch(`${EDGE_SERVER_URL}/api/checkout/status`);
+    const response = await fetch(`${edgeUrl}/api/checkout/status`);
     const data = await response.json();
     
     // Get trajectory-based queue counts (MQTT source of truth)
@@ -491,45 +554,64 @@ app.get('/api/edge-simulator/checkout/status', async (req, res) => {
 });
 
 app.post('/api/edge-simulator/checkout/set_lane_state', async (req, res) => {
+  const edgeUrl = getEdgeUrl(req);
   try {
     let { laneId, state, queueZoneId } = req.body;
-    const venueId = '1f6c779c-5f09-445f-ae4b-1ce6abc20e9f';
+    
+    // Get venueId dynamically from edge server config
+    let venueId;
+    try {
+      const cfgRes = await fetch(`${edgeUrl}/api/config`);
+      const cfg = await cfgRes.json();
+      venueId = cfg.venueId;
+    } catch (e) {
+      console.error('⚠️ Could not fetch edge config for venueId');
+    }
+    if (!venueId) {
+      return res.status(400).json({ success: false, error: 'Could not determine venueId from edge server' });
+    }
     
     // Forward to edge server
-    const response = await fetch(`${EDGE_SERVER_URL}/api/checkout/set_lane_state`, {
+    const response = await fetch(`${edgeUrl}/api/checkout/set_lane_state`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(req.body),
     });
     const data = await response.json();
-    console.log('🛒 Checkout lane state changed:', req.body);
-    
-    // Look up queueZoneId from database if not provided
-    // laneId is 1-indexed (Lane 1, Lane 2), but lane_number in DB is 0-indexed
-    if (!queueZoneId && laneId) {
-      const laneNumber = laneId - 1; // Convert to 0-indexed
-      const row = db.prepare('SELECT roi_id FROM zone_settings WHERE venue_id = ? AND lane_number = ?').get(venueId, laneNumber);
-      if (row) {
-        queueZoneId = row.roi_id;
-        console.log(`📊 Resolved laneId ${laneId} to queueZoneId ${queueZoneId.substring(0, 8)}`);
-      }
-    }
+    console.log('🛒 Checkout lane state changed:', req.body, 'venueId:', venueId);
     
     // Sync ALL lane states from edge simulator to ensure consistency
+    // Uses queueZoneId (UUID) to match zone_settings rows (lane_number may be NULL)
     try {
-      const syncResponse = await fetch(`${EDGE_SERVER_URL}/api/checkout/status`);
+      const syncResponse = await fetch(`${edgeUrl}/api/checkout/status`);
       const syncData = await syncResponse.json();
       if (syncData.lanes && Array.isArray(syncData.lanes)) {
         for (const lane of syncData.lanes) {
-          if (lane.laneId === null || lane.laneId === undefined) continue;
-          const laneNum = lane.laneId - 1;
+          const zoneId = lane.queueZoneId;
+          if (!zoneId) continue;
           const isOpenVal = (lane.status === 'OPEN' || lane.status === 'OPENING') ? 1 : 0;
-          db.prepare('UPDATE zone_settings SET is_open = ? WHERE venue_id = ? AND lane_number = ?')
-            .run(isOpenVal, venueId, laneNum);
+          // Update by queueZoneId (UUID) — the reliable identifier
+          const result = db.prepare('UPDATE zone_settings SET is_open = ? WHERE roi_id = ? AND venue_id = ?')
+            .run(isOpenVal, zoneId, venueId);
+          if (result.changes === 0) {
+            // No zone_settings row for this UUID — try matching by ROI name
+            const roi = db.prepare('SELECT id, name FROM regions_of_interest WHERE id = ?').get(zoneId);
+            if (roi) {
+              const byName = db.prepare(`
+                UPDATE zone_settings SET is_open = ? 
+                WHERE venue_id = ? AND roi_id IN (
+                  SELECT id FROM regions_of_interest WHERE venue_id = ? AND name = ?
+                )
+              `).run(isOpenVal, venueId, venueId, roi.name);
+              if (byName.changes > 0) {
+                console.log(`📊 Synced lane by name "${roi.name}" to is_open=${isOpenVal}`);
+              }
+            }
+          }
         }
         trajectoryStorage.loadOpenLanes(venueId);
         trajectoryStorage.loadZoneLinks(venueId);
-        console.log(`📊 Synced all ${syncData.lanes.length} lane states from edge simulator`);
+        console.log(`📊 Synced all ${syncData.lanes.length} lane states from edge simulator for venue ${venueId.substring(0,8)}`);
       }
     } catch (syncErr) {
       console.error('⚠️ Failed to sync lane states:', syncErr.message);
@@ -544,37 +626,50 @@ app.post('/api/edge-simulator/checkout/set_lane_state', async (req, res) => {
 
 // Sync ALL lane states from edge simulator to database
 app.post('/api/edge-simulator/checkout/sync-lane-states', async (req, res) => {
-  const venueId = '1f6c779c-5f09-445f-ae4b-1ce6abc20e9f';
+  const edgeUrl = getEdgeUrl(req);
   try {
+    // Get venueId dynamically from edge server config
+    let venueId;
+    try {
+      const cfgRes = await fetch(`${edgeUrl}/api/config`);
+      const cfg = await cfgRes.json();
+      venueId = cfg.venueId;
+    } catch (e) {
+      console.error('⚠️ Could not fetch edge config for venueId');
+    }
+    if (!venueId) {
+      return res.status(400).json({ error: 'Could not determine venueId from edge server' });
+    }
+    
     // Get lane statuses from edge simulator
-    const response = await fetch(`${EDGE_SERVER_URL}/api/checkout/status`);
+    const response = await fetch(`${edgeUrl}/api/checkout/status`);
     const data = await response.json();
     
     if (!data.lanes || !Array.isArray(data.lanes)) {
       return res.status(400).json({ error: 'No lane data from edge simulator' });
     }
     
-    // Update each lane's is_open state in database
+    // Update each lane's is_open state in database using queueZoneId (UUID)
     let synced = 0;
     for (const lane of data.lanes) {
-      if (lane.laneId === null || lane.laneId === undefined) continue;
+      const zoneId = lane.queueZoneId;
+      if (!zoneId) continue;
       
-      const laneNumber = lane.laneId - 1; // Convert 1-indexed to 0-indexed
       const isOpen = (lane.status === 'OPEN' || lane.status === 'OPENING') ? 1 : 0;
       
-      const result = db.prepare('UPDATE zone_settings SET is_open = ? WHERE venue_id = ? AND lane_number = ?')
-        .run(isOpen, venueId, laneNumber);
+      const result = db.prepare('UPDATE zone_settings SET is_open = ? WHERE roi_id = ? AND venue_id = ?')
+        .run(isOpen, zoneId, venueId);
       
       if (result.changes > 0) {
         synced++;
-        console.log(`📊 Synced lane ${lane.laneId} (lane_number=${laneNumber}) to is_open=${isOpen}`);
+        console.log(`📊 Synced lane ${lane.displayName || lane.laneId} (${zoneId.substring(0,8)}) to is_open=${isOpen}`);
       }
     }
     
     // Reload open lanes for queue tracking
     trajectoryStorage.loadOpenLanes(venueId);
     
-    res.json({ success: true, synced, message: `Synced ${synced} lanes` });
+    res.json({ success: true, synced, venueId, message: `Synced ${synced} lanes for venue ${venueId.substring(0,8)}` });
   } catch (err) {
     console.error('❌ Failed to sync lane states:', err.message);
     res.status(500).json({ success: false, error: err.message });
@@ -582,17 +677,64 @@ app.post('/api/edge-simulator/checkout/sync-lane-states', async (req, res) => {
 });
 
 app.post('/api/edge-simulator/checkout/thresholds', async (req, res) => {
+  const edgeUrl = getEdgeUrl(req);
   try {
-    const response = await fetch(`${EDGE_SERVER_URL}/api/checkout/thresholds`, {
+    const response = await fetch(`${edgeUrl}/api/checkout/thresholds`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(req.body),
     });
     const data = await response.json();
     console.log('⚙️ Checkout thresholds updated:', req.body);
-    res.json({ success: true, ...data });
+    res.json({ success: true, edgeUrl, ...data });
   } catch (err) {
     console.error('❌ Failed to update thresholds:', err.message);
+    res.status(500).json({ success: false, edgeUrl, error: err.message });
+  }
+});
+
+// ========== TRACKING STATUS API ==========
+// Get MQTT and tracking status for stream validation
+app.get('/api/tracking/venue/:venueId/status', (req, res) => {
+  const { venueId } = req.params;
+  
+  try {
+    // Get MQTT service status
+    const mqttStatus = mqttService ? mqttService.getStatus(venueId) : {
+      connected: false,
+      error: 'MQTT service not initialized',
+    };
+    
+    res.json({
+      success: true,
+      venueId,
+      mqtt: mqttStatus,
+      // Summary fields for easy validation
+      connected: mqttStatus.connected,
+      lastTrackTs: mqttStatus.venueLastTrackTs || mqttStatus.lastMessageTs,
+      tracksLast10s: mqttStatus.venueTracksLast10s || 0,
+      totalTracksReceived: mqttStatus.venueTracksReceived || 0,
+    });
+  } catch (err) {
+    console.error('❌ Failed to get tracking status:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Global MQTT status (all venues)
+app.get('/api/tracking/status', (req, res) => {
+  try {
+    const mqttStatus = mqttService ? mqttService.getStatus() : {
+      connected: false,
+      error: 'MQTT service not initialized',
+    };
+    
+    res.json({
+      success: true,
+      mqtt: mqttStatus,
+    });
+  } catch (err) {
+    console.error('❌ Failed to get tracking status:', err.message);
     res.status(500).json({ success: false, error: err.message });
   }
 });
@@ -988,9 +1130,9 @@ setImmediate(() => {
 // Start server
 httpServer.listen(PORT, async () => {
   // Auto-configure edge simulator backendUrl so SimV2 can fetch zone data
-  if (process.env.BACKEND_PUBLIC_URL && EDGE_SERVER_URL) {
+  if (process.env.BACKEND_PUBLIC_URL && DEFAULT_EDGE_SERVER_URL) {
     try {
-      const configRes = await fetch(`${EDGE_SERVER_URL}/api/config`, {
+      const configRes = await fetch(`${DEFAULT_EDGE_SERVER_URL}/api/config`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ backendUrl: process.env.BACKEND_PUBLIC_URL }),

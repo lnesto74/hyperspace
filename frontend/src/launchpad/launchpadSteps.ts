@@ -16,6 +16,7 @@ import type {
   PlaceLidarsData,
   CommissionEdgeData,
   PairDevicesData,
+  DeployHerData,
   ValidateStreamData,
   GoLiveData,
 } from './launchpadTypes'
@@ -94,11 +95,19 @@ export const STEP_METAS: StepMeta[] = [
     optional: false,
   },
   {
+    id: 'deploy_her',
+    label: 'Deploy HER',
+    description: 'Deploy algorithm provider (HER) with venue geometry and LiDAR config.',
+    icon: 'Cpu',
+    deepLinkViewMode: null,  // Inline modal, no deep-link
+    optional: false,
+  },
+  {
     id: 'validate_stream',
     label: 'Validate Stream',
-    description: 'Check MQTT connectivity and LiDAR point cloud health.',
+    description: 'Run full pipeline check: LiDAR → HER → MQTT → Backend → WebSocket.',
     icon: 'Activity',
-    deepLinkViewMode: 'edgeCommissioning',
+    deepLinkViewMode: null,  // Inline check, no deep-link
     optional: false,
   },
   {
@@ -150,8 +159,29 @@ export function canStartStep(session: LaunchPadSession, stepId: LaunchPadStepId)
       return { ok: true }
     }
 
+    case 'deploy_her': {
+      // At least 1 LiDAR must be paired — partial coverage is OK
+      const pairStep = getStep(session, 'pair_devices')
+      const pairData = pairStep?.data as PairDevicesData | null
+      if (!pairData || pairData.pairedCount === 0) {
+        return { ok: false, reason: 'Pair at least one LiDAR device first' }
+      }
+      // Edge must be online
+      const edgeStep = getStep(session, 'commission_edge')
+      const edgeData = edgeStep?.data as CommissionEdgeData | null
+      if (!edgeData?.edgeOnline) {
+        return { ok: false, reason: 'Edge device must be online' }
+      }
+      return { ok: true }
+    }
+
     case 'validate_stream': {
-      if (!isStepDone(session, 'pair_devices')) return { ok: false, reason: 'Pair all devices first' }
+      // HER must be deployed (or at least attempted)
+      const herStep = getStep(session, 'deploy_her')
+      const herData = herStep?.data as DeployHerData | null
+      if (!herData || herData.status === 'ready') {
+        return { ok: false, reason: 'Deploy HER first' }
+      }
       return { ok: true }
     }
 
@@ -223,8 +253,28 @@ export function validateStep(session: LaunchPadSession, stepId: LaunchPadStepId)
     case 'pair_devices': {
       const d = step.data as PairDevicesData
       if (d.totalPlacements === 0) return { valid: false, warnings: [], error: 'No placements found' }
-      if (!d.allPaired) return { valid: false, warnings: [`${d.unpaired.length} placement(s) still unpaired`], error: 'Not all devices paired' }
-      return { valid: true, warnings: [] }
+      // Allow partial pairing — at least 1 LiDAR is enough for HER deployment
+      if (d.pairedCount === 0) return { valid: false, warnings: [], error: 'Pair at least one LiDAR device' }
+      const warnings: string[] = []
+      if (!d.allPaired) {
+        warnings.push(`${d.unpaired.length} placement(s) still unpaired — partial coverage mode`)
+      }
+      return { valid: true, warnings }
+    }
+
+    case 'deploy_her': {
+      const d = step.data as DeployHerData
+      if (!d.edgeId) return { valid: false, warnings: [], error: 'No edge device selected' }
+      if (!d.tailscaleInstalled) return { valid: false, warnings: [], error: 'Tailscale not installed on edge' }
+      if (!d.dockerAvailable) return { valid: false, warnings: [], error: 'Docker not available on edge' }
+      if (d.status === 'error') return { valid: false, warnings: [], error: d.lastError || 'HER deployment failed' }
+      if (d.status === 'deploying') return { valid: false, warnings: [], error: 'Deployment in progress' }
+      if (d.status !== 'running') return { valid: false, warnings: [], error: 'HER not running' }
+      const warnings: string[] = []
+      if (d.pairedLidarCount < 2) {
+        warnings.push(`Only ${d.pairedLidarCount} LiDAR paired — limited coverage`)
+      }
+      return { valid: true, warnings }
     }
 
     case 'validate_stream': {
@@ -460,22 +510,82 @@ export async function checkStep(
         return { session: updated, status: 'ready', message: `${data.pairedCount}/${data.totalPlacements} paired` }
       }
 
-      case 'validate_stream': {
+      case 'deploy_her': {
         const edgeStep = getStep(updated, 'commission_edge')
         const edgeData = edgeStep?.data as CommissionEdgeData | null
+        const pairStep = getStep(updated, 'pair_devices')
+        const pairData = pairStep?.data as PairDevicesData | null
+        
         if (!edgeData?.edgeId) {
           updated = updateStepStatus(updated, stepId, 'locked')
           return { session: updated, status: 'locked', message: 'Commission edge first' }
         }
-        const data = await api.buildValidateStreamData(edgeData.edgeId)
-        if (data.overallHealthy) {
-          updated = updateStepStatus(updated, stepId, 'done', data as any)
-          return { session: updated, status: 'done', message: 'All streams healthy' }
+        if (!pairData || pairData.pairedCount === 0) {
+          updated = updateStepStatus(updated, stepId, 'locked')
+          return { session: updated, status: 'locked', message: 'Pair at least one LiDAR first' }
         }
-        const status: StepStatus = data.mqttConnected ? 'warning' : 'error'
-        updated = updateStepStatus(updated, stepId, status, data as any)
-        const msg = data.mqttConnected ? 'Some LiDARs disconnected' : 'MQTT not connected'
-        return { session: updated, status, message: msg }
+
+        // Build HER deploy data — check if HER is already running
+        // Note: Tailscale is already validated in commission_edge step
+        // Docker is installed as part of HER deployment, not a prerequisite
+        const data = await api.buildDeployHerData(edgeData.edgeId, pairData.pairedCount)
+        
+        if (data.status === 'running') {
+          updated = updateStepStatus(updated, stepId, 'done', data as any)
+          return { session: updated, status: 'done', message: `HER running (${data.providerName || 'provider'})` }
+        }
+        if (data.status === 'error' && data.lastError) {
+          // Only show error if there's an actual error message (not just missing Docker)
+          updated = updateStepStatus(updated, stepId, 'error', data as any, data.lastError)
+          return { session: updated, status: 'error', message: data.lastError }
+        }
+        
+        // Ready for deployment - edge is commissioned, LiDARs are paired
+        updated = updateStepStatus(updated, stepId, 'ready', data as any)
+        return { session: updated, status: 'ready', message: 'Ready to deploy HER' }
+      }
+
+      case 'validate_stream': {
+        const herStep = getStep(updated, 'deploy_her')
+        const herData = herStep?.data as DeployHerData | null
+        const edgeStep = getStep(updated, 'commission_edge')
+        const edgeData = edgeStep?.data as CommissionEdgeData | null
+        
+        if (!herData || herData.status !== 'running') {
+          updated = updateStepStatus(updated, stepId, 'locked')
+          return { session: updated, status: 'locked', message: 'Deploy HER first' }
+        }
+        if (!edgeData?.edgeId) {
+          updated = updateStepStatus(updated, stepId, 'locked')
+          return { session: updated, status: 'locked', message: 'Commission edge first' }
+        }
+
+        // Run multi-stage validation pipeline
+        const data = await api.buildValidateStreamData(edgeData.edgeId, updated.venueId || undefined)
+        
+        if (data.overallHealthy && data.stage === 'complete') {
+          updated = updateStepStatus(updated, stepId, 'done', data as any)
+          return { session: updated, status: 'done', message: 'All checks passed ✓' }
+        }
+        
+        // Partial success — some checks passed
+        const passedCount = data.checks.filter(c => c.status === 'pass').length
+        const failedChecks = data.checks.filter(c => c.status === 'fail')
+        
+        if (failedChecks.length > 0) {
+          const firstFail = failedChecks[0]
+          updated = updateStepStatus(updated, stepId, 'error', data as any, `${firstFail.id}: ${firstFail.detail}`)
+          return { session: updated, status: 'error', message: `${firstFail.id}: ${firstFail.detail}` }
+        }
+        
+        // Still running or partial
+        if (passedCount > 0 && passedCount < data.checks.length) {
+          updated = updateStepStatus(updated, stepId, 'warning', data as any)
+          return { session: updated, status: 'warning', message: `${passedCount}/${data.checks.length} checks passed` }
+        }
+        
+        updated = updateStepStatus(updated, stepId, 'ready', data as any)
+        return { session: updated, status: 'ready', message: 'Run stream validation' }
       }
 
       case 'go_live': {

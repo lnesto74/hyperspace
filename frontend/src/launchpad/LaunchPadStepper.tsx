@@ -7,8 +7,8 @@
  */
 
 import {
-  FileUp, Boxes, SquareDashedBottom, Radar, Server, Link, Activity, Rocket,
-  Check, AlertTriangle, Loader2, X, ExternalLink, FileText, ChevronRight, Sparkles, Pencil, Zap, MousePointerClick,
+  FileUp, Boxes, SquareDashedBottom, Radar, Server, Link, Activity, Rocket, Cpu,
+  Check, AlertTriangle, Loader2, X, ExternalLink, FileText, ChevronRight, Sparkles, Pencil, Zap, MousePointerClick, Play, Square, RefreshCw,
 } from 'lucide-react'
 import type { LaunchPadStep, LaunchPadStepId, StepStatus } from './launchpadTypes'
 import type { AutoPlaceSettings } from './launchpadApi'
@@ -16,7 +16,7 @@ import MiniDwgViewport from './MiniDwgViewport'
 import type { MiniFixture, MiniClassification, MiniRoi, MiniLidar } from './MiniDwgViewport'
 
 const ICON_MAP: Record<string, React.FC<{ className?: string }>> = {
-  FileUp, Boxes, SquareDashedBottom, Radar, Server, Link, Activity, Rocket,
+  FileUp, Boxes, SquareDashedBottom, Radar, Server, Link, Activity, Rocket, Cpu,
 }
 
 export interface DwgImportItem {
@@ -79,6 +79,20 @@ interface LaunchPadStepperProps {
   dwgLayoutId?: string
   /** DXF unit → meters scale */
   unitScaleToM?: number
+  /** HER deployment callbacks */
+  onDeployHer?: () => void
+  onStopHer?: () => void
+  herDeploying?: boolean
+  /** Available algorithm providers */
+  algorithmProviders?: Array<{ id: string; name: string; version: string; description?: string }>
+  selectedProviderId?: string
+  onSelectProvider?: (providerId: string) => void
+  /** Stream validation callback */
+  onRunValidation?: () => void
+  validating?: boolean
+  /** MQTT broker URL for HER deployment */
+  mqttBrokerUrl?: string
+  onMqttBrokerUrlChange?: (url: string) => void
 }
 
 /* ─── style helpers ─── */
@@ -159,6 +173,9 @@ export default function LaunchPadStepper({
   autoPlaceSettings, onAutoPlaceSettingsChange, lidarModels,
   onLidarUpdate, onLidarAdd, onLidarDelete, onOpen3DPreview,
   dwgLayoutId, unitScaleToM,
+  onDeployHer, onStopHer, herDeploying, algorithmProviders, selectedProviderId, onSelectProvider,
+  onRunValidation, validating,
+  mqttBrokerUrl, onMqttBrokerUrlChange,
 }: LaunchPadStepperProps) {
   return (
     <div className="grid pr-3" style={{ gridTemplateColumns: '40px 1fr' }}>
@@ -237,6 +254,16 @@ export default function LaunchPadStepper({
                     onOpen3DPreview={onOpen3DPreview}
                     dwgLayoutId={dwgLayoutId}
                     unitScaleToM={unitScaleToM}
+                    onDeployHer={onDeployHer}
+                    onStopHer={onStopHer}
+                    herDeploying={herDeploying}
+                    algorithmProviders={algorithmProviders}
+                    selectedProviderId={selectedProviderId}
+                    onSelectProvider={onSelectProvider}
+                    onRunValidation={onRunValidation}
+                    validating={validating}
+                    mqttBrokerUrl={mqttBrokerUrl}
+                    onMqttBrokerUrlChange={onMqttBrokerUrlChange}
                   />
                 </div>
               )}
@@ -269,7 +296,7 @@ const FIXTURE_TYPE_LABELS: Record<string, string> = {
 
 /* ─── expanded detail card ─── */
 
-function StepDetailCard({ step, onRun, onOpen, availableImports, onSelectImport, geometry, onAiEnhance, aiEnhancing, aiEnhanced, onDrawRois, onAutoPlace, autoPlacing, onClassifyByExample, autoPlaceSettings, onAutoPlaceSettingsChange, lidarModels, onLidarUpdate, onLidarAdd, onLidarDelete, onOpen3DPreview, dwgLayoutId, unitScaleToM }: {
+function StepDetailCard({ step, onRun, onOpen, availableImports, onSelectImport, geometry, onAiEnhance, aiEnhancing, aiEnhanced, onDrawRois, onAutoPlace, autoPlacing, onClassifyByExample, autoPlaceSettings, onAutoPlaceSettingsChange, lidarModels, onLidarUpdate, onLidarAdd, onLidarDelete, onOpen3DPreview, dwgLayoutId, unitScaleToM, onDeployHer, onStopHer, herDeploying, algorithmProviders, selectedProviderId, onSelectProvider, onRunValidation, validating, mqttBrokerUrl, onMqttBrokerUrlChange }: {
   step: LaunchPadStep
   onRun: () => void
   onOpen: () => void
@@ -292,6 +319,19 @@ function StepDetailCard({ step, onRun, onOpen, availableImports, onSelectImport,
   onOpen3DPreview?: () => void
   dwgLayoutId?: string
   unitScaleToM?: number
+  // HER deployment props
+  onDeployHer?: () => void
+  onStopHer?: () => void
+  herDeploying?: boolean
+  algorithmProviders?: Array<{ id: string; name: string; version: string; description?: string }>
+  selectedProviderId?: string
+  onSelectProvider?: (providerId: string) => void
+  // Validation props
+  onRunValidation?: () => void
+  validating?: boolean
+  // MQTT broker props
+  mqttBrokerUrl?: string
+  onMqttBrokerUrlChange?: (url: string) => void
 }) {
   return (
     <div className="space-y-2.5">
@@ -332,6 +372,16 @@ function StepDetailCard({ step, onRun, onOpen, availableImports, onSelectImport,
         lidarModels={lidarModels}
         dwgLayoutId={dwgLayoutId}
         unitScaleToM={unitScaleToM}
+        onDeployHer={onDeployHer}
+        onStopHer={onStopHer}
+        herDeploying={herDeploying}
+        algorithmProviders={algorithmProviders}
+        selectedProviderId={selectedProviderId}
+        onSelectProvider={onSelectProvider}
+        onRunValidation={onRunValidation}
+        validating={validating}
+        mqttBrokerUrl={mqttBrokerUrl}
+        onMqttBrokerUrlChange={onMqttBrokerUrlChange}
       />
 
       <div className="flex gap-2 pt-0.5">
@@ -356,7 +406,7 @@ function StepDetailCard({ step, onRun, onOpen, availableImports, onSelectImport,
 
 // ─── Step Data Display (Rich Inline Content) ────────────────────
 
-function StepDataDisplay({ step, availableImports, onSelectImport, geometry, onAiEnhance, aiEnhancing, aiEnhanced, onDrawRois, onAutoPlace, autoPlacing, onClassifyByExample, autoPlaceSettings, onAutoPlaceSettingsChange, lidarModels, onLidarUpdate, onLidarAdd, onLidarDelete, onOpen3DPreview, dwgLayoutId, unitScaleToM }: {
+function StepDataDisplay({ step, availableImports, onSelectImport, geometry, onAiEnhance, aiEnhancing, aiEnhanced, onDrawRois, onAutoPlace, autoPlacing, onClassifyByExample, autoPlaceSettings, onAutoPlaceSettingsChange, lidarModels, onLidarUpdate, onLidarAdd, onLidarDelete, onOpen3DPreview, dwgLayoutId, unitScaleToM, onDeployHer, onStopHer, herDeploying, algorithmProviders, selectedProviderId, onSelectProvider, onRunValidation, validating, mqttBrokerUrl, onMqttBrokerUrlChange }: {
   step: LaunchPadStep
   availableImports?: DwgImportItem[]
   onSelectImport?: (importId: string) => void
@@ -377,6 +427,19 @@ function StepDataDisplay({ step, availableImports, onSelectImport, geometry, onA
   onOpen3DPreview?: () => void
   dwgLayoutId?: string
   unitScaleToM?: number
+  // HER deployment props
+  onDeployHer?: () => void
+  onStopHer?: () => void
+  herDeploying?: boolean
+  algorithmProviders?: Array<{ id: string; name: string; version: string; description?: string }>
+  selectedProviderId?: string
+  onSelectProvider?: (providerId: string) => void
+  // Validation props
+  onRunValidation?: () => void
+  validating?: boolean
+  // MQTT broker props
+  mqttBrokerUrl?: string
+  onMqttBrokerUrlChange?: (url: string) => void
 }) {
   if (!step.data && step.id !== 'select_dwg' && step.id !== 'define_rois' && step.id !== 'place_lidars' && step.id !== 'map_fixtures') return null
   const data = step.data as unknown as Record<string, unknown>
@@ -848,21 +911,260 @@ function StepDataDisplay({ step, availableImports, onSelectImport, geometry, onA
       )
     }
 
-    case 'validate_stream': {
-      const d = data as { mqttConnected?: boolean; lidarStatuses?: Array<{ connected: boolean; lidarId?: string }> }
-      if (!d) return null
+    case 'deploy_her': {
+      const d = data as {
+        status?: 'ready' | 'deploying' | 'running' | 'stopped' | 'error'
+        providerName?: string
+        pairedLidarCount?: number
+        tailscaleInstalled?: boolean
+        dockerAvailable?: boolean
+        deployedAt?: string
+        lastError?: string
+        containerStatus?: string
+      } | null
+      
+      // Props are passed through component chain (no longer using __stepperProps)
       return (
-        <div className={`${s} space-y-1`}>
-          <div className="flex items-center gap-1.5">
-            <span className={`w-1.5 h-1.5 rounded-full ${d.mqttConnected ? 'bg-green-400' : 'bg-red-400'}`} />
-            <span className={d.mqttConnected ? 'text-green-400' : 'text-red-400'}>MQTT {d.mqttConnected ? 'connected' : 'disconnected'}</span>
-          </div>
-          {d.lidarStatuses?.map((l, i) => (
-            <div key={i} className="flex items-center gap-1.5 ml-1">
-              <span className={`w-1 h-1 rounded-full ${l.connected ? 'bg-green-400' : 'bg-red-400'}`} />
-              <span className="text-gray-500">{l.lidarId || `LiDAR ${i + 1}`}</span>
+        <div className="space-y-2">
+          {/* Status summary - edge is already validated in commission_edge */}
+          <div className="space-y-1">
+            <div className="flex items-center gap-1.5">
+              <span className="w-1.5 h-1.5 rounded-full bg-green-400" />
+              <span className={`${s} text-green-400`}>Edge commissioned</span>
             </div>
-          ))}
+            <div className="flex items-center gap-1.5">
+              <span className={`w-1.5 h-1.5 rounded-full ${(d?.pairedLidarCount || 0) > 0 ? 'bg-green-400' : 'bg-amber-400'}`} />
+              <span className={`${s} text-gray-400`}>
+                {d?.pairedLidarCount || 0} LiDAR{(d?.pairedLidarCount || 0) !== 1 ? 's' : ''} paired
+                {(d?.pairedLidarCount || 0) === 1 && <span className="text-amber-400 ml-1">(partial coverage)</span>}
+              </span>
+            </div>
+          </div>
+
+          {/* Provider selector - show when can deploy/redeploy */}
+          {algorithmProviders && algorithmProviders.length > 0 && (!d?.status || d?.status === 'ready' || d?.status === 'error' || d?.status === 'stopped') && (
+            <div>
+              <label className="text-[10px] text-gray-500 mb-0.5 block">Algorithm Provider</label>
+              <select
+                value={selectedProviderId || ''}
+                onChange={(e) => onSelectProvider?.(e.target.value)}
+                onClick={(e) => e.stopPropagation()}
+                className="w-full h-7 text-[11px] bg-gray-800 border border-gray-700 rounded text-white px-2"
+              >
+                {algorithmProviders.map((p: { id: string; name: string; version: string }) => (
+                  <option key={p.id} value={p.id}>{p.name} v{p.version}</option>
+                ))}
+              </select>
+            </div>
+          )}
+
+          {/* MQTT Broker URL - show when can deploy/redeploy */}
+          {(!d?.status || d?.status === 'ready' || d?.status === 'error' || d?.status === 'stopped') && (
+            <div>
+              <label className="text-[10px] text-gray-500 mb-0.5 block">MQTT Broker (Main Server)</label>
+              <input
+                type="text"
+                value={mqttBrokerUrl || ''}
+                onChange={(e) => onMqttBrokerUrlChange?.(e.target.value)}
+                onClick={(e) => e.stopPropagation()}
+                placeholder="mqtt://100.x.x.x:1883"
+                className="w-full h-7 text-[11px] bg-gray-800 border border-gray-700 rounded text-white px-2 placeholder:text-gray-600"
+              />
+              <div className="text-[9px] text-gray-500 mt-0.5">Auto-detected from Tailscale</div>
+            </div>
+          )}
+
+          {/* Status display */}
+          {d?.status === 'running' && (
+            <div className="flex items-center gap-2 bg-green-500/10 border border-green-500/20 rounded-md px-2.5 py-2">
+              <span className="w-2 h-2 bg-green-400 rounded-full animate-pulse" />
+              <div className="flex-1">
+                <div className="text-[12px] font-medium text-green-300">{d.providerName || 'HER'} Running</div>
+                {d.deployedAt && (
+                  <div className="text-[10px] text-green-400/60">
+                    Since {new Date(d.deployedAt).toLocaleTimeString()}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {d?.status === 'deploying' && (
+            <div className="flex items-center gap-2 bg-blue-500/10 border border-blue-500/20 rounded-md px-2.5 py-2">
+              <Loader2 className="w-4 h-4 text-blue-400 animate-spin" />
+              <span className="text-[11px] text-blue-300">Deploying... {d.containerStatus}</span>
+            </div>
+          )}
+
+          {d?.status === 'error' && d.lastError && (
+            <div className="flex items-start gap-2 bg-red-500/10 border border-red-500/20 rounded-md px-2.5 py-1.5">
+              <X className="w-3 h-3 text-red-400 mt-0.5 shrink-0" />
+              <span className="text-[11px] text-red-300">{d.lastError}</span>
+            </div>
+          )}
+
+          {/* Deployment logs */}
+          {(d as any)?.deploymentLogs && (d as any).deploymentLogs.length > 0 && (
+            <div className="bg-gray-900/80 border border-gray-700/50 rounded-md p-2 font-mono text-[9px] max-h-32 overflow-y-auto">
+              {(d as any).deploymentLogs.map((log: string, i: number) => (
+                <div 
+                  key={i} 
+                  className={`leading-relaxed ${
+                    log.startsWith('✅') ? 'text-green-400' : 
+                    log.startsWith('❌') ? 'text-red-400' : 
+                    'text-gray-400'
+                  }`}
+                >
+                  {log}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Action buttons - show when can deploy/redeploy */}
+          {(!d?.status || d?.status === 'ready' || d?.status === 'error' || d?.status === 'stopped') && onDeployHer && (
+            <button
+              onClick={(e) => { e.stopPropagation(); onDeployHer() }}
+              disabled={herDeploying}
+              className="w-full h-8 flex items-center justify-center gap-1.5 bg-emerald-500/15 border border-emerald-500/30 rounded-lg text-emerald-400 hover:bg-emerald-500/25 disabled:opacity-50 disabled:cursor-not-allowed transition-colors text-[11px] font-medium"
+            >
+              {herDeploying ? (
+                <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Deploying...</>
+              ) : (
+                <><Play className="w-3.5 h-3.5" /> {d?.status === 'error' ? 'Retry Deploy' : 'Deploy HER'}</>
+              )}
+            </button>
+          )}
+
+          {d?.status === 'running' && onStopHer && (
+            <button
+              onClick={(e) => { e.stopPropagation(); onStopHer() }}
+              className="w-full h-7 flex items-center justify-center gap-1.5 bg-red-500/10 border border-red-500/20 rounded-lg text-red-400 hover:bg-red-500/20 transition-colors text-[11px] font-medium"
+            >
+              <Square className="w-3 h-3" /> Stop HER
+            </button>
+          )}
+        </div>
+      )
+    }
+
+    case 'validate_stream': {
+      const d = data as {
+        stage?: string
+        checks?: Array<{ id: string; status: string; detail: string }>
+        mqttConnected?: boolean
+        lidarStatuses?: Array<{ connected: boolean; lidarId?: string; ip?: string }>
+        overallHealthy?: boolean
+        trackCount?: number
+        validationLogs?: string[]
+      } | null
+      
+      // Props are passed through component chain (no longer using __stepperProps)
+      const checkStatusIcon = (status: string) => {
+        switch (status) {
+          case 'pass': return <Check className="w-3 h-3 text-green-400" />
+          case 'fail': return <X className="w-3 h-3 text-red-400" />
+          case 'running': return <Loader2 className="w-3 h-3 text-blue-400 animate-spin" />
+          case 'skipped': return <span className="w-3 h-3 text-gray-500">–</span>
+          default: return <span className="w-3 h-3 text-gray-600">○</span>
+        }
+      }
+      
+      const checkStatusColor = (status: string) => {
+        switch (status) {
+          case 'pass': return 'text-green-400'
+          case 'fail': return 'text-red-400'
+          case 'running': return 'text-blue-400'
+          case 'skipped': return 'text-gray-500'
+          default: return 'text-gray-600'
+        }
+      }
+
+      return (
+        <div className="space-y-2">
+          {/* Check pipeline */}
+          {d?.checks && d.checks.length > 0 ? (
+            <div className="space-y-1 bg-gray-800/50 rounded-lg p-2">
+              {d.checks.map((check) => (
+                <div key={check.id} className="flex items-center gap-2">
+                  {checkStatusIcon(check.status)}
+                  <div className="flex-1 min-w-0">
+                    <span className={`text-[10px] font-medium ${checkStatusColor(check.status)}`}>
+                      {check.id.replace('_', ' ')}
+                    </span>
+                    <span className="text-[9px] text-gray-500 ml-1.5 truncate">{check.detail}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="space-y-1">
+              <div className="flex items-center gap-1.5">
+                <span className={`w-1.5 h-1.5 rounded-full ${d?.mqttConnected ? 'bg-green-400' : 'bg-red-400'}`} />
+                <span className={`${s} ${d?.mqttConnected ? 'text-green-400' : 'text-red-400'}`}>
+                  MQTT {d?.mqttConnected ? 'connected' : 'disconnected'}
+                </span>
+              </div>
+              {d?.lidarStatuses?.map((l, i) => (
+                <div key={i} className="flex items-center gap-1.5 ml-1">
+                  <span className={`w-1 h-1 rounded-full ${l.connected ? 'bg-green-400' : 'bg-red-400'}`} />
+                  <span className="text-gray-500 text-[10px]">{l.lidarId || `LiDAR ${i + 1}`}</span>
+                  {l.ip && <span className="text-gray-600 text-[9px]">{l.ip}</span>}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Validation logs */}
+          {d?.validationLogs && d.validationLogs.length > 0 && (
+            <div className="bg-gray-900/80 border border-gray-700/50 rounded-md p-2 font-mono text-[9px] max-h-40 overflow-y-auto">
+              {d.validationLogs.map((log, i) => (
+                <div 
+                  key={i} 
+                  className={`leading-relaxed ${
+                    log.startsWith('✅') || log.includes('passed') ? 'text-green-400' : 
+                    log.startsWith('❌') || log.includes('failed') ? 'text-red-400' : 
+                    log.startsWith('⏭️') || log.includes('skipping') ? 'text-gray-500' :
+                    log.startsWith('🎉') ? 'text-emerald-400 font-medium' :
+                    log.startsWith('⚠️') ? 'text-amber-400' :
+                    log.startsWith('Step') ? 'text-blue-400' :
+                    'text-gray-400'
+                  }`}
+                >
+                  {log}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Overall status */}
+          {d?.stage === 'complete' && d?.overallHealthy && (
+            <div className="flex items-center gap-2 bg-green-500/10 border border-green-500/20 rounded-md px-2.5 py-2">
+              <Check className="w-4 h-4 text-green-400" />
+              <span className="text-[11px] text-green-300 font-medium">All checks passed — ready for live tracking</span>
+            </div>
+          )}
+
+          {d?.trackCount !== undefined && d.trackCount > 0 && (
+            <div className="text-[10px] text-cyan-400">
+              {d.trackCount} tracks received
+            </div>
+          )}
+
+          {/* Run validation button */}
+          {onRunValidation && (
+            <button
+              onClick={(e) => { e.stopPropagation(); onRunValidation() }}
+              disabled={validating}
+              className="w-full h-8 flex items-center justify-center gap-1.5 bg-cyan-500/15 border border-cyan-500/30 rounded-lg text-cyan-400 hover:bg-cyan-500/25 disabled:opacity-50 disabled:cursor-wait transition-colors text-[11px] font-medium"
+            >
+              {validating ? (
+                <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Validating...</>
+              ) : (
+                <><RefreshCw className="w-3.5 h-3.5" /> Run Validation</>
+              )}
+            </button>
+          )}
         </div>
       )
     }

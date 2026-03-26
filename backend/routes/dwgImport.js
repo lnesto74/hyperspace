@@ -708,20 +708,57 @@ export default function createDwgImportRoutes(db) {
    */
   router.get('/imports', (req, res) => {
     try {
+      // Get all imports
       const imports = db.prepare(`
-        SELECT id, venue_id, filename, units, status, created_at 
-        FROM dwg_imports 
-        ORDER BY created_at DESC
+        SELECT 
+          di.id, di.venue_id, di.filename, di.units, di.status, di.created_at
+        FROM dwg_imports di
+        ORDER BY di.created_at DESC
       `).all();
       
-      res.json(imports.map(imp => ({
-        import_id: imp.id,
-        venue_id: imp.venue_id,
-        filename: imp.filename,
-        units: imp.units,
-        status: imp.status,
-        created_at: imp.created_at
-      })));
+      // Get all layouts with linked venue names
+      const layouts = db.prepare(`
+        SELECT 
+          lv.id, lv.import_id, lv.name, lv.is_active, lv.created_at,
+          v.id as venue_id, v.name as venue_name
+        FROM dwg_layout_versions lv
+        LEFT JOIN venues v ON v.dwg_layout_version_id = lv.id
+        ORDER BY lv.created_at DESC
+      `).all();
+      
+      // Group layouts by import_id
+      const layoutsByImport = {};
+      for (const lv of layouts) {
+        if (!layoutsByImport[lv.import_id]) {
+          layoutsByImport[lv.import_id] = [];
+        }
+        layoutsByImport[lv.import_id].push({
+          id: lv.id,
+          name: lv.name,
+          venue_name: lv.venue_name || null,
+          display_name: lv.venue_name || lv.name,
+          is_active: !!lv.is_active,
+          created_at: lv.created_at
+        });
+      }
+      
+      res.json(imports.map(imp => {
+        const impLayouts = layoutsByImport[imp.id] || [];
+        const activeLayout = impLayouts.find(l => l.is_active) || impLayouts[0] || null;
+        return {
+          import_id: imp.id,
+          venue_id: imp.venue_id,
+          filename: imp.filename,
+          units: imp.units,
+          status: imp.status,
+          created_at: imp.created_at,
+          layout_count: impLayouts.length,
+          layouts: impLayouts,
+          latest_layout_id: activeLayout?.id || null,
+          latest_layout_name: activeLayout?.display_name || null,
+          latest_layout_date: activeLayout?.created_at || null
+        };
+      }));
       
     } catch (err) {
       console.error('List imports error:', err);
@@ -997,6 +1034,30 @@ export default function createDwgImportRoutes(db) {
   });
   
   /**
+   * PATCH /api/dwg/layout/:layout_version_id - Rename a layout
+   */
+  router.patch('/layout/:layout_version_id', (req, res) => {
+    try {
+      const { name } = req.body;
+      if (!name || typeof name !== 'string') {
+        return res.status(400).json({ error: 'name is required' });
+      }
+      
+      const layout = db.prepare('SELECT id FROM dwg_layout_versions WHERE id = ?').get(req.params.layout_version_id);
+      if (!layout) {
+        return res.status(404).json({ error: 'Layout not found' });
+      }
+      
+      db.prepare('UPDATE dwg_layout_versions SET name = ? WHERE id = ?').run(name.trim(), req.params.layout_version_id);
+      
+      res.json({ success: true, name: name.trim() });
+    } catch (err) {
+      console.error('Rename layout error:', err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+  
+  /**
    * PATCH /api/dwg/layout/:layout_version_id/view - Save camera view / LiDAR ROI to DB
    */
   router.patch('/layout/:layout_version_id/view', (req, res) => {
@@ -1156,7 +1217,8 @@ export default function createDwgImportRoutes(db) {
         layout_version_id: l.id,
         import_id: l.import_id,
         venue_id: l.venue_id,
-        name: l.import_filename || l.name,
+        name: l.name,
+        dwg_filename: l.import_filename || null,
         is_active: !!l.is_active,
         created_at: l.created_at
       })));
@@ -1299,6 +1361,7 @@ export default function createDwgImportRoutes(db) {
       // Build catalog from existing object types + custom models
       const catalog = [
         { id: 'shelf', name: 'Shelf', type: 'shelf', hasCustomModel: false },
+        { id: 'fridge', name: 'Fridge', type: 'fridge', hasCustomModel: false },
         { id: 'wall', name: 'Wall', type: 'wall', hasCustomModel: false },
         { id: 'checkout', name: 'Checkout', type: 'checkout', hasCustomModel: false },
         { id: 'entrance', name: 'Entrance', type: 'entrance', hasCustomModel: false },
@@ -1563,13 +1626,28 @@ export default function createDwgImportRoutes(db) {
         } catch (e) { roiVertices = null; }
       }
       
+      // DEBUG: Log ROI source for debugging LaunchPad issues
+      if (roiVertices) {
+        const xs = roiVertices.map(v => v.x);
+        const zs = roiVertices.map(v => v.z);
+        console.log(`[DWG Bootstrap] ✓ lidar_roi_json found: ${roiVertices.length} vertices, bounds X[${Math.min(...xs).toFixed(1)}, ${Math.max(...xs).toFixed(1)}] Z[${Math.min(...zs).toFixed(1)}, ${Math.max(...zs).toFixed(1)}] METERS`);
+      } else {
+        console.log(`[DWG Bootstrap] ✗ lidar_roi_json is NULL — will fall back to fixture bounds for venue sizing`);
+      }
+      
       // Also fetch ROI in DXF units from regions_of_interest (for spatial filtering)
       let roiDxfVertices = null;
       try {
         const roiRow = db.prepare('SELECT vertices FROM regions_of_interest WHERE dwg_layout_id = ? LIMIT 1').get(layoutVersionId);
         if (roiRow?.vertices) {
           const parsed = typeof roiRow.vertices === 'string' ? JSON.parse(roiRow.vertices) : roiRow.vertices;
-          if (Array.isArray(parsed) && parsed.length >= 3) roiDxfVertices = parsed;
+          if (Array.isArray(parsed) && parsed.length >= 3) {
+            roiDxfVertices = parsed;
+            // DEBUG: Log DXF ROI bounds
+            const xs = roiDxfVertices.map(v => v.x);
+            const zs = roiDxfVertices.map(v => v.z || v.y || 0);
+            console.log(`[DWG Bootstrap] ✓ regions_of_interest found: ${roiDxfVertices.length} vertices, bounds X[${Math.min(...xs).toFixed(0)}, ${Math.max(...xs).toFixed(0)}] Z[${Math.min(...zs).toFixed(0)}, ${Math.max(...zs).toFixed(0)}] DXF UNITS`);
+          }
         }
       } catch (e) { /* ignore */ }
       

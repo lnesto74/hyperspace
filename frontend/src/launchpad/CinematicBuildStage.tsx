@@ -317,10 +317,11 @@ export default function CinematicBuildStage({ geometry, layoutVersionId }: Cinem
       let roiMinX = Infinity, roiMinY = Infinity, roiMaxX = -Infinity, roiMaxY = -Infinity
       rois.forEach(roi => {
         roi.vertices.forEach(v => {
-          roiMinX = Math.min(roiMinX, v.x)
-          roiMinY = Math.min(roiMinY, v.y)
-          roiMaxX = Math.max(roiMaxX, v.x)
-          roiMaxY = Math.max(roiMaxY, v.y)
+          const vAny = v as { x: number; y?: number; z?: number }
+          roiMinX = Math.min(roiMinX, vAny.x)
+          roiMinY = Math.min(roiMinY, vAny.z ?? vAny.y ?? 0)  // ROI vertices may use {x, z} or {x, y}
+          roiMaxX = Math.max(roiMaxX, vAny.x)
+          roiMaxY = Math.max(roiMaxY, vAny.z ?? vAny.y ?? 0)
         })
       })
       if (isFinite(roiMinX)) {
@@ -628,7 +629,8 @@ export default function CinematicBuildStage({ geometry, layoutVersionId }: Cinem
 
       // Outline only (no filled shape — matches 3D preview)
       const outlinePoints = roi.vertices.map(v => {
-        const [sx, sz] = toScene(v.x, v.y, centerX, centerZ, effectiveScale)
+        const vAny = v as { x: number; y?: number; z?: number }
+        const [sx, sz] = toScene(vAny.x, vAny.z ?? vAny.y ?? 0, centerX, centerZ, effectiveScale)
         return new THREE.Vector3(sx, 0.1, sz)
       })
       outlinePoints.push(outlinePoints[0].clone())

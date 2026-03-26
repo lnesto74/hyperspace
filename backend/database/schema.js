@@ -394,13 +394,16 @@ export function initDatabase() {
       vendor TEXT DEFAULT 'RoboSense',
       model TEXT,
       mac_address TEXT,
+      msop_port INTEGER DEFAULT 6699,
+      difop_port INTEGER DEFAULT 7788,
       commissioned_at TEXT NOT NULL DEFAULT (datetime('now')),
       last_seen_at TEXT,
       status TEXT NOT NULL DEFAULT 'active',
       FOREIGN KEY (venue_id) REFERENCES venues(id) ON DELETE CASCADE,
       UNIQUE(venue_id, assigned_ip)
     );
-
+    
+    
     CREATE INDEX IF NOT EXISTS idx_commissioned_lidars_venue_id ON commissioned_lidars(venue_id);
     CREATE INDEX IF NOT EXISTS idx_commissioned_lidars_edge_id ON commissioned_lidars(edge_id);
 
@@ -921,6 +924,23 @@ export function initDatabase() {
     if (deployHistoryColumnNames.length > 0 && !deployHistoryColumnNames.includes('her_response_json')) {
       db.exec("ALTER TABLE edge_deploy_history ADD COLUMN her_response_json TEXT DEFAULT NULL");
       console.log('📦 Migration: Added her_response_json column to edge_deploy_history');
+    }
+  } catch (migrationErr) {
+    // Table may not exist yet, that's fine
+  }
+
+  // Migration: Add msop_port and difop_port columns to commissioned_lidars
+  try {
+    const commissionedLidarColumns = db.prepare("PRAGMA table_info(commissioned_lidars)").all();
+    const commissionedLidarColumnNames = commissionedLidarColumns.map(c => c.name);
+    
+    if (commissionedLidarColumnNames.length > 0 && !commissionedLidarColumnNames.includes('msop_port')) {
+      db.exec("ALTER TABLE commissioned_lidars ADD COLUMN msop_port INTEGER DEFAULT 6699");
+      console.log('📦 Migration: Added msop_port column to commissioned_lidars');
+    }
+    if (commissionedLidarColumnNames.length > 0 && !commissionedLidarColumnNames.includes('difop_port')) {
+      db.exec("ALTER TABLE commissioned_lidars ADD COLUMN difop_port INTEGER DEFAULT 7788");
+      console.log('📦 Migration: Added difop_port column to commissioned_lidars');
     }
   } catch (migrationErr) {
     // Table may not exist yet, that's fine

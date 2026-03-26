@@ -113,15 +113,24 @@ function parseDifopPacket(buffer, sourceIp) {
 /**
  * Set LiDAR IP via HTTP POST to Parameter_Setting.html
  * Uses minimal form data that works (tested with curl)
+ * @param {string} currentIp - Current LiDAR IP
+ * @param {string} newIp - New LiDAR IP to set
+ * @param {string} newDestIp - Destination IP for point cloud data
+ * @param {object} options - Optional port configuration
+ * @param {number} options.msopPort - MSOP port (default 6699)
+ * @param {number} options.difopPort - DIFOP port (default 7788)
  */
-export async function setLidarIpViaHttp(currentIp, newIp, newDestIp = '192.168.1.102') {
-  console.log(`[RoboSense] Attempting HTTP config: ${currentIp} -> ${newIp}`);
+export async function setLidarIpViaHttp(currentIp, newIp, newDestIp = '192.168.1.102', portConfig = {}) {
+  const msopPort = portConfig.msopPort || 6699;
+  const difopPort = portConfig.difopPort || 7788;
   
-  // Use minimal form data that we know works from curl testing
-  const formBody = `SrcIp=${newIp}&SrcMask=255.255.255.0&SrcGateWay=192.168.1.1&DstIp=${newDestIp}&MPort=6699&DPort=7788&save_param=Save`;
+  console.log(`[RoboSense] Attempting HTTP config: ${currentIp} -> ${newIp} (MSOP:${msopPort}, DIFOP:${difopPort})`);
+  
+  // Use form data with configurable ports
+  const formBody = `SrcIp=${newIp}&SrcMask=255.255.255.0&SrcGateWay=192.168.1.1&DstIp=${newDestIp}&MPort=${msopPort}&DPort=${difopPort}&save_param=Save`;
   
   return new Promise((resolve) => {
-    const options = {
+    const httpOptions = {
       hostname: currentIp,
       port: 80,
       path: '/Parameter_Setting.html',
@@ -135,7 +144,7 @@ export async function setLidarIpViaHttp(currentIp, newIp, newDestIp = '192.168.1
     
     console.log(`[RoboSense] Sending POST to ${currentIp}...`);
     
-    const req = http.request(options, (res) => {
+    const req = http.request(httpOptions, (res) => {
       console.log(`[RoboSense] Response status: ${res.statusCode}`);
       
       let data = '';

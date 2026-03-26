@@ -36,9 +36,23 @@ export function LidarProvider({ children }: { children: ReactNode }) {
   const { addToast } = useToast()
   const { venue, snapToGrid } = useVenue()
   const [devices, setDevices] = useState<LidarDevice[]>([])
-  const [placements, setPlacements] = useState<LidarPlacement[]>([])
+  const [placements, setPlacementsInternal] = useState<LidarPlacement[]>([])
   const [selectedPlacementId, setSelectedPlacementId] = useState<string | null>(null)
   const [isScanning, setIsScanning] = useState(false)
+  
+  // FLOW-DEBUG: Wrap setPlacements to log changes
+  const setPlacements = (newPlacements: LidarPlacement[] | ((prev: LidarPlacement[]) => LidarPlacement[])) => {
+    setPlacementsInternal(prev => {
+      const result = typeof newPlacements === 'function' ? newPlacements(prev) : newPlacements
+      console.log('%c[FLOW-DEBUG] LidarContext.setPlacements called', 'color:#f59e0b;font-weight:bold', {
+        source: 'lidar_placements table (legacy manual system)',
+        prevCount: prev.length,
+        newCount: result.length,
+        ids: result.map(p => p.id.slice(0, 8)),
+      })
+      return result
+    })
+  }
 
   const scanDevices = useCallback(async () => {
     setIsScanning(true)

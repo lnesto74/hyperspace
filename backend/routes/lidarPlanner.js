@@ -615,6 +615,11 @@ router.post('/autoplace', async (req, res) => {
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     
+    console.log('══════════════════════════════════════════════════════');
+    console.log('[FLOW-DEBUG] WRITING TO lidar_instances TABLE');
+    console.log('[FLOW-DEBUG] layout_version_id:', layout_version_id);
+    console.log('[FLOW-DEBUG] positions to insert:', (placement.selected_positions || []).length);
+    
     const positions = placement.selected_positions || [];
     const idMigrationMap = new Map(); // old_id -> new_id
     
@@ -700,6 +705,9 @@ router.post('/autoplace', async (req, res) => {
       seed,
       effective_radius_m: placement.effective_radius_m
     };
+    console.log('[FLOW-DEBUG] Inserted', createdInstances.length, 'rows into lidar_instances table');
+    console.log('[FLOW-DEBUG] Instance positions:', createdInstances.map(i => `(${i.x_m.toFixed(2)}, ${i.z_m.toFixed(2)})`).join(', '));
+    console.log('══════════════════════════════════════════════════════');
     console.log('[BACKEND AutoPlace] Final response:', {
       run_id: runId,
       instanceCount: createdInstances.length,

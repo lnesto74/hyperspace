@@ -64,6 +64,7 @@ interface ImportedLayoutLayerProps {
 // Default colors for different object types
 const TYPE_COLORS: Record<string, number> = {
   shelf: 0x6366f1,
+  fridge: 0x22d3ee,
   wall: 0x64748b,
   checkout: 0x22c55e,
   entrance: 0xf59e0b,

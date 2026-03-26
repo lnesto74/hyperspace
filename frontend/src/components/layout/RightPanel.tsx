@@ -1,14 +1,50 @@
-import { X, Trash2, RotateCw } from 'lucide-react'
+import { useState, useMemo } from 'react'
+import { X, Trash2, RotateCw, Layers } from 'lucide-react'
 import { useVenue } from '../../context/VenueContext'
 import { useLidar } from '../../context/LidarContext'
 
 export default function RightPanel() {
   const { objects, selectedObjectId, updateObject, removeObject, selectObject } = useVenue()
   const { placements, selectedPlacementId, updatePlacement, removePlacement, selectPlacement, getDeviceById } = useLidar()
+  const [applyToSimilar, setApplyToSimilar] = useState(false)
 
   const selectedObject = objects.find(o => o.id === selectedObjectId)
   const selectedPlacement = placements.find(p => p.id === selectedPlacementId)
   const selectedDevice = selectedPlacement ? getDeviceById(selectedPlacement.deviceId) : null
+
+  // Find similar objects (same type, similar dimensions within 20% tolerance)
+  const similarObjects = useMemo(() => {
+    if (!selectedObject) return []
+    const tolerance = 0.2 // 20% tolerance
+    return objects.filter(o => {
+      if (o.id === selectedObject.id) return false
+      if (o.type !== selectedObject.type) return false
+      // Check if dimensions are similar (within tolerance)
+      const widthRatio = o.scale.x / selectedObject.scale.x
+      const depthRatio = o.scale.z / selectedObject.scale.z
+      return (
+        widthRatio >= (1 - tolerance) && widthRatio <= (1 + tolerance) &&
+        depthRatio >= (1 - tolerance) && depthRatio <= (1 + tolerance)
+      )
+    })
+  }, [objects, selectedObject])
+
+  // Update scale with optional cluster update
+  const handleScaleChange = (axis: 'x' | 'y' | 'z', value: number) => {
+    if (!selectedObject) return
+    const newScale = { ...selectedObject.scale, [axis]: value }
+    
+    // Update selected object
+    updateObject(selectedObject.id, { scale: newScale })
+    
+    // If apply to similar is enabled, update all similar objects
+    if (applyToSimilar && similarObjects.length > 0) {
+      similarObjects.forEach(obj => {
+        // For similar objects, only apply the changed axis value
+        updateObject(obj.id, { scale: { ...obj.scale, [axis]: value } })
+      })
+    }
+  }
 
   const handleClose = () => {
     selectObject(null)
@@ -75,15 +111,33 @@ export default function RightPanel() {
                       step="0.1"
                       min="0.1"
                       value={selectedObject.scale[axis]}
-                      onChange={e => updateObject(selectedObject.id, {
-                        scale: { ...selectedObject.scale, [axis]: parseFloat(e.target.value) || 0.1 }
-                      })}
+                      onChange={e => handleScaleChange(axis, parseFloat(e.target.value) || 0.1)}
                       className="w-full bg-card-bg border border-border-dark rounded px-2 py-1 text-sm text-white focus:border-highlight focus:outline-none"
                     />
                   </div>
                 ))}
               </div>
             </div>
+
+            {/* Apply to Similar Toggle */}
+            {similarObjects.length > 0 && (
+              <div className="bg-card-bg rounded-lg p-3 border border-border-dark">
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={applyToSimilar}
+                    onChange={e => setApplyToSimilar(e.target.checked)}
+                    className="w-4 h-4 rounded border-border-dark bg-panel-bg text-highlight focus:ring-highlight focus:ring-offset-0"
+                  />
+                  <div className="flex items-center gap-1.5">
+                    <Layers className="w-3.5 h-3.5 text-highlight" />
+                    <span className="text-xs text-gray-300">
+                      Apply to {similarObjects.length} similar {selectedObject.type}{similarObjects.length > 1 ? 's' : ''}
+                    </span>
+                  </div>
+                </label>
+              </div>
+            )}
 
             {/* Rotation */}
             <div>

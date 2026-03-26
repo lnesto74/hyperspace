@@ -21,6 +21,15 @@ class MqttTrajectoryService {
     this.cleanupInterval = null
     this.CLEANUP_INTERVAL_MS = 10000 // Clean stale tracks every 10 seconds
     this.TRACK_TTL_MS = 30000 // Tracks older than 30 seconds are stale
+    
+    // Stats tracking for validation
+    this.stats = {
+      messagesReceived: 0,
+      tracksReceived: 0,
+      lastMessageTs: null,
+      connectedAt: null,
+      venueStats: new Map() // venueId -> { tracksReceived, lastTrackTs }
+    }
   }
 
   getColorForTrack(trackKey) {
@@ -43,6 +52,7 @@ class MqttTrajectoryService {
     this.client.on('connect', () => {
       console.log('[MQTT] Connected to broker')
       this.isConnected = true
+      this.stats.connectedAt = Date.now()
       
       // Subscribe to trajectory topics
       this.client.subscribe(this.topic, (err) => {
@@ -122,6 +132,12 @@ class MqttTrajectoryService {
         }
 
         this.tracks.set(trackKey, processedTrack)
+        
+        // Update stats
+        this.stats.messagesReceived++
+        this.stats.tracksReceived++
+        this.stats.lastMessageTs = Date.now()
+        this._updateVenueStats(venueId, 1)
 
         // Emit to TrackAggregator pattern
         if (this.trackAggregator) {
@@ -170,6 +186,12 @@ class MqttTrajectoryService {
         processedTracks.push(processedTrack)
       }
 
+      // Update stats
+      this.stats.messagesReceived++
+      this.stats.tracksReceived += processedTracks.length
+      this.stats.lastMessageTs = Date.now()
+      this._updateVenueStats(venueId, processedTracks.length)
+
       // Emit to all connected clients subscribed to this venue
       this.io.of('/tracking').to(`venue:${venueId}`).emit('tracks', {
         venueId,
@@ -183,6 +205,62 @@ class MqttTrajectoryService {
   
   setTrackAggregator(aggregator) {
     this.trackAggregator = aggregator
+  }
+  
+  // Update per-venue stats
+  _updateVenueStats(venueId, trackCount) {
+    if (!this.stats.venueStats.has(venueId)) {
+      this.stats.venueStats.set(venueId, { tracksReceived: 0, lastTrackTs: null, tracksLast10s: 0, windowStart: Date.now() })
+    }
+    const vs = this.stats.venueStats.get(venueId)
+    vs.tracksReceived += trackCount
+    vs.lastTrackTs = Date.now()
+    
+    // Track 10-second window
+    const now = Date.now()
+    if (now - vs.windowStart > 10000) {
+      vs.tracksLast10s = trackCount
+      vs.windowStart = now
+    } else {
+      vs.tracksLast10s += trackCount
+    }
+  }
+  
+  // Get status for validation endpoint
+  getStatus(venueId = null) {
+    const baseStatus = {
+      connected: this.isConnected,
+      brokerUrl: this.brokerUrl,
+      topic: this.topic,
+      connectedAt: this.stats.connectedAt,
+      messagesReceived: this.stats.messagesReceived,
+      tracksReceived: this.stats.tracksReceived,
+      lastMessageTs: this.stats.lastMessageTs,
+      activeTracksCount: this.tracks.size,
+    }
+    
+    if (venueId) {
+      const vs = this.stats.venueStats.get(venueId)
+      if (vs) {
+        return {
+          ...baseStatus,
+          venueId,
+          venueTracksReceived: vs.tracksReceived,
+          venueLastTrackTs: vs.lastTrackTs,
+          venueTracksLast10s: vs.tracksLast10s,
+        }
+      } else {
+        return {
+          ...baseStatus,
+          venueId,
+          venueTracksReceived: 0,
+          venueLastTrackTs: null,
+          venueTracksLast10s: 0,
+        }
+      }
+    }
+    
+    return baseStatus
   }
 
   // Clean up stale tracks (older than TTL)

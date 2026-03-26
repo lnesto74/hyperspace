@@ -1,7 +1,15 @@
 import { useState, useEffect, useCallback } from 'react'
-import { Play, Square, RefreshCw, Users, Clock, Gauge, AlertCircle, CheckCircle2, Wifi, WifiOff, MapPin, UserCheck, Coffee, AlertTriangle, ShoppingCart, ToggleLeft, ToggleRight } from 'lucide-react'
+import { Play, Square, RefreshCw, Users, Clock, Gauge, AlertCircle, CheckCircle2, Wifi, WifiOff, MapPin, UserCheck, Coffee, AlertTriangle, ShoppingCart, ToggleLeft, ToggleRight, Server } from 'lucide-react'
 import { QueueCircles, QueuedPerson } from './QueueCircles'
 import { API_BASE } from '../../config/api'
+
+interface EdgeDevice {
+  edgeId: string
+  hostname: string
+  tailscaleIp: string
+  online: boolean
+  displayName?: string
+}
 
 interface SimulatorConfig {
   targetPeopleCount: number
@@ -91,6 +99,13 @@ export function SimulatorControl() {
   const [selectedVenueId, setSelectedVenueId] = useState<string>('')
   const [checkoutStatus, setCheckoutStatus] = useState<CheckoutStatus | null>(null)
   const [checkoutLoading, setCheckoutLoading] = useState(false)
+  
+  // Edge selector state
+  const [edges, setEdges] = useState<EdgeDevice[]>([])
+  const [selectedEdgeIp, setSelectedEdgeIp] = useState<string>(() => {
+    return localStorage.getItem('simulator-selectedEdgeIp') || ''
+  })
+  const [edgesLoading, setEdgesLoading] = useState(false)
 
   // Fetch available venues
   const fetchVenues = useCallback(async () => {
@@ -103,9 +118,28 @@ export function SimulatorControl() {
     }
   }, [])
 
+  // Fetch available edge devices
+  const fetchEdges = useCallback(async () => {
+    setEdgesLoading(true)
+    try {
+      const res = await fetch(`${API_BASE}/api/edge-commissioning/scan-edges`)
+      const data = await res.json()
+      if (data.edges) {
+        setEdges(data.edges)
+      }
+    } catch (err) {
+      console.error('Failed to fetch edges:', err)
+    }
+    setEdgesLoading(false)
+  }, [])
+
+  // Helper to build URL with edgeIp query param
+  const edgeParam = selectedEdgeIp ? `?edgeIp=${selectedEdgeIp}` : ''
+  const edgeBody = selectedEdgeIp ? { edgeIp: selectedEdgeIp } : {}
+
   const fetchStatus = useCallback(async () => {
     try {
-      const res = await fetch(`${API_BASE}/api/edge-simulator/status`)
+      const res = await fetch(`${API_BASE}/api/edge-simulator/status${edgeParam}`)
       const data = await res.json()
       setStatus(data)
       if (data.config && !configDirty) {
@@ -142,22 +176,39 @@ export function SimulatorControl() {
       setError('Failed to connect to edge server')
       setStatus({ connected: false, isRunning: false, activePeopleCount: 0, uptime: 0, tracksSent: 0 })
     }
-  }, [configDirty, selectedVenueId])
+  }, [configDirty, selectedVenueId, edgeParam])
 
   useEffect(() => {
     fetchVenues()
+    fetchEdges()
     fetchStatus()
     const interval = setInterval(fetchStatus, 3000)
     return () => clearInterval(interval)
-  }, [fetchStatus, fetchVenues])
+  }, [fetchStatus, fetchVenues, fetchEdges])
+
+  // Handle edge selection change
+  const handleEdgeChange = (ip: string) => {
+    setSelectedEdgeIp(ip)
+    localStorage.setItem('simulator-selectedEdgeIp', ip)
+    // Immediately fetch status from new edge
+    setTimeout(fetchStatus, 100)
+  }
 
   const handleStart = async () => {
     setLoading(true)
     try {
       // Always send config before starting to ensure correct venue and cashier settings
       const selectedVenue = venues.find(v => v.id === selectedVenueId)
+      
+      // Derive backendUrl from API_BASE - this ensures simulator always uses current backend
+      // API_BASE is either empty (same origin) or a full URL like http://localhost:3001
+      const backendUrl = API_BASE || window.location.origin
+      
       const configToSend = {
         ...config,
+        ...edgeBody,
+        // CRITICAL: Always include backendUrl so simulator uses correct backend
+        backendUrl,
         // Only send venueId if user has selected one, otherwise keep edge server's existing config
         ...(selectedVenueId && { venueId: selectedVenueId }),
         ...(selectedVenue && {
@@ -173,7 +224,11 @@ export function SimulatorControl() {
       setConfigDirty(false)
       
       // Now start the simulation
-      await fetch(`${API_BASE}/api/edge-simulator/start`, { method: 'POST' })
+      await fetch(`${API_BASE}/api/edge-simulator/start`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(edgeBody),
+      })
       await fetchStatus()
     } catch (err) {
       setError('Failed to start simulator')
@@ -184,7 +239,11 @@ export function SimulatorControl() {
   const handleStop = async () => {
     setLoading(true)
     try {
-      await fetch(`${API_BASE}/api/edge-simulator/stop`, { method: 'POST' })
+      await fetch(`${API_BASE}/api/edge-simulator/stop`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(edgeBody),
+      })
       await fetchStatus()
     } catch (err) {
       setError('Failed to stop simulator')
@@ -196,7 +255,7 @@ export function SimulatorControl() {
   const fetchCheckoutStatus = useCallback(async () => {
     if (!config.enableCheckoutManager) return
     try {
-      const res = await fetch(`${API_BASE}/api/edge-simulator/checkout/status`)
+      const res = await fetch(`${API_BASE}/api/edge-simulator/checkout/status${edgeParam}`)
       const data = await res.json()
       if (data.connected !== false) {
         setCheckoutStatus(data)
@@ -204,7 +263,7 @@ export function SimulatorControl() {
     } catch (err) {
       console.error('Failed to fetch checkout status:', err)
     }
-  }, [config.enableCheckoutManager])
+  }, [config.enableCheckoutManager, edgeParam])
 
   const handleSetLaneState = async (laneId: number, state: 'open' | 'closed') => {
     setCheckoutLoading(true)
@@ -212,7 +271,7 @@ export function SimulatorControl() {
       await fetch(`${API_BASE}/api/edge-simulator/checkout/set_lane_state`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ laneId, state }),
+        body: JSON.stringify({ laneId, state, ...edgeBody }),
       })
       await fetchCheckoutStatus()
     } catch (err) {
@@ -245,8 +304,15 @@ export function SimulatorControl() {
     try {
       // Find selected venue to get dimensions
       const selectedVenue = venues.find(v => v.id === selectedVenueId)
+      
+      // Derive backendUrl from API_BASE - ensures simulator uses correct backend
+      const backendUrl = API_BASE || window.location.origin
+      
       const configToSend = {
         ...config,
+        ...edgeBody,
+        // CRITICAL: Always include backendUrl so simulator uses correct backend
+        backendUrl,
         // Only send venueId if user has selected one, otherwise keep edge server's existing config
         ...(selectedVenueId && { venueId: selectedVenueId }),
         // Include venue dimensions so edge server can properly initialize
@@ -294,6 +360,40 @@ export function SimulatorControl() {
           <span className="flex items-center gap-1 text-red-400 text-sm">
             <WifiOff className="w-4 h-4" /> Disconnected
           </span>
+        )}
+      </div>
+
+      {/* Edge Selector */}
+      <div className="mb-4">
+        <label className="text-xs text-gray-400 flex items-center gap-1 mb-1">
+          <Server className="w-3 h-3" /> Edge Server
+        </label>
+        <div className="flex gap-2">
+          <select
+            value={selectedEdgeIp}
+            onChange={(e) => handleEdgeChange(e.target.value)}
+            className="flex-1 px-2 py-1.5 bg-gray-700 border border-gray-600 rounded text-white text-sm"
+          >
+            <option value="">Default Edge</option>
+            {edges.map(edge => (
+              <option key={edge.edgeId} value={edge.tailscaleIp}>
+                {edge.displayName || edge.hostname} ({edge.tailscaleIp}) {edge.online ? '🟢' : '🔴'}
+              </option>
+            ))}
+          </select>
+          <button
+            onClick={fetchEdges}
+            disabled={edgesLoading}
+            className="px-2 py-1 bg-gray-600 hover:bg-gray-500 rounded text-white transition-colors"
+            title="Refresh edge list"
+          >
+            <RefreshCw className={`w-4 h-4 ${edgesLoading ? 'animate-spin' : ''}`} />
+          </button>
+        </div>
+        {selectedEdgeIp && (
+          <div className="text-xs text-gray-500 mt-1">
+            Connected to: {selectedEdgeIp}:8080
+          </div>
         )}
       </div>
 

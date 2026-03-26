@@ -24,6 +24,9 @@ export interface EdgeLidar {
   model: string
   reachable: boolean
   ports: number[]
+  port?: number // Single port for LS Lidar (detected port)
+  msopPort?: number // RoboSense MSOP port
+  difopPort?: number // RoboSense DIFOP port
 }
 
 export interface EdgeInventory {
@@ -191,6 +194,8 @@ export interface CommissionedLidar {
   vendor?: string
   model?: string
   macAddress?: string
+  msopPort?: number
+  difopPort?: number
   commissionedAt?: string
   lastSeenAt?: string
   status: string
@@ -225,8 +230,8 @@ interface EdgeCommissioningContextType {
   // Actions
   scanEdges: () => Promise<void>
   selectEdge: (edgeId: string | null) => void
-  scanEdgeLidars: (edgeId: string) => Promise<void>
-  fetchEdgeInventory: (edgeId: string) => Promise<void>
+  scanEdgeLidars: (edgeId: string, venueId?: string) => Promise<void>
+  fetchEdgeInventory: (edgeId: string, venueId?: string) => Promise<void>
   fetchEdgeStatus: (edgeId: string) => Promise<EdgeStatus | null>
   loadPlacements: (venueId: string) => Promise<void>
   loadPairings: (venueId: string) => Promise<void>
@@ -235,6 +240,9 @@ interface EdgeCommissioningContextType {
   deployToEdge: (edgeId: string, venueId: string) => Promise<DeployResult | null>
   loadDeployHistory: (venueId?: string, edgeId?: string) => Promise<void>
   loadCommissionedLidars: (venueId: string, edgeId?: string) => Promise<void>
+  addOfflineLidar: (venueId: string, edgeId: string, lidar: Partial<CommissionedLidar>) => Promise<boolean>
+  decommissionLidar: (lidarId: string, venueId: string, edgeId?: string) => Promise<boolean>
+  decommissionAllLidars: (venueId: string, edgeId?: string) => Promise<boolean>
   
   // HER Actions
   loadProviders: () => Promise<void>
@@ -320,8 +328,71 @@ export function EdgeCommissioningProvider({ children }: Props) {
     }
   }, [])
 
+  // Fetch edge inventory (cached LiDAR list) and auto-register detected LiDARs
+  const fetchEdgeInventory = useCallback(async (edgeId: string, venueId?: string) => {
+    setIsLoadingInventory(true)
+    try {
+      const res = await fetch(`${API_BASE}/api/edge-commissioning/edge/${edgeId}/inventory`)
+      if (!res.ok) throw new Error('Inventory fetch failed')
+      const data = await res.json()
+      const lidars = data.lidars || []
+      
+      setEdgeInventory({
+        edgeId: data.edgeId,
+        hostname: data.hostname,
+        tailscaleIp: data.tailscaleIp,
+        lidars,
+      })
+      
+      // Auto-register/update detected LiDARs with non-default IPs to commissioned list
+      if (venueId && lidars.length > 0) {
+        const lidarsToSync = lidars.filter((l: EdgeLidar) => l.ip !== '192.168.1.200')
+        let updated = false
+        
+        // Register or update each detected LiDAR (upsert)
+        for (const lidar of lidarsToSync) {
+          try {
+            await fetch(`${API_BASE}/api/edge-commissioning/commissioned-lidars`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                venueId,
+                edgeId,
+                assignedIp: lidar.ip,
+                label: `LiDAR-${lidar.ip.split('.').pop()}`,
+                vendor: lidar.vendor || 'RoboSense',
+                model: lidar.model || 'RS16',
+                macAddress: lidar.mac,
+                originalIp: '192.168.1.200',
+                msopPort: lidar.msopPort || (lidar.vendor === 'LSLidar' ? 2345 : 6699),
+                difopPort: lidar.difopPort || (lidar.vendor === 'LSLidar' ? 2346 : 7788),
+                status: 'active',
+              }),
+            })
+            updated = true
+          } catch (e) {
+            console.error('Failed to sync LiDAR:', lidar.ip, e)
+          }
+        }
+        
+        // Refresh commissioned list
+        if (updated) {
+          const clRes = await fetch(`${API_BASE}/api/edge-commissioning/commissioned-lidars?edgeId=${edgeId}`)
+          if (clRes.ok) {
+            const clData = await clRes.json()
+            setCommissionedLidars(clData.lidars || [])
+          }
+        }
+      }
+    } catch (err: any) {
+      addToast('error', `Failed to fetch inventory: ${err.message}`)
+    } finally {
+      setIsLoadingInventory(false)
+    }
+  }, [addToast, commissionedLidars])
+
   // Trigger LiDAR LAN scan on edge
-  const scanEdgeLidars = useCallback(async (edgeId: string) => {
+  const scanEdgeLidars = useCallback(async (edgeId: string, venueId?: string) => {
     setIsScanningLidars(true)
     try {
       const res = await fetch(`${API_BASE}/api/edge-commissioning/edge/${edgeId}/scan-lidars`, {
@@ -330,34 +401,14 @@ export function EdgeCommissioningProvider({ children }: Props) {
       if (!res.ok) throw new Error('LiDAR scan failed')
       const data = await res.json()
       addToast('success', `LiDAR scan complete: ${data.foundCount || 0} devices found`)
-      // Automatically fetch updated inventory
-      await fetchEdgeInventory(edgeId)
+      // Automatically fetch updated inventory and auto-register new LiDARs
+      await fetchEdgeInventory(edgeId, venueId)
     } catch (err: any) {
       addToast('error', `LiDAR scan failed: ${err.message}`)
     } finally {
       setIsScanningLidars(false)
     }
-  }, [addToast])
-
-  // Fetch edge inventory (cached LiDAR list)
-  const fetchEdgeInventory = useCallback(async (edgeId: string) => {
-    setIsLoadingInventory(true)
-    try {
-      const res = await fetch(`${API_BASE}/api/edge-commissioning/edge/${edgeId}/inventory`)
-      if (!res.ok) throw new Error('Inventory fetch failed')
-      const data = await res.json()
-      setEdgeInventory({
-        edgeId: data.edgeId,
-        hostname: data.hostname,
-        tailscaleIp: data.tailscaleIp,
-        lidars: data.lidars || [],
-      })
-    } catch (err: any) {
-      addToast('error', `Failed to fetch inventory: ${err.message}`)
-    } finally {
-      setIsLoadingInventory(false)
-    }
-  }, [addToast])
+  }, [addToast, fetchEdgeInventory])
 
   // Fetch edge status
   const fetchEdgeStatus = useCallback(async (edgeId: string): Promise<EdgeStatus | null> => {
@@ -520,11 +571,14 @@ export function EdgeCommissioningProvider({ children }: Props) {
     }
   }, [])
 
-  // Load commissioned LiDARs for a venue
+  // Load commissioned LiDARs - globally for the edge (not venue-specific)
+  // This allows LiDARs commissioned on any venue to be available for pairing
   const loadCommissionedLidars = useCallback(async (venueId: string, edgeId?: string) => {
     try {
-      let url = `${API_BASE}/api/edge-commissioning/commissioned-lidars?venueId=${venueId}`
-      if (edgeId) url += `&edgeId=${edgeId}`
+      // Load ALL commissioned LiDARs for this edge (globally available)
+      // They can be re-paired to any venue
+      let url = `${API_BASE}/api/edge-commissioning/commissioned-lidars`
+      if (edgeId) url += `?edgeId=${edgeId}`
       
       const res = await fetch(url)
       if (!res.ok) throw new Error('Failed to load commissioned lidars')
@@ -534,6 +588,73 @@ export function EdgeCommissioningProvider({ children }: Props) {
       console.error('Failed to load commissioned lidars:', err)
     }
   }, [])
+
+  // Decommission a single LiDAR
+  const decommissionLidar = useCallback(async (lidarId: string, venueId: string, edgeId?: string): Promise<boolean> => {
+    try {
+      const res = await fetch(`${API_BASE}/api/edge-commissioning/commissioned-lidars/${lidarId}`, {
+        method: 'DELETE',
+      })
+      if (!res.ok) throw new Error('Failed to decommission lidar')
+      
+      // Refresh the list
+      await loadCommissionedLidars(venueId, edgeId)
+      addToast('success', 'LiDAR decommissioned')
+      return true
+    } catch (err: any) {
+      addToast('error', `Failed to decommission: ${err.message}`)
+      return false
+    }
+  }, [addToast, loadCommissionedLidars])
+
+  // Add offline LiDAR (externally commissioned)
+  const addOfflineLidar = useCallback(async (venueId: string, edgeId: string, lidar: Partial<CommissionedLidar>): Promise<boolean> => {
+    try {
+      const res = await fetch(`${API_BASE}/api/edge-commissioning/commissioned-lidars`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          venueId,
+          edgeId,
+          assignedIp: lidar.assignedIp,
+          label: lidar.label || `LiDAR-${lidar.assignedIp?.split('.').pop()}`,
+          vendor: lidar.vendor || 'RoboSense',
+          model: lidar.model || 'RS16',
+          macAddress: lidar.macAddress,
+          originalIp: lidar.originalIp,
+          status: 'offline',
+          commissionedAt: new Date().toISOString(),
+        }),
+      })
+      if (!res.ok) throw new Error('Failed to add offline lidar')
+      
+      // Refresh the list
+      await loadCommissionedLidars(venueId, edgeId)
+      addToast('success', 'Offline LiDAR added to list')
+      return true
+    } catch (err: any) {
+      addToast('error', `Failed to add offline LiDAR: ${err.message}`)
+      return false
+    }
+  }, [addToast, loadCommissionedLidars])
+
+  // Decommission all LiDARs for a venue
+  const decommissionAllLidars = useCallback(async (venueId: string, edgeId?: string): Promise<boolean> => {
+    try {
+      const res = await fetch(`${API_BASE}/api/edge-commissioning/commissioned-lidars/venue/${venueId}`, {
+        method: 'DELETE',
+      })
+      if (!res.ok) throw new Error('Failed to decommission all lidars')
+      
+      // Clear local state and refresh
+      setCommissionedLidars([])
+      addToast('success', 'All LiDARs decommissioned for this venue')
+      return true
+    } catch (err: any) {
+      addToast('error', `Failed to decommission: ${err.message}`)
+      return false
+    }
+  }, [addToast])
 
   // Helpers
   const getPairingForPlacement = useCallback((placementId: string) => {
@@ -545,18 +666,25 @@ export function EdgeCommissioningProvider({ children }: Props) {
   }, [edgeInventory])
 
   // Get merged list of LiDARs (commissioned + scanned, with online status)
+  // Deduplicated by IP to avoid React key warnings
   const getMergedLidars = useCallback((): EdgeLidar[] => {
-    const scannedIps = new Set(edgeInventory?.lidars.map(l => l.ip) || [])
+    const seenIps = new Set<string>()
     const result: EdgeLidar[] = []
 
     // First add all LiDARs from edge inventory (preserving their actual reachable status)
     if (edgeInventory?.lidars) {
-      result.push(...edgeInventory.lidars)
+      for (const lidar of edgeInventory.lidars) {
+        if (!seenIps.has(lidar.ip)) {
+          seenIps.add(lidar.ip)
+          result.push(lidar)
+        }
+      }
     }
 
     // Then add commissioned LiDARs that aren't currently online
     for (const cl of commissionedLidars) {
-      if (!scannedIps.has(cl.assignedIp)) {
+      if (!seenIps.has(cl.assignedIp)) {
+        seenIps.add(cl.assignedIp)
         result.push({
           lidarId: `lidar-${cl.assignedIp.replace(/\./g, '-')}`,
           ip: cl.assignedIp,
@@ -741,6 +869,9 @@ export function EdgeCommissioningProvider({ children }: Props) {
     deployToEdge,
     loadDeployHistory,
     loadCommissionedLidars,
+    addOfflineLidar,
+    decommissionLidar,
+    decommissionAllLidars,
     // HER Actions
     loadProviders,
     selectProvider,

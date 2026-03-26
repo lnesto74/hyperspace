@@ -1,7 +1,16 @@
 import { useState, useEffect } from 'react'
-import { FileUp, Folder, Clock, CheckCircle2, AlertCircle, Trash2, Pencil, Check, X } from 'lucide-react'
+import { FileUp, Folder, Clock, CheckCircle2, AlertCircle, Trash2, Pencil, Check, X, Layers } from 'lucide-react'
 import { API_BASE } from '../../config/api'
 
+
+interface LayoutInfo {
+  id: string
+  name: string
+  venue_name?: string | null
+  display_name?: string
+  is_active: boolean
+  created_at: string
+}
 
 interface DwgImportItem {
   import_id: string
@@ -10,6 +19,10 @@ interface DwgImportItem {
   status: string
   created_at: string
   layout_count?: number
+  layouts?: LayoutInfo[]
+  latest_layout_id?: string
+  latest_layout_name?: string
+  latest_layout_date?: string
 }
 
 interface DwgImportsListProps {
@@ -98,6 +111,32 @@ export default function DwgImportsList({ onSelectImport, onUploadNew, dwgSupport
     return date.toLocaleDateString() + ' ' + date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
   }
 
+  // Format layout name for display - show readable version
+  const formatLayoutName = (name: string, truncate = true) => {
+    // If it's an ISO timestamp format like "Layout 2026-03-04T06:00:11.463Z"
+    const match = name.match(/Layout (\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/)
+    if (match) {
+      const [, , month, day, hour, min] = match
+      return `v${month}/${day} ${hour}:${min}`
+    }
+    // Otherwise show full name or truncate
+    if (!truncate) return name
+    return name.length > 30 ? name.slice(0, 30) + '...' : name
+  }
+
+  // Check if layout has a custom name (venue name or renamed layout, not auto-generated)
+  const hasCustomName = (layout: LayoutInfo) => {
+    // Has a venue linked with a name
+    if (layout.venue_name) return true
+    // Layout name is not auto-generated timestamp
+    return !layout.name.match(/Layout \d{4}-\d{2}-\d{2}T/)
+  }
+  
+  // Get display name for a layout (prefer venue name)
+  const getDisplayName = (layout: LayoutInfo) => {
+    return layout.display_name || layout.venue_name || layout.name
+  }
+
   return (
     <div className="max-w-4xl mx-auto p-8">
       {/* Header */}
@@ -149,96 +188,137 @@ export default function DwgImportsList({ onSelectImport, onUploadNew, dwgSupport
           <p className="text-sm mt-1">Upload your first file to get started</p>
         </div>
       ) : (
-        <div className="space-y-2">
-          {imports.map(item => (
-            <div
-              key={item.import_id}
-              onClick={() => onSelectImport(item.import_id)}
-              className="p-4 bg-gray-800/50 border border-gray-700 rounded-lg hover:bg-gray-800 hover:border-gray-600 cursor-pointer transition-all group"
-            >
-              <div className="flex items-center gap-4">
-                <div className="w-10 h-10 rounded-lg bg-gray-700 flex items-center justify-center">
-                  <Folder className="w-5 h-5 text-gray-400" />
-                </div>
-                
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2">
-                    {editingId === item.import_id ? (
-                      <div className="flex items-center gap-1 flex-1" onClick={(e) => e.stopPropagation()}>
-                        <input
-                          type="text"
-                          value={editingName}
-                          onChange={(e) => setEditingName(e.target.value)}
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter') saveEdit(e as unknown as React.MouseEvent)
-                            if (e.key === 'Escape') cancelEdit()
-                          }}
-                          className="flex-1 px-2 py-1 bg-gray-900 border border-highlight rounded text-sm text-white focus:outline-none"
-                          autoFocus
-                        />
-                        <button
-                          onClick={saveEdit}
-                          className="p-1.5 hover:bg-green-900/50 rounded text-green-400"
-                          title="Save"
-                        >
-                          <Check className="w-4 h-4" />
-                        </button>
-                        <button
-                          onClick={(e) => { e.stopPropagation(); cancelEdit() }}
-                          className="p-1.5 hover:bg-red-900/50 rounded text-red-400"
-                          title="Cancel"
-                        >
-                          <X className="w-4 h-4" />
-                        </button>
+        <div className="space-y-3">
+          {imports.map(item => {
+            const layouts = item.layouts || []
+            const hasCustomLayouts = layouts.some(l => hasCustomName(l))
+            // Show layouts with custom names prominently
+            const displayLayouts = hasCustomLayouts 
+              ? layouts.filter(l => hasCustomName(l))
+              : layouts.slice(0, 1)
+            
+            return (
+              <div
+                key={item.import_id}
+                onClick={() => onSelectImport(item.import_id)}
+                className="p-4 bg-gray-800/50 border border-gray-700 rounded-lg hover:bg-gray-800 hover:border-gray-600 cursor-pointer transition-all group"
+              >
+                <div className="flex items-start gap-4">
+                  <div className="w-10 h-10 rounded-lg bg-gray-700 flex items-center justify-center flex-shrink-0 mt-0.5">
+                    <Folder className="w-5 h-5 text-gray-400" />
+                  </div>
+                  
+                  <div className="flex-1 min-w-0">
+                    {/* Layout names - shown prominently if custom named */}
+                    {displayLayouts.length > 0 && (
+                      <div className="flex flex-wrap items-center gap-2 mb-1.5">
+                        {displayLayouts.map((layout) => (
+                          <span 
+                            key={layout.id}
+                            className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-sm font-medium ${
+                              layout.is_active 
+                                ? 'bg-highlight/20 text-highlight border border-highlight/30' 
+                                : 'bg-blue-900/30 text-blue-300 border border-blue-800/50'
+                            }`}
+                            title={`Layout: ${layout.name}${layout.venue_name ? ` → Venue: ${layout.venue_name}` : ''}${layout.is_active ? ' (active)' : ''}`}
+                          >
+                            <Layers className="w-3.5 h-3.5" />
+                            {formatLayoutName(getDisplayName(layout), false)}
+                            {layout.is_active && <CheckCircle2 className="w-3 h-3 ml-0.5" />}
+                          </span>
+                        ))}
+                        {layouts.length > displayLayouts.length && (
+                          <span className="text-xs text-gray-500">
+                            +{layouts.length - displayLayouts.length} more
+                          </span>
+                        )}
                       </div>
-                    ) : (
-                      <>
-                        <h3 className="text-sm font-medium text-white truncate">
-                          {item.filename}
-                        </h3>
-                        <button
-                          onClick={(e) => startEditing(item.import_id, item.filename, e)}
-                          className="p-1 hover:bg-gray-700 rounded text-gray-400 hover:text-white opacity-0 group-hover:opacity-100 transition-opacity"
-                          title="Edit name"
-                        >
-                          <Pencil className="w-3 h-3" />
-                        </button>
-                      </>
                     )}
-                    {editingId !== item.import_id && item.status === 'generated' && (
-                      <span className="flex items-center gap-1 text-xs text-green-400">
-                        <CheckCircle2 className="w-3 h-3" />
-                        Layout Ready
-                      </span>
-                    )}
-                    {editingId !== item.import_id && item.status === 'imported' && (
-                      <span className="flex items-center gap-1 text-xs text-amber-400">
-                        <AlertCircle className="w-3 h-3" />
-                        Needs Mapping
-                      </span>
-                    )}
-                  </div>
-                  <div className="flex items-center gap-3 text-xs text-gray-500 mt-1">
-                    <span className="flex items-center gap-1">
-                      <Clock className="w-3 h-3" />
-                      {formatDate(item.created_at)}
-                    </span>
-                    <span>Units: {item.units}</span>
-                  </div>
-                </div>
 
-                <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                  <button
-                    onClick={(e) => handleDelete(item.import_id, e)}
-                    className="p-2 text-gray-400 hover:text-red-400 hover:bg-red-900/30 rounded-lg transition-colors"
-                    title="Delete"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </button>
+                    {/* DWG filename row */}
+                    <div className="flex items-center gap-2">
+                      {editingId === item.import_id ? (
+                        <div className="flex items-center gap-1 flex-1" onClick={(e) => e.stopPropagation()}>
+                          <input
+                            type="text"
+                            value={editingName}
+                            onChange={(e) => setEditingName(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') saveEdit(e as unknown as React.MouseEvent)
+                              if (e.key === 'Escape') cancelEdit()
+                            }}
+                            className="flex-1 px-2 py-1 bg-gray-900 border border-highlight rounded text-sm text-white focus:outline-none"
+                            autoFocus
+                          />
+                          <button
+                            onClick={saveEdit}
+                            className="p-1.5 hover:bg-green-900/50 rounded text-green-400"
+                            title="Save"
+                          >
+                            <Check className="w-4 h-4" />
+                          </button>
+                          <button
+                            onClick={(e) => { e.stopPropagation(); cancelEdit() }}
+                            className="p-1.5 hover:bg-red-900/50 rounded text-red-400"
+                            title="Cancel"
+                          >
+                            <X className="w-4 h-4" />
+                          </button>
+                        </div>
+                      ) : (
+                        <>
+                          <span className="text-xs text-gray-400 truncate">
+                            {item.filename}
+                          </span>
+                          <button
+                            onClick={(e) => startEditing(item.import_id, item.filename, e)}
+                            className="p-1 hover:bg-gray-700 rounded text-gray-400 hover:text-white opacity-0 group-hover:opacity-100 transition-opacity"
+                            title="Edit filename"
+                          >
+                            <Pencil className="w-3 h-3" />
+                          </button>
+                        </>
+                      )}
+                      {editingId !== item.import_id && item.status === 'generated' && layouts.length === 0 && (
+                        <span className="flex items-center gap-1 text-xs text-green-400">
+                          <CheckCircle2 className="w-3 h-3" />
+                          Layout Ready
+                        </span>
+                      )}
+                      {editingId !== item.import_id && item.status === 'imported' && (
+                        <span className="flex items-center gap-1 text-xs text-amber-400">
+                          <AlertCircle className="w-3 h-3" />
+                          Needs Mapping
+                        </span>
+                      )}
+                    </div>
+
+                    {/* Meta info */}
+                    <div className="flex items-center gap-3 text-xs text-gray-500 mt-1">
+                      <span className="flex items-center gap-1">
+                        <Clock className="w-3 h-3" />
+                        {formatDate(item.created_at)}
+                      </span>
+                      <span>Units: {item.units}</span>
+                      {layouts.length > 0 && (
+                        <span>{layouts.length} layout{layouts.length > 1 ? 's' : ''}</span>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                    <button
+                      onClick={(e) => handleDelete(item.import_id, e)}
+                      className="p-2 text-gray-400 hover:text-red-400 hover:bg-red-900/30 rounded-lg transition-colors"
+                      title="Delete"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
                 </div>
               </div>
-            </div>
-          ))}
+            )
+          })}
         </div>
       )}
     </div>

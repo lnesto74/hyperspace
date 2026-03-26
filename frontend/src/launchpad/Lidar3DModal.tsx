@@ -4,9 +4,11 @@
  */
 
 import { useState, useEffect, useCallback, useMemo } from 'react'
-import { X } from 'lucide-react'
+import { X, Radar, Box } from 'lucide-react'
 import Layout3DPreview from '../components/dwgImporter/Layout3DPreview'
 import * as api from './launchpadApi'
+
+type ModalTab = 'lidar' | 'twin'
 
 interface RoiBounds {
   minX: number; minY: number; maxX: number; maxY: number
@@ -32,6 +34,7 @@ export default function Lidar3DModal({ layoutVersionId, importId, onClose, rois,
   const [lidarInstances, setLidarInstances] = useState<any[]>([])
   const [lidarModels, setLidarModels] = useState<any[]>([])
   const [scaleCorrection, setScaleCorrection] = useState(1.0)
+  const [activeTab, setActiveTab] = useState<ModalTab>('lidar')
 
   // Load LiDAR data
   useEffect(() => {
@@ -103,11 +106,34 @@ export default function Lidar3DModal({ layoutVersionId, importId, onClose, rois,
         className="relative w-[92vw] h-[88vh] max-w-[1600px] bg-gray-950 border border-gray-700 rounded-xl shadow-2xl overflow-hidden flex flex-col"
         onClick={e => e.stopPropagation()}
       >
-        {/* Header */}
-        <div className="flex items-center justify-between px-4 py-2 bg-gray-950 border-b border-gray-800 shrink-0">
-          <div className="flex items-center gap-3">
-            <span className="text-xs text-gray-400 font-medium">LiDAR 3D Preview</span>
-            <span className="text-[10px] text-gray-600">
+        {/* Header with tabs */}
+        <div className="flex items-center justify-between px-4 py-0 bg-gray-950 border-b border-gray-800 shrink-0">
+          <div className="flex items-center gap-0">
+            {/* Tab: LiDAR Preview */}
+            <button
+              onClick={() => setActiveTab('lidar')}
+              className={`flex items-center gap-1.5 px-4 py-2.5 text-xs font-medium border-b-2 transition-colors ${
+                activeTab === 'lidar'
+                  ? 'text-indigo-400 border-indigo-400'
+                  : 'text-gray-500 border-transparent hover:text-gray-300'
+              }`}
+            >
+              <Radar className="w-3.5 h-3.5" />
+              LiDAR Preview
+            </button>
+            {/* Tab: Digital Twin */}
+            <button
+              onClick={() => setActiveTab('twin')}
+              className={`flex items-center gap-1.5 px-4 py-2.5 text-xs font-medium border-b-2 transition-colors ${
+                activeTab === 'twin'
+                  ? 'text-emerald-400 border-emerald-400'
+                  : 'text-gray-500 border-transparent hover:text-gray-300'
+              }`}
+            >
+              <Box className="w-3.5 h-3.5" />
+              Digital Twin
+            </button>
+            <span className="text-[10px] text-gray-600 ml-3">
               {lidarInstances.length} sensors · scale {scaleCorrection}×
             </span>
           </div>
@@ -122,10 +148,11 @@ export default function Lidar3DModal({ layoutVersionId, importId, onClose, rois,
         {/* 3D Preview — full remaining space */}
         <div className="flex-1 overflow-hidden">
           <Layout3DPreview
+            key={activeTab}
             layoutVersionId={layoutVersionId}
             importId={importId}
-            lidarInstances={lidarInstances}
-            lidarModels={lidarModels}
+            lidarInstances={activeTab === 'lidar' ? lidarInstances : []}
+            lidarModels={activeTab === 'lidar' ? lidarModels : []}
             scaleCorrection={scaleCorrection}
             focusBounds={focusBounds}
             classifications={classifications}

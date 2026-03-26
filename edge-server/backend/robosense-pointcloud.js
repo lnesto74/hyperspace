@@ -143,9 +143,11 @@ export function capturePointCloudSnapshot(lidarIp, options = {}) {
     maxPoints = 100000, // Max points to return
     downsample = 1, // Keep every Nth point (1 = no downsampling)
     model = 'RSAIRY', // LiDAR model: RS16, RS32, RSAIRY
+    msopPort = MSOP_PORT, // Allow custom MSOP port
   } = options;
   
   const verticalAngles = getVerticalAngles(model);
+  const port = parseInt(msopPort) || MSOP_PORT;
   
   return new Promise((resolve, reject) => {
     const socket = dgram.createSocket({ type: 'udp4', reuseAddr: true });
@@ -173,9 +175,9 @@ export function capturePointCloudSnapshot(lidarIp, options = {}) {
       reject(err);
     });
     
-    // Bind to MSOP port
-    socket.bind(MSOP_PORT, '0.0.0.0', () => {
-      console.log(`[PointCloud] Capturing from ${lidarIp} on port ${MSOP_PORT}...`);
+    // Bind to MSOP port (custom or default)
+    socket.bind(port, '0.0.0.0', () => {
+      console.log(`[PointCloud] Capturing from ${lidarIp} on port ${port}...`);
     });
     
     // Capture for specified duration

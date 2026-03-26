@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Eye, Grid3X3, Box, ArrowUp, Sun, X, Radio, History, Crosshair } from 'lucide-react'
 import Sidebar from './Sidebar'
 import RightPanel from './RightPanel'
+import ModeBar from './ModeBar'
 import MainViewport from '../venue/MainViewport'
 import type { CaptureScreenshotFn } from '../venue/MainViewport'
 import TimelineReplay from '../timeline/TimelineReplay'
@@ -14,7 +15,7 @@ import { useProfitRadar } from '../../context/ProfitRadarContext'
 import IntentFieldOverlay from '../../features/profitRadar/IntentFieldOverlay'
 import { useViewMode } from '../../App'
 
-export type SidebarTab = 'floorplan' | 'venueDwg' | 'venue' | 'objects' | 'lidars' | 'regions'
+export type SidebarTab = 'floorplan' | 'venueDwg' | 'venue' | 'objects' | 'lidars' | 'regions' | 'planogram'
 export type CameraView = 'perspective' | 'top' | 'isometric' | 'front'
 
 export interface LightingSettings {
@@ -111,8 +112,13 @@ export default function AppShell({ onOpenDwgImporter, onOpenEdgeCommissioning, s
       {/* Left Sidebar */}
       <Sidebar activeTab={activeTab} onTabChange={setActiveTab} onOpenDwgImporter={onOpenDwgImporter} onOpenEdgeCommissioning={onOpenEdgeCommissioning} launchPadOpen={lpOpen} onToggleLaunchPad={() => setLpOpen(!lpOpen)} />
       
-      {/* Main 3D Viewport - flex-1 min-w-0 ensures it shrinks when panels open */}
-      <div className="flex-1 min-w-0 relative overflow-hidden">
+      {/* Main Content Area with ModeBar + 3D Viewport */}
+      <div className="flex-1 min-w-0 flex flex-col overflow-hidden">
+        {/* Mode Bar - Setup/Edit/Live toggle + Venue selector */}
+        <ModeBar />
+        
+        {/* 3D Viewport */}
+        <div className="flex-1 relative overflow-hidden">
         <MainViewport 
           cameraView={cameraView} 
           lighting={lighting} 
@@ -474,6 +480,7 @@ export default function AppShell({ onOpenDwgImporter, onOpenEdgeCommissioning, s
             onTimeChange={setReplayTimestamp}
           />
         )}
+        </div>
       </div>
       
       {/* Right Panel (conditional) */}

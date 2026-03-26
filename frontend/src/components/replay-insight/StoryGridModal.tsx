@@ -9,6 +9,7 @@
 import { useEffect } from 'react';
 import { X, Zap, Play, BookOpen, Filter, Users, AlertTriangle, TrendingUp, TrendingDown, MapPin, Clock, Eye, ShoppingCart, ArrowRightLeft } from 'lucide-react';
 import { useReplayInsight } from '../../context/ReplayInsightContext';
+import { useVenue } from '../../context/VenueContext';
 
 const EPISODE_COLORS: Record<string, string> = {
   QUEUE_BUILDUP_SPIKE: '#ef4444',
@@ -59,6 +60,7 @@ const SEVERITY_LABELS: Record<string, { text: string; bg: string; border: string
 };
 
 export default function StoryGridModal() {
+  const { venue } = useVenue();
   const {
     isStoryGridOpen,
     closeStoryGrid,
@@ -72,13 +74,17 @@ export default function StoryGridModal() {
     activeRecipeId,
   } = useReplayInsight();
 
-  // Fetch data on open
+  // Fetch data on open - also re-fetch when venue changes while modal is open
   useEffect(() => {
-    if (isStoryGridOpen) {
+    console.log('[StoryGridModal] useEffect triggered, isStoryGridOpen:', isStoryGridOpen, 'venue.id:', venue?.id);
+    if (isStoryGridOpen && venue?.id) {
+      console.log('[StoryGridModal] Calling fetchEpisodes and fetchRecipes for venue:', venue.id);
       fetchEpisodes();
       fetchRecipes();
     }
-  }, [isStoryGridOpen, fetchEpisodes, fetchRecipes]);
+  }, [isStoryGridOpen, venue?.id, fetchEpisodes, fetchRecipes]);
+
+  console.log('[StoryGridModal] Render check - isStoryGridOpen:', isStoryGridOpen, 'venue.id:', venue?.id, 'episodes:', episodes.length, 'isLoading:', isLoading);
 
   if (!isStoryGridOpen) return null;
 

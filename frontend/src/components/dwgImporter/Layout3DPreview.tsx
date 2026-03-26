@@ -90,11 +90,14 @@ interface CustomModel {
 
 const TYPE_COLORS: Record<string, number> = {
   shelf: 0x6366f1,
+  fridge: 0x22d3ee,
   wall: 0x64748b,
   checkout: 0x22c55e,
   entrance: 0xf59e0b,
   pillar: 0x78716c,
   digital_display: 0x8b5cf6,
+  radio: 0x06b6d4,
+  custom: 0x8b5cf6,
   default: 0x4b5563
 }
 

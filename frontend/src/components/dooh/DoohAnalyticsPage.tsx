@@ -487,6 +487,9 @@ export default function DoohAnalyticsPage({ onClose }: { onClose: () => void }) 
       setEditingScreen(null)
       await loadScreens()
       await loadAvailableDisplays()
+      
+      // Dispatch event so MainViewport refreshes DOOH screens
+      window.dispatchEvent(new CustomEvent('dooh-screens-updated'))
     } catch (err: any) {
       setError(err.message)
     } finally {
@@ -505,6 +508,7 @@ export default function DoohAnalyticsPage({ onClose }: { onClose: () => void }) 
       if (selectedScreen?.id === screenId) {
         setSelectedScreen(null)
       }
+      window.dispatchEvent(new CustomEvent('dooh-screens-updated'))
     } catch (err: any) {
       setError(err.message)
     }
@@ -520,8 +524,9 @@ export default function DoohAnalyticsPage({ onClose }: { onClose: () => void }) 
       })
       if (!res.ok) throw new Error('Failed to update screen')
       await loadScreens()
-      // Notify viewport to refresh video playback
+      // Notify viewport to refresh video playback and SEZ zones
       window.dispatchEvent(new CustomEvent('dooh-playlist-updated'))
+      window.dispatchEvent(new CustomEvent('dooh-screens-updated'))
     } catch (err: any) {
       setError(err.message)
     }

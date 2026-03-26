@@ -151,6 +151,23 @@ export class TailscaleService extends EventEmitter {
     };
   }
 
+  async getSelfIp() {
+    try {
+      const { stdout } = await execAsync('tailscale status --json');
+      const status = JSON.parse(stdout);
+      // Self.TailscaleIPs is an array, first entry is IPv4
+      const selfIp = status.Self?.TailscaleIPs?.[0] || null;
+      return {
+        ip: selfIp,
+        hostname: status.Self?.HostName || null,
+        online: status.Self?.Online ?? true,
+      };
+    } catch (error) {
+      console.error('❌ Failed to get self Tailscale IP:', error.message);
+      return { ip: null, hostname: null, online: false, error: error.message };
+    }
+  }
+
   startPolling() {
     if (this.pollInterval) return;
     

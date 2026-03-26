@@ -134,17 +134,25 @@ export function ReplayInsightProvider({ children }: { children: React.ReactNode 
 
   // ─── Fetch episodes ───
   const fetchEpisodes = useCallback(async (options: { period?: string; type?: string } = {}) => {
-    if (!venue?.id) return;
+    console.log('[ReplayInsight] fetchEpisodes called, venue.id:', venue?.id);
+    if (!venue?.id) {
+      console.warn('[ReplayInsight] No venue.id, skipping fetch');
+      return;
+    }
     setIsLoading(true);
     try {
       const params = new URLSearchParams({ venueId: venue.id });
       if (options.period) params.set('period', options.period);
       if (options.type) params.set('type', options.type);
 
+      console.log('[ReplayInsight] Fetching episodes from:', `${API_BASE}/api/replay-insights?${params}`);
       const res = await fetch(`${API_BASE}/api/replay-insights?${params}`);
       if (res.ok) {
         const data = await res.json();
+        console.log('[ReplayInsight] Got episodes:', data.episodes?.length, data);
         setEpisodes(data.episodes || []);
+      } else {
+        console.error('[ReplayInsight] Fetch failed with status:', res.status);
       }
     } catch (err) {
       console.error('[ReplayInsight] Failed to fetch episodes:', err);

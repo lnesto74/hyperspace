@@ -220,6 +220,8 @@ function DwgSvg({ fixtures, rois, lidars, groupTypeMap, mode, vbX, vbY, vbW, vbH
         const pts = roi.vertices.map(v => `${v.x},${v.y}`).join(' ')
         if (pts.length === 0) return null
         const color = roi.color || '#818cf8'
+        // Hide ROI name labels in lidars mode to reduce clutter
+        const showLabel = mode !== 'lidars'
         return (
           <g key={`roi-${i}`}>
             <polygon
@@ -231,7 +233,7 @@ function DwgSvg({ fixtures, rois, lidars, groupTypeMap, mode, vbX, vbY, vbW, vbH
               strokeOpacity={0.8}
               strokeLinejoin="round"
             />
-            {roi.vertices.length > 0 && (() => {
+            {showLabel && roi.vertices.length > 0 && (() => {
               const cx = roi.vertices.reduce((s, v) => s + v.x, 0) / roi.vertices.length
               const cy = roi.vertices.reduce((s, v) => s + v.y, 0) / roi.vertices.length
               return (

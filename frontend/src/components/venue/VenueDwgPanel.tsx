@@ -15,6 +15,7 @@ interface LayoutVersion {
   id: string
   import_id: string
   name: string
+  dwg_filename?: string | null
   is_active: boolean
   created_at: string
 }

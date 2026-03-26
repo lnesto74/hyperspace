@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { Box, Package, Radar, Settings, Hexagon, Map, Play, X, LayoutGrid, Rocket } from 'lucide-react'
+import { useState, useRef, useEffect } from 'react'
+import { Box, Package, Radar, Settings, Hexagon, Map, Play, X, LayoutGrid, ChevronLeft, ChevronRight, BarChart3 } from 'lucide-react'
 import { SidebarTab } from './AppShell'
 import VenuePanel from '../venue/VenuePanel'
 import VenueDwgPanel from '../venue/VenueDwgPanel'
@@ -7,10 +7,10 @@ import FloorplanPanel from '../venue/FloorplanPanel'
 import ObjectLibrary from '../objects/ObjectLibrary'
 import LidarNetworkPanel from '../lidar/LidarNetworkPanel'
 import RoiPanel from '../roi/RoiPanel'
+import PlanogramPanel from '../planogram/PlanogramPanel'
 import WhiteLabelSettings from '../settings/WhiteLabelSettings'
 import SimulatorControl from '../settings/SimulatorControl'
 import { useVenue } from '../../context/VenueContext'
-import { isLaunchPadEnabled, loadSession } from '../../launchpad'
 
 interface SidebarProps {
   activeTab: SidebarTab
@@ -28,12 +28,40 @@ const tabs: { id: SidebarTab; icon: typeof Box; label: string }[] = [
   { id: 'objects', icon: Package, label: 'Objects' },
   { id: 'lidars', icon: Radar, label: 'LiDARs' },
   { id: 'regions', icon: Hexagon, label: 'Regions' },
+  { id: 'planogram', icon: BarChart3, label: 'Planogram' },
 ]
 
 export default function Sidebar({ activeTab, onTabChange, onOpenDwgImporter, onOpenEdgeCommissioning, launchPadOpen, onToggleLaunchPad }: SidebarProps) {
   const { venue } = useVenue()
   const [showWhiteLabel, setShowWhiteLabel] = useState(false)
   const [showSimulator, setShowSimulator] = useState(false)
+  
+  // Horizontal scroll state for tabs
+  const tabsContainerRef = useRef<HTMLDivElement>(null)
+  const [canScrollLeft, setCanScrollLeft] = useState(false)
+  const [canScrollRight, setCanScrollRight] = useState(false)
+  
+  // Check scroll position
+  const updateScrollIndicators = () => {
+    const container = tabsContainerRef.current
+    if (!container) return
+    setCanScrollLeft(container.scrollLeft > 0)
+    setCanScrollRight(container.scrollLeft < container.scrollWidth - container.clientWidth - 1)
+  }
+  
+  useEffect(() => {
+    updateScrollIndicators()
+    window.addEventListener('resize', updateScrollIndicators)
+    return () => window.removeEventListener('resize', updateScrollIndicators)
+  }, [])
+  
+  const scrollTabs = (direction: 'left' | 'right') => {
+    const container = tabsContainerRef.current
+    if (!container) return
+    const scrollAmount = 80
+    container.scrollBy({ left: direction === 'left' ? -scrollAmount : scrollAmount, behavior: 'smooth' })
+    setTimeout(updateScrollIndicators, 150)
+  }
 
   return (
     <div className="w-80 flex-shrink-0 h-full bg-panel-bg border-r border-border-dark flex flex-col overflow-hidden">
@@ -60,72 +88,62 @@ export default function Sidebar({ activeTab, onTabChange, onOpenDwgImporter, onO
         </div>
       </div>
 
-      {/* Tab Navigation */}
-      <div className="flex border-b border-border-dark">
-        {tabs.map(tab => (
+      {/* Tab Navigation - Horizontal Scroll */}
+      <div className="relative border-b border-border-dark">
+        {/* Left scroll arrow */}
+        {canScrollLeft && (
           <button
-            key={tab.id}
-            onClick={() => onTabChange(tab.id)}
-            className={`flex-1 py-3 px-2 text-xs font-medium transition-colors flex flex-col items-center gap-1 ${
-              activeTab === tab.id
-                ? 'text-highlight border-b-2 border-highlight bg-highlight/5'
-                : 'text-gray-400 hover:text-gray-200 hover:bg-white/5'
-            }`}
+            onClick={() => scrollTabs('left')}
+            className="absolute left-0 top-0 bottom-0 z-10 w-6 flex items-center justify-center bg-gradient-to-r from-panel-bg to-transparent text-gray-400 hover:text-white"
           >
-            <tab.icon className="w-4 h-4" />
-            {tab.label}
+            <ChevronLeft className="w-4 h-4" />
           </button>
-        ))}
+        )}
+        
+        {/* Scrollable tabs container */}
+        <div
+          ref={tabsContainerRef}
+          onScroll={updateScrollIndicators}
+          className="flex overflow-x-auto scrollbar-hide"
+          style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}
+        >
+          {tabs.map(tab => (
+            <button
+              key={tab.id}
+              onClick={() => onTabChange(tab.id)}
+              className={`flex-shrink-0 py-3 px-4 text-xs font-medium transition-colors flex flex-col items-center gap-1 min-w-[64px] ${
+                activeTab === tab.id
+                  ? 'text-highlight border-b-2 border-highlight bg-highlight/5'
+                  : 'text-gray-400 hover:text-gray-200 hover:bg-white/5'
+              }`}
+            >
+              <tab.icon className="w-4 h-4" />
+              {tab.label}
+            </button>
+          ))}
+        </div>
+        
+        {/* Right scroll arrow */}
+        {canScrollRight && (
+          <button
+            onClick={() => scrollTabs('right')}
+            className="absolute right-0 top-0 bottom-0 z-10 w-6 flex items-center justify-center bg-gradient-to-l from-panel-bg to-transparent text-gray-400 hover:text-white"
+          >
+            <ChevronRight className="w-4 h-4" />
+          </button>
+        )}
       </div>
 
       {/* Tab Content */}
       <div className="flex-1 overflow-y-auto">
-        {activeTab === 'floorplan' && <FloorplanPanel onOpenDwgImporter={onOpenDwgImporter} />}
+        {activeTab === 'floorplan' && <FloorplanPanel onOpenDwgImporter={onOpenDwgImporter} launchPadOpen={launchPadOpen} onToggleLaunchPad={onToggleLaunchPad} />}
         {activeTab === 'venueDwg' && <VenueDwgPanel onOpenDwgImporter={onOpenDwgImporter} />}
         {activeTab === 'venue' && <VenuePanel />}
         {activeTab === 'objects' && <ObjectLibrary />}
         {activeTab === 'lidars' && <LidarNetworkPanel onOpenEdgeCommissioning={onOpenEdgeCommissioning} />}
         {activeTab === 'regions' && <RoiPanel />}
+        {activeTab === 'planogram' && <PlanogramPanel />}
       </div>
-
-      {/* LaunchPad Toggle (setup zone) */}
-      {isLaunchPadEnabled() && onToggleLaunchPad && (() => {
-        const lpSession = loadSession()
-        const lpCompleted = lpSession?.steps.filter(s => s.status === 'done' || s.status === 'warning').length || 0
-        const lpTotal = lpSession?.steps.length || 8
-        const progress = lpTotal > 0 ? lpCompleted / lpTotal : 0
-        const hasProgress = lpCompleted > 0 && lpCompleted < lpTotal
-        return (
-          <button
-            onClick={onToggleLaunchPad}
-            className={`mx-3 mb-2 flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all ${
-              launchPadOpen
-                ? 'bg-indigo-600/20 border border-indigo-500/40 text-indigo-300'
-                : 'bg-gray-800/50 border border-gray-700 text-gray-400 hover:text-indigo-300 hover:border-indigo-500/30 hover:bg-indigo-500/5'
-            }`}
-            title={launchPadOpen ? 'Close LaunchPad' : 'Open LaunchPad — Commissioning Wizard'}
-          >
-            <div className="relative">
-              <Rocket className="w-4 h-4" />
-              {hasProgress && !launchPadOpen && (
-                <span className="absolute -top-1.5 -right-1.5 flex items-center justify-center">
-                  <svg className="w-4 h-4 -rotate-90" viewBox="0 0 20 20">
-                    <circle cx="10" cy="10" r="8" fill="#1e1e2e" stroke="#4b5563" strokeWidth="2" />
-                    <circle cx="10" cy="10" r="8" fill="none" stroke="#818cf8" strokeWidth="2" strokeDasharray={`${progress * 50.27} 50.27`} strokeLinecap="round" />
-                  </svg>
-                </span>
-              )}
-              {lpCompleted === lpTotal && lpTotal > 0 && !launchPadOpen && (
-                <span className="absolute -top-1 -right-1 w-3 h-3 bg-green-500 text-white text-[7px] font-bold rounded-full flex items-center justify-center">✓</span>
-              )}
-            </div>
-            <div className="flex-1 min-w-0">
-              <span className="text-xs font-medium">LaunchPad</span>
-              {hasProgress && <span className="text-[10px] text-gray-500 ml-1">{lpCompleted}/{lpTotal}</span>}
-            </div>
-          </button>
-        )
-      })()}
 
       {/* Footer */}
       <div className="h-12 border-t border-border-dark flex items-center justify-between px-4">

@@ -11,6 +11,8 @@ interface PointCloudViewerProps {
   tailscaleIp: string
   lidarIp: string
   lidarModel?: string
+  lidarVendor?: string  // 'RoboSense' | 'LSLidar' | etc
+  msopPort?: number     // Custom MSOP port (default 6699 for RoboSense)
   onClose: () => void
 }
 
@@ -20,6 +22,8 @@ export default function PointCloudViewer({
   tailscaleIp,
   lidarIp,
   lidarModel = 'RS16',
+  lidarVendor = 'RoboSense',
+  msopPort = 6699,
   onClose,
 }: PointCloudViewerProps) {
   const containerRef = useRef<HTMLDivElement>(null)
@@ -149,7 +153,7 @@ export default function PointCloudViewer({
       const res = await fetch(
         `${API_BASE}/api/edge-commissioning/pcl/snapshot?` +
         `tailscaleIp=${tailscaleIp}&lidarIp=${lidarIp}&` +
-        `duration=200&maxPoints=50000&downsample=1&format=json&model=${lidarModel}`
+        `duration=200&maxPoints=50000&downsample=1&format=json&model=${lidarModel}&msopPort=${msopPort}`
       )
 
       if (!res.ok) {
@@ -256,7 +260,7 @@ export default function PointCloudViewer({
     } finally {
       setIsLoading(false)
     }
-  }, [tailscaleIp, lidarIp, lidarModel, colorMode, pointSize])
+  }, [tailscaleIp, lidarIp, lidarModel, msopPort, colorMode, pointSize])
 
   // Initial fetch
   useEffect(() => {
@@ -814,7 +818,7 @@ export default function PointCloudViewer({
         {/* Stats */}
         <div className="absolute bottom-4 right-4 text-xs text-gray-500 text-right">
           <div>Points: {pointCount.toLocaleString()}</div>
-          <div>Model: {lidarModel}</div>
+          <div>Model: {lidarVendor === 'LSLidar' ? `LS ${lidarModel}` : lidarModel}</div>
         </div>
       </div>
     </div>

@@ -17,10 +17,11 @@ const EDGE_HOSTNAME_PATTERNS = ['edge', 'ulisse', 'lidar-edge', 'concentrator'];
 
 // Helper: Get edge device IP from tailscale status
 async function getEdgeDevices() {
+  let devices = [];
+  
   try {
     const { stdout } = await execAsync('tailscale status --json');
     const status = JSON.parse(stdout);
-    const devices = [];
 
     if (status.Peer) {
       for (const [id, peer] of Object.entries(status.Peer)) {
@@ -41,43 +42,37 @@ async function getEdgeDevices() {
         }
       }
     }
-
-    return devices;
   } catch (err) {
     console.error('❌ Failed to get edge devices:', err.message);
-    
-    // Return mock devices in development
-    if (process.env.MOCK_EDGE === 'true') {
-      return [
-        {
-          edgeId: 'mock-edge-001',
-          hostname: 'edge-entrance',
-          tailscaleIp: '100.64.0.201',
-          online: true,
-          lastSeen: new Date().toISOString(),
-          os: 'linux',
-          tags: ['tag:edge'],
-        },
-        {
-          edgeId: 'mock-edge-002',
-          hostname: 'edge-checkout',
-          tailscaleIp: '100.64.0.202',
-          online: true,
-          lastSeen: new Date().toISOString(),
-          os: 'linux',
-          tags: ['tag:edge'],
-        },
-      ];
-    }
-    
-    throw err;
   }
+  
+  return devices;
 }
 
 // Helper: Validate tailscale IP is in known edges list
+// Supports lookup by edgeId (Tailscale peer ID), Tailscale IP, OR hostname for flexibility
 async function validateEdgeIp(edgeId) {
   const edges = await getEdgeDevices();
-  const edge = edges.find(e => e.edgeId === edgeId);
+  
+  // Try exact edgeId match first
+  let edge = edges.find(e => e.edgeId === edgeId);
+  
+  // Try Tailscale IP match (most reliable)
+  if (!edge) {
+    edge = edges.find(e => e.tailscaleIp === edgeId);
+  }
+  
+  // Fallback: match by hostname (case-insensitive)
+  if (!edge) {
+    const normalizedId = edgeId.toLowerCase().replace(/[^a-z0-9]/g, '');
+    const matches = edges.filter(e => {
+      const normalizedHostname = e.hostname.toLowerCase().replace(/[^a-z0-9]/g, '');
+      return normalizedHostname === normalizedId || normalizedHostname.includes(normalizedId) || normalizedId.includes(normalizedHostname);
+    });
+    // Prefer online edges when multiple matches
+    edge = matches.find(e => e.online) || matches[0];
+  }
+  
   if (!edge) {
     throw new Error(`Edge device ${edgeId} not found in tailnet`);
   }
@@ -338,10 +333,10 @@ router.post('/proxy-scan', async (req, res) => {
   }
 });
 
-// POST /api/edge-commissioning/proxy-set-ip - Set LiDAR IP via edge
+// POST /api/edge-commissioning/proxy-set-ip - Set LiDAR IP via edge (supports port config)
 router.post('/proxy-set-ip', async (req, res) => {
   try {
-    const { edgeId, tailscaleIp, currentIp, newIp, destIp } = req.body;
+    const { edgeId, tailscaleIp, currentIp, newIp, destIp, msopPort, difopPort } = req.body;
 
     if (!tailscaleIp || !currentIp || !newIp) {
       return res.status(400).json({ 
@@ -354,11 +349,19 @@ router.post('/proxy-set-ip', async (req, res) => {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 45000); // Longer timeout for reboot
 
+    const payload = { 
+      currentIp, 
+      newIp, 
+      destIp: destIp || tailscaleIp.replace(/\.\d+$/, '.102'),
+    };
+    if (msopPort) payload.msopPort = msopPort;
+    if (difopPort) payload.difopPort = difopPort;
+
     try {
       const response = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ currentIp, newIp, destIp: destIp || tailscaleIp.replace(/\.\d+$/, '.102') }),
+        body: JSON.stringify(payload),
         signal: controller.signal,
       });
       clearTimeout(timeout);
@@ -381,6 +384,88 @@ router.post('/proxy-set-ip', async (req, res) => {
   } catch (err) {
     console.error('❌ Proxy set-ip failed:', err.message);
     res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// GET /api/edge-commissioning/proxy-get-config - Get RoboSense LiDAR config via edge
+router.get('/proxy-get-config', async (req, res) => {
+  try {
+    const { tailscaleIp, lidarIp } = req.query;
+
+    if (!tailscaleIp || !lidarIp) {
+      return res.status(400).json({ 
+        ok: false, 
+        error: 'tailscaleIp and lidarIp are required' 
+      });
+    }
+
+    const url = `http://${tailscaleIp}:${EDGE_PORT}/api/edge/lidar/get-config/${lidarIp}`;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 5000);
+
+    try {
+      const response = await fetch(url, { signal: controller.signal });
+      clearTimeout(timeout);
+
+      const data = await response.json();
+      res.json(data);
+    } catch (err) {
+      clearTimeout(timeout);
+      throw err;
+    }
+  } catch (err) {
+    console.error('❌ Proxy get-config failed:', err.message);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// POST /api/edge-commissioning/proxy-lslidar-config - Configure LS Lidar IP via edge
+router.post('/proxy-lslidar-config', async (req, res) => {
+  try {
+    const { edgeId, tailscaleIp, currentIp, newIp, msopPort, difopPort } = req.body;
+
+    if (!tailscaleIp || !currentIp || !newIp) {
+      return res.status(400).json({ 
+        ok: false, 
+        error: 'tailscaleIp, currentIp, and newIp are required' 
+      });
+    }
+
+    const url = `http://${tailscaleIp}:${EDGE_PORT}/api/edge/lslidar/configure`;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10000);
+
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          currentIp, 
+          newIp,
+          msopPort: msopPort || 2345,
+          difopPort: difopPort || 2346,
+        }),
+        signal: controller.signal,
+      });
+      clearTimeout(timeout);
+
+      const data = await response.json();
+      res.json(data);
+    } catch (err) {
+      clearTimeout(timeout);
+      if (err.name === 'AbortError') {
+        return res.json({ 
+          ok: true, 
+          message: 'LS Lidar is rebooting with new IP',
+          newIp,
+          rebootDetected: true,
+        });
+      }
+      throw err;
+    }
+  } catch (err) {
+    console.error('❌ Proxy LS Lidar config failed:', err.message);
+    res.status(500).json({ ok: false, error: err.message });
   }
 });
 
@@ -418,13 +503,17 @@ router.get('/proxy-config', async (req, res) => {
 // GET /api/edge-commissioning/pcl/snapshot - Get point cloud snapshot from LiDAR via edge
 router.get('/pcl/snapshot', async (req, res) => {
   try {
-    const { tailscaleIp, lidarIp, duration = 100, maxPoints = 30000, downsample = 2, format = 'json', model = 'RS16' } = req.query;
+    const { tailscaleIp, lidarIp, duration = 100, maxPoints = 30000, downsample = 2, format = 'json', model = 'RS16', vendor = 'RoboSense', msopPort = 6699 } = req.query;
 
     if (!tailscaleIp || !lidarIp) {
       return res.status(400).json({ success: false, error: 'tailscaleIp and lidarIp are required' });
     }
 
-    const url = `http://${tailscaleIp}:${EDGE_PORT}/api/edge/pcl/snapshot?ip=${lidarIp}&duration=${duration}&maxPoints=${maxPoints}&downsample=${downsample}&format=${format}&model=${model}`;
+    // Route to different edge endpoint based on vendor
+    const isLsLidar = vendor === 'LSLidar' || model === 'C16' || model === 'C32';
+    const endpoint = isLsLidar ? 'lslidar/snapshot' : 'snapshot';
+    const portParam = isLsLidar ? '&port=2345' : `&msopPort=${msopPort}`;
+    const url = `http://${tailscaleIp}:${EDGE_PORT}/api/edge/pcl/${endpoint}?ip=${lidarIp}&duration=${duration}&maxPoints=${maxPoints}&downsample=${downsample}&format=${format}&model=${model}${portParam}`;
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 15000); // 15s timeout for point cloud capture
 
@@ -1337,17 +1426,21 @@ router.get('/deploy-history', (req, res) => {
 // ============ COMMISSIONED LIDARS ============
 
 // GET /api/edge-commissioning/commissioned-lidars
+// Query params: venueId (optional), edgeId (optional), unpairedOnly (optional)
+// If venueId not provided, returns all commissioned LiDARs (global view)
+// If unpairedOnly=true, returns only LiDARs not paired to any venue
 router.get('/commissioned-lidars', (req, res) => {
   try {
     const db = req.app.get('db');
-    const { venueId, edgeId } = req.query;
+    const { venueId, edgeId, unpairedOnly } = req.query;
 
-    if (!venueId) {
-      return res.status(400).json({ error: 'venueId is required' });
+    let query = 'SELECT * FROM commissioned_lidars WHERE 1=1';
+    const params = [];
+
+    if (venueId) {
+      query += ' AND venue_id = ?';
+      params.push(venueId);
     }
-
-    let query = 'SELECT * FROM commissioned_lidars WHERE venue_id = ?';
-    const params = [venueId];
 
     if (edgeId) {
       query += ' AND edge_id = ?';
@@ -1356,7 +1449,17 @@ router.get('/commissioned-lidars', (req, res) => {
 
     query += ' ORDER BY assigned_ip ASC';
 
-    const rows = db.prepare(query).all(...params);
+    let rows = db.prepare(query).all(...params);
+
+    // If unpairedOnly, filter out LiDARs that are paired to any venue
+    if (unpairedOnly === 'true') {
+      const pairedIps = new Set(
+        db.prepare('SELECT DISTINCT lidar_ip FROM edge_lidar_pairings').all()
+          .map(r => r.lidar_ip)
+      );
+      rows = rows.filter(row => !pairedIps.has(row.assigned_ip));
+    }
+
     const lidars = rows.map(row => ({
       id: row.id,
       venueId: row.venue_id,
@@ -1367,6 +1470,8 @@ router.get('/commissioned-lidars', (req, res) => {
       vendor: row.vendor,
       model: row.model,
       macAddress: row.mac_address,
+      msopPort: row.msop_port || 6699,
+      difopPort: row.difop_port || 7788,
       commissionedAt: row.commissioned_at,
       lastSeenAt: row.last_seen_at,
       status: row.status,
@@ -1383,7 +1488,9 @@ router.get('/commissioned-lidars', (req, res) => {
 router.post('/commissioned-lidars', (req, res) => {
   try {
     const db = req.app.get('db');
-    const { venueId, edgeId, assignedIp, label, originalIp, vendor, model, macAddress } = req.body;
+    const { venueId, edgeId, assignedIp, label, originalIp, vendor, model, macAddress, msopPort, difopPort } = req.body;
+    
+    console.log(`📡 Commissioned LiDAR: ${assignedIp} | MAC: ${macAddress} | MSOP: ${msopPort} | DIFOP: ${difopPort}`);
 
     if (!venueId || !edgeId || !assignedIp) {
       return res.status(400).json({ error: 'venueId, edgeId, and assignedIp are required' });
@@ -1398,19 +1505,19 @@ router.post('/commissioned-lidars', (req, res) => {
     if (existing) {
       db.prepare(`
         UPDATE commissioned_lidars 
-        SET edge_id = ?, label = ?, original_ip = ?, vendor = ?, model = ?, mac_address = ?, 
-            commissioned_at = datetime('now'), status = 'active'
+        SET edge_id = ?, label = ?, original_ip = ?, vendor = ?, model = ?, mac_address = ?,
+            msop_port = ?, difop_port = ?, commissioned_at = datetime('now'), status = 'active'
         WHERE id = ?
       `).run(edgeId, label || null, originalIp || '192.168.1.200', vendor || 'RoboSense', 
-             model || null, macAddress || null, existing.id);
+             model || null, macAddress || null, msopPort || 6699, difopPort || 7788, existing.id);
 
       res.json({ success: true, id: existing.id, updated: true });
     } else {
       db.prepare(`
-        INSERT INTO commissioned_lidars (id, venue_id, edge_id, assigned_ip, label, original_ip, vendor, model, mac_address)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO commissioned_lidars (id, venue_id, edge_id, assigned_ip, label, original_ip, vendor, model, mac_address, msop_port, difop_port)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(id, venueId, edgeId, assignedIp, label || null, originalIp || '192.168.1.200', 
-             vendor || 'RoboSense', model || null, macAddress || null);
+             vendor || 'RoboSense', model || null, macAddress || null, msopPort || 6699, difopPort || 7788);
 
       res.json({ success: true, id, created: true });
     }
@@ -1434,11 +1541,35 @@ router.delete('/commissioned-lidars/:id', (req, res) => {
   }
 });
 
+// DELETE /api/edge-commissioning/commissioned-lidars/venue/:venueId - Decommission all LiDARs for a venue
+router.delete('/commissioned-lidars/venue/:venueId', (req, res) => {
+  try {
+    const db = req.app.get('db');
+    const { venueId } = req.params;
+    const { edgeId } = req.query;
+
+    let query = 'DELETE FROM commissioned_lidars WHERE venue_id = ?';
+    const params = [venueId];
+
+    if (edgeId) {
+      query += ' AND edge_id = ?';
+      params.push(edgeId);
+    }
+
+    const result = db.prepare(query).run(...params);
+    console.log(`✅ Decommissioned ${result.changes} LiDARs for venue ${venueId}`);
+    res.json({ success: true, deletedCount: result.changes });
+  } catch (err) {
+    console.error('❌ Failed to decommission venue lidars:', err.message);
+    res.status(500).json({ error: 'Failed to decommission venue lidars', message: err.message });
+  }
+});
+
 // GET /api/edge-commissioning/next-available-ip
 router.get('/next-available-ip', (req, res) => {
   try {
     const db = req.app.get('db');
-    const { venueId } = req.query;
+    const { venueId, startOctet } = req.query;
 
     if (!venueId) {
       return res.status(400).json({ error: 'venueId is required' });
@@ -1450,8 +1581,9 @@ router.get('/next-available-ip', (req, res) => {
 
     const usedIps = new Set(rows.map(r => r.assigned_ip));
 
-    // Find next available IP starting from 201
-    let nextOctet = 201;
+    // Find next available IP starting from configurable startOctet (default 201)
+    let nextOctet = startOctet ? parseInt(startOctet, 10) : 201;
+    if (isNaN(nextOctet) || nextOctet < 1 || nextOctet > 254) nextOctet = 201;
     while (usedIps.has(`192.168.1.${nextOctet}`) && nextOctet < 255) {
       nextOctet++;
     }
@@ -1473,10 +1605,71 @@ router.get('/next-available-ip', (req, res) => {
 
 // ============ HER (HYPERSPACE EDGE RUNTIME) API ============
 
+// GET /edge/:edgeId/prerequisites - Check edge prerequisites (Tailscale, Docker)
+router.get('/edge/:edgeId/prerequisites', async (req, res) => {
+  try {
+    const { edgeId } = req.params;
+    
+    // Validate edge is reachable (this confirms Tailscale is working)
+    let edge;
+    let tailscaleInstalled = false;
+    try {
+      edge = await validateEdgeIp(edgeId);
+      tailscaleInstalled = true;
+    } catch (err) {
+      return res.json({
+        tailscaleInstalled: false,
+        dockerAvailable: false,
+        error: err.message,
+      });
+    }
+    
+    // Check Docker availability on edge
+    let dockerAvailable = false;
+    let dockerVersion = null;
+    try {
+      const dockerStatus = await proxyToEdge(edge, '/api/edge/docker/status', {
+        method: 'GET',
+        timeout: 5000,
+      });
+      dockerAvailable = dockerStatus.available || false;
+      dockerVersion = dockerStatus.version || null;
+    } catch (err) {
+      // Docker check failed - might not have endpoint or Docker not installed
+      console.warn(`[Prerequisites] Docker check failed on ${edgeId}: ${err.message}`);
+      // Try alternative: check HER status which also indicates Docker
+      try {
+        const herStatus = await proxyToEdge(edge, '/api/edge/her/status', {
+          method: 'GET',
+          timeout: 5000,
+        });
+        // If we can get HER status, Docker is likely available
+        dockerAvailable = true;
+      } catch {
+        // Assume Docker is available if edge is online (edge server requires Docker)
+        dockerAvailable = true;
+      }
+    }
+    
+    res.json({
+      tailscaleInstalled,
+      dockerAvailable,
+      dockerVersion,
+      edgeOnline: true,
+      edgeHostname: edge.hostname,
+    });
+    
+  } catch (err) {
+    console.error('❌ [Prerequisites] Error:', err.message);
+    res.status(500).json({ error: 'Failed to check prerequisites', message: err.message });
+  }
+});
+
 // GET /providers - Get list of available algorithm providers
 router.get('/providers', (req, res) => {
   try {
-    const providers = getActiveProviders();
+    const db = req.app.get('db');
+    const providers = getActiveProviders(db);
     res.json({
       success: true,
       providers,
@@ -1491,8 +1684,9 @@ router.get('/providers', (req, res) => {
 // GET /providers/:providerId - Get a specific provider
 router.get('/providers/:providerId', (req, res) => {
   try {
+    const db = req.app.get('db');
     const { providerId } = req.params;
-    const provider = getProviderById(providerId);
+    const provider = getProviderById(db, providerId);
     
     if (!provider) {
       return res.status(404).json({ error: 'Provider not found', providerId });
@@ -1537,8 +1731,8 @@ router.post('/edge/:edgeId/deploy-her', async (req, res) => {
       return res.status(404).json({ error: 'Venue not found', venueId });
     }
     
-    // Get pairings for this venue+edge (LEFT JOIN since placements may not exist yet)
-    const pairings = db.prepare(`
+    // Get pairings for this venue+edge - try multiple edge_id formats since pairings may have been stored differently
+    const pairingQuery = db.prepare(`
       SELECT elp.*, 
              COALESCE(lp.position_x, 0) as position_x, 
              COALESCE(lp.position_y, 0) as position_y, 
@@ -1550,9 +1744,22 @@ router.post('/edge/:edgeId/deploy-her', async (req, res) => {
       FROM edge_lidar_pairings elp
       LEFT JOIN lidar_placements lp ON elp.placement_id = lp.id
       WHERE elp.venue_id = ? AND elp.edge_id = ?
-    `).all(venueId, edgeId);
+    `);
+    
+    // Try different edge_id formats: original input, resolved nodekey, Tailscale IP, hostname
+    let pairings = pairingQuery.all(venueId, edgeId);
+    if (pairings.length === 0 && edge.edgeId !== edgeId) {
+      pairings = pairingQuery.all(venueId, edge.edgeId);
+    }
+    if (pairings.length === 0 && edge.tailscaleIp !== edgeId) {
+      pairings = pairingQuery.all(venueId, edge.tailscaleIp);
+    }
+    if (pairings.length === 0 && edge.hostname) {
+      pairings = pairingQuery.all(venueId, edge.hostname);
+    }
     
     if (pairings.length === 0) {
+      console.log(`❌ [HER Deploy] No pairings found for venue ${venueId}. Tried edge_id: ${edgeId}, ${edge.edgeId}, ${edge.tailscaleIp}, ${edge.hostname}`);
       return res.status(400).json({ error: 'No LiDAR pairings found for this edge+venue' });
     }
     

@@ -115,6 +115,7 @@ interface PlanogramContextType {
   placedSkuIds: Set<string>
   getSkuPlacement: (skuId: string) => { shelfId: string; shelfName: string; levelIndex: number; slotIndex: number } | null
   removeSkuFromSlot: (skuId: string) => Promise<void>
+  allShelfPlanograms: Map<string, ShelfPlanogram>
   
   // Loading states
   loading: boolean
@@ -550,6 +551,7 @@ export function PlanogramProvider({ children }: { children: ReactNode }) {
       placedSkuIds,
       getSkuPlacement,
       removeSkuFromSlot,
+      allShelfPlanograms,
       loading,
       hoveredSkuId,
       setHoveredSkuId,

@@ -46,6 +46,7 @@ interface VenueContextType {
   venueList: VenueListItem[]
   selectedObjectId: string | null
   selectedObjectIds: Set<string>
+  hoveredObjectId: string | null
   copiedObjects: VenueObject[]
   isLoading: boolean
   
@@ -66,6 +67,7 @@ interface VenueContextType {
   removeObject: (id: string) => void
   removeObjects: (ids: string[]) => void
   selectObject: (id: string | null) => void
+  hoverObject: (id: string | null) => void
   toggleObjectSelection: (id: string) => void
   addToSelection: (id: string) => void
   clearSelection: () => void
@@ -106,6 +108,7 @@ export function VenueProvider({ children }: { children: ReactNode }) {
   const [venueList, setVenueList] = useState<VenueListItem[]>([])
   const [selectedObjectId, setSelectedObjectId] = useState<string | null>(null)
   const [selectedObjectIds, setSelectedObjectIds] = useState<Set<string>>(new Set())
+  const [hoveredObjectId, setHoveredObjectId] = useState<string | null>(null)
   const [copiedObjects, setCopiedObjects] = useState<VenueObject[]>([])
   const [isLoading, setIsLoading] = useState(false)
 
@@ -319,6 +322,10 @@ export function VenueProvider({ children }: { children: ReactNode }) {
             if (onPlacementsLoaded && data.placements) {
               onPlacementsLoaded(data.placements)
             }
+            // Refresh venue list so Floorplan Library shows correct dimensions
+            setVenueList(prev => prev.map(v => 
+              v.id === id ? { ...v, width: fixedVenue.width, depth: fixedVenue.depth } : v
+            ))
             addToast('success', `Rebootstrapped DWG venue: ${fixedVenue.width}×${fixedVenue.depth}m, ${fixedObjects.length} objects`)
             return
           }
@@ -328,10 +335,26 @@ export function VenueProvider({ children }: { children: ReactNode }) {
       }
       
       // Normal load path
+      console.log('%c[FLOW-DEBUG] VenueContext.loadVenue completed', 'color:#8b5cf6;font-weight:bold', {
+        venueId: loadedVenue.id,
+        venueName: loadedVenue.name,
+        isDwg: loadedVenue.scene_source === 'dwg' || !!loadedVenue.dwg_layout_version_id,
+        dwgLayoutVersionId: loadedVenue.dwg_layout_version_id,
+        dimensions: `${loadedVenue.width}×${loadedVenue.depth}m`,
+        objectCount: loadedObjects.length,
+        placementsCount: data.placements?.length || 0,
+        objectsByType: loadedObjects.reduce((acc: Record<string, number>, o: any) => {
+          acc[o.type] = (acc[o.type] || 0) + 1
+          return acc
+        }, {}),
+      })
       setVenue(loadedVenue)
       setObjects(loadedObjects)
       setSelectedObjectId(null)
       if (onPlacementsLoaded && data.placements) {
+        console.log('%c[FLOW-DEBUG] Passing placements to callback (lidar_placements table)', 'color:#8b5cf6', {
+          count: data.placements.length,
+        })
         onPlacementsLoaded(data.placements)
       }
       addToast('success', `Loaded venue: ${loadedVenue.name}`)
@@ -397,6 +420,12 @@ export function VenueProvider({ children }: { children: ReactNode }) {
     }
     setObjects(prev => [...prev, obj])
     setSelectedObjectId(obj.id)
+    
+    // Dispatch event so MainViewport can auto-zoom and highlight the new object
+    window.dispatchEvent(new CustomEvent('venue-object-added', { 
+      detail: { objectId: obj.id, position: obj.position, scale: obj.scale }
+    }))
+    
     return obj
   }, [venue, objects, snapToGrid])
 
@@ -420,18 +449,34 @@ export function VenueProvider({ children }: { children: ReactNode }) {
       return next
     })
     if (selectedObjectId === id) setSelectedObjectId(null)
-  }, [selectedObjectId])
+    // Auto-persist deletion to DB
+    if (venue) {
+      fetch(`/api/venues/${venue.id}/objects/${id}`, { method: 'DELETE' }).catch(() => {})
+    }
+  }, [selectedObjectId, venue])
 
   const removeObjects = useCallback((ids: string[]) => {
     const idsSet = new Set(ids)
     setObjects(prev => prev.filter(o => !idsSet.has(o.id)))
     setSelectedObjectIds(new Set())
     setSelectedObjectId(null)
-  }, [])
+    // Auto-persist deletions to DB
+    if (venue && ids.length > 0) {
+      fetch(`/api/venues/${venue.id}/objects/delete-batch`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids }),
+      }).catch(() => {})
+    }
+  }, [venue])
 
   const selectObject = useCallback((id: string | null) => {
     setSelectedObjectId(id)
     setSelectedObjectIds(id ? new Set([id]) : new Set())
+  }, [])
+
+  const hoverObject = useCallback((id: string | null) => {
+    setHoveredObjectId(id)
   }, [])
 
   const toggleObjectSelection = useCallback((id: string) => {
@@ -499,6 +544,7 @@ export function VenueProvider({ children }: { children: ReactNode }) {
       venueList,
       selectedObjectId,
       selectedObjectIds,
+      hoveredObjectId,
       copiedObjects,
       isLoading,
       fetchVenueList,
@@ -517,6 +563,7 @@ export function VenueProvider({ children }: { children: ReactNode }) {
       removeObject,
       removeObjects,
       selectObject,
+      hoverObject,
       toggleObjectSelection,
       addToSelection,
       clearSelection,

@@ -1,7 +1,7 @@
 import { useEffect, useState, useRef } from 'react'
 import { 
   Server, Radio, Wifi, WifiOff, RefreshCw, Search, Upload, 
-  Check, X, AlertCircle, Clock, Link2, Unlink, Download, Wand2, Camera, Pencil, Package, Maximize2, StopCircle, Terminal, ChevronDown, ChevronUp
+  Check, X, AlertCircle, Clock, Link2, Unlink, Download, Wand2, Camera, Pencil, Package, Maximize2, StopCircle, Terminal, ChevronDown, ChevronUp, Plus
 } from 'lucide-react'
 import { useEdgeCommissioning, EdgeDevice, EdgeLidar, EdgePlacement, EdgePairing, RoiBounds, DwgLayout, DwgFixture } from '../../context/EdgeCommissioningContext'
 import { useVenue } from '../../context/VenueContext'
@@ -38,6 +38,9 @@ export default function EdgeCommissioningPage({ onClose }: { onClose: () => void
     deployToEdge,
     loadDeployHistory,
     loadCommissionedLidars,
+    addOfflineLidar,
+    decommissionLidar,
+    decommissionAllLidars,
     getPairingForPlacement,
     getMergedLidars,
     updateEdgeName,
@@ -57,7 +60,16 @@ export default function EdgeCommissioningPage({ onClose }: { onClose: () => void
   const [isExportingConfig, setIsExportingConfig] = useState(false)
   const [showDeployHistory, setShowDeployHistory] = useState(false)
   const [showCommissioningWizard, setShowCommissioningWizard] = useState(false)
-  const [pointCloudLidar, setPointCloudLidar] = useState<{ ip: string; tailscaleIp: string } | null>(null)
+  const [pointCloudLidar, setPointCloudLidar] = useState<{ ip: string; tailscaleIp: string; vendor?: string; model?: string; msopPort?: number } | null>(null)
+  const [showOfflineLidarModal, setShowOfflineLidarModal] = useState(false)
+  const [offlineLidarForm, setOfflineLidarForm] = useState({
+    assignedIp: '',
+    label: '',
+    vendor: 'RoboSense',
+    model: 'RS16',
+    macAddress: '',
+    originalIp: '192.168.1.200',
+  })
   const [editingEdge, setEditingEdge] = useState<EdgeDevice | null>(null)
   const [editName, setEditName] = useState('')
   const [hoveredPlacementIndex, setHoveredPlacementIndex] = useState<number | null>(null)
@@ -250,8 +262,8 @@ export default function EdgeCommissioningPage({ onClose }: { onClose: () => void
           onComplete={() => {
             setShowCommissioningWizard(false)
             // Refresh LiDAR inventory after commissioning
-            if (selectedEdge) {
-              scanEdgeLidars(selectedEdge.edgeId)
+            if (selectedEdge && venue?.id) {
+              scanEdgeLidars(selectedEdge.edgeId, venue.id)
             }
           }}
         />
@@ -262,9 +274,118 @@ export default function EdgeCommissioningPage({ onClose }: { onClose: () => void
         <PointCloudViewer
           tailscaleIp={pointCloudLidar.tailscaleIp}
           lidarIp={pointCloudLidar.ip}
-          lidarModel="RS16"
+          lidarModel={pointCloudLidar.vendor === 'LSLidar' ? 'C16' : (pointCloudLidar.model || 'RS16')}
+          lidarVendor={pointCloudLidar.vendor}
+          msopPort={pointCloudLidar.msopPort || 6699}
           onClose={() => setPointCloudLidar(null)}
         />
+      )}
+
+      {/* Offline LiDAR Modal */}
+      {showOfflineLidarModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-gray-800 rounded-lg p-6 w-full max-w-md">
+            <h3 className="text-lg font-medium text-white mb-4">Add Offline LiDAR</h3>
+            <p className="text-sm text-gray-400 mb-4">
+              Add a LiDAR that was commissioned externally (e.g., via supplier web interface) but is currently offline.
+            </p>
+            
+            <div className="space-y-4">
+              <div>
+                <label className="block text-xs text-gray-400 mb-1">IP Address *</label>
+                <input
+                  type="text"
+                  value={offlineLidarForm.assignedIp}
+                  onChange={(e) => setOfflineLidarForm({...offlineLidarForm, assignedIp: e.target.value})}
+                  placeholder="192.168.1.212"
+                  className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded text-white"
+                />
+              </div>
+              
+              <div>
+                <label className="block text-xs text-gray-400 mb-1">Label</label>
+                <input
+                  type="text"
+                  value={offlineLidarForm.label}
+                  onChange={(e) => setOfflineLidarForm({...offlineLidarForm, label: e.target.value})}
+                  placeholder="LiDAR-212"
+                  className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded text-white"
+                />
+              </div>
+              
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs text-gray-400 mb-1">Vendor</label>
+                  <select
+                    value={offlineLidarForm.vendor}
+                    onChange={(e) => setOfflineLidarForm({...offlineLidarForm, vendor: e.target.value})}
+                    className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded text-white"
+                  >
+                    <option value="RoboSense">RoboSense</option>
+                    <option value="LSLidar">LS Lidar</option>
+                  </select>
+                </div>
+                
+                <div>
+                  <label className="block text-xs text-gray-400 mb-1">Model</label>
+                  <select
+                    value={offlineLidarForm.model}
+                    onChange={(e) => setOfflineLidarForm({...offlineLidarForm, model: e.target.value})}
+                    className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded text-white"
+                  >
+                    <option value="RS16">RS16</option>
+                    <option value="RS32">RS32</option>
+                    <option value="RSAIRY">RSAIRY</option>
+                    <option value="C16">C16</option>
+                    <option value="C32">C32</option>
+                  </select>
+                </div>
+              </div>
+              
+              <div>
+                <label className="block text-xs text-gray-400 mb-1">MAC Address</label>
+                <input
+                  type="text"
+                  value={offlineLidarForm.macAddress}
+                  onChange={(e) => setOfflineLidarForm({...offlineLidarForm, macAddress: e.target.value})}
+                  placeholder="aa:bb:cc:dd:ee:ff"
+                  className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded text-white"
+                />
+              </div>
+            </div>
+            
+            <div className="flex justify-end gap-3 mt-6">
+              <button
+                onClick={() => setShowOfflineLidarModal(false)}
+                className="px-4 py-2 text-gray-400 hover:text-white"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={async () => {
+                  if (!offlineLidarForm.assignedIp || !selectedEdge || !venue?.id) return
+                  
+                  const success = await addOfflineLidar(venue.id, selectedEdge.edgeId, offlineLidarForm)
+                  if (success) {
+                    setShowOfflineLidarModal(false)
+                    setOfflineLidarForm({
+                      assignedIp: '',
+                      label: '',
+                      vendor: 'RoboSense',
+                      model: 'RS16',
+                      macAddress: '',
+                      originalIp: '192.168.1.200',
+                    })
+                  }
+                }}
+                disabled={!offlineLidarForm.assignedIp || !selectedEdge}
+                className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded disabled:opacity-50"
+              >
+                Add LiDAR
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Header */}
@@ -472,13 +593,33 @@ export default function EdgeCommissioningPage({ onClose }: { onClose: () => void
                       <Wand2 className="w-4 h-4 text-amber-400" />
                     </button>
                     <button
-                      onClick={() => scanEdgeLidars(selectedEdge.edgeId)}
+                      onClick={() => setShowOfflineLidarModal(true)}
+                      className="p-1.5 hover:bg-gray-700 rounded"
+                      title="Add Offline LiDAR (externally commissioned)"
+                    >
+                      <Plus className="w-4 h-4 text-blue-400" />
+                    </button>
+                    <button
+                      onClick={() => scanEdgeLidars(selectedEdge.edgeId, venue?.id)}
                       disabled={isScanningLidars || !selectedEdge.online}
                       className="p-1.5 hover:bg-gray-700 rounded disabled:opacity-50"
                       title="Scan LAN for LiDARs"
                     >
                       <Search className={`w-4 h-4 text-gray-400 ${isScanningLidars ? 'animate-pulse' : ''}`} />
                     </button>
+                    {mergedLidars.length > 0 && venue?.id && (
+                      <button
+                        onClick={async () => {
+                          if (confirm('Decommission all LiDARs for this venue? This will remove all IP assignments.')) {
+                            await decommissionAllLidars(venue.id, selectedEdge.edgeId)
+                          }
+                        }}
+                        className="p-1.5 hover:bg-red-900/50 rounded text-red-400 hover:text-red-300"
+                        title="Decommission All LiDARs"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    )}
                   </div>
                 </div>
               )}
@@ -511,7 +652,10 @@ export default function EdgeCommissioningPage({ onClose }: { onClose: () => void
                       onDragEnd={handleDragEnd}
                       onViewPointCloud={() => selectedEdge && setPointCloudLidar({ 
                         ip: lidar.ip, 
-                        tailscaleIp: selectedEdge.tailscaleIp 
+                        tailscaleIp: selectedEdge.tailscaleIp,
+                        vendor: lidar.vendor,
+                        model: lidar.model,
+                        msopPort: lidar.msopPort
                       })}
                     />
                   ))
@@ -972,6 +1116,20 @@ function LidarCard({
       <div className="mt-1 text-xs text-gray-500">
         {lidar.ip} • {lidar.vendor || 'RoboSense'}
       </div>
+      {/* Ports display */}
+      <div className="mt-0.5 text-xs text-gray-500">
+        {lidar.vendor === 'LSLidar' ? (
+          <span>MSOP: <span className="text-blue-400">2345</span> • DIFOP: <span className="text-blue-400">2346</span></span>
+        ) : (
+          <span>MSOP: <span className="text-cyan-400">{lidar.msopPort || 6699}</span> • DIFOP: <span className="text-cyan-400">{lidar.difopPort || 7788}</span></span>
+        )}
+      </div>
+      {/* MAC address if available */}
+      {lidar.mac && (
+        <div className="mt-0.5 text-xs text-gray-500 font-mono">
+          MAC: <span className="text-cyan-400">{lidar.mac}</span>
+        </div>
+      )}
       <div className="mt-1 text-xs">
         {lidar.reachable ? (
           <span className="text-green-400">● Online</span>

@@ -150,14 +150,9 @@ export class NavGrid {
         continue; // Don't block entrance
       }
       
-      // Detect checkouts
+      // Detect checkouts (collect first, filter outliers after loop)
       if (type === 'checkout' || name.includes('checkout') || name.includes('cashier')) {
         checkoutObjs.push(obj);
-        this.cashiers.push({
-          x: obj.position.x,
-          z: obj.position.z,
-          width: obj.scale?.x || 1.5,
-        });
       }
       
       // Block obstacles - any solid object that's not entrance, floor, or zone marker
@@ -172,6 +167,31 @@ export class NavGrid {
         // Block all solid objects: walls, shelves, shelved, counters, tables, etc.
         this.blockObject(obj);
       }
+    }
+    
+    // Filter misplaced checkouts: remove outliers far from the checkout group
+    if (checkoutObjs.length > 2) {
+      const sortedZs = checkoutObjs.map(c => c.position.z).sort((a, b) => a - b);
+      const medianZ = sortedZs[Math.floor(sortedZs.length / 2)];
+      const MAX_CHECKOUT_SPREAD = 10; // meters from median
+      const validCheckouts = checkoutObjs.filter(c => 
+        Math.abs(c.position.z - medianZ) <= MAX_CHECKOUT_SPREAD
+      );
+      const removed = checkoutObjs.length - validCheckouts.length;
+      if (removed > 0) {
+        console.log(`[NavGrid] Filtered ${removed} misplaced checkout(s) (medianZ=${medianZ.toFixed(1)}, threshold=${MAX_CHECKOUT_SPREAD}m)`);
+        checkoutObjs.length = 0;
+        checkoutObjs.push(...validCheckouts);
+      }
+    }
+    
+    // Populate cashier positions from validated checkouts
+    for (const obj of checkoutObjs) {
+      this.cashiers.push({
+        x: obj.position.x,
+        z: obj.position.z,
+        width: obj.scale?.x || 1.5,
+      });
     }
     
     // Parse checkout lanes from ROIs (Queue + Service pairs)
@@ -459,9 +479,21 @@ export class NavGrid {
     const spacing = 2.0; // Waypoint spacing in meters
     const spacingCells = Math.ceil(spacing / this.resolution);
     
+    // Clearance radius in cells — waypoints must have open space around them
+    const clearanceCells = Math.ceil(0.5 / this.resolution); // 0.5m clearance
+    
     for (let gz = 0; gz < this.gridDepth; gz += spacingCells) {
       for (let gx = 0; gx < this.gridWidth; gx += spacingCells) {
-        if (!this.isWalkable(gx, gz)) continue;
+        if (!this.isStrictlyWalkable(gx, gz)) continue;
+        
+        // Check clearance: all cells within radius must be walkable
+        let hasClearance = true;
+        for (let dz = -clearanceCells; dz <= clearanceCells && hasClearance; dz++) {
+          for (let dx = -clearanceCells; dx <= clearanceCells && hasClearance; dx++) {
+            if (!this.isWalkable(gx + dx, gz + dz)) hasClearance = false;
+          }
+        }
+        if (!hasClearance) continue;
         
         const { x, z } = this.gridToWorld(gx, gz);
         const zone = this.getZone(gx, gz);
@@ -509,7 +541,9 @@ export class NavGrid {
           const midGx = Math.floor((aisleStart + gx) / 2);
           const { x } = this.gridToWorld(midGx, gz);
           if (x >= shoppingMinX && x <= shoppingMaxX) {
-            this.safeWaypoints.aisles.push({ x, z, gx: midGx, gz });
+            const wp = { x, z, gx: midGx, gz };
+            this.safeWaypoints.aisles.push(wp);
+            this.safeWaypoints.shopping.push(wp);
           }
           inAisle = false;
         }

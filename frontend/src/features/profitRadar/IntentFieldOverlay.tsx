@@ -89,7 +89,9 @@ export default function IntentFieldOverlay() {
   const [frozenClusters, setFrozenClusters] = useState<BehaviorCluster[] | null>(null)
 
   const sortedZones = useMemo(() =>
-    [...zoneField].sort((a, b) => b.dominantScore - a.dominantScore),
+    [...zoneField]
+      .filter(z => z.roiName !== 'Zone 1' && z.roiName !== 'LiDAR Coverage') // Hide auto-generated zones
+      .sort((a, b) => b.dominantScore - a.dominantScore),
     [zoneField]
   )
 

@@ -277,9 +277,33 @@ export default function SkuDebugOverlay({ enabled, containerRef, cameraRef, onHo
         <div className="w-2 h-2 rounded-full bg-white animate-pulse" />
         SKU Debug ON | {trackDetections.size} detections | {tracks.size} tracks
       </div>
-      {/* Stacked SKU Cards Panel - Left Side */}
+      {/* SKU Detection Panel - Left Side (Status card on top of track cards) */}
       {detectionsArray.length > 0 && (
         <div className="absolute top-4 left-16 flex flex-col gap-2 max-h-[calc(100%-8rem)] overflow-y-auto">
+          {/* Status card - always on top */}
+          <div className="bg-gray-900/90 border border-green-500/50 rounded-lg p-3 min-w-[200px]">
+            <div className="flex items-center gap-2 mb-2">
+              <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
+              <span className="text-xs font-medium text-white">SKU Detection Active</span>
+            </div>
+            <div className="text-[10px] text-gray-400 space-y-1">
+              <div className="flex justify-between">
+                <span>Tracked persons:</span>
+                <span className="text-white">{tracks.size}</span>
+              </div>
+              <div className="flex justify-between">
+                <span>In shelf zones:</span>
+                <span className="text-green-400">{trackDetections.size}</span>
+              </div>
+              <div className="flex justify-between">
+                <span>SKUs detected:</span>
+                <span className="text-amber-400">
+                  {Array.from(trackDetections.values()).reduce((sum, d) => sum + d.detectedSkus.length, 0)}
+                </span>
+              </div>
+            </div>
+          </div>
+          {/* Track detection cards */}
           {detectionsArray.map((detection, index) => {
             const topSku = detection.detectedSkus[0]
             if (!topSku) return null
@@ -398,32 +422,6 @@ export default function SkuDebugOverlay({ enabled, containerRef, cameraRef, onHo
               </div>
             )
           })}
-        </div>
-      )}
-      
-      {/* Debug info panel - Top Right */}
-      {trackDetections.size > 0 && (
-        <div className="absolute top-4 right-4 bg-gray-900/90 border border-gray-700 rounded-lg p-3 min-w-[200px]">
-          <div className="flex items-center gap-2 mb-2">
-            <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
-            <span className="text-xs font-medium text-white">SKU Detection Active</span>
-          </div>
-          <div className="text-[10px] text-gray-400 space-y-1">
-            <div className="flex justify-between">
-              <span>Tracked persons:</span>
-              <span className="text-white">{tracks.size}</span>
-            </div>
-            <div className="flex justify-between">
-              <span>In shelf zones:</span>
-              <span className="text-green-400">{trackDetections.size}</span>
-            </div>
-            <div className="flex justify-between">
-              <span>SKUs detected:</span>
-              <span className="text-amber-400">
-                {Array.from(trackDetections.values()).reduce((sum, d) => sum + d.detectedSkus.length, 0)}
-              </span>
-            </div>
-          </div>
         </div>
       )}
     </div>

@@ -15,6 +15,7 @@ export type LaunchPadStepId =
   | 'place_lidars'
   | 'commission_edge'    // merged: scan tailscale + select edge + scan LiDARs
   | 'pair_devices'
+  | 'deploy_her'         // HER deployment with algorithm provider
   | 'validate_stream'
   | 'go_live'
 
@@ -103,7 +104,45 @@ export interface PairDevicesData {
   allPaired: boolean
 }
 
+/** At least 1 LiDAR must be paired for HER deployment */
+export interface DeployHerData {
+  edgeId: string | null
+  providerId: string | null
+  providerName: string | null
+  status: 'ready' | 'deploying' | 'running' | 'stopped' | 'error'
+  tailscaleInstalled: boolean
+  dockerAvailable: boolean
+  pairedLidarCount: number       // may be < total planned (partial coverage OK)
+  deployedAt: string | null
+  lastError: string | null
+  containerStatus?: string       // 'pulling' | 'starting' | 'running' | 'stopped'
+  deploymentLogs?: string[]      // deployment progress log entries
+  deploymentId?: string          // deployment ID from backend
+  containerId?: string           // Docker container ID
+  imagePulled?: boolean          // whether Docker image was pulled
+}
+
+/** Multi-stage stream validation pipeline */
+export type StreamCheckId = 
+  | 'lidar_conn'          // Edge→LiDAR UDP connection
+  | 'her_health'          // HER Docker container health
+  | 'edge_mqtt'           // Edge publishes to local MQTT
+  | 'cloud_mqtt'          // Cloud receives via bridge
+  | 'backend_rx'          // Backend processes tracks
+  | 'websocket'           // WebSocket broadcasts to clients
+
+export type StreamCheckStatus = 'pending' | 'running' | 'pass' | 'fail' | 'skipped'
+
+export interface StreamCheck {
+  id: StreamCheckId
+  status: StreamCheckStatus
+  detail: string
+  lastChecked?: string
+}
+
 export interface ValidateStreamData {
+  stage: StreamCheckId | 'complete'
+  checks: StreamCheck[]
   mqttConnected: boolean
   lidarStatuses: Array<{
     lidarId: string
@@ -112,6 +151,9 @@ export interface ValidateStreamData {
     publishRate?: number       // tracks/sec
   }>
   overallHealthy: boolean
+  lastTrackTs?: number          // epoch ms of last track received
+  trackCount?: number           // tracks in last 10 seconds
+  validationLogs?: string[]     // logs for UI display
 }
 
 export interface GoLiveData {
@@ -128,6 +170,7 @@ export type StepData =
   | PlaceLidarsData
   | CommissionEdgeData
   | PairDevicesData
+  | DeployHerData
   | ValidateStreamData
   | GoLiveData
 

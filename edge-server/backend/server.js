@@ -8,9 +8,11 @@ import net from 'net';
 import crypto from 'crypto';
 import dgram from 'dgram';
 import http from 'http';
+import os from 'os';
 import { WebSocketServer } from 'ws';
 import { listenForDifop, probeRoboSense, setLidarIpViaHttp, getLidarConfigViaHttp } from './robosense-commissioner.js';
 import { capturePointCloudSnapshot, pointsToBuffer, pointsToPly, startPointCloudStream } from './robosense-pointcloud.js';
+import { captureLslidarSnapshot, pointsToBuffer as lsPointsToBuffer, LSLIDAR_DEST_PORT, configureLslidarIp } from './lslidar-pointcloud.js';
 
 // V2 Simulation modules
 import { SimulatorV2, SIM_CONFIG, STATE } from './sim/index.js';
@@ -72,19 +74,28 @@ const defaultConfig = {
 let simulatorV2 = null;
 
 // Load config from file or use defaults
+// IMPORTANT: backendUrl and mqttBroker are NEVER loaded from disk - they must be set via API
+// This prevents stale Tailscale IPs from breaking the simulator
 let config = { ...defaultConfig };
 try {
   if (fs.existsSync(CONFIG_FILE)) {
-    config = { ...defaultConfig, ...JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf-8')) };
+    const savedConfig = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf-8'));
+    // Explicitly ignore backendUrl and mqttBroker from saved config
+    const { backendUrl: _bu, mqttBroker: _mb, ...safeConfig } = savedConfig;
+    config = { ...defaultConfig, ...safeConfig };
+    console.log('[Config] Loaded from disk (backendUrl/mqttBroker use defaults, not persisted values)');
   }
 } catch (err) {
   console.error('Failed to load config:', err.message);
 }
 
-// Save config to file
+// Save config to file (excluding backendUrl which should always be auto-detected)
 const saveConfig = () => {
   try {
-    fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2));
+    // Don't persist backendUrl - it should be auto-detected from incoming requests
+    // This prevents stale URLs when Mac Tailscale IP changes
+    const { backendUrl, mqttBroker, ...persistConfig } = config;
+    fs.writeFileSync(CONFIG_FILE, JSON.stringify(persistConfig, null, 2));
   } catch (err) {
     console.error('Failed to save config:', err.message);
   }
@@ -1180,6 +1191,25 @@ app.post('/api/config', async (req, res) => {
     stopSimulation();
   }
 
+  // Auto-detect backendUrl from request if not explicitly provided
+  // This handles the case where the Mac's Tailscale IP changes
+  if (!req.body.backendUrl) {
+    // Try to derive backendUrl from the request origin
+    const forwardedFor = req.headers['x-forwarded-for'];
+    const realIp = req.headers['x-real-ip'];
+    const originIp = forwardedFor?.split(',')[0]?.trim() || realIp || req.ip;
+    
+    // If the request is coming from a non-localhost IP, use that as the backend
+    if (originIp && !originIp.includes('127.0.0.1') && !originIp.includes('::1')) {
+      const cleanIp = originIp.replace('::ffff:', ''); // Handle IPv6-mapped IPv4
+      const detectedUrl = `http://${cleanIp}:3001`;
+      if (detectedUrl !== config.backendUrl) {
+        console.log(`[API] Auto-detected backendUrl from request: ${detectedUrl} (was: ${config.backendUrl})`);
+        req.body.backendUrl = detectedUrl;
+      }
+    }
+  }
+
   config = { ...config, ...req.body };
   saveConfig();
 
@@ -1405,14 +1435,71 @@ let appliedConfig = null;
 
 // Known LiDAR ports and vendors
 const LIDAR_SIGNATURES = [
-  { vendor: 'RoboSense', ports: [6699, 7788, 80], httpCheck: true }, // RoboSense (MSOP/DIFOP/Web)
-  { vendor: 'Livox', ports: [56000, 56001], httpCheck: false },
-  { vendor: 'Ouster', ports: [7502, 7503], httpCheck: false },
-  { vendor: 'Velodyne', ports: [2368, 8308], httpCheck: false },
-  { vendor: 'Hesai', ports: [2368, 9870], httpCheck: false },
+  { vendor: 'RoboSense', ports: [6699, 7788, 80], httpCheck: true, udpDetect: false }, // RoboSense (MSOP/DIFOP/Web)
+  { vendor: 'LSLidar', ports: [2369, 2345], httpCheck: false, udpDetect: true, udpPort: 2345 }, // LS Lidar (Leishen) - UDP only
+  { vendor: 'Livox', ports: [56000, 56001], httpCheck: false, udpDetect: false },
+  { vendor: 'Ouster', ports: [7502, 7503], httpCheck: false, udpDetect: false },
+  { vendor: 'Velodyne', ports: [2368, 8308], httpCheck: false, udpDetect: false },
+  { vendor: 'Hesai', ports: [2368, 9870], httpCheck: false, udpDetect: false },
 ];
 
-// Scan a single IP for LiDAR devices
+// Detect LS Lidar by listening for UDP packets on ports 2340-2370
+// LS Lidar continuously broadcasts, so we just listen for any packets
+async function detectLsLidarUdp(timeout = 2000) {
+  return new Promise((resolve) => {
+    const detectedLidars = new Map(); // ip -> port
+    const sockets = [];
+    const startPort = 2340;
+    const endPort = 2370;
+    
+    console.log(`[LSLidar] Listening for UDP broadcasts on ports ${startPort}-${endPort}...`);
+    
+    for (let port = startPort; port <= endPort; port++) {
+      try {
+        const socket = dgram.createSocket({ type: 'udp4', reuseAddr: true });
+        
+        socket.on('message', (msg, rinfo) => {
+          // Check for LS Lidar header 0xFFEE
+          if (msg.length > 2 && msg[0] === 0xFF && msg[1] === 0xEE) {
+            if (!detectedLidars.has(rinfo.address)) {
+              detectedLidars.set(rinfo.address, port);
+            }
+          }
+        });
+        
+        socket.on('error', (err) => {
+          // Ignore bind errors for ports already in use
+        });
+        
+        socket.bind(port, '0.0.0.0');
+        sockets.push(socket);
+      } catch (err) {
+        // Ignore errors, continue with other ports
+      }
+    }
+    
+    setTimeout(() => {
+      // Close all sockets
+      for (const socket of sockets) {
+        try { socket.close(); } catch (e) {}
+      }
+      
+      const results = Array.from(detectedLidars.entries()).map(([ip, port]) => ({
+        lidarId: `lidar-${ip.replace(/\./g, '-')}`,
+        ip,
+        vendor: 'LSLidar',
+        model: 'C16/C32',
+        port,
+        reachable: true,
+        configurable: true, // UDP config protocol reverse-engineered from LeiShen View
+      }));
+      console.log(`[LSLidar] Detected ${results.length} LS Lidar devices:`, results.map(r => `${r.ip}:${r.port}`));
+      resolve(results);
+    }, timeout);
+  });
+}
+
+// Scan a single IP for LiDAR devices (TCP-based for RoboSense, etc.)
 async function probeLidarIp(ip, timeout = 2000) {
   const results = [];
   
@@ -1531,6 +1618,21 @@ app.post('/api/edge/lidar/scan', async (req, res) => {
     }
   }
   
+  // Step 3: Also detect LS Lidar via UDP (runs in parallel with TCP scans)
+  console.log('[Edge Commissioning] Also checking for LS Lidar via UDP...');
+  try {
+    const lsLidars = await detectLsLidarUdp(1500);
+    // Merge LS Lidar results (avoid duplicates)
+    const existingIps = new Set(foundLidars.map(l => l.ip));
+    for (const ls of lsLidars) {
+      if (!existingIps.has(ls.ip)) {
+        foundLidars.push(ls);
+      }
+    }
+  } catch (err) {
+    console.log('[Edge Commissioning] LS Lidar UDP detection failed:', err.message);
+  }
+  
   const scanDuration = Date.now() - startTime;
   console.log(`[Edge Commissioning] Scan complete: found ${foundLidars.length} LiDARs in ${scanDuration}ms`);
   
@@ -1545,13 +1647,102 @@ app.post('/api/edge/lidar/scan', async (req, res) => {
   });
 });
 
+// Track last scan time for staleness check
+let lastScanTime = 0;
+const SCAN_STALE_MS = 10000; // Consider inventory stale after 10 seconds
+
 // GET /api/edge/lidar/inventory - Get discovered LiDAR devices with live reachability check
 app.get('/api/edge/lidar/inventory', async (req, res) => {
   console.log('[Edge Commissioning] Inventory requested - checking reachability...');
   
+  // Auto-refresh scan if inventory is empty OR stale
+  const isStale = Date.now() - lastScanTime > SCAN_STALE_MS;
+  if (lidarInventory.length === 0 || isStale) {
+    console.log(`[Edge Commissioning] Inventory ${lidarInventory.length === 0 ? 'empty' : 'stale'}, triggering quick scan...`);
+    try {
+      // Quick LS Lidar UDP scan (fast, ~2 seconds)
+      const lsLidars = await detectLsLidarUdp(2000);
+      
+      // Remove old LS Lidar entries and add fresh ones
+      const nonLsLidars = lidarInventory.filter(l => l.vendor !== 'LSLidar');
+      lidarInventory.length = 0;
+      lidarInventory.push(...nonLsLidars, ...lsLidars);
+      
+      // Helper to get MAC from ARP table after TCP connection
+      const getMacFromArp = async (ip) => {
+        try {
+          const { exec } = await import('child_process');
+          const { promisify } = await import('util');
+          const execAsync = promisify(exec);
+          // Try arp command (works on Linux/Mac)
+          const { stdout } = await execAsync(`arp -n ${ip} 2>/dev/null || arp ${ip} 2>/dev/null`);
+          // Parse MAC from output (format varies by OS)
+          const macMatch = stdout.match(/([0-9a-fA-F]{2}[:-]){5}[0-9a-fA-F]{2}/);
+          return macMatch ? macMatch[0].toLowerCase() : '';
+        } catch (e) {
+          return '';
+        }
+      };
+      
+      // Quick TCP probe for RoboSense on expanded IP range (200-230)
+      const roboIps = [];
+      for (let i = 200; i <= 230; i++) roboIps.push(`192.168.1.${i}`);
+      const roboChecks = await Promise.all(roboIps.map(async (ip) => {
+        // Skip if already detected as LS Lidar
+        if (lsLidars.some(l => l.ip === ip)) return null;
+        try {
+          const isOpen = await new Promise((resolve) => {
+            const socket = new net.Socket();
+            socket.setTimeout(1000);
+            socket.on('connect', () => { socket.destroy(); resolve(true); });
+            socket.on('error', () => { socket.destroy(); resolve(false); });
+            socket.on('timeout', () => { socket.destroy(); resolve(false); });
+            socket.connect(80, ip);
+          });
+          if (isOpen) {
+            // Try to get actual config including custom ports
+            let config = null;
+            try {
+              const configRes = await getLidarConfigViaHttp(ip);
+              if (configRes.success) config = configRes.config;
+            } catch (e) {}
+            
+            // Get MAC from ARP table (populated by TCP connection)
+            const mac = await getMacFromArp(ip);
+            
+            return {
+              lidarId: `lidar-${ip.replace(/\./g, '-')}`,
+              ip,
+              mac,
+              vendor: 'RoboSense',
+              model: 'RS16',
+              reachable: true,
+              ports: [80, config?.msopPort || 6699, config?.difopPort || 7788],
+              msopPort: config?.msopPort || 6699,
+              difopPort: config?.difopPort || 7788,
+            };
+          }
+        } catch (e) {}
+        return null;
+      }));
+      
+      // Add detected RoboSense LiDARs
+      for (const robo of roboChecks) {
+        if (robo && !lidarInventory.some(l => l.ip === robo.ip)) {
+          lidarInventory.push(robo);
+        }
+      }
+      
+      lastScanTime = Date.now();
+      console.log(`[Edge Commissioning] Quick scan: ${lsLidars.length} LS LiDARs, ${roboChecks.filter(r => r).length} RoboSense`);
+    } catch (err) {
+      console.log('[Edge Commissioning] Auto-scan error:', err.message);
+    }
+  }
+  
   try {
     // Quick TCP ping to check if each LiDAR is actually reachable
-    const checkReachable = (ip, port = 80, timeout = 1500) => {
+    const checkReachableTcp = (ip, port = 80, timeout = 1500) => {
       return new Promise((resolve) => {
         try {
           const socket = new net.Socket();
@@ -1571,7 +1762,15 @@ app.get('/api/edge/lidar/inventory', async (req, res) => {
     const lidarsWithStatus = await Promise.all(
       lidarInventory.map(async (lidar) => {
         try {
-          const reachable = await checkReachable(lidar.ip, lidar.ports?.[0] || 80);
+          // LS Lidar: trust the scan result (UDP-only, no TCP check possible)
+          // For others: do TCP check
+          const isLsLidar = lidar.vendor === 'LSLidar';
+          if (isLsLidar) {
+            // LS Lidar was detected via UDP during scan, so it's reachable
+            // The scan already verified it by receiving UDP packets
+            return { ...lidar, reachable: true };
+          }
+          const reachable = await checkReachableTcp(lidar.ip, lidar.ports?.[0] || 80);
           return { ...lidar, reachable };
         } catch (err) {
           console.error(`[Edge Commissioning] Error checking ${lidar.ip}:`, err.message);
@@ -1792,18 +1991,22 @@ app.delete('/api/edge/lidar/commissioned/:id', (req, res) => {
   res.json({ ok: true, removed });
 });
 
-// POST /api/edge/lidar/set-ip - Try to change LiDAR IP via HTTP
+// POST /api/edge/lidar/set-ip - Try to change LiDAR IP via HTTP (supports port config)
 app.post('/api/edge/lidar/set-ip', async (req, res) => {
-  const { currentIp = '192.168.1.200', newIp, destIp = '192.168.1.102' } = req.body;
+  const { currentIp = '192.168.1.200', newIp, destIp = '192.168.1.102', msopPort, difopPort } = req.body;
   
   if (!newIp) {
     return res.status(400).json({ ok: false, error: 'newIp is required' });
   }
   
-  console.log(`[Commissioner] Attempting to change IP: ${currentIp} -> ${newIp}`);
+  const portConfig = {};
+  if (msopPort) portConfig.msopPort = msopPort;
+  if (difopPort) portConfig.difopPort = difopPort;
+  
+  console.log(`[Commissioner] Attempting to change IP: ${currentIp} -> ${newIp}`, portConfig);
   
   try {
-    const result = await setLidarIpViaHttp(currentIp, newIp, destIp);
+    const result = await setLidarIpViaHttp(currentIp, newIp, destIp, portConfig);
     res.json(result);
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message });
@@ -1836,10 +2039,11 @@ app.get('/api/edge/pcl/snapshot', async (req, res) => {
     maxPoints = 30000,
     downsample = 2,
     format = 'json', // json, binary, ply
-    model = 'RS16'
+    model = 'RS16',
+    msopPort = 6699, // Support custom MSOP port
   } = req.query;
   
-  console.log(`[PointCloud] Snapshot requested from ${ip} (format=${format}, duration=${duration}ms)`);
+  console.log(`[PointCloud] Snapshot requested from ${ip} on port ${msopPort} (format=${format}, duration=${duration}ms)`);
   
   try {
     const result = await capturePointCloudSnapshot(ip, {
@@ -1847,6 +2051,7 @@ app.get('/api/edge/pcl/snapshot', async (req, res) => {
       maxPoints: parseInt(maxPoints),
       downsample: parseInt(downsample),
       model,
+      msopPort: parseInt(msopPort),
     });
     
     if (!result.success || result.pointCount === 0) {
@@ -1907,10 +2112,11 @@ app.post('/api/edge/pcl/snapshot', async (req, res) => {
     maxPoints = 30000,
     downsample = 2,
     format = 'json',
-    model = 'RS16'
+    model = 'RS16',
+    msopPort = 6699,
   } = req.body;
   
-  console.log(`[PointCloud] Snapshot requested from ${ip} (format=${format}, duration=${duration}ms)`);
+  console.log(`[PointCloud] Snapshot requested from ${ip} on port ${msopPort} (format=${format}, duration=${duration}ms)`);
   
   try {
     const result = await capturePointCloudSnapshot(ip, {
@@ -1918,6 +2124,7 @@ app.post('/api/edge/pcl/snapshot', async (req, res) => {
       maxPoints: parseInt(maxPoints),
       downsample: parseInt(downsample),
       model,
+      msopPort: parseInt(msopPort),
     });
     
     if (!result.success || result.pointCount === 0) {
@@ -1968,6 +2175,120 @@ app.post('/api/edge/pcl/snapshot', async (req, res) => {
     });
   }
 });
+
+// GET /api/edge/pcl/lslidar/snapshot - Capture point cloud from LS Lidar (Leishen)
+app.get('/api/edge/pcl/lslidar/snapshot', async (req, res) => {
+  const { 
+    ip = '192.168.1.203', 
+    duration = 200,
+    maxPoints = 50000,
+    downsample = 1,
+    format = 'json',
+    model = 'C16',
+    port = LSLIDAR_DEST_PORT
+  } = req.query;
+  
+  console.log(`[LSLidar] Snapshot requested from ${ip} (model=${model}, port=${port})`);
+  
+  try {
+    const result = await captureLslidarSnapshot(ip, {
+      duration: parseInt(duration),
+      maxPoints: parseInt(maxPoints),
+      downsample: parseInt(downsample),
+      model,
+      listenPort: parseInt(port),
+    });
+    
+    if (!result.success || result.pointCount === 0) {
+      return res.status(404).json({
+        success: false,
+        error: 'No point cloud data received from LS Lidar',
+        lidarIp: ip,
+        packetsReceived: result.packetsReceived || 0,
+        hint: 'Check that LS Lidar destination IP matches edge server IP',
+      });
+    }
+    
+    if (format === 'binary') {
+      const buffer = lsPointsToBuffer(result.points);
+      res.setHeader('Content-Type', 'application/octet-stream');
+      res.setHeader('X-Point-Count', result.pointCount);
+      res.setHeader('X-Lidar-IP', ip);
+      return res.send(buffer);
+    }
+    
+    res.json({
+      success: true,
+      lidarIp: ip,
+      lidarType: 'lslidar',
+      model,
+      pointCount: result.pointCount,
+      packetsReceived: result.packetsReceived,
+      timestamp: Date.now(),
+      points: result.points.flatMap(p => [
+        Math.round(p.x * 1000) / 1000,
+        Math.round(p.y * 1000) / 1000,
+        Math.round(p.z * 1000) / 1000,
+        p.intensity
+      ]),
+    });
+  } catch (err) {
+    console.error('[LSLidar] Snapshot error:', err.message);
+    res.status(500).json({
+      success: false,
+      error: err.message,
+      lidarIp: ip,
+    });
+  }
+});
+
+// POST /api/edge/lslidar/configure - Configure LS Lidar IP address
+app.post('/api/edge/lslidar/configure', async (req, res) => {
+  const { currentIp, newIp, destinationIp, msopPort, difopPort } = req.body;
+  
+  if (!currentIp || !newIp) {
+    return res.status(400).json({
+      ok: false,
+      error: 'currentIp and newIp are required',
+    });
+  }
+  
+  // Default destination IP to edge server's LAN IP
+  const destIp = destinationIp || getEdgeLanIp();
+  
+  console.log(`[LSLidar] Configure request: ${currentIp} -> ${newIp}, dest: ${destIp}`);
+  
+  try {
+    const result = await configureLslidarIp(currentIp, newIp, destIp, {
+      msopPort: msopPort || 2345,
+      difopPort: difopPort || 2346,
+    });
+    
+    res.json({
+      ok: true,
+      ...result,
+    });
+  } catch (err) {
+    console.error('[LSLidar] Configure error:', err.message);
+    res.status(500).json({
+      ok: false,
+      error: err.message,
+    });
+  }
+});
+
+// Helper to get edge server's LAN IP
+function getEdgeLanIp() {
+  const interfaces = os.networkInterfaces();
+  for (const name of Object.keys(interfaces)) {
+    for (const iface of interfaces[name]) {
+      if (iface.family === 'IPv4' && !iface.internal && iface.address.startsWith('192.168.')) {
+        return iface.address;
+      }
+    }
+  }
+  return '192.168.1.100'; // Fallback
+}
 
 // ========== END POINT CLOUD STREAMING API ==========
 

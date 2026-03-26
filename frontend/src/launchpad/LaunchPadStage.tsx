@@ -542,15 +542,30 @@ export default function LaunchPadStage({
     <div className="h-full flex flex-col bg-gray-950 overflow-hidden">
       {/* Stage header — step indicator with animation */}
       <div className="h-10 border-b border-gray-800 flex items-center px-4 shrink-0">
-        <div className="flex items-center gap-3 flex-1">
-          {session.steps.map((s, i) => {
-            const isDone = s.status === 'done' || s.status === 'warning'
-            const isActive = s.id === activeStep
-            const isError = s.status === 'error'
-            return (
-              <div key={s.id} className="flex items-center gap-1.5">
-                {i > 0 && <div className={`w-4 h-px ${isDone ? 'bg-green-500/50' : 'bg-gray-700'}`} />}
+        <div className="flex items-center flex-1 relative">
+          {/* Continuous background line */}
+          <div className="absolute left-1 right-1 top-1/2 -translate-y-1/2 h-px flex">
+            {session.steps.slice(0, -1).map((s, i) => {
+              const isDone = s.status === 'done' || s.status === 'warning'
+              const nextDone = session.steps[i + 1]?.status === 'done' || session.steps[i + 1]?.status === 'warning'
+              const segmentDone = isDone && nextDone
+              return (
+                <div 
+                  key={`line-${s.id}`} 
+                  className={`flex-1 ${segmentDone ? 'bg-green-500/50' : 'bg-gray-700'}`} 
+                />
+              )
+            })}
+          </div>
+          {/* Step circles */}
+          <div className="flex items-center justify-between w-full relative z-10">
+            {session.steps.map((s) => {
+              const isDone = s.status === 'done' || s.status === 'warning'
+              const isActive = s.id === activeStep
+              const isError = s.status === 'error'
+              return (
                 <div
+                  key={s.id}
                   className={`w-2 h-2 rounded-full transition-all duration-500 ${
                     isDone ? 'bg-green-400 scale-100' :
                     isActive ? 'bg-indigo-400 scale-125 animate-pulse' :
@@ -559,9 +574,9 @@ export default function LaunchPadStage({
                   }`}
                   title={s.label}
                 />
-              </div>
-            )
-          })}
+              )
+            })}
+          </div>
         </div>
         {activeStep && (
           <span className="text-[10px] text-gray-500 font-medium">

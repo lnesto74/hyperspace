@@ -34,9 +34,21 @@ export default function createRoiRoutes(db) {
   });
 
   // Get all ROIs for a DWG layout
+  // Query params:
+  //   ?units=meters — convert vertices from DXF units to meters (for 3D views)
+  //   (default) — return raw DXF units (for 2D LaunchPad views)
   router.get('/venues/:venueId/dwg/:dwgLayoutId/roi', (req, res) => {
     try {
-      const rois = roiQueries.getByDwgLayoutId(db, req.params.venueId, req.params.dwgLayoutId);
+      const { dwgLayoutId } = req.params;
+      const wantMeters = req.query.units === 'meters';
+      const rois = roiQueries.getByDwgLayoutId(db, req.params.venueId, dwgLayoutId);
+      
+      // No conversion needed - ROIs are stored in their native units:
+      // - Smart KPI ROIs: stored in meters
+      // - User-created ROIs from RoiPanel: stored in meters  
+      // - LaunchPad ROIs: stored in meters (lidar_roi_json handles sizing)
+      // The ?units=meters param is kept for API compatibility but does nothing now
+      
       res.json(rois);
     } catch (err) {
       console.error('Failed to get DWG ROIs:', err);
@@ -92,6 +104,7 @@ export default function createRoiRoutes(db) {
   router.post('/venues/:venueId/dwg/:dwgLayoutId/roi', (req, res) => {
     try {
       const { name, vertices, color, opacity } = req.body;
+      const { dwgLayoutId } = req.params;
       
       if (!name || !vertices || vertices.length < 3) {
         return res.status(400).json({ error: 'Name and at least 3 vertices required' });
@@ -101,7 +114,7 @@ export default function createRoiRoutes(db) {
       const roi = {
         id: uuidv4(),
         venueId: req.params.venueId,
-        dwgLayoutId: req.params.dwgLayoutId,  // DWG mode
+        dwgLayoutId,  // DWG mode
         name,
         vertices,
         color: color || '#f59e0b',
@@ -111,6 +124,48 @@ export default function createRoiRoutes(db) {
       };
 
       roiQueries.create(db, roi);
+      
+      // ── CRITICAL FIX: Also write to lidar_roi_json in METERS ──
+      // RoiDrawingModal sends vertices in DXF units (e.g., mm).
+      // as-venue-bootstrap reads lidar_roi_json for venue sizing and expects METERS.
+      // Without this, LaunchPad venues get wrong dimensions.
+      try {
+        // Get unit scale from dwg_layout_versions → dwg_imports
+        const layoutRow = db.prepare(`
+          SELECT lv.import_id, di.unit_scale_to_m, lv.scale_correction
+          FROM dwg_layout_versions lv
+          LEFT JOIN dwg_imports di ON lv.import_id = di.id
+          WHERE lv.id = ?
+        `).get(dwgLayoutId);
+        
+        if (layoutRow) {
+          const unitScale = layoutRow.unit_scale_to_m || 0.001; // default mm→m
+          const scaleCorrection = layoutRow.scale_correction || 1.0;
+          const effectiveScale = unitScale * scaleCorrection;
+          
+          // Convert DXF vertices {x, z} to meters
+          // Vertices come as {x, z} where z is the DXF Y coordinate
+          const roiMeters = vertices.map(v => ({
+            x: (v.x || 0) * effectiveScale,
+            z: (v.z || v.y || 0) * effectiveScale,
+          }));
+          
+          // Write to lidar_roi_json
+          db.prepare('UPDATE dwg_layout_versions SET lidar_roi_json = ? WHERE id = ?')
+            .run(JSON.stringify(roiMeters), dwgLayoutId);
+          
+          console.log(`[ROI] Wrote lidar_roi_json (${roiMeters.length} vertices) to layout ${dwgLayoutId.substring(0,8)} in METERS (scale=${effectiveScale})`);
+          
+          // Log bounds for debugging
+          const xs = roiMeters.map(v => v.x);
+          const zs = roiMeters.map(v => v.z);
+          console.log(`[ROI] Bounds: X[${Math.min(...xs).toFixed(1)}, ${Math.max(...xs).toFixed(1)}] Z[${Math.min(...zs).toFixed(1)}, ${Math.max(...zs).toFixed(1)}] meters`);
+        }
+      } catch (e) {
+        console.warn('[ROI] Failed to write lidar_roi_json:', e.message);
+        // Non-fatal — ROI is still saved to regions_of_interest
+      }
+      
       res.status(201).json(roi);
     } catch (err) {
       console.error('Failed to create DWG ROI:', err);

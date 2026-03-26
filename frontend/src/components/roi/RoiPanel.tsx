@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Plus, Trash2, Edit2, X, Check, MousePointer2, Eye, EyeOff } from 'lucide-react'
+import { Plus, Trash2, Edit2, X, Check, MousePointer2, Eye, EyeOff, Filter } from 'lucide-react'
 import { useRoi } from '../../context/RoiContext'
 import { useVenue } from '../../context/VenueContext'
 
@@ -24,6 +24,28 @@ export default function RoiPanel() {
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editName, setEditName] = useState('')
   const [newRoiName, setNewRoiName] = useState('Zone')
+  const [typeFilter, setTypeFilter] = useState<string>('all')
+
+  // Extract region type from name or metadata
+  const getRegionType = (roi: typeof regions[0]) => {
+    // Check metadata first
+    if (roi.metadata?.zoneType) return roi.metadata.zoneType as string
+    if (roi.metadata?.type) return roi.metadata.type as string
+    // Extract from name pattern like "Checkout 1 - Service" -> "service"
+    const dashMatch = roi.name.match(/- (\w+)$/i)
+    if (dashMatch) return dashMatch[1].toLowerCase()
+    // Default to 'zone'
+    return 'zone'
+  }
+
+  // Compute type counts and filtered regions
+  const typeCounts = regions.reduce((acc, roi) => {
+    const type = getRegionType(roi)
+    acc[type] = (acc[type] || 0) + 1
+    return acc
+  }, {} as Record<string, number>)
+  const filteredRegions = typeFilter === 'all' ? regions : regions.filter(r => getRegionType(r) === typeFilter)
+  const availableTypes = Object.keys(typeCounts).sort()
 
   const handleStartEdit = (id: string, name: string) => {
     setEditingId(id)
@@ -40,7 +62,8 @@ export default function RoiPanel() {
   const handleFinishDrawing = async () => {
     if (!venue) return
     const name = newRoiName.trim() || `Zone ${regions.length + 1}`
-    await finishDrawing(venue.id, name)
+    // For DWG venues, pass dwg_layout_version_id so ROI is associated with the layout
+    await finishDrawing(venue.id, name, undefined, venue.dwg_layout_version_id)
     setNewRoiName('Zone')
   }
 
@@ -109,18 +132,55 @@ export default function RoiPanel() {
 
       {/* Regions List */}
       <div>
-        <h3 className="text-xs font-medium text-gray-400 uppercase tracking-wide mb-3">
-          Regions ({regions.length})
-        </h3>
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-xs font-medium text-gray-400 uppercase tracking-wide">
+            Regions ({typeFilter === 'all' ? regions.length : `${filteredRegions.length}/${regions.length}`})
+          </h3>
+          <div className="flex items-center gap-1">
+            <Filter className="w-3 h-3 text-gray-500" />
+            <select
+              value={typeFilter}
+              onChange={(e) => setTypeFilter(e.target.value)}
+              className="bg-card-bg border border-border-dark rounded px-2 py-0.5 text-xs text-white focus:border-highlight focus:outline-none"
+            >
+              <option value="all">All Types</option>
+              {availableTypes.map(type => (
+                <option key={type} value={type}>
+                  {type.charAt(0).toUpperCase() + type.slice(1)} ({typeCounts[type]})
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+        
+        {/* Delete all filtered button */}
+        {typeFilter !== 'all' && filteredRegions.length > 0 && (
+          <button
+            onClick={() => {
+              if (confirm(`Delete all ${filteredRegions.length} ${typeFilter} regions?`)) {
+                filteredRegions.forEach(roi => deleteRegion(roi.id))
+                setTypeFilter('all')
+              }
+            }}
+            className="w-full mb-2 py-1.5 text-xs bg-red-500/20 text-red-400 border border-red-500/30 rounded hover:bg-red-500/30 transition-colors flex items-center justify-center gap-1"
+          >
+            <Trash2 className="w-3 h-3" />
+            Delete All {filteredRegions.length} {typeFilter}
+          </button>
+        )}
         
         {regions.length === 0 ? (
           <div className="text-center py-8 text-gray-500 text-sm">
             No regions defined.<br />
             Click "Draw New Region" to create one.
           </div>
+        ) : filteredRegions.length === 0 ? (
+          <div className="text-center py-4 text-gray-500 text-sm">
+            No {typeFilter} regions found.
+          </div>
         ) : (
           <div className="space-y-1 max-h-[400px] overflow-y-auto">
-            {regions.map(roi => (
+            {filteredRegions.map(roi => (
               <div
                 key={roi.id}
                 onClick={() => !editingId && selectRegion(roi.id)}

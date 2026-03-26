@@ -33,10 +33,10 @@ import DoohEffectivenessPage from './components/dooh/DoohEffectivenessPage'
 import { BusinessReportingPage } from './features/businessReporting'
 import { ProfitRadarPage } from './features/profitRadar'
 import { ProfitRadarProvider } from './context/ProfitRadarContext'
-import { LaunchPadPanel, isLaunchPadEnabled } from './launchpad'
+import { LaunchPadPanel, isLaunchPadEnabled, loadSession } from './launchpad'
 
-import { BarChart3, Bell, Thermometer, Zap, LayoutGrid, ShoppingCart, Monitor, Activity, PieChart, Clapperboard, Crosshair, Building2, LogOut, User, Rocket } from 'lucide-react'
-import { useState, useEffect, createContext, useContext } from 'react'
+import { BarChart3, Bell, Thermometer, Zap, ShoppingCart, Monitor, Activity, PieChart, Clapperboard, Crosshair, Building2, LogOut, User, Rocket } from 'lucide-react'
+import { useState, useEffect, useRef, createContext, useContext } from 'react'
 import { Routes, Route, useNavigate } from 'react-router-dom'
 import { useAuth } from './context/AuthContext'
 import { useVenue } from './context/VenueContext'
@@ -228,15 +228,6 @@ function KPIOverlayToggle() {
       
       {/* Button Group above Footer */}
       <div className="fixed bottom-16 right-4 z-30 flex items-center gap-2">
-        {/* Planogram Builder Button */}
-        <button
-          onClick={() => setMode('planogram')}
-          className="flex items-center justify-center w-10 h-10 rounded-lg shadow-lg transition-all bg-gray-800 hover:bg-gray-700 text-gray-300 border border-gray-600"
-          title="Planogram Builder"
-        >
-          <LayoutGrid className="w-4 h-4" />
-        </button>
-        
         {/* Smart KPI Button */}
         <button
           onClick={() => setShowSmartKpiModal(true)}
@@ -418,14 +409,68 @@ function KPIOverlayToggle() {
 }
 
 function MainApp() {
-  const { venue } = useVenue()
-  const [viewMode, setViewMode] = useState<ViewMode>('main')
+  const { venue, loadVenue } = useVenue()
+  const [viewMode, setViewModeInternal] = useState<ViewMode>('main')
   const [showLanding, setShowLanding] = useState(true)
   const [launchPadOpen, setLaunchPadOpen] = useState(false)
+  
+  // FLOW-DEBUG: Wrap setViewMode to log navigation
+  const setViewMode = (newMode: ViewMode) => {
+    console.log('%c[FLOW-DEBUG] ══════════════════════════════════════════════════════', 'color:#22d3ee;font-weight:bold')
+    console.log('%c[FLOW-DEBUG] VIEW MODE CHANGE', 'color:#22d3ee;font-size:14px;font-weight:bold')
+    console.log('%c[FLOW-DEBUG]', 'color:#22d3ee', { from: viewMode, to: newMode, venueId: venue?.id })
+    console.log('%c[FLOW-DEBUG] ══════════════════════════════════════════════════════', 'color:#22d3ee;font-weight:bold')
+    setViewModeInternal(newMode)
+  }
+  
+  // Handle LaunchPad close — reload venue to sync with FloorplanPanel behavior
+  const handleLaunchPadClose = async () => {
+    const session = loadSession()
+    const sessionVenueId = session?.venueId
+    const layoutVersionId = (session?.steps.find(s => s.id === 'select_dwg')?.data as any)?.layoutVersionId
+    
+    console.log('%c[FLOW-DEBUG] LaunchPad CLOSE', 'color:#f472b6;font-weight:bold', {
+      sessionVenueId,
+      layoutVersionId,
+      currentVenueId: venue?.id,
+    })
+    
+    // If session has a venue, reload it to sync state (same as FloorplanPanel click)
+    if (sessionVenueId) {
+      if (layoutVersionId) {
+        localStorage.setItem('venueDwg-selectedLayout', layoutVersionId)
+      }
+      await loadVenue(sessionVenueId)
+      if (layoutVersionId) {
+        window.dispatchEvent(new CustomEvent('dwgLayoutSelected', { detail: { layoutId: layoutVersionId } }))
+      }
+      // Reset camera to fit the reloaded venue (after a small delay for scene to update)
+      setTimeout(() => {
+        window.dispatchEvent(new Event('mainviewport-reset-camera'))
+      }, 100)
+    }
+    
+    setLaunchPadOpen(false)
+  }
   
   const handleDismissLanding = () => {
     setShowLanding(false)
   }
+  
+  // ── AUTO-RELOAD VENUE WHEN RETURNING FROM DWG IMPORTER ──
+  // Track previous viewMode to detect transitions from dwgImporter → main
+  // This ensures the 3D view picks up any fixture type changes made in DWG Importer
+  const prevViewModeRef = useRef<ViewMode>(viewMode)
+  useEffect(() => {
+    const prevMode = prevViewModeRef.current
+    prevViewModeRef.current = viewMode
+    
+    // If transitioning FROM dwgImporter TO main, reload the venue to get updated types
+    if (prevMode === 'dwgImporter' && viewMode === 'main' && venue?.id) {
+      console.log('[App] Returning from DWG Importer → reloading venue to sync fixture types')
+      loadVenue(venue.id).catch(err => console.warn('Failed to reload venue:', err))
+    }
+  }, [viewMode, venue?.id, loadVenue])
   
   return (
     <ViewModeContext.Provider value={{ mode: viewMode, setMode: setViewMode, launchPadOpen, setLaunchPadOpen }}>
@@ -495,7 +540,7 @@ function MainApp() {
         {isLaunchPadEnabled() && (
           <LaunchPadPanel
             isOpen={launchPadOpen}
-            onClose={() => setLaunchPadOpen(false)}
+            onClose={handleLaunchPadClose}
             onDeepLink={(vm) => setViewMode(vm as ViewMode)}
             venueId={venue?.id}
             venueName={venue?.name}

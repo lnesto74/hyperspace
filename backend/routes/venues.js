@@ -38,8 +38,68 @@ export default function venuesRoutes(db) {
         return res.status(404).json({ error: 'Venue not found' });
       }
 
-      const objects = objectQueries.getByVenueId(db, req.params.id);
+      let objects = objectQueries.getByVenueId(db, req.params.id);
       const placements = placementQueries.getByVenueId(db, req.params.id);
+
+      // ── LIVE TYPE OVERLAY ──
+      // For DWG venues, overlay CURRENT dwg_mappings types onto stored venue_objects.
+      // This ensures the 3D view always reflects the latest fixture classifications
+      // from DWG Importer, even without re-bootstrapping the entire venue.
+      if (venue.dwg_layout_version_id && objects.length > 0) {
+        try {
+          // Get the import_id from the layout
+          const layout = db.prepare('SELECT import_id FROM dwg_layout_versions WHERE id = ?')
+            .get(venue.dwg_layout_version_id);
+          
+          if (layout?.import_id) {
+            // Get current dwg_mappings
+            const mappingRow = db.prepare('SELECT mapping_json FROM dwg_mappings WHERE import_id = ?')
+              .get(layout.import_id);
+            
+            if (mappingRow?.mapping_json) {
+              const mappings = JSON.parse(mappingRow.mapping_json);
+              const groupMappings = mappings.group_mappings || {};
+              
+              if (Object.keys(groupMappings).length > 0) {
+                // Build a map: dwg_fixture_id → group_id from layout_json
+                const layoutRow = db.prepare('SELECT layout_json FROM dwg_layout_versions WHERE id = ?')
+                  .get(venue.dwg_layout_version_id);
+                
+                if (layoutRow?.layout_json) {
+                  const layoutData = JSON.parse(layoutRow.layout_json);
+                  const fixtureToGroup = new Map();
+                  (layoutData.fixtures || []).forEach(f => {
+                    if (f.id && f.group_id) fixtureToGroup.set(f.id, f.group_id);
+                  });
+                  
+                  // Overlay types: match object's dwg_fixture_id → group_id → current mapping type
+                  let overlayCount = 0;
+                  objects = objects.map(obj => {
+                    const dwgFixtureId = obj.metadata?.dwg_fixture_id;
+                    if (!dwgFixtureId) return obj;
+                    
+                    const groupId = fixtureToGroup.get(dwgFixtureId);
+                    if (!groupId) return obj;
+                    
+                    const liveMapping = groupMappings[groupId];
+                    if (liveMapping?.type && liveMapping.type !== obj.type) {
+                      overlayCount++;
+                      return { ...obj, type: liveMapping.type };
+                    }
+                    return obj;
+                  });
+                  
+                  if (overlayCount > 0) {
+                    console.log(`[Venues] Live type overlay: updated ${overlayCount} objects from dwg_mappings`);
+                  }
+                }
+              }
+            }
+          }
+        } catch (overlayErr) {
+          console.warn('[Venues] Failed to overlay dwg_mappings:', overlayErr.message);
+        }
+      }
 
       res.json({
         venue: {
@@ -144,6 +204,44 @@ export default function venuesRoutes(db) {
     } catch (error) {
       console.error('Update venue error:', error);
       res.status(500).json({ error: 'Failed to update venue', details: error.message });
+    }
+  });
+
+  // Delete a single venue object
+  router.delete('/:id/objects/:objectId', (req, res) => {
+    try {
+      const result = db.prepare('DELETE FROM venue_objects WHERE id = ? AND venue_id = ?')
+        .run(req.params.objectId, req.params.id);
+      if (result.changes === 0) {
+        return res.status(404).json({ error: 'Object not found' });
+      }
+      res.json({ success: true });
+    } catch (error) {
+      console.error('Delete object error:', error);
+      res.status(500).json({ error: 'Failed to delete object' });
+    }
+  });
+
+  // Delete multiple venue objects
+  router.post('/:id/objects/delete-batch', (req, res) => {
+    try {
+      const { ids } = req.body;
+      if (!ids || !Array.isArray(ids)) {
+        return res.status(400).json({ error: 'ids array required' });
+      }
+      const stmt = db.prepare('DELETE FROM venue_objects WHERE id = ? AND venue_id = ?');
+      const deleteMany = db.transaction((objectIds) => {
+        let deleted = 0;
+        for (const objectId of objectIds) {
+          deleted += stmt.run(objectId, req.params.id).changes;
+        }
+        return deleted;
+      });
+      const deleted = deleteMany(ids);
+      res.json({ success: true, deleted });
+    } catch (error) {
+      console.error('Batch delete objects error:', error);
+      res.status(500).json({ error: 'Failed to delete objects' });
     }
   });
 

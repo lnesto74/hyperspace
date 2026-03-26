@@ -13,7 +13,8 @@ import {
   ChevronRight,
   Trash2,
   Radio,
-  Building2
+  Building2,
+  Rocket
 } from 'lucide-react'
 import { useVenue } from '../../context/VenueContext'
 import { useLidar } from '../../context/LidarContext'
@@ -23,6 +24,7 @@ import { LidarPlacement } from '../../types'
 import VenueSettingsPanel from './VenueSettingsPanel'
 import AddressAutocomplete from './AddressAutocomplete'
 import { API_BASE } from '../../config/api'
+import { isLaunchPadEnabled, loadSession } from '../../launchpad'
 
 interface Company {
   id: string
@@ -62,9 +64,11 @@ interface FloorplanItem {
 
 interface FloorplanPanelProps {
   onOpenDwgImporter?: () => void
+  launchPadOpen?: boolean
+  onToggleLaunchPad?: () => void
 }
 
-export default function FloorplanPanel({ onOpenDwgImporter }: FloorplanPanelProps) {
+export default function FloorplanPanel({ onOpenDwgImporter, launchPadOpen, onToggleLaunchPad }: FloorplanPanelProps) {
   const { 
     venue, 
     venueList, 
@@ -92,7 +96,7 @@ export default function FloorplanPanel({ onOpenDwgImporter }: FloorplanPanelProp
   // Company state
   const [companies, setCompanies] = useState<Company[]>([])
   const [filterCompanyId, setFilterCompanyId] = useState<string>('all')
-  const [expandedCompanies, setExpandedCompanies] = useState<Set<string>>(new Set(['all']))
+  const [expandedCompanies, setExpandedCompanies] = useState<Set<string>>(new Set())
   
   // UI state
   const [showSettings, setShowSettings] = useState(false)
@@ -268,6 +272,16 @@ export default function FloorplanPanel({ onOpenDwgImporter }: FloorplanPanelProp
     setNewVenueAddress(null)
   }
 
+  // Format layout name to version badge format (e.g., "v03/05 03:20") matching DWG Importer
+  const formatVersionBadge = (name: string) => {
+    const match = name.match(/Layout (\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/)
+    if (match) {
+      const [, , month, day, hour, min] = match
+      return `v${month}/${day} ${hour}:${min}`
+    }
+    return null
+  }
+
   const toggleCompanyExpand = (id: string) => {
     setExpandedCompanies(prev => {
       const next = new Set(prev)
@@ -357,13 +371,16 @@ export default function FloorplanPanel({ onOpenDwgImporter }: FloorplanPanelProp
           <div className="space-y-3">
             {/* Active Floorplan Card */}
             <div className="bg-highlight/5 border border-highlight/30 rounded-lg p-3">
-              <div className="flex items-start justify-between">
-                <div>
+              <div className="flex items-start justify-between gap-2">
+                <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 min-w-0">
                     <Check className="w-4 h-4 text-highlight flex-shrink-0" />
-                    <span className="text-sm font-medium text-white truncate">{venue.name}</span>
+                    <span 
+                      className="text-sm font-medium text-white truncate max-w-[140px]" 
+                      title={`${venue.name}${formatVersionBadge(venue.name) ? `\nDWG Importer badge: ${formatVersionBadge(venue.name)}` : ''}`}
+                    >{venue.name}</span>
                     {activeFloorplan?.type === 'dwg' && (
-                      <span className="text-[10px] px-1.5 py-0.5 bg-blue-500/20 text-blue-400 rounded">DWG</span>
+                      <span className="text-[10px] px-1.5 py-0.5 bg-blue-500/20 text-blue-400 rounded flex-shrink-0">DWG</span>
                     )}
                   </div>
                   <div className="text-xs text-gray-400 mt-1">
@@ -533,7 +550,7 @@ export default function FloorplanPanel({ onOpenDwgImporter }: FloorplanPanelProp
         ) : (
           <div className="space-y-1 max-h-72 overflow-y-auto">
             {groupedFloorplans.map(group => {
-              const isGroupExpanded = expandedCompanies.has(group.id) || expandedCompanies.has('all')
+              const isGroupExpanded = expandedCompanies.has(group.id)
               const isCompanyGroup = group.id !== 'all'
 
               return (
@@ -589,7 +606,10 @@ export default function FloorplanPanel({ onOpenDwgImporter }: FloorplanPanelProp
                                     ) : (
                                       <div className="w-2.5 h-2.5 rounded-full border border-gray-600 flex-shrink-0" />
                                     )}
-                                    <span className="text-sm font-medium truncate">{fp.name}</span>
+                                    <span 
+                                      className="text-sm font-medium truncate" 
+                                      title={`${fp.name}${formatVersionBadge(fp.name) ? `\nDWG Importer badge: ${formatVersionBadge(fp.name)}` : ''}`}
+                                    >{fp.name}</span>
                                     <span className={`text-[10px] px-1.5 py-0.5 rounded ${
                                       fp.type === 'dwg' 
                                         ? 'bg-blue-500/20 text-blue-400' 
@@ -728,6 +748,54 @@ export default function FloorplanPanel({ onOpenDwgImporter }: FloorplanPanelProp
           </div>
         </div>
       )}
+
+      {/* Section 4: LaunchPad */}
+      {isLaunchPadEnabled() && onToggleLaunchPad && (() => {
+        const lpSession = loadSession()
+        const lpCompleted = lpSession?.steps.filter(s => s.status === 'done' || s.status === 'warning').length || 0
+        const lpTotal = lpSession?.steps.length || 8
+        const hasProgress = lpCompleted > 0 && lpCompleted < lpTotal
+        const allDone = lpCompleted === lpTotal && lpTotal > 0
+        const progressPct = lpTotal > 0 ? Math.round((lpCompleted / lpTotal) * 100) : 0
+        return (
+          <div className="bg-card-bg border border-border-dark rounded-lg p-4">
+            <div className="flex items-center gap-2 mb-2">
+              <Rocket className="w-4 h-4 text-indigo-400" />
+              <h3 className="text-sm font-medium text-gray-300">LaunchPad</h3>
+              {allDone && <span className="w-4 h-4 bg-green-500 text-white text-[8px] font-bold rounded-full flex items-center justify-center ml-auto">✓</span>}
+            </div>
+            <p className="text-[11px] text-gray-500 mb-3">
+              {allDone
+                ? 'All commissioning steps completed.'
+                : hasProgress
+                ? `${lpCompleted} of ${lpTotal} steps completed — continue setup.`
+                : 'Step-by-step commissioning wizard for your venue.'}
+            </p>
+            {hasProgress && (
+              <div className="mb-3">
+                <div className="flex justify-between text-[10px] mb-1">
+                  <span className="text-indigo-400">{progressPct}% complete</span>
+                  <span className="text-gray-600">{lpCompleted}/{lpTotal} steps</span>
+                </div>
+                <div className="h-1.5 bg-gray-800 rounded-full overflow-hidden">
+                  <div className="h-full bg-indigo-500 rounded-full transition-all duration-500" style={{ width: `${progressPct}%` }} />
+                </div>
+              </div>
+            )}
+            <button
+              onClick={onToggleLaunchPad}
+              className={`w-full py-2 rounded-lg text-xs font-medium transition-colors flex items-center justify-center gap-2 ${
+                launchPadOpen
+                  ? 'bg-indigo-600/20 border border-indigo-500/40 text-indigo-300 hover:bg-indigo-600/30'
+                  : 'bg-indigo-500/15 border border-indigo-500/30 text-indigo-400 hover:bg-indigo-500/25'
+              }`}
+            >
+              <Rocket className="w-3.5 h-3.5" />
+              {launchPadOpen ? 'Close LaunchPad' : allDone ? 'View LaunchPad' : hasProgress ? 'Continue Setup' : 'Open LaunchPad'}
+            </button>
+          </div>
+        )
+      })()}
 
       {/* Venue Settings Modal */}
       {venue && (

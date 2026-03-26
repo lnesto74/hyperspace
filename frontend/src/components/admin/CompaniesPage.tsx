@@ -113,6 +113,22 @@ export default function CompaniesPage({ onClose }: { onClose: () => void }) {
     }
   }
 
+  const deleteVenue = async (id: string, name: string) => {
+    if (!confirm(`Delete venue "${name}"? This cannot be undone.`)) return
+    try {
+      const res = await fetch(`${API_BASE}/api/venues/${id}`, {
+        method: 'DELETE',
+      })
+      if (res.ok) {
+        fetchData()
+      } else {
+        console.error('[Companies] Delete venue failed:', await res.text())
+      }
+    } catch (err) {
+      console.error('[Companies] Delete venue error:', err)
+    }
+  }
+
   const assignVenue = async (venueId: string, companyId: string | null) => {
     try {
       if (companyId) {
@@ -288,6 +304,7 @@ export default function CompaniesPage({ onClose }: { onClose: () => void }) {
                               venue={v}
                               onDragStart={() => handleDragStart(v.id)}
                               isDragging={dragVenueId === v.id}
+                              onDelete={() => deleteVenue(v.id, v.name)}
                             />
                           ))
                         )}
@@ -332,6 +349,7 @@ export default function CompaniesPage({ onClose }: { onClose: () => void }) {
                       venue={v}
                       onDragStart={() => handleDragStart(v.id)}
                       isDragging={dragVenueId === v.id}
+                      onDelete={() => deleteVenue(v.id, v.name)}
                     />
                   ))
                 )}
@@ -348,12 +366,12 @@ export default function CompaniesPage({ onClose }: { onClose: () => void }) {
   )
 }
 
-function VenueCard({ venue, onDragStart, isDragging }: { venue: VenueItem; onDragStart: () => void; isDragging: boolean }) {
+function VenueCard({ venue, onDragStart, isDragging, onDelete }: { venue: VenueItem; onDragStart: () => void; isDragging: boolean; onDelete: () => void }) {
   return (
     <div
       draggable
       onDragStart={onDragStart}
-      className={`flex items-center gap-2 px-3 py-2 rounded-lg border cursor-grab active:cursor-grabbing transition-all ${
+      className={`flex items-center gap-2 px-3 py-2 rounded-lg border cursor-grab active:cursor-grabbing transition-all group ${
         isDragging
           ? 'opacity-50 border-blue-500/50 bg-blue-500/5'
           : 'border-gray-700/50 bg-gray-800/50 hover:border-gray-600 hover:bg-gray-800'
@@ -365,6 +383,13 @@ function VenueCard({ venue, onDragStart, isDragging }: { venue: VenueItem; onDra
         <p className="text-xs font-medium text-white truncate">{venue.name}</p>
         <p className="text-[10px] text-gray-500">{venue.width}m × {venue.depth}m{venue.address ? ` · ${venue.address}` : ''}</p>
       </div>
+      <button
+        onClick={(e) => { e.stopPropagation(); onDelete(); }}
+        className="opacity-0 group-hover:opacity-100 text-gray-500 hover:text-red-400 transition-all p-1"
+        title="Delete venue"
+      >
+        <Trash2 className="w-3.5 h-3.5" />
+      </button>
     </div>
   )
 }

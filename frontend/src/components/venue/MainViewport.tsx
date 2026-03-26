@@ -1,17 +1,20 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
+import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js'
 import { CSS2DRenderer, CSS2DObject } from 'three/examples/jsm/renderers/CSS2DRenderer.js'
 import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
-import { Hand, Move3D, RotateCcw, Save, Download, Layers, Eye, EyeOff } from 'lucide-react'
+import { Hand, Move3D, RotateCcw, Save, Download, Layers, Eye, EyeOff, Move, RotateCw } from 'lucide-react'
 import { useVenue } from '../../context/VenueContext'
 import { useLidar } from '../../context/LidarContext'
 import { useTracking } from '../../context/TrackingContext'
 import { useRoi } from '../../context/RoiContext'
 import { useReplayInsight } from '../../context/ReplayInsightContext'
 import { useProfitRadar } from '../../context/ProfitRadarContext'
+import { usePlanogram } from '../../context/PlanogramContext'
 import SkuDebugOverlay from './SkuDebugOverlay'
+import { BarChart3, X } from 'lucide-react'
 
 
 const COLORS = {
@@ -212,6 +215,10 @@ export default function MainViewport({
   const [hasSavedView, setHasSavedView] = useState(false)
   const [justSaved, setJustSaved] = useState(false)
   
+  // Transform controls state (translate/rotate gizmo)
+  const transformControlsRef = useRef<TransformControls | null>(null)
+  const [transformMode, setTransformMode] = useState<'translate' | 'rotate'>('translate')
+  
   // Layers panel state
   const [showLayersPanel, setShowLayersPanel] = useState(false)
   const [showObjectsLayer, setShowObjectsLayer] = useState(true)
@@ -220,6 +227,9 @@ export default function MainViewport({
   const [showRoiLayer, setShowRoiLayer] = useState(true)
   const [showTracksLayer, setShowTracksLayer] = useState(true)
   const [showDoohLayer, setShowDoohLayer] = useState(true)
+  const [showPlanogramLayer, setShowPlanogramLayer] = useState(false)
+  const [planogramSelectedShelfId, setPlanogramSelectedShelfId] = useState<string | null>(null)
+  const [planogramHoveredSlotIndex, setPlanogramHoveredSlotIndex] = useState<number | null>(null)
   const [showAxisHelper, setShowAxisHelper] = useState(false)
   const axisHelperRef = useRef<THREE.AxesHelper | null>(null)
   const [showSlotArrows, setShowSlotArrows] = useState(false)
@@ -280,6 +290,10 @@ export default function MainViewport({
   }>>(new Map())
   const [videoPlaylistRefresh, setVideoPlaylistRefresh] = useState(0)
   
+  // Cluster highlight state (which object types should glow)
+  const [highlightedTypes, setHighlightedTypes] = useState<string[]>([])
+  const clusterHighlightMeshesRef = useRef<Map<string, THREE.LineSegments>>(new Map())
+  
   // Listen for playlist updates from other components
   useEffect(() => {
     const handlePlaylistUpdate = () => {
@@ -292,8 +306,30 @@ export default function MainViewport({
       doohVideoStatesRef.current.clear()
       setVideoPlaylistRefresh(prev => prev + 1)
     }
+    
+    const handleScreensUpdate = () => {
+      // Re-fetch DOOH screens when they're created/updated in DoohAnalyticsPage
+      if (venueRef.current?.id) {
+        fetchDoohScreensRef.current(venueRef.current.id)
+      }
+    }
+    
     window.addEventListener('dooh-playlist-updated', handlePlaylistUpdate)
-    return () => window.removeEventListener('dooh-playlist-updated', handlePlaylistUpdate)
+    window.addEventListener('dooh-screens-updated', handleScreensUpdate)
+    return () => {
+      window.removeEventListener('dooh-playlist-updated', handlePlaylistUpdate)
+      window.removeEventListener('dooh-screens-updated', handleScreensUpdate)
+    }
+  }, [])
+  
+  // Listen for cluster highlight changes from ObjectLibrary
+  useEffect(() => {
+    const handleHighlightChange = (e: CustomEvent<{ highlightedTypes: string[] }>) => {
+      setHighlightedTypes(e.detail.highlightedTypes)
+    }
+    
+    window.addEventListener('cluster-highlight-change', handleHighlightChange as EventListener)
+    return () => window.removeEventListener('cluster-highlight-change', handleHighlightChange as EventListener)
   }, [])
   
   // Track when each person entered an SEZ zone (for 1-minute label visibility)
@@ -309,10 +345,16 @@ export default function MainViewport({
   // Drag threshold to prevent accidental selection when navigating
   const DRAG_THRESHOLD_PX = 5 // Pixels of movement before drag starts
   const mouseDownPosRef = useRef<{ x: number; y: number } | null>(null)
-  const pendingDragRef = useRef<{ type: 'object' | 'lidar' | 'roi-vertex' | 'roi', id: string, vertexIndex?: number, hit: any } | null>(null)
+  const pendingDragRef = useRef<{ type: 'object' | 'lidar' | 'roi-vertex' | 'roi', id: string, vertexIndex?: number, hit: any, requiresShift?: boolean } | null>(null)
   
   // Magnetic snap threshold (meters)
   const SNAP_THRESHOLD = 0.2
+  
+  // Track if initial camera position has been set (to avoid resetting during object drag)
+  const cameraInitializedRef = useRef(false)
+  
+  // Track if transform gizmo is being used (to prevent any camera resets)
+  const isGizmoActiveRef = useRef(false)
   
   // Hovered ROI for tooltip
   const hoveredRoiIdRef = useRef<string | null>(null)
@@ -341,6 +383,9 @@ export default function MainViewport({
   const intentGlowsRef = useRef<Map<string, THREE.Mesh>>(new Map())
   const intentClusterGroupRef = useRef<THREE.Group | null>(null)
   const tracksRef = useRef<Map<string, { trail?: { x: number; z: number }[] }>>(new Map())
+  
+  // Planogram layer - shelf planogram data
+  const { activePlanogram, loadShelfPlanogram, activeShelfPlanogram, activeCatalog, allShelfPlanograms } = usePlanogram()
   
   // Fetch custom models
   const fetchCustomModels = useCallback(async () => {
@@ -372,23 +417,30 @@ export default function MainViewport({
   }, [])
   
   // Helper to create SEZ zone mesh from polygon
+  // offsetX/offsetZ: offset to apply to make coordinates relative to group origin
   const createSezZoneMesh = (
     polygon: { x: number; z: number }[],
     height: number,
     color: number,
-    opacity: number = 0.15
+    opacity: number = 0.15,
+    offsetX: number = 0,
+    offsetZ: number = 0
   ): THREE.Group => {
     const zoneGroup = new THREE.Group()
     
-    // Calculate center of polygon
-    const centerX = polygon.reduce((sum, p) => sum + p.x, 0) / polygon.length
-    const centerZ = polygon.reduce((sum, p) => sum + p.z, 0) / polygon.length
+    // Apply offset to make polygon relative to group origin
+    const relPolygon = polygon.map(p => ({ x: p.x - offsetX, z: p.z - offsetZ }))
     
-    // Create shape relative to center
+    // Calculate center of relative polygon
+    const centerX = relPolygon.reduce((sum, p) => sum + p.x, 0) / relPolygon.length
+    const centerZ = relPolygon.reduce((sum, p) => sum + p.z, 0) / relPolygon.length
+    
+    // Create shape relative to center - use X and -Z to match world coordinates after rotation
+    // This ensures the solid matches the wireframe orientation
     const shape = new THREE.Shape()
-    shape.moveTo(polygon[0].x - centerX, polygon[0].z - centerZ)
-    for (let i = 1; i < polygon.length; i++) {
-      shape.lineTo(polygon[i].x - centerX, polygon[i].z - centerZ)
+    shape.moveTo(relPolygon[0].x - centerX, -(relPolygon[0].z - centerZ))
+    for (let i = 1; i < relPolygon.length; i++) {
+      shape.lineTo(relPolygon[i].x - centerX, -(relPolygon[i].z - centerZ))
     }
     shape.closePath()
     
@@ -408,15 +460,14 @@ export default function MainViewport({
       })
     )
     zoneMesh.rotation.x = -Math.PI / 2
-    zoneMesh.rotation.z = Math.PI
     zoneMesh.position.set(centerX, 0.02, centerZ)
     zoneGroup.add(zoneMesh)
     
-    // Edge lines
+    // Edge lines (relative to group origin)
     const edgePoints: THREE.Vector3[] = []
-    for (let i = 0; i < polygon.length; i++) {
-      const p1 = polygon[i]
-      const p2 = polygon[(i + 1) % polygon.length]
+    for (let i = 0; i < relPolygon.length; i++) {
+      const p1 = relPolygon[i]
+      const p2 = relPolygon[(i + 1) % relPolygon.length]
       edgePoints.push(new THREE.Vector3(p1.x, 0.03, p1.z))
       edgePoints.push(new THREE.Vector3(p2.x, 0.03, p2.z))
       edgePoints.push(new THREE.Vector3(p1.x, height, p1.z))
@@ -435,6 +486,7 @@ export default function MainViewport({
   }
 
   // Generate back-facing SEZ polygon (rotated 180 degrees from screen position)
+  // Returns polygon in ABSOLUTE coordinates (caller should apply offset)
   const generateBackSezPolygon = (
     frontPolygon: { x: number; z: number }[],
     screenPos: { x: number; z: number }
@@ -448,35 +500,47 @@ export default function MainViewport({
   }
 
   // Create DOOH zone mesh for a screen
+  // Group is positioned at screen.position so children use RELATIVE coordinates
+  // This allows the entire group to be moved/rotated and children follow naturally
   const createDoohZoneMesh = useCallback((screen: typeof doohScreens[0]): THREE.Group => {
     const group = new THREE.Group()
     group.name = `dooh-screen-${screen.id}`
+    
+    // Position group at screen location - all children will be relative to this
+    group.position.set(screen.position.x, 0, screen.position.z)
+    group.rotation.y = (screen.yawDeg || 0) * Math.PI / 180
+    
+    // Store original screen position for reference
+    group.userData.screenId = screen.id
+    group.userData.originalPosition = { x: screen.position.x, z: screen.position.z }
+    group.userData.originalYawRad = (screen.yawDeg || 0) * Math.PI / 180
     
     const sezColor = 0x9333ea // Purple
     const sezColorBack = 0x7c3aed // Slightly different purple for back
     const height = screen.mountHeightM + 0.5
     
-    // Create front SEZ zone
+    // Create front SEZ zone (relative to screen position, no rotation - group handles rotation)
     if (screen.sezPolygon && screen.sezPolygon.length >= 3) {
-      const frontZone = createSezZoneMesh(screen.sezPolygon, height, sezColor)
+      // Create SEZ relative to screen position, then undo group rotation so it renders correctly
+      const frontZone = createSezZoneMesh(screen.sezPolygon, height, sezColor, 0.15, screen.position.x, screen.position.z)
+      // Undo group rotation for the zone (SEZ polygon is already in world orientation from backend)
+      frontZone.rotation.y = -group.rotation.y
       group.add(frontZone)
       
       // Create back SEZ zone if double-sided
       if (screen.doubleSided) {
         const backPolygon = generateBackSezPolygon(screen.sezPolygon, screen.position)
-        const backZone = createSezZoneMesh(backPolygon, height, sezColorBack, 0.12)
+        const backZone = createSezZoneMesh(backPolygon, height, sezColorBack, 0.12, screen.position.x, screen.position.z)
+        backZone.rotation.y = -group.rotation.y
         group.add(backZone)
       }
     }
     
-    // Direction arrow (screen marker removed - video screen replaces it)
-    const yawRad = (screen.yawDeg || 0) * Math.PI / 180
+    // Direction arrow (relative to group origin, pointing in local +Z direction)
     const arrowLength = 1.5
-    const dirX = Math.sin(yawRad)
-    const dirZ = Math.cos(yawRad)
     const arrowPoints = [
-      new THREE.Vector3(screen.position.x, screen.mountHeightM, screen.position.z),
-      new THREE.Vector3(screen.position.x + dirX * arrowLength, screen.mountHeightM, screen.position.z + dirZ * arrowLength),
+      new THREE.Vector3(0, screen.mountHeightM, 0),
+      new THREE.Vector3(0, screen.mountHeightM, arrowLength),
     ]
     const arrowGeometry = new THREE.BufferGeometry().setFromPoints(arrowPoints)
     const arrowLine = new THREE.Line(
@@ -485,12 +549,12 @@ export default function MainViewport({
     )
     group.add(arrowLine)
     
-    // Vertical pole
+    // Vertical pole (at group origin)
     const pole = new THREE.Mesh(
       new THREE.CylinderGeometry(0.03, 0.03, screen.mountHeightM, 8),
       new THREE.MeshStandardMaterial({ color: 0x666666 })
     )
-    pole.position.set(screen.position.x, screen.mountHeightM / 2, screen.position.z)
+    pole.position.set(0, screen.mountHeightM / 2, 0)
     group.add(pole)
     
     return group
@@ -583,7 +647,7 @@ export default function MainViewport({
     }
   }, [])
 
-  const { venue, objects, selectedObjectId, selectObject, updateObject, removeObject, snapToGrid } = useVenue()
+  const { venue, objects, selectedObjectId, hoveredObjectId, selectObject, hoverObject, updateObject, removeObject, snapToGrid, copySelectedObjects, pasteObjects } = useVenue()
   const { placements, selectedPlacementId, selectPlacement, updatePlacement, removePlacement, getDeviceById } = useLidar()
   const { tracks } = useTracking()
   tracksRef.current = tracks
@@ -598,9 +662,12 @@ export default function MainViewport({
   const updateObjectRef = useRef(updateObject)
   const updatePlacementRef = useRef(updatePlacement)
   const removeObjectRef = useRef(removeObject)
+  const copySelectedObjectsRef = useRef(copySelectedObjects)
+  const pasteObjectsRef = useRef(pasteObjects)
   const removePlacementRef = useRef(removePlacement)
   const snapToGridRef = useRef(snapToGrid)
   const selectObjectRef = useRef(selectObject)
+  const hoverObjectRef = useRef(hoverObject)
   const selectPlacementRef = useRef(selectPlacement)
   const selectRegionRef = useRef(selectRegion)
   const addDrawingVertexRef = useRef(addDrawingVertex)
@@ -612,6 +679,13 @@ export default function MainViewport({
   const selectedObjectIdRef = useRef(selectedObjectId)
   const selectedPlacementIdRef = useRef(selectedPlacementId)
   const selectedRoiIdRef = useRef(selectedRoiId)
+  const showPlanogramLayerRef = useRef(showPlanogramLayer)
+  const setPlanogramSelectedShelfIdRef = useRef(setPlanogramSelectedShelfId)
+  const planogramSelectedShelfIdRef = useRef(planogramSelectedShelfId)
+  const activeShelfPlanogramRef = useRef(activeShelfPlanogram)
+  const setPlanogramHoveredSlotIndexRef = useRef(setPlanogramHoveredSlotIndex)
+  const doohScreensRef = useRef(doohScreens)
+  const fetchDoohScreensRef = useRef(fetchDoohScreens)
   
   useEffect(() => {
     venueRef.current = venue
@@ -623,9 +697,12 @@ export default function MainViewport({
     updateObjectRef.current = updateObject
     updatePlacementRef.current = updatePlacement
     removeObjectRef.current = removeObject
+    copySelectedObjectsRef.current = copySelectedObjects
+    pasteObjectsRef.current = pasteObjects
     removePlacementRef.current = removePlacement
     snapToGridRef.current = snapToGrid
     selectObjectRef.current = selectObject
+    hoverObjectRef.current = hoverObject
     selectPlacementRef.current = selectPlacement
     selectRegionRef.current = selectRegion
     addDrawingVertexRef.current = addDrawingVertex
@@ -637,7 +714,14 @@ export default function MainViewport({
     selectedObjectIdRef.current = selectedObjectId
     selectedPlacementIdRef.current = selectedPlacementId
     selectedRoiIdRef.current = selectedRoiId
-  }, [venue, objects, placements, regions, isDrawing, drawingVertices, updateObject, updatePlacement, removeObject, removePlacement, snapToGrid, selectObject, selectPlacement, selectRegion, addDrawingVertex, updateRegion, deleteRegion, updateVertexPosition, openKPIPopup, setHoveredRoiId, selectedObjectId, selectedPlacementId, selectedRoiId])
+    showPlanogramLayerRef.current = showPlanogramLayer
+    setPlanogramSelectedShelfIdRef.current = setPlanogramSelectedShelfId
+    planogramSelectedShelfIdRef.current = planogramSelectedShelfId
+    activeShelfPlanogramRef.current = activeShelfPlanogram
+    setPlanogramHoveredSlotIndexRef.current = setPlanogramHoveredSlotIndex
+    doohScreensRef.current = doohScreens
+    fetchDoohScreensRef.current = fetchDoohScreens
+  }, [venue, objects, placements, regions, isDrawing, drawingVertices, updateObject, updatePlacement, removeObject, copySelectedObjects, pasteObjects, removePlacement, snapToGrid, selectObject, selectPlacement, selectRegion, addDrawingVertex, updateRegion, deleteRegion, updateVertexPosition, openKPIPopup, setHoveredRoiId, selectedObjectId, selectedPlacementId, selectedRoiId, showPlanogramLayer, setPlanogramSelectedShelfId, planogramSelectedShelfId, activeShelfPlanogram, setPlanogramHoveredSlotIndex, doohScreens, fetchDoohScreens])
   
   // Load ROIs when venue changes
   useEffect(() => {
@@ -701,9 +785,100 @@ export default function MainViewport({
     controls.enableDamping = true
     controls.dampingFactor = 0.05
     controls.maxPolarAngle = Math.PI / 2.1
-    controls.minDistance = 1
-    controls.maxDistance = 500
+    controls.minDistance = 0.1
+    controls.maxDistance = Infinity
     controlsRef.current = controls
+
+    // Transform controls (gizmo for translate/rotate)
+    const transformControls = new TransformControls(camera, renderer.domElement)
+    transformControls.setSpace('world') // World space for consistent XZ movement
+    transformControls.setSize(0.5)      // Smaller, less intrusive
+    transformControls.visible = false
+    // Constrain to X-Z plane (floor movement) - hide Y axis for translate
+    transformControls.showY = false
+    scene.add(transformControls)
+    transformControlsRef.current = transformControls
+    
+    // Disable orbit controls while interacting with transform gizmo
+    transformControls.addEventListener('mouseDown', () => {
+      isGizmoActiveRef.current = true
+      controls.enabled = false
+    })
+    
+    transformControls.addEventListener('dragging-changed', (event) => {
+      if (event.value) {
+        // Started dragging - keep orbit disabled and mark gizmo as active
+        isGizmoActiveRef.current = true
+        controls.enabled = false
+      } else {
+        // Finished dragging - delay re-enable to prevent camera jump
+        setTimeout(() => {
+          isGizmoActiveRef.current = false
+          controls.enabled = true
+        }, 100)
+      }
+    })
+    
+    transformControls.addEventListener('mouseUp', () => {
+      // Delay re-enable to prevent camera jump when releasing gizmo
+      setTimeout(() => {
+        isGizmoActiveRef.current = false
+        controls.enabled = true
+      }, 100)
+      
+      // Sync DOOH screen to backend when transform gizmo drag ends
+      const obj3d = transformControls.object
+      if (obj3d?.userData?.objectId) {
+        const objId = obj3d.userData.objectId
+        const venueObj = objectsRef.current.find(o => o.id === objId)
+        if (venueObj?.type === 'digital_display' && venueRef.current?.id) {
+          const linkedScreen = doohScreensRef.current.find((s: { id: string; objectId?: string }) => s.objectId === objId)
+          if (linkedScreen) {
+            const position = { x: obj3d.position.x, y: 0, z: obj3d.position.z }
+            fetch(`${API_BASE}/api/dooh/screens/${linkedScreen.id}`, {
+              method: 'PUT',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                position,
+                yawDeg: obj3d.rotation.y * (180 / Math.PI)
+              })
+            }).then(() => {
+              if (venueRef.current?.id) {
+                fetchDoohScreensRef.current(venueRef.current.id)
+              }
+            }).catch(err => console.warn('Failed to sync DOOH screen from gizmo:', err))
+          }
+        }
+      }
+    })
+    
+    // Update object position/rotation when transform gizmo changes
+    transformControls.addEventListener('objectChange', () => {
+      const obj3d = transformControls.object
+      if (!obj3d || !obj3d.userData.objectId) return
+      
+      const objId = obj3d.userData.objectId
+      // Keep Y at 0 for floor objects
+      const position = { x: obj3d.position.x, y: 0, z: obj3d.position.z }
+      const rotation = { x: 0, y: obj3d.rotation.y, z: 0 } // Only Y rotation matters for floor objects
+      
+      // Update via context (will trigger re-render)
+      updateObjectRef.current(objId, { position, rotation })
+      
+      // Real-time DOOH FOV sync: update linked DOOH screen mesh when transform gizmo moves digital_display
+      const venueObj = objectsRef.current.find(o => o.id === objId)
+      if (venueObj?.type === 'digital_display') {
+        const linkedScreen = doohScreensRef.current.find((s: { id: string; objectId?: string }) => s.objectId === objId)
+        if (linkedScreen) {
+          const doohGroup = doohMeshesRef.current.get(linkedScreen.id)
+          if (doohGroup) {
+            // Update DOOH group to match the new position and rotation (group is at screen position)
+            doohGroup.position.set(obj3d.position.x, 0, obj3d.position.z)
+            doohGroup.rotation.y = obj3d.rotation.y
+          }
+        }
+      }
+    })
 
     // Lighting
     const ambientLight = new THREE.AmbientLight(0xffffff, 0.6)
@@ -727,6 +902,8 @@ export default function MainViewport({
     // Animation loop with visibility-based throttling to prevent memory leaks
     let animationFrameId: number | null = null
     let isTabVisible = true
+    let lastJitterTime = 0
+    const JITTER_INTERVAL = 100 // Throttle jitter to 10fps to reduce CPU usage
     
     const animate = () => {
       if (!isTabVisible) {
@@ -739,13 +916,17 @@ export default function MainViewport({
       animationFrameId = requestAnimationFrame(animate)
       controls.update()
 
-      // Animate point clouds every frame for living shimmer
-      trackMeshesRef.current.forEach((group) => {
-        const pc = group.children[4]
-        if (pc && pc.visible && pc instanceof THREE.Points) {
-          jitterPointCloud(pc)
-        }
-      })
+      // Animate point clouds at throttled rate for living shimmer (10fps instead of 60fps)
+      const now = performance.now()
+      if (now - lastJitterTime > JITTER_INTERVAL) {
+        lastJitterTime = now
+        trackMeshesRef.current.forEach((group) => {
+          const pc = group.children[4]
+          if (pc && pc.visible && pc instanceof THREE.Points) {
+            jitterPointCloud(pc)
+          }
+        })
+      }
 
       renderer.render(scene, camera)
       labelRenderer.render(scene, camera)
@@ -1011,7 +1192,7 @@ export default function MainViewport({
     }
 
     // Mouse down - record position for drag threshold
-    // SHIFT+Click required to select/drag objects (prevents accidental selection during navigation)
+    // Click to select objects, SHIFT+drag to move (or use transform gizmo)
     const handleMouseDown = (event: MouseEvent) => {
       if (event.button !== 0) return // Only left click
       
@@ -1026,23 +1207,19 @@ export default function MainViewport({
         return // Don't process other click actions while drawing
       }
       
-      // Require Shift key for selection/dragging (prevents accidental selection during pan/rotate/zoom)
-      if (!event.shiftKey) {
-        mouseDownPosRef.current = null
-        pendingDragRef.current = null
-        return // Allow OrbitControls to handle navigation
-      }
-      
-      // Store mouse down position for drag threshold check
-      mouseDownPosRef.current = { x: event.clientX, y: event.clientY }
-      
+      // Check if clicking on an object
       const hit = findHitObject(mouse)
-
+      
       if (hit) {
-        // Store pending drag info - actual drag starts after threshold
+        // Store mouse down position for potential drag
+        mouseDownPosRef.current = { x: event.clientX, y: event.clientY }
+        
+        // Store pending drag info - actual drag only starts with SHIFT or after using gizmo
         const vertexIndex = hit.type === 'roi-vertex' ? hit.vertexIndex : undefined
-        pendingDragRef.current = { type: hit.type, id: hit.id, vertexIndex, hit }
+        pendingDragRef.current = { type: hit.type, id: hit.id, vertexIndex, hit, requiresShift: !event.shiftKey }
       } else {
+        // Clicked on empty space
+        mouseDownPosRef.current = { x: event.clientX, y: event.clientY }
         pendingDragRef.current = null
       }
     }
@@ -1091,6 +1268,14 @@ export default function MainViewport({
       if (hit.type === 'object') {
         selectObjectRef.current(hit.id)
         selectPlacementRef.current(null)
+        
+        // If planogram layer is active and this is a shelf, select it for planogram display
+        if (showPlanogramLayerRef.current) {
+          const obj = objectsRef.current.find(o => o.id === hit.id)
+          if (obj?.type === 'shelf') {
+            setPlanogramSelectedShelfIdRef.current(hit.id)
+          }
+        }
       } else if (hit.type === 'lidar') {
         selectPlacementRef.current(hit.id)
         selectObjectRef.current(null)
@@ -1142,8 +1327,11 @@ export default function MainViewport({
         const distance = Math.sqrt(dx * dx + dy * dy)
         
         if (distance > DRAG_THRESHOLD_PX) {
-          // Threshold crossed - start the actual drag
-          startDrag(mouse)
+          // ROIs can be dragged without SHIFT, objects/lidars require SHIFT
+          const isRoiType = pendingDragRef.current.type === 'roi' || pendingDragRef.current.type === 'roi-vertex'
+          if (isRoiType || !pendingDragRef.current.requiresShift) {
+            startDrag(mouse)
+          }
           pendingDragRef.current = null
         }
       }
@@ -1201,6 +1389,7 @@ export default function MainViewport({
         }
         if (hovObjId !== hoveredObjectIdRef.current) {
           hoveredObjectIdRef.current = hovObjId
+          hoverObjectRef.current(hovObjId)
           if (hovObjId) {
             const obj = objectsRef.current.find(o => o.id === hovObjId)
             if (obj) {
@@ -1223,6 +1412,52 @@ export default function MainViewport({
         } else if (hovObjId && hoveredObjectIdRef.current) {
           // Update mouse position for existing tooltip
           setHoveredObjectTooltip(prev => prev ? { ...prev, mouseX: event.clientX, mouseY: event.clientY } : null)
+        }
+        
+        // Planogram layer: check if hovering over the selected shelf to sync slot highlight
+        if (showPlanogramLayerRef.current && planogramSelectedShelfIdRef.current && objHits.length > 0) {
+          const hitObj = objHits[0]
+          let hitObjId: string | null = null
+          let cur: THREE.Object3D | null = hitObj.object
+          while (cur) {
+            if (cur.userData.objectId) { hitObjId = cur.userData.objectId; break }
+            cur = cur.parent
+          }
+          
+          if (hitObjId === planogramSelectedShelfIdRef.current) {
+            // Calculate which slot column is being hovered (scanner laser effect)
+            const shelf = objectsRef.current.find(o => o.id === hitObjId)
+            if (shelf && activeShelfPlanogramRef.current) {
+              const shelfWidth = shelf.scale?.x || 2.0
+              const slotWidthM = activeShelfPlanogramRef.current.slotWidthM || 0.1
+              const slotsPerLevel = Math.floor(shelfWidth / slotWidthM)
+              
+              // Calculate slot index based on world position relative to shelf center
+              // Use shelf rotation to determine which axis to use
+              const shelfRotY = shelf.rotation?.y || 0
+              const shelfCenterX = shelf.position.x
+              const shelfCenterZ = shelf.position.z
+              const hitX = hitObj.point.x - shelfCenterX
+              const hitZ = hitObj.point.z - shelfCenterZ
+              
+              // Rotate hit point by negative shelf rotation to get shelf-local X
+              const cosR = Math.cos(-shelfRotY)
+              const sinR = Math.sin(-shelfRotY)
+              const localX = hitX * cosR - hitZ * sinR
+              
+              // Calculate normalized position (0 = left edge, 1 = right edge)
+              const normalizedX = (localX + shelfWidth / 2) / shelfWidth
+              const slotIndex = Math.min(Math.max(0, Math.floor(normalizedX * slotsPerLevel)), slotsPerLevel - 1)
+              
+              setPlanogramHoveredSlotIndexRef.current(slotIndex)
+            }
+          } else {
+            // Not hovering over the selected shelf
+            setPlanogramHoveredSlotIndexRef.current(null)
+          }
+        } else if (showPlanogramLayerRef.current && planogramSelectedShelfIdRef.current) {
+          // Not hovering over any object
+          setPlanogramHoveredSlotIndexRef.current(null)
         }
 
         // Check if hovering over an ROI zone
@@ -1291,6 +1526,20 @@ export default function MainViewport({
         if (mesh) {
           mesh.position.x = clampedX
           mesh.position.z = clampedZ
+          
+          // Real-time DOOH FOV sync: move linked DOOH screen mesh with the digital_display
+          const obj = objectsRef.current.find(o => o.id === draggedObjectRef.current!.id)
+          if (obj?.type === 'digital_display') {
+            const linkedScreen = doohScreensRef.current.find((s: { id: string; objectId?: string }) => s.objectId === obj.id)
+            if (linkedScreen) {
+              const doohGroup = doohMeshesRef.current.get(linkedScreen.id)
+              if (doohGroup) {
+                // Set DOOH group position to match the screen (group is positioned at screen location)
+                doohGroup.position.x = clampedX
+                doohGroup.position.z = clampedZ
+              }
+            }
+          }
         }
       } else if (draggedObjectRef.current.type === 'lidar') {
         const group = lidarMeshesRef.current.get(draggedObjectRef.current.id)
@@ -1419,6 +1668,7 @@ export default function MainViewport({
     const handleMouseUp = (event: MouseEvent) => {
       // Clear object hover tooltip
       hoveredObjectIdRef.current = null
+      hoverObjectRef.current(null)
       setHoveredObjectTooltip(null)
       // Handle click selection (no drag occurred - threshold not crossed)
       if (pendingDragRef.current && !isDraggingRef.current) {
@@ -1428,6 +1678,14 @@ export default function MainViewport({
           selectObjectRef.current(pending.id)
           selectPlacementRef.current(null)
           selectRegionRef.current(null)
+          
+          // If planogram layer is active and this is a shelf, select it for planogram display
+          if (showPlanogramLayerRef.current) {
+            const obj = objectsRef.current.find(o => o.id === pending.id)
+            if (obj?.type === 'shelf') {
+              setPlanogramSelectedShelfIdRef.current(pending.id)
+            }
+          }
         } else if (pending.type === 'lidar') {
           selectPlacementRef.current(pending.id)
           selectObjectRef.current(null)
@@ -1571,9 +1829,32 @@ export default function MainViewport({
             const snapped = snapToGridRef.current({ x: newX, y: 0, z: newZ })
 
             if (draggedObjectRef.current.type === 'object') {
-              updateObjectRef.current(draggedObjectRef.current.id, {
+              const objId = draggedObjectRef.current.id
+              updateObjectRef.current(objId, {
                 position: snapped
               })
+              
+              // If it's a digital_display, sync DOOH screen position
+              const obj = objectsRef.current.find(o => o.id === objId)
+              if (obj?.type === 'digital_display' && venueRef.current?.id) {
+                // Find linked DOOH screen and update its position
+                const linkedScreen = doohScreensRef.current.find((s: { id: string; objectId?: string }) => s.objectId === objId)
+                if (linkedScreen) {
+                  fetch(`${API_BASE}/api/dooh/screens/${linkedScreen.id}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                      position: snapped,
+                      yawDeg: (obj.rotation?.y || 0) * (180 / Math.PI)
+                    })
+                  }).then(() => {
+                    // Re-fetch DOOH screens to update SEZ polygons
+                    if (venueRef.current?.id) {
+                      fetchDoohScreensRef.current(venueRef.current.id)
+                    }
+                  }).catch(err => console.warn('Failed to sync DOOH screen position:', err))
+                }
+              }
             } else if (draggedObjectRef.current.type === 'lidar') {
               updatePlacementRef.current(draggedObjectRef.current.id, {
                 position: snapped
@@ -1632,11 +1913,37 @@ export default function MainViewport({
           if (obj) {
             selectObjectRef.current(hit.id)
             selectPlacementRef.current(null)
+            const newRotationY = obj.rotation.y + rotationStep
             updateObjectRef.current(hit.id, {
-              rotation: { ...obj.rotation, y: obj.rotation.y + rotationStep }
+              rotation: { ...obj.rotation, y: newRotationY }
             })
+            
+            // If it's a digital_display, sync DOOH screen rotation
+            if (obj.type === 'digital_display' && venueRef.current?.id) {
+              const linkedScreen = doohScreensRef.current.find((s: { id: string; objectId?: string }) => s.objectId === hit.id)
+              if (linkedScreen) {
+                // Real-time visual rotation of DOOH FOV mesh (group is at screen position, just rotate it)
+                const doohGroup = doohMeshesRef.current.get(linkedScreen.id)
+                if (doohGroup) {
+                  doohGroup.rotation.y = newRotationY
+                }
+                
+                // Also sync to backend (will trigger full refresh with correct SEZ polygon)
+                fetch(`${API_BASE}/api/dooh/screens/${linkedScreen.id}`, {
+                  method: 'PUT',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    yawDeg: newRotationY * (180 / Math.PI)
+                  })
+                }).then(() => {
+                  if (venueRef.current?.id) {
+                    fetchDoohScreensRef.current(venueRef.current.id)
+                  }
+                }).catch(err => console.warn('Failed to sync DOOH screen rotation:', err))
+              }
+            }
           }
-        } else {
+        } else if (hit.type === 'lidar') {
           const placement = placementsRef.current.find(p => p.id === hit.id)
           if (placement) {
             selectPlacementRef.current(hit.id)
@@ -1645,17 +1952,45 @@ export default function MainViewport({
               rotation: { ...placement.rotation, y: placement.rotation.y + rotationStep }
             })
           }
+        } else if (hit.type === 'roi') {
+          // Rotate ROI polygon around its centroid
+          const roi = regionsRef.current.find(r => r.id === hit.id)
+          if (roi && roi.vertices.length >= 3) {
+            selectRegionRef.current(hit.id)
+            
+            // Calculate centroid
+            const cx = roi.vertices.reduce((s, v) => s + v.x, 0) / roi.vertices.length
+            const cz = roi.vertices.reduce((s, v) => s + v.z, 0) / roi.vertices.length
+            
+            // Rotate all vertices around centroid
+            const cos = Math.cos(rotationStep)
+            const sin = Math.sin(rotationStep)
+            const newVertices = roi.vertices.map(v => {
+              const dx = v.x - cx
+              const dz = v.z - cz
+              return {
+                x: cx + dx * cos - dz * sin,
+                z: cz + dx * sin + dz * cos
+              }
+            })
+            
+            // Update ROI with rotated vertices
+            updateRegionRef.current(hit.id, { vertices: newVertices })
+          }
         }
       }
     }
 
     // Keyboard handler - Delete key removes selected object/lidar/roi, Escape cancels drawing
     const handleKeyDown = (event: KeyboardEvent) => {
+      // Ignore if typing in input field
+      if (document.activeElement?.tagName === 'INPUT' || document.activeElement?.tagName === 'TEXTAREA') {
+        return
+      }
+      
       if (event.key === 'Delete' || event.key === 'Backspace') {
         // Prevent browser back navigation on Backspace
-        if (event.key === 'Backspace' && document.activeElement?.tagName !== 'INPUT') {
-          event.preventDefault()
-        }
+        event.preventDefault()
         if (selectedObjectIdRef.current) {
           removeObjectRef.current(selectedObjectIdRef.current)
           selectObjectRef.current(null)
@@ -1666,6 +2001,56 @@ export default function MainViewport({
           deleteRegionRef.current(selectedRoiIdRef.current)
           selectRegionRef.current(null)
         }
+      }
+      
+      // Transform mode shortcuts (when object is selected)
+      if (selectedObjectIdRef.current && transformControlsRef.current) {
+        if (event.key === 'g' || event.key === 'G') {
+          event.preventDefault()
+          event.stopPropagation()
+          setTransformMode('translate')
+          transformControlsRef.current.setMode('translate')
+          transformControlsRef.current.showX = true
+          transformControlsRef.current.showY = false
+          transformControlsRef.current.showZ = true
+        } else if (event.key === 'r') {
+          // Use lowercase 'r' only - uppercase R can be used for other things
+          event.preventDefault()
+          event.stopPropagation()
+          // Temporarily disable orbit controls to prevent viewport rotation
+          if (controlsRef.current) {
+            controlsRef.current.enabled = false
+            setTimeout(() => {
+              if (controlsRef.current) controlsRef.current.enabled = true
+            }, 100)
+          }
+          setTransformMode('rotate')
+          transformControlsRef.current.setMode('rotate')
+          transformControlsRef.current.showX = false
+          transformControlsRef.current.showY = true
+          transformControlsRef.current.showZ = false
+        }
+      }
+      
+      // Escape to deselect
+      if (event.key === 'Escape') {
+        selectObjectRef.current(null)
+        selectPlacementRef.current(null)
+        selectRegionRef.current(null)
+      }
+      
+      // Copy (Cmd+C / Ctrl+C)
+      if ((event.metaKey || event.ctrlKey) && event.key === 'c') {
+        if (selectedObjectIdRef.current) {
+          event.preventDefault()
+          copySelectedObjectsRef.current()
+        }
+      }
+      
+      // Paste (Cmd+V / Ctrl+V)
+      if ((event.metaKey || event.ctrlKey) && event.key === 'v') {
+        event.preventDefault()
+        pasteObjectsRef.current()
       }
     }
 
@@ -1759,12 +2144,164 @@ export default function MainViewport({
       })
       loadedModelsRef.current.clear()
       
+      // Dispose transform controls
+      if (transformControlsRef.current) {
+        transformControlsRef.current.detach()
+        scene.remove(transformControlsRef.current)
+        transformControlsRef.current.dispose()
+        transformControlsRef.current = null
+      }
+      
       // Dispose renderer and remove DOM elements
       renderer.dispose()
       renderer.forceContextLoss()
       container.removeChild(renderer.domElement)
       container.removeChild(labelRenderer.domElement)
     }
+  }, [])
+
+  // Attach/detach transform controls when selected object changes
+  useEffect(() => {
+    const tc = transformControlsRef.current
+    if (!tc) return
+    
+    if (selectedObjectId) {
+      const mesh = objectMeshesRef.current.get(selectedObjectId)
+      if (mesh) {
+        tc.attach(mesh)
+        tc.visible = true
+        tc.setMode(transformMode)
+        // Configure axes and size based on mode
+        if (transformMode === 'translate') {
+          tc.showX = true
+          tc.showY = false
+          tc.showZ = true
+          tc.setSize(0.5)
+        } else if (transformMode === 'rotate') {
+          tc.showX = false
+          tc.showY = true
+          tc.showZ = false
+          tc.setSize(1.0) // Larger ring for easier rotation
+        }
+      }
+    } else {
+      tc.detach()
+      tc.visible = false
+    }
+  }, [selectedObjectId, transformMode])
+  
+  // Update transform mode when it changes
+  useEffect(() => {
+    const tc = transformControlsRef.current
+    if (tc && tc.object) {
+      tc.setMode(transformMode)
+      // Configure axes based on mode
+      if (transformMode === 'translate') {
+        tc.showX = true
+        tc.showY = false  // No vertical movement for floor objects
+        tc.showZ = true
+        tc.setSize(0.5)   // Smaller for translate
+      } else if (transformMode === 'rotate') {
+        tc.showX = false  // Only Y rotation (around vertical axis)
+        tc.showY = true
+        tc.showZ = false
+        tc.setSize(1.0)   // Larger ring for easier rotation
+      }
+    }
+  }, [transformMode])
+  
+  // Auto-zoom and highlight newly added objects
+  useEffect(() => {
+    const handleObjectAdded = (event: CustomEvent<{ objectId: string; position: { x: number; z: number }; scale: { x: number; y: number; z: number } }>) => {
+      const { position, scale } = event.detail
+      const camera = cameraRef.current
+      const controls = controlsRef.current
+      const scene = sceneRef.current
+      
+      if (!camera || !controls || !scene) return
+      
+      // Calculate optimal camera distance based on object size
+      const objectSize = Math.max(scale.x, scale.z, 2)
+      const cameraDistance = objectSize * 4
+      const cameraHeight = objectSize * 3
+      
+      // Smoothly animate camera to focus on the new object
+      const targetX = position.x
+      const targetZ = position.z
+      
+      // Animate camera position
+      const startPos = camera.position.clone()
+      const startTarget = controls.target.clone()
+      const endPos = new THREE.Vector3(targetX + cameraDistance * 0.7, cameraHeight, targetZ + cameraDistance * 0.7)
+      const endTarget = new THREE.Vector3(targetX, scale.y / 2, targetZ)
+      
+      let progress = 0
+      const duration = 600 // ms
+      const startTime = performance.now()
+      
+      const animateCamera = () => {
+        progress = Math.min(1, (performance.now() - startTime) / duration)
+        // Ease out cubic
+        const eased = 1 - Math.pow(1 - progress, 3)
+        
+        camera.position.lerpVectors(startPos, endPos, eased)
+        controls.target.lerpVectors(startTarget, endTarget, eased)
+        controls.update()
+        
+        if (progress < 1) {
+          requestAnimationFrame(animateCamera)
+        }
+      }
+      animateCamera()
+      
+      // Add pulsing highlight ring around the new object
+      const highlightRing = new THREE.Mesh(
+        new THREE.RingGeometry(objectSize * 0.8, objectSize * 1.2, 32),
+        new THREE.MeshBasicMaterial({ 
+          color: 0x22c55e, 
+          transparent: true, 
+          opacity: 0.8,
+          side: THREE.DoubleSide,
+          depthWrite: false
+        })
+      )
+      highlightRing.rotation.x = -Math.PI / 2
+      highlightRing.position.set(position.x, 0.05, position.z)
+      highlightRing.userData.isHighlight = true
+      scene.add(highlightRing)
+      
+      // Animate the highlight ring (pulse and fade out)
+      let ringProgress = 0
+      const ringDuration = 2000 // 2 seconds
+      const ringStartTime = performance.now()
+      
+      const animateRing = () => {
+        ringProgress = (performance.now() - ringStartTime) / ringDuration
+        
+        if (ringProgress >= 1) {
+          scene.remove(highlightRing)
+          highlightRing.geometry.dispose()
+          ;(highlightRing.material as THREE.Material).dispose()
+          return
+        }
+        
+        // Pulse scale
+        const pulse = 1 + Math.sin(ringProgress * Math.PI * 4) * 0.2
+        highlightRing.scale.set(pulse, pulse, pulse)
+        
+        // Fade out in last 30%
+        if (ringProgress > 0.7) {
+          const fadeProgress = (ringProgress - 0.7) / 0.3
+          ;(highlightRing.material as THREE.MeshBasicMaterial).opacity = 0.8 * (1 - fadeProgress)
+        }
+        
+        requestAnimationFrame(animateRing)
+      }
+      animateRing()
+    }
+    
+    window.addEventListener('venue-object-added', handleObjectAdded as EventListener)
+    return () => window.removeEventListener('venue-object-added', handleObjectAdded as EventListener)
   }, [])
 
   // Compute effective scene bounds for DWG venues (shared by grid/floor + camera presets)
@@ -1887,18 +2424,81 @@ export default function MainViewport({
     scene.add(floor)
     floorRef.current = floor
 
-    // Camera — replicate Layout3DPreview focusBounds logic
-    if (controlsRef.current && cameraRef.current) {
-      const viewSize = Math.max(floorW, floorD)
-      cameraRef.current.position.set(
-        centerX + viewSize * 0.8,
-        viewSize * 0.7,
-        centerZ + viewSize * 0.8
-      )
-      controlsRef.current.target.set(centerX, 0, centerZ)
-      controlsRef.current.update()
-    }
+    // Camera — only set on first render, NOT on object changes
+    // (dwgSceneBounds depends on objects, so this would reset camera during drag)
   }, [venue?.width, venue?.depth, venue?.tileSize, venue?.scene_source, venue?.dwg_layout_version_id, dwgSceneBounds])
+
+  // Reset camera initialized flag when venue changes
+  useEffect(() => {
+    cameraInitializedRef.current = false
+  }, [venue?.id])
+  
+  // Listen for camera reset event (e.g., when LaunchPad closes)
+  useEffect(() => {
+    const handleCameraReset = () => {
+      console.log('[MainViewport] Camera reset event received')
+      cameraInitializedRef.current = false
+      // Trigger re-initialization by forcing a re-render
+      if (controlsRef.current && cameraRef.current && venue && dwgSceneBounds) {
+        const { floorW, floorD, centerX, centerZ } = dwgSceneBounds
+        const viewSize = Math.max(floorW, floorD)
+        cameraRef.current.position.set(
+          centerX + viewSize * 0.8,
+          viewSize * 0.7,
+          centerZ + viewSize * 0.8
+        )
+        controlsRef.current.target.set(centerX, 0, centerZ)
+        controlsRef.current.update()
+        cameraInitializedRef.current = true
+      } else if (controlsRef.current && cameraRef.current && venue) {
+        const viewSize = Math.max(venue.width, venue.depth)
+        const centerX = venue.width / 2
+        const centerZ = venue.depth / 2
+        cameraRef.current.position.set(
+          centerX + viewSize * 0.8,
+          viewSize * 0.7,
+          centerZ + viewSize * 0.8
+        )
+        controlsRef.current.target.set(centerX, 0, centerZ)
+        controlsRef.current.update()
+        cameraInitializedRef.current = true
+      }
+    }
+    window.addEventListener('mainviewport-reset-camera', handleCameraReset)
+    return () => window.removeEventListener('mainviewport-reset-camera', handleCameraReset)
+  }, [venue, dwgSceneBounds])
+  
+  // Initial camera positioning - only runs ONCE per venue
+  useEffect(() => {
+    if (!controlsRef.current || !cameraRef.current || !venue) return
+    if (cameraInitializedRef.current) return // Already initialized
+    if (isGizmoActiveRef.current) return // Don't reset while using gizmo
+    
+    // For DWG venues, use content-based bounds; for manual venues, use full dimensions
+    let floorW = venue.width
+    let floorD = venue.depth
+    let centerX = venue.width / 2
+    let centerZ = venue.depth / 2
+
+    if (dwgSceneBounds) {
+      floorW = dwgSceneBounds.floorW
+      floorD = dwgSceneBounds.floorD
+      centerX = dwgSceneBounds.centerX
+      centerZ = dwgSceneBounds.centerZ
+    }
+    
+    const viewSize = Math.max(floorW, floorD)
+    cameraRef.current.position.set(
+      centerX + viewSize * 0.8,
+      viewSize * 0.7,
+      centerZ + viewSize * 0.8
+    )
+    controlsRef.current.target.set(centerX, 0, centerZ)
+    controlsRef.current.update()
+    
+    cameraInitializedRef.current = true
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [venue?.id]) // Only run when venue changes, not when objects/dwgSceneBounds change
 
   // 3D Logo Billboard on back wall
   useEffect(() => {
@@ -1983,6 +2583,7 @@ export default function MainViewport({
   // Camera view presets
   useEffect(() => {
     if (!cameraRef.current || !controlsRef.current || !venue) return
+    if (isGizmoActiveRef.current) return // Don't change camera while using gizmo
     
     const camera = cameraRef.current
     const controls = controlsRef.current
@@ -2022,7 +2623,8 @@ export default function MainViewport({
     
     camera.lookAt(centerX, 0, centerZ)
     controls.update()
-  }, [cameraView, venue?.width, venue?.depth, venue?.height, dwgSceneBounds])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cameraView]) // Only trigger on explicit view changes, NOT dwgSceneBounds changes
 
   // Update lighting when settings change
   useEffect(() => {
@@ -2326,10 +2928,10 @@ export default function MainViewport({
     // For DWG venues, hide noise types AND filter to ROI area only
     const isDwgVenue = venue?.scene_source === 'dwg' || !!venue?.dwg_layout_version_id
     const isAbsurdVenue = venue ? Math.max(venue.width, venue.depth) > 500 : false
-    const HIDDEN_VENUE_TYPES = new Set(['pillar', 'entrance'])
+    const HIDDEN_DWG_TYPES = new Set(['pillar', 'entrance'])
     let visibleObjects = objects
     if (isDwgVenue) {
-      visibleObjects = objects.filter(o => !HIDDEN_VENUE_TYPES.has(o.type))
+      visibleObjects = objects.filter(o => !(HIDDEN_DWG_TYPES.has(o.type) && o.metadata?.source === 'dwg'))
       // For absurd venues, also filter to objects within/near the ROI
       if (isAbsurdVenue && regions.length > 0) {
         let roiMinX = Infinity, roiMaxX = -Infinity, roiMinZ = Infinity, roiMaxZ = -Infinity
@@ -2357,27 +2959,34 @@ export default function MainViewport({
     const existingIds = new Set(visibleObjects.map(o => o.id))
 
     // Remove deleted objects (and newly-hidden noise types)
-    objectMeshesRef.current.forEach((obj3d, id) => {
+    // Collect IDs to remove first, then remove them (avoids modifying Map during iteration)
+    const idsToRemove: string[] = []
+    objectMeshesRef.current.forEach((_, id) => {
       if (!existingIds.has(id)) {
-        // Also remove associated wireframe line for DWG polygon objects
-        if (obj3d.userData.wireLineRef) {
-          scene.remove(obj3d.userData.wireLineRef)
-          obj3d.userData.wireLineRef.geometry?.dispose()
-          obj3d.userData.wireLineRef.material?.dispose()
-        }
-        scene.remove(obj3d)
-        obj3d.traverse(child => {
-          if (child instanceof THREE.Mesh) {
-            child.geometry.dispose()
-            if (Array.isArray(child.material)) {
-              child.material.forEach(m => m.dispose())
-            } else {
-              child.material.dispose()
-            }
-          }
-        })
-        objectMeshesRef.current.delete(id)
+        idsToRemove.push(id)
       }
+    })
+    idsToRemove.forEach(id => {
+      const obj3d = objectMeshesRef.current.get(id)
+      if (!obj3d) return
+      // Also remove associated wireframe line for DWG polygon objects
+      if (obj3d.userData.wireLineRef) {
+        scene.remove(obj3d.userData.wireLineRef)
+        obj3d.userData.wireLineRef.geometry?.dispose()
+        obj3d.userData.wireLineRef.material?.dispose()
+      }
+      scene.remove(obj3d)
+      obj3d.traverse(child => {
+        if (child instanceof THREE.Mesh) {
+          child.geometry.dispose()
+          if (Array.isArray(child.material)) {
+            child.material.forEach(m => m.dispose())
+          } else {
+            child.material.dispose()
+          }
+        }
+      })
+      objectMeshesRef.current.delete(id)
     })
 
     // ── DWG TYPE COLORS (matches Layout3DPreview exactly) ──
@@ -2560,8 +3169,12 @@ export default function MainViewport({
       // Update transform
       if (obj3d.userData.isDwgPolygon) {
         // DWG polygon meshes: position is centroid, no rotation needed (shape is in world coords)
+        // For DWG polygons, scaling requires rebuilding geometry - apply Y scale (height) by scaling mesh
         obj3d.position.set(obj.position.x, 0, obj.position.z)
-        obj3d.scale.set(1, 1, 1)
+        // Allow height scaling for DWG polygons (X/Z scaling would distort the shape)
+        const originalHeight = obj3d.userData.originalHeight || obj.scale.y
+        if (!obj3d.userData.originalHeight) obj3d.userData.originalHeight = obj.scale.y
+        obj3d.scale.set(1, obj.scale.y / originalHeight, 1)
       } else {
         obj3d.rotation.set(obj.rotation.x, obj.rotation.y, obj.rotation.z)
         
@@ -2586,6 +3199,9 @@ export default function MainViewport({
         
         obj3d.position.set(obj.position.x, yOffset, obj.position.z)
       }
+      
+      // Force Three.js to update the object's world matrix
+      obj3d.updateMatrixWorld(true)
 
       // Update material color and selection state
       const isTranslucentType = isDwg || obj.type === 'wall' || obj.type === 'shelf'
@@ -2601,6 +3217,9 @@ export default function MainViewport({
           if (obj.id === selectedObjectId) {
             mat.emissive.setHex(COLORS.selected)
             mat.emissiveIntensity = 0.3
+          } else if (obj.id === hoveredObjectId) {
+            mat.emissive.setHex(0x22d3ee)
+            mat.emissiveIntensity = 0.25
           } else {
             mat.emissive.setHex(0x000000)
             mat.emissiveIntensity = 0
@@ -2610,13 +3229,21 @@ export default function MainViewport({
     }
 
     visibleObjects.forEach(obj => createOrUpdateObject(obj))
-  }, [objects, selectedObjectId, customModels, loadModel, venue?.scene_source, venue?.dwg_layout_version_id, venue?.width, venue?.depth, regions])
+  }, [objects, selectedObjectId, hoveredObjectId, customModels, loadModel, venue?.scene_source, venue?.dwg_layout_version_id, venue?.width, venue?.depth, regions])
 
   // Update LiDAR placements
   useEffect(() => {
     if (!sceneRef.current) return
     const scene = sceneRef.current
     const existingIds = new Set(placements.map(p => p.id))
+    
+    // FLOW-DEBUG: Log what placements MainViewport is receiving from LidarContext
+    console.log('%c[FLOW-DEBUG] MainViewport LiDAR placements update', 'color:#3b82f6;font-weight:bold', {
+      source: 'LidarContext.placements (lidar_placements table)',
+      count: placements.length,
+      ids: placements.map(p => p.id.slice(0, 8)),
+      positions: placements.map(p => ({ x: p.position.x.toFixed(2), z: p.position.z.toFixed(2) })),
+    })
 
     // Remove deleted placements
     lidarMeshesRef.current.forEach((group, id) => {
@@ -3175,10 +3802,8 @@ export default function MainViewport({
       topCapMat.emissiveIntensity = emissiveIntensity
       bottomCapMat.emissiveIntensity = emissiveIntensity
 
-      // Apply shimmer jitter to point cloud when visible
-      if (pointCloud && !isCylinderMode && pointCloud instanceof THREE.Points) {
-        jitterPointCloud(pointCloud)
-      }
+      // NOTE: Shimmer jitter is now handled in the throttled animate loop (10fps)
+      // to avoid CPU spikes from Socket.IO track updates
     })
     
     // Clean up stale SEZ entry times for tracks that no longer exist
@@ -3194,11 +3819,24 @@ export default function MainViewport({
   useEffect(() => {
     if (!sceneRef.current) return
     const scene = sceneRef.current
-    const existingIds = new Set(regions.map(r => r.id))
+    
+    // Filter ROIs for 3D display:
+    // - HIDE: LaunchPad auto-coverage ROI named "LiDAR Coverage" or "Zone 1" (no metadata)
+    // - SHOW: Everything else (Smart KPI ROIs, user-created custom ROIs named Zone 2/3/etc.)
+    const isLaunchPadCoverageRoi = (roi: typeof regions[0]) => {
+      const hasNoMetadata = !roi.metadata || Object.keys(roi.metadata).length === 0
+      // Hide exactly "LiDAR Coverage" or "Zone 1" (the LaunchPad default names)
+      const isAutoGenName = roi.name === 'LiDAR Coverage' || roi.name === 'Zone 1'
+      return hasNoMetadata && isAutoGenName
+    }
+    
+    const visibleIds = new Set(
+      regions.filter(r => !isLaunchPadCoverageRoi(r)).map(r => r.id)
+    )
 
-    // Remove deleted ROIs
+    // Remove deleted ROIs and non-smart-kpi ROIs
     roiMeshesRef.current.forEach((group, id) => {
-      if (!existingIds.has(id)) {
+      if (!visibleIds.has(id)) {
         scene.remove(group)
         group.traverse(child => {
           if (child instanceof THREE.Mesh || child instanceof THREE.Line) {
@@ -3215,12 +3853,14 @@ export default function MainViewport({
       }
     })
 
-    // Add/update ROIs
-    regions.forEach((roi, idx) => {
+    // Add/update ROIs (only Smart KPI ROIs - LaunchPad coverage zones filtered by visibleIds)
+    const visibleRegions = regions.filter(r => visibleIds.has(r.id))
+    
+    visibleRegions.forEach((roi, idx) => {
       if (roi.vertices.length < 3) return
       
       if (idx === 0) {
-        console.log(`[MainViewport] First ROI: "${roi.name}" vertices:`, roi.vertices.slice(0, 2))
+        console.log(`[MainViewport] First visible ROI: "${roi.name}" vertices:`, roi.vertices.slice(0, 2))
       }
       
       let group = roiMeshesRef.current.get(roi.id)
@@ -3415,6 +4055,104 @@ export default function MainViewport({
     })
   }, [showObjectsLayer, objects])
   
+  // Cluster highlight effect - apply translucent fill + wireframe to highlighted object types
+  // Same style as the hovered object tooltip effect (25% opacity fill + cyan edges)
+  useEffect(() => {
+    if (!sceneRef.current) return
+    const scene = sceneRef.current
+    
+    // Semantic highlight colors per type
+    const CLUSTER_HIGHLIGHT_COLORS: Record<string, number> = {
+      shelf: 0x00D4FF,          // Electric Blue
+      checkout: 0x00FF88,       // Neon Green
+      wall: 0x5EEAD4,           // Slate Cyan
+      entrance: 0xFBBF24,       // Amber
+      pillar: 0xA78BFA,         // Purple
+      digital_display: 0xF472B6, // Magenta
+      radio: 0x38BDF8,          // Sky Blue
+      custom: 0x94A3B8,         // Slate
+    }
+    
+    // Remove existing highlight groups for types no longer highlighted
+    clusterHighlightMeshesRef.current.forEach((group, objectId) => {
+      const obj = objects.find(o => o.id === objectId)
+      if (!obj || !highlightedTypes.includes(obj.type)) {
+        scene.remove(group)
+        group.traverse(child => {
+          if (child instanceof THREE.Mesh || child instanceof THREE.LineSegments) {
+            child.geometry.dispose()
+            if (Array.isArray(child.material)) {
+              child.material.forEach(m => m.dispose())
+            } else {
+              ;(child.material as THREE.Material).dispose()
+            }
+          }
+        })
+        clusterHighlightMeshesRef.current.delete(objectId)
+      }
+    })
+    
+    // Add highlight groups for newly highlighted types
+    objects.forEach(obj => {
+      if (!highlightedTypes.includes(obj.type)) return
+      if (clusterHighlightMeshesRef.current.has(obj.id)) return // Already highlighted
+      
+      const objectMesh = objectMeshesRef.current.get(obj.id)
+      if (!objectMesh) return
+      
+      const highlightColor = CLUSTER_HIGHLIGHT_COLORS[obj.type] || 0x00FFFF
+      
+      // Create a group to hold both fill and wireframe
+      const highlightGroup = new THREE.Group()
+      highlightGroup.name = `cluster-highlight-${obj.id}`
+      
+      // Create translucent fill box - slightly larger to avoid z-fighting
+      const boxGeo = new THREE.BoxGeometry(obj.scale.x * 1.01, obj.scale.y * 1.01, obj.scale.z * 1.01)
+      const fillMaterial = new THREE.MeshBasicMaterial({
+        color: highlightColor,
+        transparent: true,
+        opacity: 0.30,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+        depthTest: true,
+        polygonOffset: true,
+        polygonOffsetFactor: -1,
+        polygonOffsetUnits: -1,
+      })
+      const fillMesh = new THREE.Mesh(boxGeo, fillMaterial)
+      fillMesh.renderOrder = 999
+      highlightGroup.add(fillMesh)
+      
+      // Create wireframe edges - slightly larger
+      const edgesGeo = new THREE.EdgesGeometry(boxGeo)
+      const lineMaterial = new THREE.LineBasicMaterial({
+        color: highlightColor,
+        transparent: true,
+        opacity: 0.9,
+        depthTest: false,
+      })
+      const edgeLines = new THREE.LineSegments(edgesGeo, lineMaterial)
+      edgeLines.renderOrder = 1000
+      highlightGroup.add(edgeLines)
+      
+      // Position at object's position (accounting for y offset - objects sit on floor)
+      highlightGroup.position.set(obj.position.x, obj.scale.y / 2, obj.position.z)
+      highlightGroup.rotation.set(obj.rotation.x, obj.rotation.y, obj.rotation.z)
+      
+      scene.add(highlightGroup)
+      clusterHighlightMeshesRef.current.set(obj.id, highlightGroup as any)
+    })
+    
+    // Update positions of existing highlights (in case objects moved)
+    clusterHighlightMeshesRef.current.forEach((group, objectId) => {
+      const obj = objects.find(o => o.id === objectId)
+      if (obj) {
+        group.position.set(obj.position.x, obj.scale.y / 2, obj.position.z)
+        group.rotation.set(obj.rotation.x, obj.rotation.y, obj.rotation.z)
+      }
+    })
+  }, [highlightedTypes, objects])
+  
   // Toggle layer visibility - LiDAR
   useEffect(() => {
     lidarMeshesRef.current.forEach(group => {
@@ -3517,6 +4255,114 @@ export default function MainViewport({
   useEffect(() => {
     setTrackVisibility(showTracksLayer)
   }, [showTracksLayer])
+  
+  // Load shelf planogram when planogramSelectedShelfId changes
+  useEffect(() => {
+    if (planogramSelectedShelfId && activePlanogram) {
+      loadShelfPlanogram(planogramSelectedShelfId)
+    }
+  }, [planogramSelectedShelfId, activePlanogram, loadShelfPlanogram])
+  
+  // Close layers panel when planogram strip is shown
+  useEffect(() => {
+    if (showPlanogramLayer && planogramSelectedShelfId) {
+      setShowLayersPanel(false)
+    }
+  }, [showPlanogramLayer, planogramSelectedShelfId])
+  
+  // Highlight shelves with planogram data when layer is enabled
+  useEffect(() => {
+    if (!sceneRef.current) return
+    
+    // Get set of shelf IDs that have filled planograms
+    const shelvesWithPlanograms = new Set<string>()
+    
+    // Check activePlanogram.shelves for shelf data
+    if (activePlanogram?.shelves) {
+      activePlanogram.shelves.forEach(sp => {
+        // Check if shelf has any SKUs placed
+        const hasSkus = sp.slots?.levels?.some(level => 
+          level.slots?.some(slot => slot.skuItemId)
+        )
+        if (hasSkus) {
+          shelvesWithPlanograms.add(sp.shelfId)
+        }
+      })
+    }
+    
+    // Also check allShelfPlanograms cache
+    allShelfPlanograms.forEach((sp, shelfId) => {
+      const hasSkus = sp.slots?.levels?.some(level => 
+        level.slots?.some(slot => slot.skuItemId)
+      )
+      if (hasSkus) {
+        shelvesWithPlanograms.add(shelfId)
+      }
+    })
+    
+    // Apply/remove highlight to shelf meshes
+    objectMeshesRef.current.forEach((mesh, objectId) => {
+      const obj = objects.find(o => o.id === objectId)
+      if (!obj || obj.type !== 'shelf') return
+      
+      mesh.traverse(child => {
+        if (child instanceof THREE.Mesh && child.material) {
+          const materials = Array.isArray(child.material) ? child.material : [child.material]
+          materials.forEach(mat => {
+            if (mat instanceof THREE.MeshStandardMaterial || mat instanceof THREE.MeshPhongMaterial) {
+              if (showPlanogramLayer && shelvesWithPlanograms.has(objectId)) {
+                // Store original emissive if not already stored
+                if (!mat.userData.originalEmissive) {
+                  mat.userData.originalEmissive = mat.emissive.clone()
+                  mat.userData.originalEmissiveIntensity = mat.emissiveIntensity
+                }
+                // Apply subtle green glow
+                mat.emissive.setHex(0x22c55e)
+                mat.emissiveIntensity = 0.3
+              } else if (mat.userData.originalEmissive) {
+                // Restore original
+                mat.emissive.copy(mat.userData.originalEmissive)
+                mat.emissiveIntensity = mat.userData.originalEmissiveIntensity || 0
+              }
+            }
+          })
+        }
+      })
+    })
+  }, [showPlanogramLayer, activePlanogram, allShelfPlanograms, objects])
+  
+  // Get selected shelf object for planogram strip
+  const planogramSelectedShelf = useMemo(() => {
+    if (!planogramSelectedShelfId) return null
+    return objects.find(o => o.id === planogramSelectedShelfId) || null
+  }, [planogramSelectedShelfId, objects])
+  
+  // Calculate slot mapping for 3D hover → 2D highlight
+  const getSlotFromShelfPosition = useCallback((
+    localX: number, 
+    localZ: number, 
+    shelf: typeof planogramSelectedShelf
+  ): { levelIndex: number; slotIndex: number } | null => {
+    if (!shelf || !activeShelfPlanogram) return null
+    
+    const shelfWidth = shelf.scale?.x || 2.0
+    const shelfHeight = shelf.scale?.y || 2.0
+    const numLevels = activeShelfPlanogram.numLevels || 4
+    const slotWidthM = activeShelfPlanogram.slotWidthM || 0.1
+    const slotsPerLevel = Math.floor(shelfWidth / slotWidthM)
+    
+    // localX is along shelf width (-shelfWidth/2 to +shelfWidth/2)
+    // localZ is depth (ignored for slot calculation on front face)
+    const normalizedX = (localX + shelfWidth / 2) / shelfWidth
+    const slotIndex = Math.min(Math.floor(normalizedX * slotsPerLevel), slotsPerLevel - 1)
+    
+    // Y position determines level (assuming levels are evenly distributed)
+    // This would need the actual Y coordinate from the raycast hit
+    // For now, use level 0 as placeholder - will be enhanced with raycast Y
+    const levelIndex = 0
+    
+    return { levelIndex: Math.max(0, levelIndex), slotIndex: Math.max(0, slotIndex) }
+  }, [activeShelfPlanogram])
   
   // Toggle pan mode
   const togglePanMode = useCallback(() => {
@@ -4064,6 +4910,31 @@ export default function MainViewport({
           </button>
         </div>
         
+        {/* Transform Controls (when object selected) */}
+        {selectedObjectId && (
+          <div className="flex items-center gap-1 border-l border-gray-700 pl-2 ml-2">
+            <span className="text-[10px] text-gray-500 mr-1">Gizmo:</span>
+            <button
+              onClick={() => setTransformMode('translate')}
+              className={`p-1.5 rounded transition-colors ${transformMode === 'translate' ? 'bg-green-900/50 text-green-400' : 'text-gray-400 hover:text-white hover:bg-gray-700'}`}
+              title="Move object (G)"
+            >
+              <Move className="w-4 h-4" />
+            </button>
+            <button
+              onClick={() => setTransformMode('rotate')}
+              className={`p-1.5 rounded transition-colors ${transformMode === 'rotate' ? 'bg-orange-900/50 text-orange-400' : 'text-gray-400 hover:text-white hover:bg-gray-700'}`}
+              title="Rotate object (R)"
+            >
+              <RotateCw className="w-4 h-4" />
+            </button>
+            {/* Helper hint for current mode */}
+            <span className="text-[10px] text-gray-500 ml-2">
+              {transformMode === 'translate' ? '↔ Drag arrows' : '↻ Drag green ring'}
+            </span>
+          </div>
+        )}
+        
         {/* View Presets */}
         <div className="flex items-center gap-1 border-l border-gray-700 pl-2 ml-2">
           <button
@@ -4125,6 +4996,87 @@ export default function MainViewport({
       
       {/* 3D Canvas */}
       <div ref={containerRef} className="flex-1 relative">
+        {/* Planogram Layer Strip - Full Width at Top */}
+        {showPlanogramLayer && planogramSelectedShelfId && planogramSelectedShelf && (
+          <div className="absolute top-0 left-0 right-0 z-20 bg-gray-900/95 border-b border-gray-700 backdrop-blur">
+            <div className="flex items-center gap-3 px-3 py-2">
+              {/* Header */}
+              <div className="flex items-center gap-2 flex-shrink-0">
+                <BarChart3 className="w-4 h-4 text-amber-500" />
+                <div>
+                  <div className="text-sm font-medium text-white">{planogramSelectedShelf.name || 'Shelf'}</div>
+                  <div className="text-[10px] text-gray-500">
+                    {activeShelfPlanogram ? `${activeShelfPlanogram.numLevels} levels × ${Math.floor((planogramSelectedShelf.scale?.x || 2) / (activeShelfPlanogram.slotWidthM || 0.1))} slots` : 'Loading...'}
+                  </div>
+                </div>
+              </div>
+              
+              {/* Planogram Grid - Horizontal */}
+              <div className="flex-1 overflow-x-auto">
+                {activeShelfPlanogram ? (
+                  <div className="flex flex-col gap-0.5 min-w-fit">
+                    {Array.from({ length: activeShelfPlanogram.numLevels }, (_, i) => activeShelfPlanogram.numLevels - 1 - i).map(levelIndex => {
+                      const level = activeShelfPlanogram.slots?.levels?.find(l => l.levelIndex === levelIndex)
+                      const shelfWidth = planogramSelectedShelf.scale?.x || 2.0
+                      const slotsPerLevel = Math.floor(shelfWidth / (activeShelfPlanogram.slotWidthM || 0.1))
+                      
+                      return (
+                        <div key={levelIndex} className="flex items-center gap-1">
+                          <span className="text-[9px] text-gray-600 w-4 text-right">L{levelIndex + 1}</span>
+                          <div className="flex gap-px">
+                            {Array.from({ length: slotsPerLevel }, (_, slotIndex) => {
+                              const slot = level?.slots?.find(s => s.slotIndex === slotIndex)
+                              const sku = slot?.skuItemId && activeCatalog?.items.find(i => i.id === slot.skuItemId)
+                              const isHovered = planogramHoveredSlotIndex === slotIndex
+                              
+                              // Build detailed tooltip
+                              let tooltip = `L${levelIndex + 1} / Slot ${slotIndex + 1}`
+                              if (sku) {
+                                tooltip = `${sku.name}\nSKU: ${sku.skuCode}\nCategory: ${sku.category || 'N/A'}\nBrand: ${sku.brand || 'N/A'}\nL${levelIndex + 1} / Slot ${slotIndex + 1}`
+                              } else {
+                                tooltip = `Empty Slot\nL${levelIndex + 1} / Slot ${slotIndex + 1}`
+                              }
+                              
+                              return (
+                                <div
+                                  key={slotIndex}
+                                  className={`w-6 h-5 rounded-sm text-[7px] flex items-center justify-center transition-all cursor-pointer ${
+                                    isHovered
+                                      ? 'bg-amber-500 text-white ring-2 ring-amber-400 scale-110 z-10'
+                                      : sku
+                                        ? 'bg-amber-600/40 border border-amber-600/60 text-amber-200'
+                                        : 'bg-gray-700/40 border border-gray-700 text-gray-600'
+                                  }`}
+                                  title={tooltip}
+                                  onMouseEnter={() => setPlanogramHoveredSlotIndex(slotIndex)}
+                                  onMouseLeave={() => setPlanogramHoveredSlotIndex(null)}
+                                >
+                                  {sku ? sku.name.substring(0, 2) : ''}
+                                </div>
+                              )
+                            })}
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                ) : (
+                  <div className="text-xs text-gray-500 py-2">No planogram data</div>
+                )}
+              </div>
+              
+              {/* Close button */}
+              <button
+                onClick={() => setPlanogramSelectedShelfId(null)}
+                className="p-1 text-gray-500 hover:text-white hover:bg-gray-700 rounded transition-colors flex-shrink-0"
+                title="Close planogram view"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+        )}
+        
         {/* SKU Detection Debug Overlay */}
         <SkuDebugOverlay
           enabled={tracking.showSkuDebug}
@@ -4167,7 +5119,11 @@ export default function MainViewport({
         {/* Floating Layers Panel - Top Left */}
         <div className="absolute top-14 left-3 z-10">
           <button
-            onClick={() => setShowLayersPanel(!showLayersPanel)}
+            onClick={() => {
+              // Don't allow opening layers panel while planogram strip is visible
+              if (showPlanogramLayer && planogramSelectedShelfId && !showLayersPanel) return
+              setShowLayersPanel(!showLayersPanel)
+            }}
             className={`p-2 rounded-lg shadow-lg transition-colors ${
               showLayersPanel
                 ? 'bg-blue-600 text-white'
@@ -4250,6 +5206,21 @@ export default function MainViewport({
                 <span className="text-sm text-gray-300 flex items-center gap-1.5">
                   {showDoohLayer ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5 text-gray-500" />}
                   DOOH Screens
+                </span>
+              </label>
+              <label className="flex items-center gap-2 py-1.5 px-2 rounded hover:bg-gray-700 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={showPlanogramLayer}
+                  onChange={(e) => {
+                    setShowPlanogramLayer(e.target.checked)
+                    if (!e.target.checked) setPlanogramSelectedShelfId(null)
+                  }}
+                  className="rounded border-gray-600 bg-gray-700 text-amber-500"
+                />
+                <span className="text-sm text-gray-300 flex items-center gap-1.5">
+                  {showPlanogramLayer ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5 text-gray-500" />}
+                  Planogram
                 </span>
               </label>
               <div className="border-t border-gray-700 my-1" />

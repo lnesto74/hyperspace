@@ -1,5 +1,5 @@
-import { useState, useEffect, useCallback, useMemo } from 'react'
-import { X, Zap, ShoppingCart, DoorOpen, Package, Check, Loader2, Eye, Sparkles, AlertCircle, Settings2, Maximize2, RefreshCw, PenTool, Trash2, Plus, MousePointer } from 'lucide-react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
+import { X, Zap, ShoppingCart, DoorOpen, Package, Check, Loader2, Eye, Sparkles, AlertCircle, Settings2, Maximize2, RefreshCw, PenTool, Trash2, Plus, MousePointer, ZoomIn, ZoomOut, Move } from 'lucide-react'
 import { useVenue } from '../../context/VenueContext'
 import { useRoi } from '../../context/RoiContext'
 import { API_BASE } from '../../config/api'
@@ -74,34 +74,94 @@ const ICON_MAP: Record<string, React.ComponentType<{ className?: string }>> = {
 }
 
 // Mini 2D preview component for ROIs
-function MiniRoiPreview({ rois }: { rois: PreviewRoi[] }) {
-  // Calculate bounds
-  const allPoints = rois.flatMap(r => r.vertices)
+function MiniRoiPreview({ rois, fixtures, zoomed, isPanning, panOffset, onPanStart, onPanMove, onPanEnd }: {
+  rois: PreviewRoi[],
+  fixtures?: DetectedObject[],
+  zoomed?: boolean,
+  isPanning?: boolean,
+  panOffset: { x: number; y: number },
+  onPanStart?: (e: React.MouseEvent) => void,
+  onPanMove?: (e: React.MouseEvent) => void,
+  onPanEnd?: () => void,
+}) {
+  // Calculate bounds from both ROIs and fixtures
+  const roiPoints = rois.flatMap(r => r.vertices)
+  const fixturePoints = (fixtures || []).map(f => ({ x: f.position.x, z: f.position.z }))
+  const allPoints = [...roiPoints, ...fixturePoints]
   if (allPoints.length === 0) return null
   
-  const minX = Math.min(...allPoints.map(p => p.x))
-  const maxX = Math.max(...allPoints.map(p => p.x))
-  const minZ = Math.min(...allPoints.map(p => p.z))
-  const maxZ = Math.max(...allPoints.map(p => p.z))
+  let minX = Math.min(...allPoints.map(p => p.x))
+  let maxX = Math.max(...allPoints.map(p => p.x))
+  let minZ = Math.min(...allPoints.map(p => p.z))
+  let maxZ = Math.max(...allPoints.map(p => p.z))
   
-  const width = maxX - minX || 1
-  const depth = maxZ - minZ || 1
+  // When zoomed, focus on the first fixture + its surrounding ROIs
+  if (zoomed && fixtures && fixtures.length > 0) {
+    const firstFix = fixtures[0]
+    const fx = firstFix.position.x
+    const fz = firstFix.position.z
+    const dim = firstFix.maxDimension || 1.5
+    const zoomRadius = Math.max(dim * 3, 6)
+    minX = fx - zoomRadius
+    maxX = fx + zoomRadius
+    minZ = fz - zoomRadius
+    maxZ = fz + zoomRadius
+  }
   
-  // Transform point to SVG coordinates (0-100 viewBox)
+  // Add padding so fixtures at edges are visible
+  const padX = (maxX - minX) * 0.08 || 1
+  const padZ = (maxZ - minZ) * 0.08 || 1
+  const bMinX = minX - padX
+  const bMaxX = maxX + padX
+  const bMinZ = minZ - padZ
+  const bMaxZ = maxZ + padZ
+  
+  const width = bMaxX - bMinX || 1
+  const depth = bMaxZ - bMinZ || 1
+  
+  // Transform point to SVG coordinates relative to viewBox
   const toSvg = (x: number, z: number) => ({
-    x: ((x - minX) / width) * 80 + 10, // 10% margin
-    y: ((z - minZ) / depth) * 80 + 10,
+    x: ((x - bMinX) / width) * 100,
+    y: ((z - bMinZ) / depth) * 100,
   })
   
   return (
-    <svg viewBox="0 0 100 100" className="w-full h-full">
+    <svg
+      viewBox={`${-panOffset.x} ${-panOffset.y} 100 100`}
+      className={`w-full h-full ${isPanning ? 'cursor-grab active:cursor-grabbing' : ''}`}
+      onMouseDown={onPanStart}
+      onMouseMove={onPanMove}
+      onMouseUp={onPanEnd}
+      onMouseLeave={onPanEnd}
+    >
       {/* Grid */}
       <defs>
-        <pattern id="grid" width="10" height="10" patternUnits="userSpaceOnUse">
+        <pattern id="miniGrid" width="10" height="10" patternUnits="userSpaceOnUse">
           <path d="M 10 0 L 0 0 0 10" fill="none" stroke="#374151" strokeWidth="0.3" />
         </pattern>
       </defs>
-      <rect width="100" height="100" fill="url(#grid)" />
+      <rect x={-panOffset.x} y={-panOffset.y} width="200" height="200" fill="url(#miniGrid)" />
+      
+      {/* Fixtures (checkout counters etc.) */}
+      {(fixtures || []).map((fix, idx) => {
+        const pos = toSvg(fix.position.x, fix.position.z)
+        const dim = fix.maxDimension || 1.2
+        const fw = Math.max(2, (dim / width) * 100)
+        const fd = Math.max(1, (0.5 / depth) * 100)
+        return (
+          <rect
+            key={`fix-${fix.id || idx}`}
+            x={pos.x - fw / 2}
+            y={pos.y - fd / 2}
+            width={fw}
+            height={fd}
+            fill="#6b7280"
+            stroke="#d1d5db"
+            strokeWidth="0.4"
+            rx="0.5"
+          />
+        )
+      })}
       
       {/* ROIs */}
       {rois.map((roi, idx) => {
@@ -123,8 +183,8 @@ function MiniRoiPreview({ rois }: { rois: PreviewRoi[] }) {
       })}
       
       {/* Scale indicator */}
-      <text x="5" y="97" fontSize="3" fill="#9ca3af">
-        {width.toFixed(1)}m × {depth.toFixed(1)}m
+      <text x={-panOffset.x + 2} y={-panOffset.y + 98} fontSize="2.5" fill="#9ca3af">
+        {(maxX - minX).toFixed(1)}m × {(maxZ - minZ).toFixed(1)}m
       </text>
     </svg>
   )
@@ -153,7 +213,38 @@ export default function SmartKpiModal({ isOpen, onClose, dwgLayoutId: propDwgLay
   const [customZones, setCustomZones] = useState<PreviewRoi[]>([])
   const [isDrawingCustom, setIsDrawingCustom] = useState(false)
   const [drawingPoints, setDrawingPoints] = useState<{ x: number; z: number }[]>([])
+  const [previewZoomed, setPreviewZoomed] = useState(false)
+  const [previewPanning, setPreviewPanning] = useState(false)
+  const [panOffset, setPanOffset] = useState({ x: 0, y: 0 })
+  const dragRef = useRef<{ dragging: boolean; startX: number; startY: number; startPanX: number; startPanY: number } | null>(null)
   
+  const handlePanStart = useCallback((e: React.MouseEvent) => {
+    if (!previewPanning) return
+    dragRef.current = {
+      dragging: true,
+      startX: e.clientX,
+      startY: e.clientY,
+      startPanX: panOffset.x,
+      startPanY: panOffset.y,
+    }
+  }, [previewPanning, panOffset])
+  
+  const handlePanMove = useCallback((e: React.MouseEvent) => {
+    if (!dragRef.current?.dragging) return
+    const rect = (e.currentTarget as SVGSVGElement).getBoundingClientRect()
+    // Pan in SVG viewBox units (0-100 space) - direct 1:1 pixel-to-unit mapping
+    const dx = (e.clientX - dragRef.current.startX) / rect.width * 100
+    const dy = (e.clientY - dragRef.current.startY) / rect.height * 100
+    setPanOffset({
+      x: dragRef.current.startPanX + dx,
+      y: dragRef.current.startPanY + dy,
+    })
+  }, [])
+  
+  const handlePanEnd = useCallback(() => {
+    if (dragRef.current) dragRef.current.dragging = false
+  }, [])
+
   // ROI dimension adjustments per type
   const [roiDimensions, setRoiDimensions] = useState<Record<string, RoiDimensionConfig>>({
     service: { width: 1.5, depth: 2.5, minWidth: 0.5, maxWidth: 4.0, minDepth: 1.0, maxDepth: 5.0, offsetX: 0, offsetZ: 0 },
@@ -590,15 +681,51 @@ export default function SmartKpiModal({ isOpen, onClose, dwgLayoutId: propDwgLay
               
               {/* Right: Mini Preview */}
               <div>
-                <h3 className="text-sm font-medium text-gray-300 mb-3 flex items-center gap-2">
-                  <Eye className="w-4 h-4 text-blue-400" />
-                  Preview
-                </h3>
+                <div className="flex items-center justify-between mb-3">
+                  <h3 className="text-sm font-medium text-gray-300 flex items-center gap-2">
+                    <Eye className="w-4 h-4 text-blue-400" />
+                    Preview
+                  </h3>
+                  <div className="flex items-center gap-1">
+                    <button
+                      onClick={() => { setPreviewPanning(p => !p) }}
+                      className={`p-1 rounded transition-colors ${previewPanning ? 'bg-blue-600 text-white' : 'bg-gray-700 text-gray-400 hover:text-white'}`}
+                      title={previewPanning ? 'Disable pan' : 'Enable pan (drag to move)'}
+                    >
+                      <Move className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      onClick={() => { setPreviewZoomed(z => !z); setPanOffset({ x: 0, y: 0 }) }}
+                      className={`p-1 rounded transition-colors ${previewZoomed ? 'bg-blue-600 text-white' : 'bg-gray-700 text-gray-400 hover:text-white'}`}
+                      title={previewZoomed ? 'Zoom out (show all)' : 'Zoom in (first fixture)'}
+                    >
+                      {previewZoomed ? <ZoomOut className="w-3.5 h-3.5" /> : <ZoomIn className="w-3.5 h-3.5" />}
+                    </button>
+                    {(panOffset.x !== 0 || panOffset.y !== 0) && (
+                      <button
+                        onClick={() => setPanOffset({ x: 0, y: 0 })}
+                        className="p-1 rounded bg-gray-700 text-gray-400 hover:text-white transition-colors"
+                        title="Reset pan"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                  </div>
+                </div>
                 
                 {/* Mini 2D Preview Canvas */}
                 <div className="bg-gray-800 border border-gray-700 rounded-lg p-2 aspect-square relative overflow-hidden">
                   {previewRois.length > 0 ? (
-                    <MiniRoiPreview rois={previewRois} />
+                    <MiniRoiPreview
+                      rois={previewRois}
+                      fixtures={selectedTemplateData?.detectedObjects}
+                      zoomed={previewZoomed}
+                      isPanning={previewPanning}
+                      panOffset={panOffset}
+                      onPanStart={handlePanStart}
+                      onPanMove={handlePanMove}
+                      onPanEnd={handlePanEnd}
+                    />
                   ) : (
                     <div className="w-full h-full flex items-center justify-center text-gray-500 text-sm">
                       No zones to preview

@@ -100,10 +100,22 @@ const DEFAULT_STEPS: Omit<LaunchPadStep, 'status'>[] = [
     warnings: [],
   },
   {
-    id: 'validate_stream',
+    id: 'deploy_her',
     index: 6,
+    label: 'Deploy HER',
+    description: 'Deploy algorithm provider (HER) with venue geometry and LiDAR config.',
+    icon: 'Cpu',
+    data: null,
+    startedAt: null,
+    completedAt: null,
+    error: null,
+    warnings: [],
+  },
+  {
+    id: 'validate_stream',
+    index: 7,
     label: 'Validate Stream',
-    description: 'Check MQTT connectivity and LiDAR point cloud health.',
+    description: 'Run full pipeline check: LiDAR → HER → MQTT → Backend → WebSocket.',
     icon: 'Activity',
     data: null,
     startedAt: null,
@@ -113,7 +125,7 @@ const DEFAULT_STEPS: Omit<LaunchPadStep, 'status'>[] = [
   },
   {
     id: 'go_live',
-    index: 7,
+    index: 8,
     label: 'Go Live',
     description: 'Deploy configuration and start real-time tracking.',
     icon: 'Rocket',
@@ -156,7 +168,37 @@ export function loadSession(): LaunchPadSession | null {
   try {
     const raw = localStorage.getItem(STORAGE_KEY)
     if (!raw) return null
-    return JSON.parse(raw) as LaunchPadSession
+    const session = JSON.parse(raw) as LaunchPadSession
+    
+    // Migrate: add any missing steps and fix indices to match DEFAULT_STEPS order
+    const existingById = new Map(session.steps.map(s => [s.id, s]))
+    const missingSteps = DEFAULT_STEPS.filter(ds => !existingById.has(ds.id))
+    
+    // Build new steps array in correct order from DEFAULT_STEPS
+    const migratedSteps = DEFAULT_STEPS.map((ds, idx) => {
+      const existing = existingById.get(ds.id)
+      if (existing) {
+        // Update index to match DEFAULT_STEPS order
+        return { ...existing, index: idx }
+      } else {
+        // New step - add with locked status
+        return { ...ds, index: idx, status: 'locked' as StepStatus }
+      }
+    })
+    
+    // Check if any step has wrong index (needs reorder)
+    const needsReorder = session.steps.some(s => {
+      const expected = DEFAULT_STEPS.find(ds => ds.id === s.id)
+      return expected && s.index !== expected.index
+    })
+    
+    if (missingSteps.length > 0 || session.steps.length !== migratedSteps.length || needsReorder) {
+      session.steps = migratedSteps
+      saveSession(session)
+      console.log(`[LaunchPad] Migrated session: added ${missingSteps.map(s => s.id).join(', ') || 'none'}, reordered: ${needsReorder}`)
+    }
+    
+    return session
   } catch {
     return null
   }

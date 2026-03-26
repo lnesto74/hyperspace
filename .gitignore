@@ -34,3 +34,8 @@ coverage/
 tutorial/
 *.mov
 *.mp4
+
+# User uploads
+backend/uploads/dwg/
+backend/uploads/logos/
+backend/uploads/floorplans/

@@ -349,6 +349,17 @@ router.put('/screens/:id', (req, res) => {
       return res.status(400).json({ error: 'No updates provided' });
     }
 
+    // Recalculate SEZ polygon if position or yaw changed (and sezPolygon wasn't explicitly provided)
+    if ((position !== undefined || yawDeg !== undefined) && sezPolygon === undefined) {
+      const existingParams = JSON.parse(existing.params_json);
+      const finalPosition = position || JSON.parse(existing.position_json);
+      const finalYaw = yawDeg !== undefined ? yawDeg : existing.yaw_deg;
+      const recalculatedSez = calculateViewingConeSEZ(finalPosition, finalYaw, existingParams);
+      updates.push('sez_polygon_json = ?');
+      values.push(JSON.stringify(recalculatedSez));
+      console.log('📐 Recalculated SEZ polygon for position/yaw change');
+    }
+
     updates.push('updated_at = ?');
     values.push(new Date().toISOString());
     values.push(id);

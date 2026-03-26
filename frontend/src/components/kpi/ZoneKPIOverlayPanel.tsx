@@ -95,16 +95,20 @@ export default function ZoneKPIOverlayPanel({ onZoneClick }: ZoneKPIOverlayPanel
     return displayNames
   }, [regions])
 
-  // Get available categories from current regions
+  // Get available categories from current regions (excluding auto-generated zones)
   const availableCategories = useMemo(() => {
     const cats = new Set<ZoneCategory>()
-    regions.forEach(roi => cats.add(getZoneCategory(roi.name)))
+    regions
+      .filter(roi => roi.name !== 'Zone 1' && roi.name !== 'LiDAR Coverage')
+      .forEach(roi => cats.add(getZoneCategory(roi.name)))
     return Array.from(cats)
   }, [regions])
 
   // Filter regions based on active filters (empty = show all)
+  // Also hide auto-generated zones like "Zone 1" and "LiDAR Coverage"
   const filteredRegions = useMemo(() => {
-    let result = activeFilters.size === 0 ? regions : regions.filter(roi => activeFilters.has(getZoneCategory(roi.name)))
+    const baseRegions = regions.filter(roi => roi.name !== 'Zone 1' && roi.name !== 'LiDAR Coverage')
+    let result = activeFilters.size === 0 ? baseRegions : baseRegions.filter(roi => activeFilters.has(getZoneCategory(roi.name)))
     
     // If there's a pinned ROI, move it to the top of the list
     if (pinnedRoiId) {

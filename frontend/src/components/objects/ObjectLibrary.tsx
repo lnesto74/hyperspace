@@ -1,8 +1,20 @@
 import { useState, useEffect, useRef } from 'react'
-import { Package, Square, ShoppingCart, DoorOpen, Circle, Shapes, Upload, FolderUp, X, ChevronDown, Plus, Monitor, Radio } from 'lucide-react'
+import { Package, Square, ShoppingCart, DoorOpen, Circle, Shapes, Upload, FolderUp, X, ChevronDown, Plus, Monitor, Radio, Filter, Trash2, Eye, EyeOff } from 'lucide-react'
 import { useVenue } from '../../context/VenueContext'
 import { ObjectType, Vector3 } from '../../types'
 import { API_BASE } from '../../config/api'
+
+// Semantic highlight colors for each object type (digital twin aesthetic)
+export const CLUSTER_HIGHLIGHT_COLORS: Record<ObjectType, number> = {
+  shelf: 0x00D4FF,          // Electric Blue
+  checkout: 0x00FF88,       // Neon Green
+  wall: 0x5EEAD4,           // Slate Cyan
+  entrance: 0xFBBF24,       // Amber
+  pillar: 0xA78BFA,         // Purple
+  digital_display: 0xF472B6, // Magenta
+  radio: 0x38BDF8,          // Sky Blue
+  custom: 0x94A3B8,         // Slate
+}
 
 
 interface ObjectPreset {
@@ -48,13 +60,56 @@ const DEFAULT_DIMENSIONS: Record<ObjectType, ObjectDimensions> = {
 }
 
 export default function ObjectLibrary() {
-  const { venue, objects, addObject, removeObject, selectObject, selectedObjectId } = useVenue()
+  const { venue, objects, addObject, removeObject, selectObject, selectedObjectId, hoveredObjectId, hoverObject } = useVenue()
+  const listContainerRef = useRef<HTMLDivElement>(null)
+  const cardRefsMap = useRef<Map<string, HTMLDivElement>>(new Map())
   const [customModels, setCustomModels] = useState<Map<string, CustomModel>>(new Map())
   const [uploading, setUploading] = useState<string | null>(null)
   const [expandedType, setExpandedType] = useState<ObjectType | null>(null)
   const [dimensions, setDimensions] = useState<Record<ObjectType, ObjectDimensions>>(() => ({ ...DEFAULT_DIMENSIONS }))
+  const [typeFilter, setTypeFilter] = useState<ObjectType | 'all'>('all')
+  const [highlightedTypes, setHighlightedTypes] = useState<Set<ObjectType>>(new Set())
   const fileInputRefs = useRef<Map<string, HTMLInputElement>>(new Map())
   const folderInputRefs = useRef<Map<string, HTMLInputElement>>(new Map())
+
+  // Dispatch event when highlighted types change
+  useEffect(() => {
+    window.dispatchEvent(new CustomEvent('cluster-highlight-change', {
+      detail: { highlightedTypes: Array.from(highlightedTypes) }
+    }))
+  }, [highlightedTypes])
+
+  const toggleTypeHighlight = (type: ObjectType) => {
+    setHighlightedTypes(prev => {
+      const next = new Set(prev)
+      if (next.has(type)) {
+        next.delete(type)
+      } else {
+        next.add(type)
+      }
+      return next
+    })
+  }
+
+  // Track whether hover originated from sidebar (to avoid auto-scroll when user hovers sidebar cards)
+  const hoverFromSidebarRef = useRef(false)
+
+  // Compute type counts and filtered objects
+  const typeCounts = objects.reduce((acc, obj) => {
+    acc[obj.type] = (acc[obj.type] || 0) + 1
+    return acc
+  }, {} as Record<string, number>)
+  const filteredObjects = typeFilter === 'all' ? objects : objects.filter(o => o.type === typeFilter)
+  const availableTypes = Object.keys(typeCounts).sort() as ObjectType[]
+
+  // Auto-scroll to hovered card when hover comes from 3D viewport
+  useEffect(() => {
+    if (!hoveredObjectId || hoverFromSidebarRef.current) return
+    const card = cardRefsMap.current.get(hoveredObjectId)
+    if (card && listContainerRef.current) {
+      card.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+    }
+  }, [hoveredObjectId])
 
   // Fetch custom models on mount
   useEffect(() => {
@@ -160,12 +215,53 @@ export default function ObjectLibrary() {
 
   const handleAddObject = (type: ObjectType) => {
     if (!venue) return
-    const position: Vector3 = {
-      x: venue.width / 2,
-      y: 0,
-      z: venue.depth / 2,
-    }
     const dim = dimensions[type]
+    
+    // Find a clear spawn position away from existing fixtures
+    // Calculate bounding box of all existing objects
+    let minX = Infinity, maxX = -Infinity
+    let minZ = Infinity, maxZ = -Infinity
+    
+    objects.forEach(obj => {
+      const hw = (obj.scale?.x || 1) / 2
+      const hd = (obj.scale?.z || 1) / 2
+      minX = Math.min(minX, obj.position.x - hw)
+      maxX = Math.max(maxX, obj.position.x + hw)
+      minZ = Math.min(minZ, obj.position.z - hd)
+      maxZ = Math.max(maxZ, obj.position.z + hd)
+    })
+    
+    // Spawn position: top-left corner, 3m outside the fixture bounding box
+    // If no objects exist, place at venue corner with some margin
+    const margin = 3
+    const objHalfW = dim.width / 2
+    const objHalfD = dim.depth / 2
+    
+    let spawnX: number, spawnZ: number
+    
+    if (objects.length === 0 || !isFinite(minX)) {
+      // No existing objects - place at top-left with margin
+      spawnX = objHalfW + margin
+      spawnZ = objHalfD + margin
+    } else {
+      // Place to the left of existing fixtures, or above if left is out of bounds
+      spawnX = minX - margin - objHalfW
+      spawnZ = minZ - margin - objHalfD
+      
+      // If would be negative, place to the right/bottom instead
+      if (spawnX < objHalfW + 1) {
+        spawnX = maxX + margin + objHalfW
+      }
+      if (spawnZ < objHalfD + 1) {
+        spawnZ = maxZ + margin + objHalfD
+      }
+    }
+    
+    const position: Vector3 = {
+      x: spawnX,
+      y: 0,
+      z: spawnZ,
+    }
     const scale: Vector3 = { x: dim.width, y: dim.height, z: dim.depth }
     addObject(type, position, scale)
     setExpandedType(null)
@@ -203,23 +299,42 @@ export default function ObjectLibrary() {
                 } ${isExpanded ? 'border-highlight' : ''}`}
               >
                 {/* Header - click to expand */}
-                <button
-                  onClick={() => setExpandedType(isExpanded ? null : preset.type)}
-                  disabled={!venue}
-                  className="w-full p-3 flex items-center justify-between text-left disabled:opacity-50 disabled:cursor-not-allowed group"
-                >
-                  <div className="flex items-center gap-2">
+                <div className="w-full p-3 flex items-center justify-between">
+                  <button
+                    onClick={() => setExpandedType(isExpanded ? null : preset.type)}
+                    disabled={!venue}
+                    className="flex items-center gap-2 flex-1 text-left disabled:opacity-50 disabled:cursor-not-allowed group"
+                  >
                     <preset.icon className={`w-4 h-4 transition-colors ${isExpanded ? 'text-highlight' : 'text-gray-400 group-hover:text-highlight'}`} />
                     <div>
                       <div className="flex items-center gap-2">
                         <span className="text-sm font-medium text-white">{preset.name}</span>
                         {hasCustomModel && <span className="text-[8px] text-green-400 bg-green-500/20 px-1 rounded">OBJ</span>}
+                        {typeCounts[preset.type] > 0 && (
+                          <span className="text-[9px] text-gray-500 bg-gray-700/50 px-1.5 rounded">{typeCounts[preset.type]}</span>
+                        )}
                       </div>
                       <p className="text-[10px] text-gray-500">{dim.width}×{dim.depth}×{dim.height}m</p>
                     </div>
+                  </button>
+                  <div className="flex items-center gap-1">
+                    {/* Highlight toggle - only show if objects of this type exist */}
+                    {typeCounts[preset.type] > 0 && (
+                      <button
+                        onClick={(e) => { e.stopPropagation(); toggleTypeHighlight(preset.type) }}
+                        className={`p-1.5 rounded transition-colors ${
+                          highlightedTypes.has(preset.type)
+                            ? 'text-cyan-400 bg-cyan-500/20'
+                            : 'text-gray-500 hover:text-cyan-400 hover:bg-cyan-500/10'
+                        }`}
+                        title={highlightedTypes.has(preset.type) ? `Hide ${preset.name} highlight` : `Highlight all ${preset.name}s`}
+                      >
+                        {highlightedTypes.has(preset.type) ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5" />}
+                      </button>
+                    )}
+                    <ChevronDown className={`w-4 h-4 text-gray-500 transition-transform ${isExpanded ? 'rotate-180' : ''}`} />
                   </div>
-                  <ChevronDown className={`w-4 h-4 text-gray-500 transition-transform ${isExpanded ? 'rotate-180' : ''}`} />
-                </button>
+                </div>
                 
                 {/* Expanded panel with dimension controls */}
                 {isExpanded && (
@@ -384,34 +499,78 @@ export default function ObjectLibrary() {
 
       {/* Objects List */}
       <div>
-        <h3 className="text-xs font-medium text-gray-400 uppercase tracking-wide mb-3">
-          Scene Objects ({objects.length})
-        </h3>
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-xs font-medium text-gray-400 uppercase tracking-wide">
+            Scene Objects ({typeFilter === 'all' ? objects.length : `${filteredObjects.length}/${objects.length}`})
+          </h3>
+          <div className="flex items-center gap-1">
+            <Filter className="w-3 h-3 text-gray-500" />
+            <select
+              value={typeFilter}
+              onChange={(e) => setTypeFilter(e.target.value as ObjectType | 'all')}
+              className="bg-card-bg border border-border-dark rounded px-2 py-0.5 text-xs text-white focus:border-highlight focus:outline-none"
+            >
+              <option value="all">All Types</option>
+              {availableTypes.map(type => (
+                <option key={type} value={type}>
+                  {type.charAt(0).toUpperCase() + type.slice(1).replace('_', ' ')} ({typeCounts[type]})
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+        
+        {/* Delete all filtered button */}
+        {typeFilter !== 'all' && filteredObjects.length > 0 && (
+          <button
+            onClick={() => {
+              if (confirm(`Delete all ${filteredObjects.length} ${typeFilter} objects?`)) {
+                filteredObjects.forEach(obj => removeObject(obj.id))
+                setTypeFilter('all')
+              }
+            }}
+            className="w-full mb-2 py-1.5 text-xs bg-red-500/20 text-red-400 border border-red-500/30 rounded hover:bg-red-500/30 transition-colors flex items-center justify-center gap-1"
+          >
+            <Trash2 className="w-3 h-3" />
+            Delete All {filteredObjects.length} {typeFilter}
+          </button>
+        )}
         
         {objects.length === 0 ? (
           <div className="text-center py-8 text-gray-500 text-sm">
             No objects in scene.<br />
             Click an object type above to add.
           </div>
+        ) : filteredObjects.length === 0 ? (
+          <div className="text-center py-4 text-gray-500 text-sm">
+            No {typeFilter} objects found.
+          </div>
         ) : (
-          <div className="space-y-1 max-h-[400px] overflow-y-auto">
-            {objects.map(obj => {
+          <div ref={listContainerRef} className="space-y-1 max-h-[400px] overflow-y-auto">
+            {filteredObjects.map(obj => {
               const preset = OBJECT_PRESETS.find(p => p.type === obj.type)
               const Icon = preset?.icon || Shapes
+              const isHovered = hoveredObjectId === obj.id
+              const isSelected = selectedObjectId === obj.id
               
               return (
                 <div
                   key={obj.id}
+                  ref={(el) => { if (el) cardRefsMap.current.set(obj.id, el); else cardRefsMap.current.delete(obj.id) }}
                   onClick={() => selectObject(obj.id)}
+                  onMouseEnter={() => { hoverFromSidebarRef.current = true; hoverObject(obj.id) }}
+                  onMouseLeave={() => { hoverFromSidebarRef.current = false; hoverObject(null) }}
                   className={`p-2 rounded-lg cursor-pointer flex items-center justify-between group transition-colors ${
-                    selectedObjectId === obj.id
+                    isSelected
                       ? 'bg-highlight/20 border border-highlight'
-                      : 'bg-card-bg border border-border-dark hover:border-gray-600'
+                      : isHovered
+                        ? 'bg-cyan-500/10 border border-cyan-500/60'
+                        : 'bg-card-bg border border-border-dark hover:border-gray-600'
                   }`}
                 >
                   <div className="flex items-center gap-2 flex-1 min-w-0">
                     <Icon className={`w-4 h-4 flex-shrink-0 ${
-                      selectedObjectId === obj.id ? 'text-highlight' : 'text-gray-400'
+                      isSelected ? 'text-highlight' : isHovered ? 'text-cyan-400' : 'text-gray-400'
                     }`} />
                     <div className="min-w-0">
                       <div className="text-sm text-white truncate">{obj.name}</div>
@@ -426,7 +585,9 @@ export default function ObjectLibrary() {
                       e.stopPropagation()
                       removeObject(obj.id)
                     }}
-                    className="p-1 text-gray-500 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-all"
+                    className={`p-1 text-gray-500 hover:text-red-400 transition-all ${
+                      isHovered ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
+                    }`}
                   >
                     ×
                   </button>

@@ -101,6 +101,7 @@ export class AgentV2 {
     this.blockedFrames = 0;
     this.agentBlockedFrames = 0;
     this.nearbyAgentCount = 0;
+    this.replanAttempts = 0; // Track consecutive replans to same target
     
     antiGlitch.initAgent(id);
   }
@@ -167,12 +168,26 @@ export class AgentV2 {
     
     switch (newState) {
       case STATE.ENTERING: this.planEntryPath(); break;
-      case STATE.BROWSING: this.selectBrowsingTargets(); this.planNextBrowsingPath(); break;
+      case STATE.BROWSING:
+        // If coming from ENTERING with merged first target, targets are already selected
+        if (!this.browsingTargets || this.browsingTargets.length === 0) {
+          this.selectBrowsingTargets();
+        }
+        this.speed = this.baseSpeed * (1.2 + this.rng.next() * 0.1); // 1.2-1.3x between targets
+        this.planNextBrowsingPath();
+        break;
       
       // Simple queue states
       case STATE.WALKING_TO_QUEUE:
         this.isInQueueSystem = true;
-        this.queueManager.startQueueDecision(this.id, this);
+        const queueResult = this.queueManager.startQueueDecision(this.id, this);
+        if (!queueResult) {
+          // No open lanes — exit instead of queueing at a closed lane
+          console.log(`[Agent ${this.id}] No open lanes, exiting instead of queueing`);
+          this.isInQueueSystem = false;
+          this.transitionTo(STATE.EXITING);
+          return;
+        }
         this.planPathToQueue();
         break;
         
@@ -213,23 +228,50 @@ export class AgentV2 {
   }
   
   planEntryPath() {
-    const bypass = this.navGrid.zoneBounds.bypassCorridorX;
-    const shopZ = this.navGrid.zoneBounds.shoppingMinZ;
-    const p1 = this.pathPlanner.findPath(this.x, this.z, bypass, 3);
-    const p2 = this.pathPlanner.findPath(bypass, 3, bypass, shopZ);
-    this.path = p1 && p2 ? [...p1, ...p2.slice(1)] : [{ x: bypass, z: 3 }, { x: bypass, z: shopZ }];
+    // Entry: entrance → corridor exit → first browsing target (one continuous path)
+    
+    // Wide corridor exit spread to reduce bunching (full corridor width)
+    this.corridorTargetX = 93 + this.rng.next() * 9; // x ≈ 93-102
+    this.corridorTargetZ = 36;  // corridor exit
+    
+    const p1 = this.pathPlanner.findPath(this.x, this.z, this.corridorTargetX, this.corridorTargetZ);
+    
+    // Pre-select browsing targets so we can merge the first one into entry path
+    this.selectBrowsingTargets();
+    
+    let fullPath = p1 || [{ x: this.corridorTargetX, z: this.corridorTargetZ }];
+    
+    // Merge first browsing target into entry path for smooth continuous motion
+    if (this.browsingTargets && this.browsingTargets.length > 0) {
+      const firstTarget = this.browsingTargets[0];
+      const p2 = this.pathPlanner.findPath(this.corridorTargetX, this.corridorTargetZ, firstTarget.x, firstTarget.z);
+      if (p2 && p2.length > 0) {
+        fullPath = [...fullPath, ...p2.slice(1)];
+        this.entryIncludesFirstBrowse = true; // Flag so BROWSING skips first target's path planning
+      } else {
+        this.entryIncludesFirstBrowse = false;
+      }
+    } else {
+      this.entryIncludesFirstBrowse = false;
+    }
+    
+    this.path = fullPath;
+    this.replanAttempts = 0;
     this.currentPathIndex = 0;
     this.setNextTarget();
   }
   
   selectBrowsingTargets() {
     this.browsingTargets = [];
-    const wp = [...this.navGrid.safeWaypoints.shopping, ...this.navGrid.safeWaypoints.aisles];
-    const shuffled = wp.sort(() => this.rng.next() - 0.5);
+    // Shopping list already includes aisle waypoints (superset)
+    const wp = this.navGrid.safeWaypoints.shopping;
+    if (!wp || wp.length === 0) return;
+    const shuffled = [...wp].sort(() => this.rng.next() - 0.5);
     for (let i = 0; i < Math.min(this.numStops, shuffled.length); i++) {
       this.browsingTargets.push(shuffled[i]);
     }
     this.currentBrowsingIndex = 0;
+    this.replanAttempts = 0;
   }
   
   planNextBrowsingPath() {
@@ -295,30 +337,18 @@ export class AgentV2 {
   
   planExitPath() {
     const ent = this.navGrid.entrancePos;
-    const cashierZ = this.navGrid.zoneBounds.cashierLineZ || 7;
-    const exitCorridorZ = 3; // Safe corridor between cashiers and entrance
     
     console.log(`[Agent ${this.id}] EXIT: from (${this.x.toFixed(1)}, ${this.z.toFixed(1)}) -> entrance (${ent.x.toFixed(1)}, ${ent.z.toFixed(1)})`);
     
-    // Step 1: Move to exit corridor first (same X, lower Z) - avoid crossing other cashiers
-    const corridorPoint = { x: this.x, z: exitCorridorZ };
-    const path1 = this.pathPlanner.findPath(this.x, this.z, corridorPoint.x, corridorPoint.z);
+    // Let A* find the natural exit path to entrance
+    this.path = this.pathPlanner.findPath(this.x, this.z, ent.x, ent.z);
     
-    // Step 2: From corridor to entrance
-    const path2 = this.pathPlanner.findPath(corridorPoint.x, corridorPoint.z, ent.x, ent.z);
-    
-    // Combine paths
-    if (path1 && path1.length > 0 && path2 && path2.length > 0) {
-      this.path = [...path1, ...path2.slice(1)]; // Avoid duplicate waypoint
-    } else if (path1 && path1.length > 0) {
-      this.path = [...path1, { x: ent.x, z: ent.z }];
-    } else {
-      // Fallback: direct waypoints
-      console.warn(`[Agent ${this.id}] EXIT PATH using fallback waypoints`);
-      this.path = [corridorPoint, { x: ent.x, z: ent.z }];
+    if (!this.path || this.path.length === 0) {
+      console.warn(`[Agent ${this.id}] EXIT PATH FAILED, using fallback`);
+      this.path = [{ x: ent.x, z: ent.z }];
     }
     
-    console.log(`[Agent ${this.id}] Exit path: ${this.path.length} waypoints, first: (${this.path[0].x.toFixed(1)}, ${this.path[0].z.toFixed(1)})`);
+    console.log(`[Agent ${this.id}] Exit path: ${this.path.length} waypoints`);
     
     this.currentPathIndex = 0;
     this.setNextTarget();
@@ -326,20 +356,47 @@ export class AgentV2 {
   }
   
   replanPath() {
+    this.replanAttempts = (this.replanAttempts || 0) + 1;
+    
     switch (this.state) {
-      case STATE.ENTERING: this.planEntryPath(); break;
+      case STATE.ENTERING:
+        // Recompute route to same corridor exit point — don't pick new target
+        this.path = this.pathPlanner.findPath(this.x, this.z, this.corridorTargetX, this.corridorTargetZ);
+        if (!this.path || this.path.length === 0) {
+          this.path = [{ x: this.corridorTargetX, z: this.corridorTargetZ }];
+        }
+        this.currentPathIndex = 0;
+        this.setNextTarget();
+        break;
+        
       case STATE.BROWSING: 
         if (this.browsingTargets && this.currentBrowsingIndex < this.browsingTargets.length) {
-          const t = this.browsingTargets[this.currentBrowsingIndex];
-          this.path = this.pathPlanner.findPath(this.x, this.z, t.x, t.z) || [t];
-          this.currentPathIndex = 0;
-          this.setNextTarget();
+          if (this.replanAttempts > 2) {
+            // Stuck on this target after 2 attempts — skip to next target
+            console.log(`[Agent ${this.id}] Skipping target ${this.currentBrowsingIndex} after ${this.replanAttempts} failed attempts`);
+            this.currentBrowsingIndex++;
+            this.replanAttempts = 0;
+            this.planNextBrowsingPath();
+          } else {
+            // Recompute route to same target from current position
+            const t = this.browsingTargets[this.currentBrowsingIndex];
+            this.path = this.pathPlanner.findPath(this.x, this.z, t.x, t.z);
+            if (!this.path || this.path.length === 0) {
+              // A* failed — skip this target immediately
+              this.currentBrowsingIndex++;
+              this.replanAttempts = 0;
+              this.planNextBrowsingPath();
+            } else {
+              this.currentPathIndex = 0;
+              this.setNextTarget();
+            }
+          }
         }
         break;
+        
       case STATE.WALKING_TO_QUEUE: this.planPathToQueue(); break;
       case STATE.IN_QUEUE:
       case STATE.SERVICE:
-        // Don't replan while in queue or service
         break;
       case STATE.EXITING: 
       case STATE.EXIT_FAST:
@@ -355,7 +412,22 @@ export class AgentV2 {
     }
   }
   
-  updateEntering(dt, agents) { if (this.followPath(dt, agents)) this.transitionTo(STATE.BROWSING); }
+  updateEntering(dt, agents) {
+    if (this.followPath(dt, agents)) {
+      // If entry path included first browse target, skip to dwelling at it
+      if (this.entryIncludesFirstBrowse && this.browsingTargets && this.browsingTargets.length > 0) {
+        this.state = STATE.BROWSING;
+        this.stateTime = 0;
+        this.isDwelling = true;
+        this.dwellTimer = 0;
+        this.replanAttempts = 0;
+        this.dwellDuration = this.rng.range(SIM_CONFIG.browsingDwellSec[0], SIM_CONFIG.browsingDwellSec[1]);
+        // currentBrowsingIndex is 0 from selectBrowsingTargets; will increment after dwell
+      } else {
+        this.transitionTo(STATE.BROWSING);
+      }
+    }
+  }
   
   updateBrowsing(dt, agents) {
     if (this.isDwelling) {
@@ -363,11 +435,14 @@ export class AgentV2 {
       if (this.dwellTimer >= this.dwellDuration) {
         this.isDwelling = false;
         this.currentBrowsingIndex++;
+        this.speed = this.baseSpeed * (1.2 + this.rng.next() * 0.1); // 1.2-1.3x walking speed between targets
         this.planNextBrowsingPath();
       }
     } else if (this.followPath(dt, agents)) {
       this.isDwelling = true;
       this.dwellTimer = 0;
+      this.replanAttempts = 0; // Target reached successfully
+      this.speed = this.baseSpeed; // Reset to normal speed while dwelling
       this.dwellDuration = this.rng.range(SIM_CONFIG.browsingDwellSec[0], SIM_CONFIG.browsingDwellSec[1]);
     }
     if (this.totalTime > this.targetStayTime) {

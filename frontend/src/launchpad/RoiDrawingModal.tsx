@@ -368,7 +368,16 @@ export default function RoiDrawingModal({
 
       const name = roiName.trim() || 'LiDAR Coverage'
       // Convert vertices to {x, z} format as expected by the ROI system
+      // NOTE: These are in DXF units (e.g., mm). Backend will convert to meters for lidar_roi_json.
       const apiVertices = vertices.map(v => ({ x: v.x, z: v.y }))
+      
+      // DEBUG: Log vertices for debugging sizing issues
+      const xs = apiVertices.map(v => v.x)
+      const zs = apiVertices.map(v => v.z)
+      console.log(`[RoiDrawingModal] Saving ROI "${name}" with ${apiVertices.length} vertices (DXF units)`)
+      console.log(`[RoiDrawingModal] DXF bounds: X[${Math.min(...xs).toFixed(0)}, ${Math.max(...xs).toFixed(0)}] Z[${Math.min(...zs).toFixed(0)}, ${Math.max(...zs).toFixed(0)}]`)
+      console.log(`[RoiDrawingModal] Expected meters (×${unitScaleToM}): ~${((Math.max(...xs) - Math.min(...xs)) * unitScaleToM).toFixed(1)}m × ${((Math.max(...zs) - Math.min(...zs)) * unitScaleToM).toFixed(1)}m`)
+      
       const url = dwgLayoutId
         ? `${API_BASE}/api/venues/${venueId}/dwg/${dwgLayoutId}/roi`
         : `${API_BASE}/api/venues/${venueId}/roi`

@@ -90,15 +90,30 @@ export function RoiProvider({ children }: { children: ReactNode }) {
   const loadRegions = useCallback(async (venueId: string, dwgLayoutId?: string | null) => {
     try {
       // Use different endpoint for DWG vs manual mode
+      // For DWG layouts, request meters for 3D display (MainViewport expects meters)
       const url = dwgLayoutId
-        ? `${API_BASE}/api/venues/${venueId}/dwg/${dwgLayoutId}/roi`
+        ? `${API_BASE}/api/venues/${venueId}/dwg/${dwgLayoutId}/roi?units=meters`
         : `${API_BASE}/api/venues/${venueId}/roi`
       
       console.log(`[RoiContext] Loading regions from: ${url}`)
       
       const res = await fetch(url)
       if (!res.ok) throw new Error('Failed to load regions')
-      const data = await res.json()
+      let data = await res.json()
+      
+      // FALLBACK: If no dwgLayoutId was provided and no ROIs found, 
+      // check if there are ROIs with a dwg_layout_id (venue lost its dwg_layout_version_id)
+      if (!dwgLayoutId && data.length === 0) {
+        console.log(`[RoiContext] No manual ROIs found, checking for orphaned DWG ROIs...`)
+        const fallbackRes = await fetch(`${API_BASE}/api/venues/${venueId}/roi?all=true`)
+        if (fallbackRes.ok) {
+          const allData = await fallbackRes.json()
+          if (allData.length > 0) {
+            console.log(`[RoiContext] Found ${allData.length} orphaned ROIs (venue missing dwg_layout_version_id)`)
+            data = allData
+          }
+        }
+      }
       
       console.log(`[RoiContext] Loaded ${data.length} ROIs for ${dwgLayoutId ? 'DWG mode' : 'manual mode'}`)
       if (data.length > 0) {

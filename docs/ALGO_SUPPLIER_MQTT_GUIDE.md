@@ -316,3 +316,118 @@ For integration support, contact the PDUMind team.
 
 *Document Version: 1.0*  
 *Last Updated: February 2026*
+
+---
+
+# Appendix: Offline Integration (Native Installation)
+
+For developers installing perception software **natively** (without Docker/HER), follow this minimal integration guide.
+
+## Step 1: Export Config from Hyperspace Portal
+
+1. Open **Edge Commissioning Portal** → **Algorithm** tab
+2. Click **"Preview"** under "Export Config JSON"
+3. Click **"Download"** to save as `edge-config.json`
+
+The config contains everything: LiDAR IPs, extrinsics, venue bounds, coordinate frame.
+
+## Step 2: Config File Location
+
+Place the downloaded config at a shared path both systems can access:
+
+```
+/opt/hyperspace/edge-server/backend/data/edge-config.json
+```
+
+Or use any agreed location. Your software should read this file on startup.
+
+## Step 3: MQTT Connection
+
+| Parameter | Value |
+|-----------|-------|
+| **Broker** | `mqtt://localhost:1883` |
+| **Topic** | `hyperspace/trajectories/{edgeId}` |
+| **QoS** | 1 |
+
+The `edgeId` is in the config file (e.g., `nodekey:e8ff657dc04d...`).
+
+## Step 4: Message Format (CRITICAL)
+
+Publish **one JSON message per tracked object**, at 10 Hz:
+
+```json
+{
+  "id": "person-42",
+  "deviceId": "nodekey:e8ff657dc04d4bab...",
+  "venueId": "f7aafcdc-1a87-473d-84f0-7f11a78d60ed",
+  "timestamp": 1711278000000,
+  "position": { "x": 15.3, "y": 0.0, "z": 22.7 },
+  "velocity": { "x": 0.5, "y": 0.0, "z": -0.3 },
+  "objectType": "person",
+  "boundingBox": { "width": 0.5, "height": 1.7, "depth": 0.5 }
+}
+```
+
+### Required Fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | string | Unique track ID (e.g., `person-42`). Must persist across frames for same person. |
+| `deviceId` | string | Copy `edgeId` from config |
+| `venueId` | string | Copy `venueId` from config |
+| `timestamp` | number | Unix timestamp in **milliseconds** |
+| `position.x` | number | X in meters (relative to ROI SW corner) |
+| `position.y` | number | Height in meters (usually 0 for ground) |
+| `position.z` | number | Z in meters (relative to ROI SW corner) |
+| `velocity.x/y/z` | number | Velocity in m/s (can be 0 if not computed) |
+| `objectType` | string | `"person"` or `"cart"` |
+| `boundingBox` | object | Dimensions in meters |
+
+### Coordinate System
+
+- **Origin**: Southwest corner of ROI at floor level (from `coordinateFrame.roiOffset`)
+- **Axes**: X = East, Y = Up, Z = North
+- **Units**: Meters
+
+## Step 5: Verification
+
+Test your MQTT publishing:
+
+```bash
+# Subscribe to see messages
+mosquitto_sub -h localhost -t "hyperspace/trajectories/#" -v
+```
+
+When tracks appear in the Hyperspace frontend 3D viewport, integration is complete.
+
+## Quick Reference: Config Fields
+
+```json
+{
+  "edgeId": "...",           // Use as deviceId in messages
+  "venueId": "...",          // Use in messages
+  "lidars": [                // Your LiDAR inputs
+    {
+      "ip": "192.168.1.213", // LiDAR IP to capture UDP
+      "extrinsics": {
+        "x_m": 9.45,         // Position in venue frame
+        "y_m": 3.0,          // Mount height
+        "z_m": 28.35
+      }
+    }
+  ],
+  "venueBounds": {
+    "width": 115.6,          // Venue X extent
+    "depth": 74.2            // Venue Z extent
+  },
+  "operationalParams": {
+    "minDetectionHeight": 0.3,
+    "maxDetectionHeight": 2.2,
+    "publishRateHz": 10
+  }
+}
+```
+
+---
+
+*For questions, contact the PDUMind integration team.*

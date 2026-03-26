@@ -148,7 +148,8 @@ export class CheckoutQueueSubsystem {
   }
 
   /**
-   * Agent wants to join a queue - pick from open lanes (or random if all closed)
+   * Agent wants to join a queue - pick from open lanes only
+   * Returns null if no open lanes (agent should exit instead)
    */
   startQueueDecision(agentId, agent) {
     if (this.queues.length === 0) return null;
@@ -158,12 +159,22 @@ export class CheckoutQueueSubsystem {
     
     let queueIdx;
     if (openLanes.length > 0) {
-      // Pick random open lane
-      queueIdx = openLanes[Math.floor(this.rng.next() * openLanes.length)];
+      // Pick the open lane with shortest queue
+      let bestIdx = openLanes[0];
+      let bestLen = Infinity;
+      for (const idx of openLanes) {
+        const q = this.queues[idx];
+        const len = (q.serviceAgent !== null ? 1 : 0) + q.queueAgents.length;
+        if (len < bestLen) {
+          bestLen = len;
+          bestIdx = idx;
+        }
+      }
+      queueIdx = bestIdx;
     } else {
-      // No open lanes - pick random queue anyway (customers might queue hoping lane opens)
-      queueIdx = Math.floor(this.rng.next() * this.queues.length);
-      console.log(`[Queue] No open lanes, agent ${agentId} picking closed lane ${queueIdx}`);
+      // No open lanes - agent should exit, not queue at a closed lane
+      console.log(`[Queue] No open lanes, agent ${agentId} will exit instead`);
+      return null;
     }
     const queue = this.queues[queueIdx];
     

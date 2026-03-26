@@ -7,7 +7,7 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { Rocket, X, RotateCw, Trash2, ChevronDown, Play, Pause, ChevronLeft, ChevronRight } from 'lucide-react'
-import type { LaunchPadSession, LaunchPadStepId, MapFixturesData, AutopilotContext } from './launchpadTypes'
+import type { LaunchPadSession, LaunchPadStepId, MapFixturesData, AutopilotContext, DeployHerData, CommissionEdgeData, PairDevicesData } from './launchpadTypes'
 import { isLaunchPadEnabled } from './launchpadTypes'
 import {
   createSession,
@@ -27,6 +27,8 @@ import type { SelectDwgData } from './launchpadTypes'
 import Lidar3DModal from './Lidar3DModal'
 import RoiDrawingModal from './RoiDrawingModal'
 import FixtureClassifyModal from './FixtureClassifyModal'
+import EdgeCommissioningModal from './EdgeCommissioningModal'
+import PairDevicesModal from './PairDevicesModal'
 import LaunchPadStage from './LaunchPadStage'
 import type { StageMode } from './LaunchPadStage'
 
@@ -60,7 +62,18 @@ export default function LaunchPadPanel({
   const [showRoiModal, setShowRoiModal] = useState(false)
   const [autoPlacing, setAutoPlacing] = useState(false)
   const [showClassifyModal, setShowClassifyModal] = useState(false)
+  const [showEdgeModal, setShowEdgeModal] = useState(false)
+  const [showPairModal, setShowPairModal] = useState(false)
   const [show3DPreview, setShow3DPreview] = useState(false)
+  // HER deployment state
+  const [herDeploying, setHerDeploying] = useState(false)
+  const [algorithmProviders, setAlgorithmProviders] = useState<Array<{ id: string; name: string; version: string; description?: string }>>([])  
+  const [selectedProviderId, setSelectedProviderId] = useState<string | undefined>(undefined)
+  const [mqttBrokerUrl, setMqttBrokerUrl] = useState<string>(() => {
+    return localStorage.getItem('launchpad-mqttBrokerUrl') || ''
+  })
+  // Stream validation state
+  const [validating, setValidating] = useState(false)
   const [autoPlaceSettings, setAutoPlaceSettings] = useState<AutoPlaceSettings>(() => {
     try {
       const saved = localStorage.getItem('launchpad-autoplace-settings')
@@ -176,7 +189,31 @@ export default function LaunchPadPanel({
         return prev
       })
     }).catch(() => {})
+
+    // Fetch algorithm providers for HER deployment
+    api.listAlgorithmProviders().then(providers => {
+      setAlgorithmProviders(providers)
+      if (providers.length > 0 && !selectedProviderId) {
+        setSelectedProviderId(providers[0].id)
+      }
+    }).catch(() => {
+      // Fallback to a default provider if endpoint not available
+      setAlgorithmProviders([{ id: 'robosense-her', name: 'RoboSense HER', version: '1.0.0' }])
+      setSelectedProviderId('robosense-her')
+    })
   }, [isOpen])
+
+  // Auto-fetch backend Tailscale IP for MQTT broker default
+  useEffect(() => {
+    if (!isOpen || mqttBrokerUrl) return // Skip if already set
+    api.getBackendTailscaleIp().then(self => {
+      if (self.ip) {
+        const url = `mqtt://${self.ip}:1883`
+        setMqttBrokerUrl(url)
+        localStorage.setItem('launchpad-mqttBrokerUrl', url)
+      }
+    }).catch(() => {})
+  }, [isOpen, mqttBrokerUrl])
 
   // Fetch geometry data when the selected DWG (importId) changes
   useEffect(() => {
@@ -378,6 +415,17 @@ export default function LaunchPadPanel({
 
   const handleRunStep = useCallback(async (stepId: LaunchPadStepId) => {
     if (!session) return
+    
+    // Special handling for steps that open modals
+    if (stepId === 'commission_edge') {
+      setShowEdgeModal(true)
+      return
+    }
+    if (stepId === 'pair_devices') {
+      setShowPairModal(true)
+      return
+    }
+    
     setIsChecking(true)
     try {
       const result = await checkStep(session, stepId)
@@ -809,7 +857,14 @@ export default function LaunchPadPanel({
     const dwgStep = session.steps.find(s => s.id === 'select_dwg')
     const dwgData = dwgStep?.data as SelectDwgData | null
     const effectiveVenueId = session.venueId || venueId
-    console.log('[LaunchPad AutoPlace] layoutVersionId:', dwgData?.layoutVersionId, 'venueId:', effectiveVenueId)
+    console.log('%c[FLOW-DEBUG] ══════════════════════════════════════════════════════', 'color:#ff6b6b;font-weight:bold')
+    console.log('%c[FLOW-DEBUG] AUTO-PLACE TRIGGERED', 'color:#ff6b6b;font-size:14px;font-weight:bold')
+    console.log('%c[FLOW-DEBUG] Input:', 'color:#ff6b6b', {
+      layoutVersionId: dwgData?.layoutVersionId,
+      venueId: effectiveVenueId,
+      importId: dwgData?.importId,
+      settings: autoPlaceSettings,
+    })
     if (!dwgData?.layoutVersionId) {
       console.error('[LaunchPad AutoPlace] No layoutVersionId — generate a layout first')
       alert('No layout generated yet for this DWG. Please generate a layout in the DWG Importer first, or select a DWG with an existing layout.')
@@ -823,12 +878,19 @@ export default function LaunchPadPanel({
 
     setAutoPlacing(true)
     try {
+      console.log('%c[FLOW-DEBUG] Calling api.autoPlaceWithRois...', 'color:#ff6b6b')
       const placeLidarsData = await api.autoPlaceWithRois(
         dwgData.layoutVersionId,
         effectiveVenueId,
         dwgData.layoutVersionId || undefined,
         autoPlaceSettings,
       )
+      console.log('%c[FLOW-DEBUG] AutoPlace RESULT:', 'color:#22c55e;font-weight:bold', {
+        sensorCount: placeLidarsData.sensorCount,
+        coveragePct: (placeLidarsData.coveragePct * 100).toFixed(1) + '%',
+        meetsCoverage: placeLidarsData.meetsCoverage,
+      })
+      console.log('%c[FLOW-DEBUG] ══════════════════════════════════════════════════════', 'color:#22c55e;font-weight:bold')
       // Update step with new data
       const updated = {
         ...session,
@@ -861,10 +923,221 @@ export default function LaunchPadPanel({
     }
   }, [session, autoPlacing, venueId, autoPlaceSettings])
 
+  // HER deployment handler
+  const handleDeployHer = useCallback(async () => {
+    if (!session || herDeploying) return
+    const edgeStep = session.steps.find(s => s.id === 'commission_edge')
+    const edgeData = edgeStep?.data as CommissionEdgeData | null
+    const dwgStep = session.steps.find(s => s.id === 'select_dwg')
+    const dwgData = dwgStep?.data as SelectDwgData | null
+    const effectiveVenueId = session.venueId || venueId
+
+    // Use Tailscale IP as the edge identifier - it's the most reliable from commission_edge step
+    const edgeIdentifier = edgeData?.edgeTailscaleIp || edgeData?.edgeId
+    if (!edgeIdentifier || !effectiveVenueId || !dwgData?.layoutVersionId) {
+      console.error('[LaunchPad] Cannot deploy HER: missing edge identifier, venueId, or layoutVersionId')
+      return
+    }
+
+    setHerDeploying(true)
+    try {
+      // Update step to deploying status - clear old errors and logs
+      const deployingData: DeployHerData = {
+        edgeId: edgeIdentifier,
+        providerId: selectedProviderId || null,
+        providerName: algorithmProviders.find(p => p.id === selectedProviderId)?.name || null,
+        status: 'deploying',
+        tailscaleInstalled: true,
+        dockerAvailable: true,
+        pairedLidarCount: (session.steps.find(s => s.id === 'pair_devices')?.data as PairDevicesData | null)?.pairedCount || 0,
+        deployedAt: null,
+        lastError: null,
+        containerStatus: 'starting',
+        deploymentLogs: [], // Clear old logs when starting new deployment
+      }
+      let updated = {
+        ...session,
+        steps: session.steps.map(s =>
+          s.id === 'deploy_her' ? { ...s, status: 'running' as const, data: deployingData, error: null } : s
+        ),
+      }
+      setSession(updated)
+
+      // Build initial deployment logs
+      const provider = algorithmProviders.find(p => p.id === selectedProviderId)
+      const logs: string[] = [
+        `Starting HER deployment...`,
+        `Provider: ${provider?.name || 'Unknown'} v${provider?.version || '?'}`,
+        `Edge: ${edgeData.edgeHostname || edgeData.edgeId}`,
+        `Sending deploy request to backend...`,
+      ]
+
+      // Call the deploy API using Tailscale IP as edge identifier
+      const result = await api.deployHer(
+        edgeIdentifier,
+        effectiveVenueId,
+        selectedProviderId || 'robosense-her',
+        mqttBrokerUrl || undefined
+      )
+
+      if (result.ok) {
+        // Add success logs
+        logs.push(`✅ Deploy request sent successfully`)
+        if (result.deploymentId) logs.push(`Deployment ID: ${result.deploymentId}`)
+        if (result.containerId) logs.push(`Container ID: ${result.containerId.substring(0, 12)}`)
+        if (result.imagePulled !== undefined) logs.push(`Image Pulled: ${result.imagePulled ? 'Yes' : 'No'}`)
+        if (result.containerRunning !== undefined) logs.push(`Container Running: ${result.containerRunning ? 'Yes' : 'No'}`)
+        logs.push(`✅ HER deployment complete!`)
+
+        const runningData: DeployHerData = {
+          ...deployingData,
+          status: 'running',
+          providerName: result.moduleStatus?.provider || deployingData.providerName,
+          deployedAt: new Date().toISOString(),
+          containerStatus: 'running',
+          deploymentLogs: logs,
+          deploymentId: result.deploymentId,
+          containerId: result.containerId,
+          imagePulled: result.imagePulled,
+        }
+        updated = {
+          ...session,
+          steps: session.steps.map(s =>
+            s.id === 'deploy_her' ? { ...s, status: 'done' as const, data: runningData, error: null } : s
+          ),
+        }
+        setSession(updated)
+        saveSession(updated)
+        console.log('[LaunchPad] HER deployed successfully:', result.moduleStatus)
+      } else {
+        logs.push(`❌ Deployment failed: ${result.error || result.message}`)
+        const errorData: DeployHerData = {
+          ...deployingData,
+          status: 'error',
+          lastError: result.error || result.message || 'Deployment failed',
+          containerStatus: undefined,
+          deploymentLogs: logs,
+        }
+        updated = {
+          ...session,
+          steps: session.steps.map(s =>
+            s.id === 'deploy_her' ? { ...s, status: 'error' as const, data: errorData, error: errorData.lastError } : s
+          ),
+        }
+        setSession(updated)
+        saveSession(updated)
+      }
+    } catch (err: any) {
+      console.error('[LaunchPad] HER deploy failed:', err)
+      const errorData: DeployHerData = {
+        edgeId: edgeData.edgeId,
+        providerId: selectedProviderId || null,
+        providerName: null,
+        status: 'error',
+        tailscaleInstalled: true,
+        dockerAvailable: true,
+        pairedLidarCount: 0,
+        deployedAt: null,
+        lastError: err.message || 'Deployment failed',
+      }
+      const updated = {
+        ...session,
+        steps: session.steps.map(s =>
+          s.id === 'deploy_her' ? { ...s, status: 'error' as const, data: errorData, error: err.message } : s
+        ),
+      }
+      setSession(updated)
+      saveSession(updated)
+    } finally {
+      setHerDeploying(false)
+    }
+  }, [session, herDeploying, venueId, selectedProviderId, algorithmProviders])
+
+  // Stop HER handler
+  const handleStopHer = useCallback(async () => {
+    if (!session) return
+    const edgeStep = session.steps.find(s => s.id === 'commission_edge')
+    const edgeData = edgeStep?.data as CommissionEdgeData | null
+    if (!edgeData?.edgeId) return
+
+    try {
+      await api.stopHer(edgeData.edgeId)
+      // Update step to ready status
+      const herStep = session.steps.find(s => s.id === 'deploy_her')
+      const herData = herStep?.data as DeployHerData | null
+      const stoppedData: DeployHerData = {
+        edgeId: edgeData.edgeId,
+        providerId: herData?.providerId || null,
+        providerName: herData?.providerName || null,
+        status: 'stopped',
+        tailscaleInstalled: true,
+        dockerAvailable: true,
+        pairedLidarCount: herData?.pairedLidarCount || 0,
+        deployedAt: null,
+        lastError: null,
+      }
+      const updated = {
+        ...session,
+        steps: session.steps.map(s =>
+          s.id === 'deploy_her' ? { ...s, status: 'ready' as const, data: stoppedData } : s
+        ),
+      }
+      setSession(updated)
+      saveSession(updated)
+    } catch (err: any) {
+      console.error('[LaunchPad] HER stop failed:', err)
+    }
+  }, [session])
+
+  // Stream validation handler
+  const handleRunValidation = useCallback(async () => {
+    if (!session || validating) return
+    const edgeStep = session.steps.find(s => s.id === 'commission_edge')
+    const edgeData = edgeStep?.data as CommissionEdgeData | null
+    const effectiveVenueId = session.venueId || venueId
+
+    if (!edgeData?.edgeId) {
+      console.error('[LaunchPad] Cannot run validation: no edge commissioned')
+      return
+    }
+
+    setValidating(true)
+    try {
+      // Run multi-stage validation
+      const validationData = await api.runStreamValidation(edgeData.edgeId, effectiveVenueId || undefined)
+      
+      const stepStatus = validationData.overallHealthy && validationData.stage === 'complete'
+        ? 'done'
+        : validationData.checks.some(c => c.status === 'fail')
+          ? 'error'
+          : 'warning'
+
+      const updated = {
+        ...session,
+        steps: session.steps.map(s =>
+          s.id === 'validate_stream'
+            ? { ...s, status: stepStatus as 'done' | 'warning' | 'error', data: validationData, error: null }
+            : s
+        ),
+      }
+      setSession(updated)
+      saveSession(updated)
+
+      // If all checks passed and autopilot running, advance
+      if (stepStatus === 'done' && autopilotRef.current.state === 'running') {
+        setTimeout(() => advanceAutopilot('go_live'), 500)
+      }
+    } catch (err: any) {
+      console.error('[LaunchPad] Validation failed:', err)
+    } finally {
+      setValidating(false)
+    }
+  }, [session, validating, venueId])
+
   // ─── Autopilot: auto-advance loop ───────────────────────────────
   const STEP_ORDER: LaunchPadStepId[] = [
     'select_dwg', 'map_fixtures', 'define_rois', 'place_lidars',
-    'commission_edge', 'pair_devices', 'validate_stream', 'go_live',
+    'commission_edge', 'pair_devices', 'deploy_her', 'validate_stream', 'go_live',
   ]
 
   const advanceAutopilot = useCallback(async (fromStepId?: LaunchPadStepId) => {
@@ -940,6 +1213,12 @@ export default function LaunchPadPanel({
         }
         if (stepId === 'commission_edge') {
           setAutopilot(prev => ({ ...prev, state: 'waiting_input', waitingFor: 'edge_connect', stageMessage: null }))
+          setShowEdgeModal(true)
+          return
+        }
+        if (stepId === 'pair_devices') {
+          setAutopilot(prev => ({ ...prev, state: 'waiting_input', waitingFor: 'manual', stageMessage: null }))
+          setShowPairModal(true)
           return
         }
 
@@ -999,6 +1278,8 @@ export default function LaunchPadPanel({
           const bootstrapped = await api.bootstrapVenueFromLayout(result.layout_version_id)
           updatedSession = { ...updatedSession, venueId: bootstrapped.venueId, venueName: bootstrapped.venueName }
           console.log(`[LaunchPad] Created new venue: ${bootstrapped.venueName} (${bootstrapped.venueId}) with ${bootstrapped.objectCount} objects`)
+          // Notify ModeBar and other components about the new venue
+          window.dispatchEvent(new CustomEvent('launchpad-venue-created', { detail: { venueId: bootstrapped.venueId, venueName: bootstrapped.venueName } }))
         } catch (bErr: any) {
           console.warn('[LaunchPad] Venue creation failed (non-fatal):', bErr.message)
         }
@@ -1346,6 +1627,21 @@ export default function LaunchPadPanel({
               const settings = stored ? JSON.parse(stored) : {}
               return (settings.scaleMultiplier || 1) * 0.001
             })()}
+            // HER deployment props
+            onDeployHer={handleDeployHer}
+            onStopHer={handleStopHer}
+            herDeploying={herDeploying}
+            algorithmProviders={algorithmProviders}
+            selectedProviderId={selectedProviderId}
+            onSelectProvider={setSelectedProviderId}
+            mqttBrokerUrl={mqttBrokerUrl}
+            onMqttBrokerUrlChange={(url) => {
+              setMqttBrokerUrl(url)
+              localStorage.setItem('launchpad-mqttBrokerUrl', url)
+            }}
+            // Stream validation props
+            onRunValidation={handleRunValidation}
+            validating={validating}
           />
         </div>
       )}
@@ -1464,6 +1760,107 @@ export default function LaunchPadPanel({
             onClose={() => setShow3DPreview(false)}
             rois={geometry?.rois}
             classifications={geometry?.classifications}
+          />
+        )
+      })()}
+
+      {/* Edge Commissioning Modal */}
+      {showEdgeModal && (() => {
+        const effectiveVenueId = session.venueId || venueId
+        if (!effectiveVenueId) {
+          console.warn('[LaunchPad] Edge modal: no venueId available, cannot open')
+          return null
+        }
+        const dwgStep = session.steps.find(s => s.id === 'select_dwg')
+        const dwgData = dwgStep?.data as SelectDwgData | null
+        const placeLidarsStep = session.steps.find(s => s.id === 'place_lidars')
+        const placeLidarsData = placeLidarsStep?.data as { sensorCount?: number } | null
+        const neededLidars = placeLidarsData?.sensorCount || 0
+        return (
+          <EdgeCommissioningModal
+            venueId={effectiveVenueId}
+            layoutVersionId={dwgData?.layoutVersionId || undefined}
+            onClose={() => setShowEdgeModal(false)}
+            onCommissioned={(edgeId, edgeHostname, edgeTailscaleIp, lidarCount) => {
+              setShowEdgeModal(false)
+              // Update step with commissioned edge data matching CommissionEdgeData interface
+              const commissionData = {
+                edgeId,
+                edgeHostname,
+                edgeTailscaleIp,
+                edgeOnline: true,
+                scannedLidarCount: lidarCount,
+                neededLidarCount: neededLidars,
+                missingLidars: lidarCount < neededLidars,
+              }
+              const stepStatus = lidarCount >= neededLidars ? 'done' : 'warning'
+              const updated = {
+                ...session,
+                steps: session.steps.map(s =>
+                  s.id === 'commission_edge'
+                    ? { ...s, status: stepStatus as 'done' | 'warning', data: commissionData }
+                    : s
+                ),
+              }
+              setSession(updated)
+              saveSession(updated)
+              // If autopilot running, continue to next step
+              if (autopilotRef.current.state === 'waiting_input') {
+                setAutopilot(prev => ({ ...prev, state: 'running', waitingFor: null }))
+                setTimeout(() => advanceAutopilot('pair_devices'), 300)
+              }
+            }}
+          />
+        )
+      })()}
+
+      {/* Pair Devices Modal */}
+      {showPairModal && (() => {
+        const effectiveVenueId = session.venueId || venueId
+        if (!effectiveVenueId) {
+          console.warn('[LaunchPad] Pair modal: no venueId available')
+          return null
+        }
+        // Get edge info from commission_edge step
+        const commissionStep = session.steps.find(s => s.id === 'commission_edge')
+        const commissionData = commissionStep?.data as { edgeId?: string; edgeTailscaleIp?: string } | null
+        if (!commissionData?.edgeId || !commissionData?.edgeTailscaleIp) {
+          console.warn('[LaunchPad] Pair modal: no edge commissioned yet')
+          setShowPairModal(false)
+          return null
+        }
+        return (
+          <PairDevicesModal
+            venueId={effectiveVenueId}
+            edgeId={commissionData.edgeId}
+            edgeTailscaleIp={commissionData.edgeTailscaleIp}
+            onClose={() => setShowPairModal(false)}
+            onPairingComplete={(pairedCount, totalPlacements) => {
+              setShowPairModal(false)
+              // Update step with pairing data (must match PairDevicesData interface)
+              const stepStatus = pairedCount === totalPlacements ? 'done' : pairedCount > 0 ? 'warning' : 'ready'
+              const pairData: PairDevicesData = {
+                pairedCount,
+                totalPlacements,
+                unpaired: [],  // Will be populated by next checkStep
+                allPaired: pairedCount === totalPlacements && totalPlacements > 0,
+              }
+              const updated: LaunchPadSession = {
+                ...session,
+                steps: session.steps.map(s =>
+                  s.id === 'pair_devices'
+                    ? { ...s, status: stepStatus as 'done' | 'warning' | 'ready', data: pairData }
+                    : s
+                ),
+              }
+              setSession(updated)
+              saveSession(updated)
+              // If autopilot running, continue to next step
+              if (autopilotRef.current.state === 'waiting_input' && pairedCount > 0) {
+                setAutopilot(prev => ({ ...prev, state: 'running', waitingFor: null }))
+                setTimeout(() => advanceAutopilot('validate_stream'), 300)
+              }
+            }}
           />
         )
       })()}
