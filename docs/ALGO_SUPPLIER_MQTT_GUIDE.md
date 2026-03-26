@@ -34,15 +34,49 @@ This document provides comprehensive requirements and instructions for algorithm
 
 ## 3. MQTT Connection Details
 
-### MQTT Broker
+### Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                         EDGE DEVICE                                 │
+│  ┌──────────────────┐      ┌─────────────────────────────────────┐  │
+│  │ Perception SW    │      │ Local Mosquitto Broker              │  │
+│  │ (Your Software)  │─────▶│ mqtt://localhost:1883               │  │
+│  └──────────────────┘      │                                     │  │
+│                            │ Bridge: hyperspace/trajectories/#   │  │
+│                            └─────────────────┬───────────────────┘  │
+└──────────────────────────────────────────────┼──────────────────────┘
+                                               │
+                                               ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│                    PRODUCTION (DigitalOcean)                        │
+│  ┌─────────────────────────────────────┐                            │
+│  │ Mosquitto Broker                    │                            │
+│  │ mqtt://100.76.196.2:1883 (Tailscale)│                            │
+│  │ mqtt://165.245.191.45:1883 (Public) │                            │
+│  └─────────────────┬───────────────────┘                            │
+│                    ▼                                                │
+│  ┌─────────────────────────────────────┐                            │
+│  │ Hyperspace Backend                  │                            │
+│  │ - Track processing                  │                            │
+│  │ - KPI aggregation                   │                            │
+│  │ - WebSocket broadcast               │                            │
+│  └─────────────────────────────────────┘                            │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### MQTT Broker (For Perception Software)
 
 | Parameter | Value |
 |-----------|-------|
 | **Protocol** | MQTT 3.1.1 / 5.0 |
-| **Broker URL** | `mqtt://<edge-server-ip>:1883` |
-| **Default Local** | `mqtt://localhost:1883` |
-| **TLS (optional)** | `mqtts://<edge-server-ip>:8883` |
+| **Broker URL** | `mqtt://localhost:1883` |
 | **QoS** | 1 (At least once delivery) |
+
+> **Important**: Your perception software publishes to the **local** Mosquitto broker on the edge device (`localhost:1883`). The local broker automatically bridges messages to the production cloud. This architecture provides:
+> - **Low latency** for perception software
+> - **Resilience** — messages are buffered if internet drops
+> - **Simplicity** — no need to configure cloud URLs in your software
 
 ### Authentication (if enabled)
 
@@ -180,7 +214,9 @@ Each tracked object is published as an **individual message**:
 import json
 import paho.mqtt.client as mqtt
 
-BROKER = "mqtt://192.168.1.100"  # Edge server IP
+# Production: Use DigitalOcean Tailscale IP or public IP
+BROKER_HOST = "100.76.196.2"  # Tailscale IP (preferred if on Tailscale network)
+# BROKER_HOST = "165.245.191.45"  # Public IP (alternative)
 TOPIC = "hyperspace/trajectories/ulisse-edge-01"
 
 def on_connect(client, userdata, flags, rc):
@@ -197,7 +233,7 @@ client = mqtt.Client()
 client.on_connect = on_connect
 client.on_message = on_message
 
-client.connect("192.168.1.100", 1883, 60)
+client.connect("localhost", 1883, 60)  # Local broker on edge device
 client.loop_forever()
 ```
 
@@ -206,7 +242,8 @@ client.loop_forever()
 ```javascript
 const mqtt = require('mqtt');
 
-const client = mqtt.connect('mqtt://192.168.1.100:1883');
+// Connect to local broker on edge device (bridges to production automatically)
+const client = mqtt.connect('mqtt://localhost:1883');
 const TOPIC = 'hyperspace/trajectories/ulisse-edge-01';
 
 client.on('connect', () => {
@@ -350,6 +387,8 @@ Or use any agreed location. Your software should read this file on startup.
 | **QoS** | 1 |
 
 The `edgeId` is in the config file (e.g., `nodekey:e8ff657dc04d...`).
+
+> **Note**: The local Mosquitto broker on the edge device automatically bridges your messages to the production cloud. You don't need to configure any cloud URLs.
 
 ## Step 4: Message Format (CRITICAL)
 
