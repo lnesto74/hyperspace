@@ -1,246 +1,102 @@
 /**
  * JourneyFlowStream - Q4 of Neural Dashboard
  * 
- * Real-time particle flow visualization showing individual track journeys
- * through behavioral states: Entry → Browse → Engage → Dwell → Checkout → Exit
- * 
- * Each track is a glowing particle that flows left-to-right through state columns.
+ * Simplified dwell-time bar visualization showing how long each track
+ * has been in the venue. Bars grow over time like a progress meter.
+ * Color indicates current behavior state.
  */
 
-import { useMemo, useRef, useEffect, useState } from 'react'
+import { useRef, useEffect, useState } from 'react'
 import { useTracking } from '../../context/TrackingContext'
-import { useRoi } from '../../context/RoiContext'
 
-// Behavioral phases (left to right)
-const PHASES = ['entry', 'browse', 'engage', 'dwell', 'checkout', 'exit'] as const
-type Phase = typeof PHASES[number]
-
-// Phase display config
-const PHASE_CONFIG: Record<Phase, { label: string; color: string; glowColor: string }> = {
-  entry:    { label: 'ENTER',    color: '#22d3ee', glowColor: 'rgba(34,211,238,0.6)' },   // cyan
-  browse:   { label: 'BROWSE',   color: '#a78bfa', glowColor: 'rgba(167,139,250,0.6)' },  // purple
-  engage:   { label: 'ENGAGE',   color: '#34d399', glowColor: 'rgba(52,211,153,0.6)' },   // green
-  dwell:    { label: 'DWELL',    color: '#fbbf24', glowColor: 'rgba(251,191,36,0.6)' },   // amber
-  checkout: { label: 'CHECKOUT', color: '#f97316', glowColor: 'rgba(249,115,22,0.6)' },  // orange
-  exit:     { label: 'EXIT',     color: '#ef4444', glowColor: 'rgba(239,68,68,0.6)' },    // red
-}
-
-// Track state for animation
-interface TrackState {
+// Track visualization state
+interface TrackBar {
   id: string
-  phase: Phase
-  targetX: number      // target X position for animation
-  currentX: number     // current animated X position
-  y: number            // Y position (lane)
-  velocity: number     // movement speed
-  dwellTime: number    // time in current zone (ms)
-  lastZoneId: string | null
-  entryTime: number
+  entryTime: number    // when track first appeared
+  dwellSec: number     // current dwell time in seconds
+  velocity: number     // current velocity
+  lane: number         // stable Y lane (hash-based)
+  hue: number          // stable color hue (hash-based)
 }
 
-// Animation constants
-const PARTICLE_SIZE = 6
-const LANE_HEIGHT = 12
-const ANIMATION_SPEED = 0.08 // lerp factor
-const UPDATE_INTERVAL = 50  // ms
+// Simple hash to get stable number from string
+function hashCode(str: string): number {
+  let hash = 0
+  for (let i = 0; i < str.length; i++) {
+    hash = ((hash << 5) - hash) + str.charCodeAt(i)
+    hash |= 0
+  }
+  return Math.abs(hash)
+}
+
+const MAX_DWELL_SEC = 300 // 5 min = full bar
+const BAR_HEIGHT = 6
+const BAR_GAP = 3
+const UPDATE_MS = 200
 
 export default function JourneyFlowStream() {
   const { tracks } = useTracking()
-  const { regions } = useRoi()
   const canvasRef = useRef<HTMLCanvasElement>(null)
-  const trackStatesRef = useRef<Map<string, TrackState>>(new Map())
-  const [phaseCounts, setPhaseCounts] = useState<Record<Phase, number>>({
-    entry: 0, browse: 0, engage: 0, dwell: 0, checkout: 0, exit: 0
-  })
+  const trackBarsRef = useRef<Map<string, TrackBar>>(new Map())
+  const [stats, setStats] = useState({ active: 0, avgDwell: 0, maxDwell: 0 })
   
-  // Classify ROIs by type
-  const roiTypes = useMemo(() => {
-    const checkoutRois = new Set<string>()
-    const entranceRois = new Set<string>()
-    const engagementRois = new Set<string>()
-    
-    regions.forEach(roi => {
-      const name = roi.name.toLowerCase()
-      if (name.includes('checkout') || name.includes('queue') || name.includes('cashier') || name.includes('service')) {
-        checkoutRois.add(roi.id)
-      } else if (name.includes('entrance') || name.includes('entry') || name.includes('exit') || name.includes('door')) {
-        entranceRois.add(roi.id)
-      } else {
-        engagementRois.add(roi.id)
-      }
-    })
-    
-    return { checkoutRois, entranceRois, engagementRois }
-  }, [regions])
-  
-  // Point-in-polygon helper
-  const isInRoi = (x: number, z: number, roi: typeof regions[0]): boolean => {
-    const vertices = roi.vertices
-    if (vertices.length < 3) return false
-    let inside = false
-    for (let i = 0, j = vertices.length - 1; i < vertices.length; j = i++) {
-      const xi = vertices[i].x, zi = vertices[i].z
-      const xj = vertices[j].x, zj = vertices[j].z
-      if (((zi > z) !== (zj > z)) && (x < (xj - xi) * (z - zi) / (zj - zi) + xi)) {
-        inside = !inside
-      }
-    }
-    return inside
-  }
-  
-  // Determine phase for a track
-  const determinePhase = (
-    trackId: string,
-    pos: { x: number; z: number },
-    velocity: number,
-    existingState: TrackState | undefined
-  ): { phase: Phase; zoneId: string | null } => {
-    const now = Date.now()
-    
-    // Check which ROI the track is in
-    let currentZoneId: string | null = null
-    let isInCheckout = false
-    let isInEntrance = false
-    let isInEngagement = false
-    
-    for (const roi of regions) {
-      if (isInRoi(pos.x, pos.z, roi)) {
-        currentZoneId = roi.id
-        if (roiTypes.checkoutRois.has(roi.id)) isInCheckout = true
-        if (roiTypes.entranceRois.has(roi.id)) isInEntrance = true
-        if (roiTypes.engagementRois.has(roi.id)) isInEngagement = true
-        break
-      }
-    }
-    
-    // New track = entry phase
-    if (!existingState) {
-      return { phase: 'entry', zoneId: currentZoneId }
-    }
-    
-    // Recent entry (< 3 seconds)
-    if (now - existingState.entryTime < 3000) {
-      return { phase: 'entry', zoneId: currentZoneId }
-    }
-    
-    // In checkout zone
-    if (isInCheckout) {
-      return { phase: 'checkout', zoneId: currentZoneId }
-    }
-    
-    // In entrance/exit zone after being in store
-    if (isInEntrance && existingState.phase !== 'entry') {
-      return { phase: 'exit', zoneId: currentZoneId }
-    }
-    
-    // In engagement zone
-    if (isInEngagement) {
-      // Check dwell time in this zone
-      const sameZone = existingState.lastZoneId === currentZoneId
-      const dwellTime = sameZone ? existingState.dwellTime + UPDATE_INTERVAL : 0
-      
-      // Dwell if stopped for > 5 seconds
-      if (dwellTime > 5000 && velocity < 0.3) {
-        return { phase: 'dwell', zoneId: currentZoneId }
-      }
-      return { phase: 'engage', zoneId: currentZoneId }
-    }
-    
-    // Moving through store = browse
-    return { phase: 'browse', zoneId: currentZoneId }
-  }
-  
-  // Get X position for phase
-  const getPhaseX = (phase: Phase, canvasWidth: number): number => {
-    const phaseIndex = PHASES.indexOf(phase)
-    const sectionWidth = canvasWidth / PHASES.length
-    return sectionWidth * phaseIndex + sectionWidth / 2
-  }
-  
-  // Update track states
+  // Update track bars
   useEffect(() => {
     const interval = setInterval(() => {
-      const canvas = canvasRef.current
-      if (!canvas) return
-      
-      const width = canvas.getBoundingClientRect().width
-      const height = canvas.getBoundingClientRect().height
-      const states = trackStatesRef.current
+      const bars = trackBarsRef.current
       const now = Date.now()
-      
-      // Track IDs that are still active
       const activeIds = new Set<string>()
-      const counts: Record<Phase, number> = {
-        entry: 0, browse: 0, engage: 0, dwell: 0, checkout: 0, exit: 0
-      }
       
-      // Assign lanes to tracks (vertical distribution)
-      const maxLanes = Math.floor((height - 40) / LANE_HEIGHT)
-      let laneIndex = 0
+      let totalDwell = 0
+      let maxDwell = 0
+      
+      // Get canvas dimensions for lane calculation
+      const canvas = canvasRef.current
+      const height = canvas ? canvas.getBoundingClientRect().height - 40 : 200
+      const maxLanes = Math.floor(height / (BAR_HEIGHT + BAR_GAP))
       
       tracks.forEach(track => {
         activeIds.add(track.id)
-        const existing = states.get(track.id)
-        const pos = track.venuePosition
-        const vel = track.velocity || 0
-        
-        const { phase, zoneId } = determinePhase(track.id, pos, vel, existing)
-        const targetX = getPhaseX(phase, width)
-        
-        counts[phase]++
+        const existing = bars.get(track.id)
         
         if (existing) {
-          // Update existing track
-          existing.phase = phase
-          existing.targetX = targetX
-          existing.velocity = vel
-          existing.lastZoneId = zoneId
-          if (zoneId === existing.lastZoneId) {
-            existing.dwellTime += UPDATE_INTERVAL
-          } else {
-            existing.dwellTime = 0
-          }
-          // Animate X position
-          existing.currentX += (targetX - existing.currentX) * ANIMATION_SPEED
+          // Update existing
+          existing.dwellSec = (now - existing.entryTime) / 1000
+          existing.velocity = track.velocity || 0
         } else {
-          // New track - assign a lane
-          const y = 30 + (laneIndex % maxLanes) * LANE_HEIGHT
-          laneIndex++
-          
-          states.set(track.id, {
+          // New track - assign stable lane and color from ID hash
+          const hash = hashCode(track.id)
+          bars.set(track.id, {
             id: track.id,
-            phase,
-            targetX,
-            currentX: 0, // Start from left edge
-            y,
-            velocity: vel,
-            dwellTime: 0,
-            lastZoneId: zoneId,
-            entryTime: now
+            entryTime: now,
+            dwellSec: 0,
+            velocity: track.velocity || 0,
+            lane: hash % maxLanes,
+            hue: (hash * 37) % 360, // spread hues
           })
         }
+        
+        const bar = bars.get(track.id)!
+        totalDwell += bar.dwellSec
+        if (bar.dwellSec > maxDwell) maxDwell = bar.dwellSec
       })
       
-      // Remove tracks that are no longer active (they've exited)
-      states.forEach((state, id) => {
+      // Remove exited tracks
+      bars.forEach((_, id) => {
         if (!activeIds.has(id)) {
-          // Animate to exit before removing
-          state.phase = 'exit'
-          state.targetX = width + 20
-          state.currentX += (state.targetX - state.currentX) * ANIMATION_SPEED
-          
-          // Remove once off-screen
-          if (state.currentX > width + 10) {
-            states.delete(id)
-          }
+          bars.delete(id)
         }
       })
       
-      setPhaseCounts(counts)
-    }, UPDATE_INTERVAL)
+      setStats({
+        active: tracks.size,
+        avgDwell: tracks.size > 0 ? totalDwell / tracks.size : 0,
+        maxDwell,
+      })
+    }, UPDATE_MS)
     
     return () => clearInterval(interval)
-  }, [tracks, regions, roiTypes])
+  }, [tracks])
   
   // Render canvas
   useEffect(() => {
@@ -249,6 +105,8 @@ export default function JourneyFlowStream() {
     
     const ctx = canvas.getContext('2d')
     if (!ctx) return
+    
+    let animationId: number
     
     const render = () => {
       const rect = canvas.getBoundingClientRect()
@@ -259,89 +117,103 @@ export default function JourneyFlowStream() {
       
       const width = rect.width
       const height = rect.height
+      const barAreaHeight = height - 30
       
       // Clear
-      ctx.clearRect(0, 0, width, height)
+      ctx.fillStyle = '#0d0d14'
+      ctx.fillRect(0, 0, width, height)
       
-      // Draw phase dividers and labels
-      const sectionWidth = width / PHASES.length
+      // Draw time scale at bottom
+      ctx.fillStyle = 'rgba(255,255,255,0.15)'
+      ctx.font = '8px monospace'
+      ctx.textAlign = 'center'
+      const markers = [0, 60, 120, 180, 240, 300]
+      markers.forEach(sec => {
+        const x = 10 + (sec / MAX_DWELL_SEC) * (width - 20)
+        ctx.fillText(sec < 60 ? '0' : `${Math.floor(sec / 60)}m`, x, height - 4)
+      })
       
-      PHASES.forEach((phase, i) => {
-        const x = sectionWidth * i
+      // Draw bars
+      const bars = trackBarsRef.current
+      const maxLanes = Math.floor(barAreaHeight / (BAR_HEIGHT + BAR_GAP))
+      
+      // Group by lane for stacking
+      const laneGroups = new Map<number, TrackBar[]>()
+      bars.forEach(bar => {
+        const lane = bar.lane % maxLanes
+        if (!laneGroups.has(lane)) laneGroups.set(lane, [])
+        laneGroups.get(lane)!.push(bar)
+      })
+      
+      laneGroups.forEach((laneBars, lane) => {
+        const y = 10 + lane * (BAR_HEIGHT + BAR_GAP)
         
-        // Vertical divider (except first)
-        if (i > 0) {
-          ctx.strokeStyle = 'rgba(255,255,255,0.05)'
-          ctx.lineWidth = 1
+        // Sort by dwell time for consistent rendering
+        laneBars.sort((a, b) => a.dwellSec - b.dwellSec)
+        
+        laneBars.forEach((bar, idx) => {
+          const progress = Math.min(bar.dwellSec / MAX_DWELL_SEC, 1)
+          const barWidth = Math.max(4, progress * (width - 20))
+          
+          // Offset if multiple bars in same lane
+          const yOffset = idx * 2
+          
+          // Color based on velocity (moving = cooler, stopped = warmer)
+          const saturation = 70
+          const lightness = 50 + bar.velocity * 10
+          const hueShift = bar.velocity < 0.5 ? 30 : 0 // warmer when stopped
+          const color = `hsl(${(bar.hue + hueShift) % 360}, ${saturation}%, ${lightness}%)`
+          
+          // Draw bar with gradient
+          const gradient = ctx.createLinearGradient(10, 0, 10 + barWidth, 0)
+          gradient.addColorStop(0, 'transparent')
+          gradient.addColorStop(0.1, color)
+          gradient.addColorStop(1, color)
+          
+          ctx.fillStyle = gradient
           ctx.beginPath()
-          ctx.moveTo(x, 20)
-          ctx.lineTo(x, height - 20)
-          ctx.stroke()
-        }
-        
-        // Phase label at bottom
-        ctx.fillStyle = 'rgba(255,255,255,0.25)'
-        ctx.font = '8px monospace'
-        ctx.textAlign = 'center'
-        ctx.fillText(PHASE_CONFIG[phase].label, x + sectionWidth / 2, height - 6)
+          ctx.roundRect(10, y + yOffset, barWidth, BAR_HEIGHT - 1, 2)
+          ctx.fill()
+          
+          // Glow on tip
+          ctx.shadowColor = color
+          ctx.shadowBlur = 6
+          ctx.fillStyle = color
+          ctx.beginPath()
+          ctx.arc(10 + barWidth, y + yOffset + BAR_HEIGHT / 2, 2, 0, Math.PI * 2)
+          ctx.fill()
+          ctx.shadowBlur = 0
+        })
       })
       
-      // Draw particles
-      const states = trackStatesRef.current
-      
-      states.forEach(state => {
-        const config = PHASE_CONFIG[state.phase]
-        
-        // Animate towards target
-        state.currentX += (state.targetX - state.currentX) * ANIMATION_SPEED
-        
-        // Draw trail
-        const trailLength = 20
-        const gradient = ctx.createLinearGradient(
-          state.currentX - trailLength, state.y,
-          state.currentX, state.y
-        )
-        gradient.addColorStop(0, 'transparent')
-        gradient.addColorStop(1, config.color)
-        
-        ctx.strokeStyle = gradient
-        ctx.lineWidth = 2
-        ctx.beginPath()
-        ctx.moveTo(Math.max(0, state.currentX - trailLength), state.y)
-        ctx.lineTo(state.currentX, state.y)
-        ctx.stroke()
-        
-        // Draw particle with glow
-        ctx.shadowColor = config.glowColor
-        ctx.shadowBlur = 8 + (state.velocity * 4)
-        
-        ctx.fillStyle = config.color
-        ctx.beginPath()
-        ctx.arc(state.currentX, state.y, PARTICLE_SIZE / 2, 0, Math.PI * 2)
-        ctx.fill()
-        
-        ctx.shadowBlur = 0
-      })
-      
-      requestAnimationFrame(render)
+      animationId = requestAnimationFrame(render)
     }
     
-    const animationId = requestAnimationFrame(render)
+    animationId = requestAnimationFrame(render)
     return () => cancelAnimationFrame(animationId)
   }, [])
   
-  // Total active
-  const totalActive = Object.values(phaseCounts).reduce((a, b) => a + b, 0)
+  const formatTime = (sec: number) => {
+    if (sec < 60) return `${Math.round(sec)}s`
+    return `${Math.floor(sec / 60)}:${String(Math.floor(sec % 60)).padStart(2, '0')}`
+  }
   
   return (
     <div className="h-full flex flex-col p-4 font-mono text-[11px]">
       {/* Header */}
       <div className="flex items-center justify-between mb-2">
         <div className="flex items-center gap-2">
-          <div className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse shadow-[0_0_8px_rgba(34,211,238,0.6)]" />
-          <span className="text-[10px] uppercase tracking-[0.2em] text-gray-500">JOURNEY FLOW</span>
+          <div className="w-2 h-2 rounded-full bg-purple-400 animate-pulse shadow-[0_0_8px_rgba(167,139,250,0.6)]" />
+          <span className="text-[10px] uppercase tracking-[0.2em] text-gray-500">DWELL STREAM</span>
         </div>
-        <span className="text-[10px] text-gray-600 tabular-nums">{totalActive} active</span>
+        <div className="flex items-center gap-3 text-[10px]">
+          <span className="text-gray-600">
+            AVG <span className="text-white">{formatTime(stats.avgDwell)}</span>
+          </span>
+          <span className="text-gray-600">
+            MAX <span className="text-amber-400">{formatTime(stats.maxDwell)}</span>
+          </span>
+        </div>
       </div>
       
       {/* Canvas */}
@@ -352,22 +224,10 @@ export default function JourneyFlowStream() {
         />
       </div>
       
-      {/* Phase counts bar */}
-      <div className="flex items-center justify-between mt-2 pt-2 border-t border-[rgba(255,255,255,0.04)]">
-        {PHASES.map(phase => (
-          <div key={phase} className="flex flex-col items-center">
-            <div 
-              className="w-4 h-1 rounded-full mb-1"
-              style={{ 
-                backgroundColor: PHASE_CONFIG[phase].color,
-                opacity: phaseCounts[phase] > 0 ? 1 : 0.2
-              }}
-            />
-            <span className="text-[9px] text-gray-500 tabular-nums">
-              {phaseCounts[phase]}
-            </span>
-          </div>
-        ))}
+      {/* Footer */}
+      <div className="flex items-center justify-between mt-1 pt-1 border-t border-[rgba(255,255,255,0.04)]">
+        <span className="text-[9px] text-gray-600">{stats.active} active journeys</span>
+        <span className="text-[9px] text-gray-600">← dwell time →</span>
       </div>
     </div>
   )

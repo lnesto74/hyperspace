@@ -43,11 +43,15 @@ export default function LiveMetricsPanel({
     prevPaxRef.current = totalPax
   }, [totalPax])
 
-  // Fetch checkout metrics
+  // Fetch checkout metrics (stop polling after 404 to prevent spam)
+  const checkoutDisabledRef = useRef(false)
+  
   useEffect(() => {
     if (!venue?.id) return
     
     const fetchCheckout = async () => {
+      if (checkoutDisabledRef.current) return
+      
       try {
         const res = await fetch(`${API_BASE}/api/venues/${venue.id}/checkout/status`)
         if (res.ok) {
@@ -59,6 +63,9 @@ export default function LiveMetricsPanel({
             queuePressure: data.pressure?.avgQueuePerLane || 0,
           })
           setThroughput(data.kpi?.throughputPerHour || 0)
+        } else if (res.status === 404) {
+          // Endpoint doesn't exist for this venue - stop polling
+          checkoutDisabledRef.current = true
         }
       } catch (err) {
         // Silent fail
