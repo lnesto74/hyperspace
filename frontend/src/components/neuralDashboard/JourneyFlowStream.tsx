@@ -1,234 +1,314 @@
 /**
  * JourneyFlowStream - Q4 of Neural Dashboard
  * 
- * Simplified dwell-time bar visualization showing how long each track
- * has been in the venue. Bars grow over time like a progress meter.
- * Color indicates current behavior state.
+ * Live Journey Feed showing individual track journeys with:
+ * - Track ID (short hash)
+ * - Behavioral status (arrived/exploring/interested/buying)
+ * - Zone/category they're in
+ * - Time in current state
  */
 
-import { useRef, useEffect, useState } from 'react'
+import { useEffect, useState, useRef, useMemo } from 'react'
 import { useTracking } from '../../context/TrackingContext'
+import { useRoi } from '../../context/RoiContext'
+import { 
+  DoorOpen, 
+  Navigation, 
+  Eye, 
+  CreditCard,
+  LogOut,
+  Croissant,
+  Wine,
+  Milk,
+  Salad,
+  Snowflake,
+  Package,
+  Cookie,
+  MapPin
+} from 'lucide-react'
 
-// Track visualization state
-interface TrackBar {
+// Behavioral states
+type BehaviorState = 'arrived' | 'exploring' | 'interested' | 'buying' | 'exiting'
+
+// Track journey data
+interface TrackJourney {
   id: string
-  entryTime: number    // when track first appeared
-  dwellSec: number     // current dwell time in seconds
-  velocity: number     // current velocity
-  lane: number         // stable Y lane (hash-based)
-  hue: number          // stable color hue (hash-based)
+  shortId: string
+  state: BehaviorState
+  zoneName: string | null
+  category: string | null
+  timeInState: number // seconds
+  entryTime: number
+  lastStateChange: number
+  velocity: number
 }
 
-// Simple hash to get stable number from string
-function hashCode(str: string): number {
+// Category to icon mapping
+const CATEGORY_ICONS: Record<string, React.ElementType> = {
+  'Bakery & Breakfast': Croissant,
+  'Beverages': Wine,
+  'Dairy & Eggs': Milk,
+  'Fresh Produce': Salad,
+  'Frozen & Ready Meals': Snowflake,
+  'Pantry': Package,
+  'Snacks & Confectionery': Cookie,
+}
+
+// State config
+const STATE_CONFIG: Record<BehaviorState, { label: string; color: string; Icon: React.ElementType }> = {
+  arrived:    { label: 'ARRIVED',    color: 'text-cyan-400',   Icon: DoorOpen },
+  exploring:  { label: 'EXPLORING',  color: 'text-purple-400', Icon: Navigation },
+  interested: { label: 'INTERESTED', color: 'text-green-400',  Icon: Eye },
+  buying:     { label: 'BUYING',     color: 'text-amber-400',  Icon: CreditCard },
+  exiting:    { label: 'EXITING',    color: 'text-red-400',    Icon: LogOut },
+}
+
+// Short hash from track ID
+function shortHash(id: string): string {
   let hash = 0
-  for (let i = 0; i < str.length; i++) {
-    hash = ((hash << 5) - hash) + str.charCodeAt(i)
+  for (let i = 0; i < id.length; i++) {
+    hash = ((hash << 5) - hash) + id.charCodeAt(i)
     hash |= 0
   }
-  return Math.abs(hash)
+  return Math.abs(hash).toString(16).slice(0, 4).toUpperCase()
 }
 
-const MAX_DWELL_SEC = 300 // 5 min = full bar
-const BAR_HEIGHT = 6
-const BAR_GAP = 3
-const UPDATE_MS = 200
+// Point-in-polygon helper
+function isPointInPolygon(x: number, z: number, vertices: { x: number; z: number }[]): boolean {
+  if (vertices.length < 3) return false
+  let inside = false
+  for (let i = 0, j = vertices.length - 1; i < vertices.length; j = i++) {
+    const xi = vertices[i].x, zi = vertices[i].z
+    const xj = vertices[j].x, zj = vertices[j].z
+    if (((zi > z) !== (zj > z)) && (x < (xj - xi) * (z - zi) / (zj - zi) + xi)) {
+      inside = !inside
+    }
+  }
+  return inside
+}
+
+const UPDATE_INTERVAL = 500
+const MAX_VISIBLE_ROWS = 8
 
 export default function JourneyFlowStream() {
   const { tracks } = useTracking()
-  const canvasRef = useRef<HTMLCanvasElement>(null)
-  const trackBarsRef = useRef<Map<string, TrackBar>>(new Map())
-  const [stats, setStats] = useState({ active: 0, avgDwell: 0, maxDwell: 0 })
+  const { regions } = useRoi()
+  const journeysRef = useRef<Map<string, TrackJourney>>(new Map())
+  const [visibleJourneys, setVisibleJourneys] = useState<TrackJourney[]>([])
+  const [stateCounts, setStateCounts] = useState<Record<BehaviorState, number>>({
+    arrived: 0, exploring: 0, interested: 0, buying: 0, exiting: 0
+  })
   
-  // Update track bars
+  // Classify ROIs - filter out Service zones for checkout
+  const roiClassification = useMemo(() => {
+    const checkoutRois = new Map<string, string>() // id -> checkout name
+    const shelfRois = new Map<string, { name: string; category: string | null }>()
+    
+    regions.forEach(roi => {
+      const name = roi.name
+      const nameLower = name.toLowerCase()
+      
+      // Only use Queue zones for checkout, not Service
+      if (nameLower.includes('checkout') && nameLower.includes('queue')) {
+        // Extract checkout number
+        const match = name.match(/Checkout\s*(\d+)/i)
+        const checkoutName = match ? `Checkout ${match[1]}` : 'Checkout'
+        checkoutRois.set(roi.id, checkoutName)
+      } else if (nameLower.includes('shelf') && nameLower.includes('engagement')) {
+        // Extract shelf number
+        const match = name.match(/Shelf\s*(\d+)/i)
+        const shelfName = match ? `Shelf ${match[1]}` : name
+        shelfRois.set(roi.id, { name: shelfName, category: null })
+      }
+    })
+    
+    return { checkoutRois, shelfRois }
+  }, [regions])
+  
+  // Update journeys
   useEffect(() => {
     const interval = setInterval(() => {
-      const bars = trackBarsRef.current
+      const journeys = journeysRef.current
       const now = Date.now()
       const activeIds = new Set<string>()
-      
-      let totalDwell = 0
-      let maxDwell = 0
-      
-      // Get canvas dimensions for lane calculation
-      const canvas = canvasRef.current
-      const height = canvas ? canvas.getBoundingClientRect().height - 40 : 200
-      const maxLanes = Math.floor(height / (BAR_HEIGHT + BAR_GAP))
+      const counts: Record<BehaviorState, number> = {
+        arrived: 0, exploring: 0, interested: 0, buying: 0, exiting: 0
+      }
       
       tracks.forEach(track => {
         activeIds.add(track.id)
-        const existing = bars.get(track.id)
+        const pos = track.venuePosition
+        const vel = typeof track.velocity === 'number' && !isNaN(track.velocity) ? track.velocity : 0
+        
+        // Find which ROI track is in
+        let zoneName: string | null = null
+        let category: string | null = null
+        let isInCheckout = false
+        
+        for (const roi of regions) {
+          if (isPointInPolygon(pos.x, pos.z, roi.vertices)) {
+            
+            if (roiClassification.checkoutRois.has(roi.id)) {
+              zoneName = roiClassification.checkoutRois.get(roi.id)!
+              isInCheckout = true
+            } else if (roiClassification.shelfRois.has(roi.id)) {
+              const shelf = roiClassification.shelfRois.get(roi.id)!
+              zoneName = shelf.name
+              category = shelf.category
+            } else {
+              zoneName = roi.name
+            }
+            break
+          }
+        }
+        
+        const existing = journeys.get(track.id)
+        
+        // Determine state
+        let state: BehaviorState
+        if (!existing || now - existing.entryTime < 5000) {
+          state = 'arrived'
+        } else if (isInCheckout) {
+          state = 'buying'
+        } else if (zoneName && vel < 0.3) {
+          state = 'interested'
+        } else {
+          state = 'exploring'
+        }
         
         if (existing) {
-          // Update existing
-          existing.dwellSec = (now - existing.entryTime) / 1000
-          existing.velocity = track.velocity || 0
+          // Check if state changed
+          const stateChanged = existing.state !== state
+          
+          existing.state = state
+          existing.zoneName = zoneName
+          existing.category = category
+          existing.velocity = vel
+          existing.timeInState = stateChanged 
+            ? 0 
+            : (now - existing.lastStateChange) / 1000
+          if (stateChanged) {
+            existing.lastStateChange = now
+          }
         } else {
-          // New track - assign stable lane and color from ID hash
-          const hash = hashCode(track.id)
-          bars.set(track.id, {
+          journeys.set(track.id, {
             id: track.id,
+            shortId: shortHash(track.id),
+            state,
+            zoneName,
+            category,
+            timeInState: 0,
             entryTime: now,
-            dwellSec: 0,
-            velocity: track.velocity || 0,
-            lane: hash % maxLanes,
-            hue: (hash * 37) % 360, // spread hues
+            lastStateChange: now,
+            velocity: vel,
           })
         }
         
-        const bar = bars.get(track.id)!
-        totalDwell += bar.dwellSec
-        if (bar.dwellSec > maxDwell) maxDwell = bar.dwellSec
+        counts[state]++
       })
       
-      // Remove exited tracks
-      bars.forEach((_, id) => {
+      // Mark exiting tracks
+      journeys.forEach((journey, id) => {
         if (!activeIds.has(id)) {
-          bars.delete(id)
+          journey.state = 'exiting'
+          journey.timeInState = (now - journey.lastStateChange) / 1000
+          counts.exiting++
+          
+          // Remove after 3 seconds
+          if (journey.timeInState > 3) {
+            journeys.delete(id)
+          }
         }
       })
       
-      setStats({
-        active: tracks.size,
-        avgDwell: tracks.size > 0 ? totalDwell / tracks.size : 0,
-        maxDwell,
-      })
-    }, UPDATE_MS)
+      // Sort by most recent state change and take top N
+      const sorted = Array.from(journeys.values())
+        .sort((a, b) => b.lastStateChange - a.lastStateChange)
+        .slice(0, MAX_VISIBLE_ROWS)
+      
+      setVisibleJourneys(sorted)
+      setStateCounts(counts)
+    }, UPDATE_INTERVAL)
     
     return () => clearInterval(interval)
-  }, [tracks])
-  
-  // Render canvas
-  useEffect(() => {
-    const canvas = canvasRef.current
-    if (!canvas) return
-    
-    const ctx = canvas.getContext('2d')
-    if (!ctx) return
-    
-    let animationId: number
-    
-    const render = () => {
-      const rect = canvas.getBoundingClientRect()
-      const dpr = window.devicePixelRatio || 1
-      canvas.width = rect.width * dpr
-      canvas.height = rect.height * dpr
-      ctx.scale(dpr, dpr)
-      
-      const width = rect.width
-      const height = rect.height
-      const barAreaHeight = height - 30
-      
-      // Clear
-      ctx.fillStyle = '#0d0d14'
-      ctx.fillRect(0, 0, width, height)
-      
-      // Draw time scale at bottom
-      ctx.fillStyle = 'rgba(255,255,255,0.15)'
-      ctx.font = '8px monospace'
-      ctx.textAlign = 'center'
-      const markers = [0, 60, 120, 180, 240, 300]
-      markers.forEach(sec => {
-        const x = 10 + (sec / MAX_DWELL_SEC) * (width - 20)
-        ctx.fillText(sec < 60 ? '0' : `${Math.floor(sec / 60)}m`, x, height - 4)
-      })
-      
-      // Draw bars
-      const bars = trackBarsRef.current
-      const maxLanes = Math.floor(barAreaHeight / (BAR_HEIGHT + BAR_GAP))
-      
-      // Group by lane for stacking
-      const laneGroups = new Map<number, TrackBar[]>()
-      bars.forEach(bar => {
-        const lane = bar.lane % maxLanes
-        if (!laneGroups.has(lane)) laneGroups.set(lane, [])
-        laneGroups.get(lane)!.push(bar)
-      })
-      
-      laneGroups.forEach((laneBars, lane) => {
-        const y = 10 + lane * (BAR_HEIGHT + BAR_GAP)
-        
-        // Sort by dwell time for consistent rendering
-        laneBars.sort((a, b) => a.dwellSec - b.dwellSec)
-        
-        laneBars.forEach((bar, idx) => {
-          const progress = Math.min(bar.dwellSec / MAX_DWELL_SEC, 1)
-          const barWidth = Math.max(4, progress * (width - 20))
-          
-          // Offset if multiple bars in same lane
-          const yOffset = idx * 2
-          
-          // Color based on velocity (moving = cooler, stopped = warmer)
-          const vel = typeof bar.velocity === 'number' && !isNaN(bar.velocity) ? bar.velocity : 0
-          const saturation = 70
-          const lightness = Math.max(40, Math.min(70, 50 + vel * 10))
-          const hueShift = vel < 0.5 ? 30 : 0 // warmer when stopped
-          const color = `hsl(${(bar.hue + hueShift) % 360}, ${saturation}%, ${lightness}%)`
-          
-          // Draw bar with gradient
-          const gradient = ctx.createLinearGradient(10, 0, 10 + barWidth, 0)
-          gradient.addColorStop(0, 'transparent')
-          gradient.addColorStop(0.1, color)
-          gradient.addColorStop(1, color)
-          
-          ctx.fillStyle = gradient
-          ctx.beginPath()
-          ctx.roundRect(10, y + yOffset, barWidth, BAR_HEIGHT - 1, 2)
-          ctx.fill()
-          
-          // Glow on tip
-          ctx.shadowColor = color
-          ctx.shadowBlur = 6
-          ctx.fillStyle = color
-          ctx.beginPath()
-          ctx.arc(10 + barWidth, y + yOffset + BAR_HEIGHT / 2, 2, 0, Math.PI * 2)
-          ctx.fill()
-          ctx.shadowBlur = 0
-        })
-      })
-      
-      animationId = requestAnimationFrame(render)
-    }
-    
-    animationId = requestAnimationFrame(render)
-    return () => cancelAnimationFrame(animationId)
-  }, [])
+  }, [tracks, regions, roiClassification])
   
   const formatTime = (sec: number) => {
     if (sec < 60) return `${Math.round(sec)}s`
     return `${Math.floor(sec / 60)}:${String(Math.floor(sec % 60)).padStart(2, '0')}`
   }
   
+  const totalActive = Object.values(stateCounts).reduce((a, b) => a + b, 0)
+  
   return (
-    <div className="h-full flex flex-col p-4 font-mono text-[11px]">
+    <div className="h-full flex flex-col p-3 font-mono text-[11px]">
       {/* Header */}
-      <div className="flex items-center justify-between mb-2">
+      <div className="flex items-center justify-between mb-2 pb-2 border-b border-[rgba(255,255,255,0.06)]">
         <div className="flex items-center gap-2">
-          <div className="w-2 h-2 rounded-full bg-purple-400 animate-pulse shadow-[0_0_8px_rgba(167,139,250,0.6)]" />
-          <span className="text-[10px] uppercase tracking-[0.2em] text-gray-500">DWELL STREAM</span>
+          <div className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse shadow-[0_0_8px_rgba(34,211,238,0.6)]" />
+          <span className="text-[10px] uppercase tracking-[0.2em] text-gray-500">LIVE JOURNEYS</span>
         </div>
-        <div className="flex items-center gap-3 text-[10px]">
-          <span className="text-gray-600">
-            AVG <span className="text-white">{formatTime(stats.avgDwell)}</span>
-          </span>
-          <span className="text-gray-600">
-            MAX <span className="text-amber-400">{formatTime(stats.maxDwell)}</span>
-          </span>
-        </div>
+        <span className="text-[10px] text-gray-500 tabular-nums">{totalActive} in store</span>
       </div>
       
-      {/* Canvas */}
-      <div className="flex-1 relative min-h-0">
-        <canvas 
-          ref={canvasRef}
-          className="absolute inset-0 w-full h-full"
-        />
+      {/* Journey Feed */}
+      <div className="flex-1 overflow-hidden space-y-1">
+        {visibleJourneys.length === 0 ? (
+          <div className="flex items-center justify-center h-full text-gray-600 text-[10px]">
+            No active journeys
+          </div>
+        ) : (
+          visibleJourneys.map(journey => {
+            const stateConfig = STATE_CONFIG[journey.state]
+            const StateIcon = stateConfig.Icon
+            const CategoryIcon = journey.category 
+              ? CATEGORY_ICONS[journey.category] || MapPin
+              : MapPin
+            
+            return (
+              <div 
+                key={journey.id}
+                className="flex items-center gap-2 py-1 px-2 rounded bg-[rgba(255,255,255,0.02)] hover:bg-[rgba(255,255,255,0.04)] transition-colors"
+              >
+                {/* Track ID */}
+                <span className="text-[10px] text-gray-400 font-bold w-10">
+                  #{journey.shortId}
+                </span>
+                
+                {/* State */}
+                <div className={`flex items-center gap-1 w-24 ${stateConfig.color}`}>
+                  <StateIcon className="w-3 h-3" />
+                  <span className="text-[9px] font-medium">{stateConfig.label}</span>
+                </div>
+                
+                {/* Zone */}
+                <div className="flex items-center gap-1 flex-1 min-w-0">
+                  <CategoryIcon className="w-3 h-3 text-gray-500 flex-shrink-0" />
+                  <span className="text-[10px] text-gray-400 truncate">
+                    {journey.zoneName || 'Store'}
+                  </span>
+                </div>
+                
+                {/* Time */}
+                <span className="text-[10px] text-gray-600 tabular-nums w-10 text-right">
+                  {formatTime(journey.timeInState)}
+                </span>
+              </div>
+            )
+          })
+        )}
       </div>
       
-      {/* Footer */}
-      <div className="flex items-center justify-between mt-1 pt-1 border-t border-[rgba(255,255,255,0.04)]">
-        <span className="text-[9px] text-gray-600">{stats.active} active journeys</span>
-        <span className="text-[9px] text-gray-600">← dwell time →</span>
+      {/* State Summary */}
+      <div className="flex items-center justify-between mt-2 pt-2 border-t border-[rgba(255,255,255,0.04)]">
+        {Object.entries(STATE_CONFIG).map(([state, config]) => (
+          <div key={state} className="flex items-center gap-1">
+            <config.Icon className={`w-3 h-3 ${stateCounts[state as BehaviorState] > 0 ? config.color : 'text-gray-700'}`} />
+            <span className={`text-[9px] tabular-nums ${stateCounts[state as BehaviorState] > 0 ? 'text-gray-400' : 'text-gray-700'}`}>
+              {stateCounts[state as BehaviorState]}
+            </span>
+          </div>
+        ))}
       </div>
     </div>
   )
