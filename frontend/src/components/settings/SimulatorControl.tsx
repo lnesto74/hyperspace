@@ -200,15 +200,11 @@ export function SimulatorControl() {
       // Always send config before starting to ensure correct venue and cashier settings
       const selectedVenue = venues.find(v => v.id === selectedVenueId)
       
-      // Derive backendUrl from API_BASE - this ensures simulator always uses current backend
-      // API_BASE is either empty (same origin) or a full URL like http://localhost:3001
-      const backendUrl = API_BASE || window.location.origin
-      
       const configToSend = {
         ...config,
         ...edgeBody,
-        // CRITICAL: Always include backendUrl so simulator uses correct backend
-        backendUrl,
+        // NOTE: Do NOT override backendUrl/mqttBroker here - edge server has its own persisted config
+        // for production use (e.g., pointing to DigitalOcean). Only override in dev if needed.
         // Only send venueId if user has selected one, otherwise keep edge server's existing config
         ...(selectedVenueId && { venueId: selectedVenueId }),
         ...(selectedVenue && {
