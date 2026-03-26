@@ -443,21 +443,20 @@ app.post('/api/edge-simulator/config', async (req, res) => {
       }
     }
     
-    // In production (no Tailscale), use BACKEND_PUBLIC_URL or don't override
-    // Only auto-inject URLs when Tailscale is available (dev environment)
+    // Only inject backendUrl (so edge can reach this server)
+    // NEVER override mqttBroker - edge devices have their own local MQTT broker
+    // that bridges to production. Overriding would break the local broker setup.
     const configWithUrls = { ...req.body };
     
     if (tailscaleIp) {
-      // Dev: auto-inject URLs based on Tailscale IP
+      // Use Tailscale IP for backend connectivity
       configWithUrls.backendUrl = `http://${tailscaleIp}:${PORT}`;
-      configWithUrls.mqttBroker = `mqtt://${tailscaleIp}:1883`;
     } else if (process.env.BACKEND_PUBLIC_URL) {
-      // Production: use explicit public URL if set
+      // Production: use explicit public URL
       const publicHost = new URL(process.env.BACKEND_PUBLIC_URL).hostname;
       configWithUrls.backendUrl = `http://${publicHost}:${PORT}`;
-      configWithUrls.mqttBroker = `mqtt://${publicHost}:1883`;
     }
-    // Otherwise: don't override - let edge server use its persisted config
+    // mqttBroker is NOT set here - edge server manages its own MQTT config
     
     const edgeUrl = getEdgeUrl(req);
     const response = await fetch(`${edgeUrl}/api/config`, {
