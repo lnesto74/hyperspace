@@ -74,28 +74,23 @@ const defaultConfig = {
 let simulatorV2 = null;
 
 // Load config from file or use defaults
-// IMPORTANT: backendUrl and mqttBroker are NEVER loaded from disk - they must be set via API
-// This prevents stale Tailscale IPs from breaking the simulator
+// backendUrl and mqttBroker ARE persisted when explicitly set (for production use)
 let config = { ...defaultConfig };
 try {
   if (fs.existsSync(CONFIG_FILE)) {
     const savedConfig = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf-8'));
-    // Explicitly ignore backendUrl and mqttBroker from saved config
-    const { backendUrl: _bu, mqttBroker: _mb, ...safeConfig } = savedConfig;
-    config = { ...defaultConfig, ...safeConfig };
-    console.log('[Config] Loaded from disk (backendUrl/mqttBroker use defaults, not persisted values)');
+    config = { ...defaultConfig, ...savedConfig };
+    console.log('[Config] Loaded from disk:', JSON.stringify({ backendUrl: config.backendUrl, mqttBroker: config.mqttBroker }));
   }
 } catch (err) {
   console.error('Failed to load config:', err.message);
 }
 
-// Save config to file (excluding backendUrl which should always be auto-detected)
+// Save config to file (including backendUrl and mqttBroker for production use)
 const saveConfig = () => {
   try {
-    // Don't persist backendUrl - it should be auto-detected from incoming requests
-    // This prevents stale URLs when Mac Tailscale IP changes
-    const { backendUrl, mqttBroker, ...persistConfig } = config;
-    fs.writeFileSync(CONFIG_FILE, JSON.stringify(persistConfig, null, 2));
+    fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2));
+    console.log('[Config] Saved to disk:', JSON.stringify({ backendUrl: config.backendUrl, mqttBroker: config.mqttBroker }));
   } catch (err) {
     console.error('Failed to save config:', err.message);
   }
