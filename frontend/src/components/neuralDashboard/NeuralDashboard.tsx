@@ -14,7 +14,7 @@ import { useRoi } from '../../context/RoiContext'
 import { useVenue } from '../../context/VenueContext'
 import LiveMetricsPanel from './LiveMetricsPanel'
 import ActivityMatrix from './ActivityMatrix'
-import TrendChart from './TrendChart'
+import JourneyFlowStream from './JourneyFlowStream'
 
 interface NeuralDashboardProps {
   children: React.ReactNode // The existing MainViewport
@@ -92,9 +92,9 @@ export default function NeuralDashboard({ children }: NeuralDashboardProps) {
         <ActivityMatrix />
       </div>
       
-      {/* Q4: Real-Time Charts */}
+      {/* Q4: Journey Flow Stream */}
       <div className="relative overflow-hidden bg-[#0d0d14] border-t border-[rgba(255,255,255,0.04)]">
-        <TrendChart />
+        <JourneyFlowStream />
       </div>
     </div>
   )
