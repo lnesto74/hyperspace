@@ -7,7 +7,7 @@
 
 import { useMemo, useRef, useEffect } from 'react'
 import { useTracking } from '../../context/TrackingContext'
-import { useVenue } from '../../context/VenueContext'
+import { useRoi } from '../../context/RoiContext'
 
 const GRID_COLS = 24
 const GRID_ROWS = 16
@@ -16,12 +16,45 @@ const DOT_GAP = 2
 
 export default function ActivityMatrix() {
   const { tracks } = useTracking()
-  const { venue } = useVenue()
+  const { regions } = useRoi()
   const canvasRef = useRef<HTMLCanvasElement>(null)
   
   // Cache for last known good grid (prevents drop to empty on MQTT disconnect)
   const cachedGridRef = useRef<number[][] | null>(null)
+  const cachedBoundsRef = useRef<{ minX: number; maxX: number; minZ: number; maxZ: number } | null>(null)
   const prevTrackCountRef = useRef(0)
+  
+  // Compute bounds from ROI vertices (actual tracked area)
+  const bounds = useMemo(() => {
+    if (regions.length === 0) return null
+    
+    let minX = Infinity, maxX = -Infinity
+    let minZ = Infinity, maxZ = -Infinity
+    
+    regions.forEach(roi => {
+      roi.vertices.forEach(v => {
+        if (v.x < minX) minX = v.x
+        if (v.x > maxX) maxX = v.x
+        if (v.z < minZ) minZ = v.z
+        if (v.z > maxZ) maxZ = v.z
+      })
+    })
+    
+    // Add small padding (5%)
+    const padX = (maxX - minX) * 0.05
+    const padZ = (maxZ - minZ) * 0.05
+    
+    const newBounds = { 
+      minX: minX - padX, 
+      maxX: maxX + padX, 
+      minZ: minZ - padZ, 
+      maxZ: maxZ + padZ 
+    }
+    
+    // Cache bounds for MQTT disconnect resilience
+    cachedBoundsRef.current = newBounds
+    return newBounds
+  }, [regions])
   
   // Build occupancy grid from track positions with caching
   const gridData = useMemo(() => {
@@ -35,16 +68,20 @@ export default function ActivityMatrix() {
     
     const grid: number[][] = Array(GRID_ROWS).fill(null).map(() => Array(GRID_COLS).fill(0))
     
-    if (!venue) return grid
+    // Use current bounds or cached bounds
+    const activeBounds = bounds || cachedBoundsRef.current
+    if (!activeBounds) return grid
     
-    const cellWidth = venue.width / GRID_COLS
-    const cellHeight = venue.depth / GRID_ROWS
+    const width = activeBounds.maxX - activeBounds.minX
+    const height = activeBounds.maxZ - activeBounds.minZ
+    const cellWidth = width / GRID_COLS
+    const cellHeight = height / GRID_ROWS
     
     tracks.forEach(track => {
       const pos = track.venuePosition
-      // Map venue coords to grid cell
-      const col = Math.floor((pos.x + venue.width / 2) / cellWidth)
-      const row = Math.floor((pos.z + venue.depth / 2) / cellHeight)
+      // Map track position to grid cell using ROI bounds
+      const col = Math.floor((pos.x - activeBounds.minX) / cellWidth)
+      const row = Math.floor((pos.z - activeBounds.minZ) / cellHeight)
       
       if (col >= 0 && col < GRID_COLS && row >= 0 && row < GRID_ROWS) {
         grid[row][col] += 1
@@ -57,7 +94,7 @@ export default function ActivityMatrix() {
     }
     
     return grid
-  }, [tracks, venue])
+  }, [tracks, bounds])
   
   // Find max for normalization
   const maxVal = useMemo(() => {
