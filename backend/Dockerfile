@@ -23,22 +23,39 @@ COPY . .
 # Remove .env file (secrets come from docker-compose environment)
 RUN rm -f .env
 
+# ---- LibreDWG build stage ----
+FROM debian:bookworm-slim AS libredwg-builder
+
+RUN apt-get update && apt-get install -y \
+    git autoconf automake libtool texinfo build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+RUN git clone --depth 1 https://github.com/LibreDWG/libredwg.git \
+    && cd libredwg \
+    && sh ./autogen.sh \
+    && ./configure --prefix=/usr/local \
+    && make -j$(nproc) \
+    && make install DESTDIR=/libredwg-install
+
 # ---- Production stage (smaller image) ----
 FROM node:18-slim
 
 WORKDIR /app
 
+# Copy libredwg binaries from builder
+COPY --from=libredwg-builder /libredwg-install/usr/local /usr/local
+
 # Install runtime dependencies:
 # - libsqlite3-0: for better-sqlite3 native module
 # - curl: for Tailscale install script
 # - tailscale: for device discovery (TailscaleService.js shells out to `tailscale status --json`)
-# - libredwg-tools: for DWG to DXF conversion (dwgread command)
 RUN apt-get update && apt-get install -y \
     libsqlite3-0 \
     curl \
-    libredwg-tools \
     && curl -fsSL https://tailscale.com/install.sh | sh \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && ldconfig
 
 # Copy built app from builder
 COPY --from=builder /app /app
