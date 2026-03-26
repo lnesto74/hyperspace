@@ -1,6 +1,18 @@
 version: '3.8'
 
 services:
+  # Local MQTT broker with bridge to production
+  mosquitto:
+    image: eclipse-mosquitto:2
+    container_name: edge-mosquitto
+    ports:
+      - "1883:1883"
+    volumes:
+      - ./mosquitto/config:/mosquitto/config:ro
+      - ./mosquitto/data:/mosquitto/data
+      - ./mosquitto/log:/mosquitto/log
+    restart: unless-stopped
+
   edge-lidar:
     build: .
     container_name: edge-lidar-server
@@ -11,4 +23,6 @@ services:
       - ./data:/app/backend/data
     environment:
       - PORT=8080
+    depends_on:
+      - mosquitto
     restart: unless-stopped
