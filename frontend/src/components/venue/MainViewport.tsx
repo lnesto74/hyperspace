@@ -192,6 +192,11 @@ export default function MainViewport({
   const lidarMeshesRef = useRef<Map<string, THREE.Group>>(new Map())
   const trackMeshesRef = useRef<Map<string, THREE.Group>>(new Map())
   const trailLinesRef = useRef<Map<string, THREE.Line>>(new Map())
+  // Instanced rendering for tracks - single draw call for all 200+ tracks
+  const trackInstancedMeshRef = useRef<THREE.InstancedMesh | null>(null)
+  const trackInstanceMapRef = useRef<Map<string, number>>(new Map()) // trackKey -> instanceIndex
+  const trackInstanceColorsRef = useRef<THREE.InstancedBufferAttribute | null>(null)
+  const MAX_TRACK_INSTANCES = 500
   const roiMeshesRef = useRef<Map<string, THREE.Group>>(new Map())
   const roiVertexHandlesRef = useRef<Map<string, THREE.Mesh[]>>(new Map())
   const drawingLinesRef = useRef<THREE.Line | null>(null)
@@ -3568,7 +3573,7 @@ export default function MainViewport({
 
         // Person cylinder (capsule-like shape)
         const cylinderGeometry = new THREE.CylinderGeometry(
-          cylinderRadius, cylinderRadius, cylinderHeight, 16
+          cylinderRadius, cylinderRadius, cylinderHeight, 8 // Reduced from 16 to 8 segments
         )
         const cylinderMaterial = new THREE.MeshStandardMaterial({ 
           color, 
@@ -3581,8 +3586,8 @@ export default function MainViewport({
         cylinder.userData.isCylinder = true
         group.add(cylinder) // index 0
 
-        // Top cap (hemisphere)
-        const topCapGeometry = new THREE.SphereGeometry(cylinderRadius, 16, 8, 0, Math.PI * 2, 0, Math.PI / 2)
+        // Top cap (hemisphere) - reduced segments
+        const topCapGeometry = new THREE.SphereGeometry(cylinderRadius, 8, 4, 0, Math.PI * 2, 0, Math.PI / 2)
         const topCapMaterial = new THREE.MeshStandardMaterial({ 
           color, 
           emissive: color, 
@@ -3594,8 +3599,8 @@ export default function MainViewport({
         topCap.position.y = cylinderHeight / 2
         group.add(topCap) // index 1
 
-        // Bottom cap (hemisphere, flipped)
-        const bottomCapGeometry = new THREE.SphereGeometry(cylinderRadius, 16, 8, 0, Math.PI * 2, 0, Math.PI / 2)
+        // Bottom cap (hemisphere, flipped) - reduced segments
+        const bottomCapGeometry = new THREE.SphereGeometry(cylinderRadius, 8, 4, 0, Math.PI * 2, 0, Math.PI / 2)
         const bottomCapMaterial = new THREE.MeshStandardMaterial({ 
           color, 
           emissive: color, 
@@ -3645,8 +3650,8 @@ export default function MainViewport({
         labelSprite.userData.isSezLabel = true
         group.add(labelSprite) // index 3
 
-        // Point cloud representation (300 scattered points in capsule volume)
-        const pcPositions = generateCapsulePoints(cylinderRadius, cylinderHeight, 300)
+        // Point cloud representation (150 scattered points - reduced from 300)
+        const pcPositions = generateCapsulePoints(cylinderRadius, cylinderHeight, 150)
         const pcGeometry = new THREE.BufferGeometry()
         pcGeometry.setAttribute('position', new THREE.BufferAttribute(pcPositions, 3))
         const pcMaterial = new THREE.PointsMaterial({

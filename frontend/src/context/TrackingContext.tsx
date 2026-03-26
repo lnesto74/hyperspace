@@ -51,22 +51,33 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
       setIsConnected(false)
     })
 
-    // Throttle track updates to avoid overwhelming React
+    // Throttle track updates to reduce memory pressure (target ~15fps instead of 30fps)
     let pendingTracks: Track[] = []
-    let updateScheduled = false
+    let lastFlushTime = 0
+    const MIN_FLUSH_INTERVAL = 66 // ~15fps max update rate (was ~30fps)
     
     const flushTrackUpdates = () => {
       if (pendingTracks.length === 0) return
       
-      const tracksToProcess = pendingTracks
-      pendingTracks = []
-      updateScheduled = false
-      
       const now = Date.now()
+      // Skip if we flushed too recently
+      if (now - lastFlushTime < MIN_FLUSH_INTERVAL) {
+        requestAnimationFrame(flushTrackUpdates)
+        return
+      }
+      lastFlushTime = now
+      
+      // Only keep the latest position per track (skip intermediate positions)
+      const latestByKey = new Map<string, Track>()
+      for (const track of pendingTracks) {
+        latestByKey.set(track.trackKey, track)
+      }
+      pendingTracks = []
+      
       setLiveTracks(prev => {
         const next = new Map(prev)
         
-        for (const track of tracksToProcess) {
+        for (const [, track] of latestByKey) {
           const existing = next.get(track.trackKey)
           const trail = existing?.trail || []
           
@@ -76,8 +87,6 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
           }
           
           next.set(track.trackKey, { ...track, trail })
-          
-          // Update last seen timestamp (no timeout creation)
           trackLastSeenRef.current.set(track.trackKey, now)
         }
         
@@ -87,17 +96,11 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
     
     socket.on('tracks', (data: { venueId: string, tracks: Track[] }) => {
       if (data.venueId !== subscribedVenueRef.current) return
-      
-      // Skip live updates when in replay mode
       if (isReplayMode) return
       
-      // Buffer tracks and throttle updates to ~30fps max
+      // Buffer tracks - will be deduplicated and throttled in flushTrackUpdates
       pendingTracks.push(...data.tracks)
-      
-      if (!updateScheduled) {
-        updateScheduled = true
-        requestAnimationFrame(flushTrackUpdates)
-      }
+      requestAnimationFrame(flushTrackUpdates)
     })
 
     socket.on('track_removed', (data: { trackKey: string }) => {
