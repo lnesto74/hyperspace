@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Eye, Grid3X3, Box, ArrowUp, Sun, X, Radio, History, Crosshair } from 'lucide-react'
+import { Eye, Grid3X3, Box, ArrowUp, Sun, X, Radio, History, Crosshair, LayoutGrid } from 'lucide-react'
 import Sidebar from './Sidebar'
 import RightPanel from './RightPanel'
 import ModeBar from './ModeBar'
@@ -7,6 +7,7 @@ import MainViewport from '../venue/MainViewport'
 import type { CaptureScreenshotFn } from '../venue/MainViewport'
 import TimelineReplay from '../timeline/TimelineReplay'
 import LandingExperience from '../landing/LandingExperience'
+import { NeuralDashboard } from '../neuralDashboard'
 import { useVenue } from '../../context/VenueContext'
 import { useLidar } from '../../context/LidarContext'
 import { useDwg } from '../../context/DwgContext'
@@ -68,6 +69,7 @@ export default function AppShell({ onOpenDwgImporter, onOpenEdgeCommissioning, s
   const [showTrackingPopup, setShowTrackingPopup] = useState(false)
   const [lighting, setLighting] = useState<LightingSettings>(defaultLighting)
   const [tracking, setTracking] = useState<TrackingSettings>(defaultTracking)
+  const [neuralDashboardEnabled, setNeuralDashboardEnabled] = useState(false)
   const { venue, selectedObjectId, objects } = useVenue()
   const { selectedPlacementId, placements } = useLidar()
   const { dwgLayoutId: selectedDwgLayoutId } = useDwg()
@@ -117,19 +119,33 @@ export default function AppShell({ onOpenDwgImporter, onOpenEdgeCommissioning, s
         {/* Mode Bar - Setup/Edit/Live toggle + Venue selector */}
         <ModeBar />
         
-        {/* 3D Viewport */}
+        {/* 3D Viewport - with optional Neural Dashboard wrapper */}
         <div className="flex-1 relative overflow-hidden">
-        <MainViewport 
-          cameraView={cameraView} 
-          lighting={lighting} 
-          tracking={tracking}
-          isReplayMode={isReplayMode}
-          replayTimestamp={replayTimestamp}
-          onCaptureReady={(fn) => setCaptureScreenshot(() => fn)}
-        />
+        {neuralDashboardEnabled ? (
+          <NeuralDashboard>
+            <MainViewport 
+              cameraView={cameraView} 
+              lighting={lighting} 
+              tracking={tracking}
+              isReplayMode={isReplayMode}
+              replayTimestamp={replayTimestamp}
+              onCaptureReady={(fn) => setCaptureScreenshot(() => fn)}
+            />
+          </NeuralDashboard>
+        ) : (
+          <MainViewport 
+            cameraView={cameraView} 
+            lighting={lighting} 
+            tracking={tracking}
+            isReplayMode={isReplayMode}
+            replayTimestamp={replayTimestamp}
+            onCaptureReady={(fn) => setCaptureScreenshot(() => fn)}
+          />
+        )}
 
-        {/* Intent Field Overlay (Profit Radar) */}
-        <IntentFieldOverlay />
+        {/* Intent Field Overlay (Profit Radar) - only show in default mode */}
+        {!neuralDashboardEnabled && <IntentFieldOverlay />}
+
 
         {/* Landing Experience - renders inside viewport area, on top of 3D */}
         {showLanding && onDismissLanding && (
@@ -352,7 +368,7 @@ export default function AppShell({ onOpenDwgImporter, onOpenEdgeCommissioning, s
           </div>
         )}
         
-        {/* Status Bar */}
+        {/* Status Bar - always visible */}
         <div className="absolute bottom-0 left-0 right-0 h-12 bg-panel-bg/90 border-t border-border-dark flex items-center px-4 text-xs text-gray-400 z-20">
           <span className="mr-4">
             <span className="text-gray-500">Venue:</span>{' '}
@@ -431,6 +447,17 @@ export default function AppShell({ onOpenDwgImporter, onOpenEdgeCommissioning, s
               title="Timeline Replay"
             >
               <History className="w-3.5 h-3.5" />
+            </button>
+            <button
+              onClick={() => setNeuralDashboardEnabled(!neuralDashboardEnabled)}
+              className={`p-1.5 rounded transition-colors ${
+                neuralDashboardEnabled 
+                  ? 'bg-cyan-600 text-white' 
+                  : 'text-gray-400 hover:text-white hover:bg-gray-700'
+              }`}
+              title="Neural Dashboard (4-Quadrant View)"
+            >
+              <LayoutGrid className="w-3.5 h-3.5" />
             </button>
           </div>
           
