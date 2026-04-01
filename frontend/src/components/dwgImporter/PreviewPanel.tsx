@@ -311,6 +311,9 @@ export default function PreviewPanel({
     return 3.0
   })
   const [showDebugPanel, setShowDebugPanel] = useState(false)
+  const [showMainAreaBounds, setShowMainAreaBounds] = useState(false) // Only show when user enables it
+  const [editableMainArea, setEditableMainArea] = useState<{ minX: number; maxX: number; minY: number; maxY: number } | null>(null)
+  const [draggingMainAreaHandle, setDraggingMainAreaHandle] = useState<'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw' | null>(null)
   // Scale correction: multiply unit_scale_to_m by this factor (e.g., 10 if DWG is cm not mm)
   const [scaleCorrection, setScaleCorrection] = useState(() => {
     const saved = localStorage.getItem(autoplaceStorageKey)
@@ -362,6 +365,25 @@ export default function PreviewPanel({
     }
     localStorage.setItem(autoplaceStorageKey, JSON.stringify(settings))
   }, [autoplaceStorageKey, autoplaceOverlapMode, autoplaceKRequired, autoplaceOverlapTargetPct, autoplaceLosEnabled, autoplaceSampleSpacing, autoplaceMountHeight, scaleCorrection])
+
+  // Reload settings when switching DWGs (autoplaceStorageKey changes)
+  useEffect(() => {
+    const saved = localStorage.getItem(autoplaceStorageKey)
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved)
+        setScaleCorrection(parsed.scaleCorrection || 1.0)
+        setAutoplaceOverlapMode(parsed.overlapMode || 'everywhere')
+        setAutoplaceKRequired(parsed.kRequired || 2)
+        setAutoplaceSampleSpacing(parsed.sampleSpacing || 0.75)
+        setAutoplaceMountHeight(parsed.mountHeight || 3.0)
+        setAutoplaceLosEnabled(parsed.losEnabled || false)
+      } catch { /* ignore */ }
+    } else {
+      // Reset to defaults for new DWG
+      setScaleCorrection(1.0)
+    }
+  }, [autoplaceStorageKey])
 
   // Load floor plan overlay from backend on mount
   useEffect(() => {
@@ -650,6 +672,66 @@ export default function PreviewPanel({
     }
   }, [importData, dimensions, zoom, panOffset])
 
+  // Calculate main shopping area bounds (from LAYOUT/LEGNO fixtures)
+  const mainAreaBounds = useMemo(() => {
+    const mainFixtures = importData.fixtures.filter(f => {
+      const group = importData.groups.find(g => g.group_id === f.group_id)
+      if (!group) return false
+      const layer = (group.layer || '').toUpperCase()
+      return layer.includes('LAYOUT') || layer.includes('LEGNO')
+    })
+    if (mainFixtures.length === 0) return null
+    
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity
+    for (const f of mainFixtures) {
+      const x = f.pose2d.x
+      const y = f.pose2d.y
+      minX = Math.min(minX, x)
+      maxX = Math.max(maxX, x)
+      minY = Math.min(minY, y)
+      maxY = Math.max(maxY, y)
+    }
+    // Add small buffer
+    return { minX: minX - 2, maxX: maxX + 2, minY: minY - 2, maxY: maxY + 2 }
+  }, [importData.fixtures, importData.groups])
+
+  // Reset editable main area when import changes (different DWG)
+  const importIdRef = useRef(importData.import_id)
+  useEffect(() => {
+    if (importData.import_id !== importIdRef.current) {
+      importIdRef.current = importData.import_id
+      setEditableMainArea(null)
+      setShowMainAreaBounds(false)
+    }
+  }, [importData.import_id])
+
+  // Initialize editable main area from calculated bounds (only when user enables it)
+  useEffect(() => {
+    if (showMainAreaBounds && mainAreaBounds && !editableMainArea) {
+      setEditableMainArea({ ...mainAreaBounds })
+    }
+  }, [showMainAreaBounds, mainAreaBounds, editableMainArea])
+
+  // The active main area (editable if set, otherwise calculated)
+  const activeMainArea = editableMainArea || mainAreaBounds
+
+  // Calculate ACTUAL bounds from current (filtered) fixtures for accurate display
+  const actualBounds = useMemo(() => {
+    if (importData.fixtures.length === 0) return importData.bounds
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity
+    for (const f of importData.fixtures) {
+      const x = f.pose2d?.x || 0
+      const y = f.pose2d?.y || 0
+      const hw = (f.footprint?.w || 0) / 2
+      const hd = (f.footprint?.d || 0) / 2
+      minX = Math.min(minX, x - hw)
+      maxX = Math.max(maxX, x + hw)
+      minY = Math.min(minY, y - hd)
+      maxY = Math.max(maxY, y + hd)
+    }
+    return minX !== Infinity ? { minX, maxX, minY, maxY } : importData.bounds
+  }, [importData.fixtures, importData.bounds])
+
   // Convert DXF coordinates to screen coordinates
   // Note: Y is inverted (DXF Y+ is up, screen Y+ is down)
   const toScreen = useCallback((x: number, y: number) => {
@@ -871,6 +953,25 @@ export default function PreviewPanel({
   const handleMouseMove = useCallback((e: React.MouseEvent) => {
     const pos = getMousePos(e)
     
+    // Handle main area handle dragging
+    if (draggingMainAreaHandle && editableMainArea) {
+      const worldPos = fromScreen(pos.x, pos.y)
+      setEditableMainArea(prev => {
+        if (!prev) return prev
+        const updated = { ...prev }
+        // Update bounds based on which handle is being dragged
+        if (draggingMainAreaHandle.includes('n')) updated.maxY = worldPos.y
+        if (draggingMainAreaHandle.includes('s')) updated.minY = worldPos.y
+        if (draggingMainAreaHandle.includes('e')) updated.maxX = worldPos.x
+        if (draggingMainAreaHandle.includes('w')) updated.minX = worldPos.x
+        // Ensure min < max
+        if (updated.minX > updated.maxX) [updated.minX, updated.maxX] = [updated.maxX, updated.minX]
+        if (updated.minY > updated.maxY) [updated.minY, updated.maxY] = [updated.maxY, updated.minY]
+        return updated
+      })
+      return
+    }
+    
     // Handle LiDAR dragging — track position locally, persist on mouseup
     if (draggingLidarId && lidarDragStart && lidarDragOriginal) {
       const effectiveScale = importData.unit_scale_to_m * scaleCorrection
@@ -947,9 +1048,14 @@ export default function PreviewPanel({
     } else if (activeTool === 'crop_floorplan' && fpCropStart) {
       setFpCropCurrent(pos)
     }
-  }, [isDragging, getMousePos, dragStart, dragStartOffset, activeTool, selectionRect, onHoverFixture, findFixtureAt, fpCropStart, viewMode, floorplan, fpDragStart, fpDragStartTransform, fromScreen, draggingLidarId, lidarDragStart, lidarDragOriginal, importData.unit_scale_to_m, scaleCorrection, mappings])
+  }, [isDragging, getMousePos, dragStart, dragStartOffset, activeTool, selectionRect, onHoverFixture, findFixtureAt, fpCropStart, viewMode, floorplan, fpDragStart, fpDragStartTransform, fromScreen, draggingLidarId, lidarDragStart, lidarDragOriginal, importData.unit_scale_to_m, scaleCorrection, mappings, draggingMainAreaHandle, editableMainArea])
 
   const handleMouseUp = useCallback((e: React.MouseEvent) => {
+    // Main area handle drag end
+    if (draggingMainAreaHandle) {
+      setDraggingMainAreaHandle(null)
+      return
+    }
     // LiDAR drag is handled by the global mouseup listener (which also persists to DB)
     if (draggingLidarId) {
       return
@@ -1227,6 +1333,7 @@ export default function PreviewPanel({
         <button onClick={() => setActiveTool('pan')} className={`p-1.5 rounded transition-colors ${activeTool === 'pan' ? 'bg-highlight text-white' : 'text-gray-400 hover:text-white hover:bg-gray-700'}`} title="Pan"><Move className="w-4 h-4" /></button>
         <div className="w-px h-5 bg-gray-700 mx-2" />
         <button onClick={() => setShowGrid(!showGrid)} className={`p-1.5 rounded transition-colors ${showGrid ? 'bg-gray-700 text-white' : 'text-gray-500 hover:text-white'}`} title="Toggle Grid"><Grid className="w-4 h-4" /></button>
+        <button onClick={() => setShowMainAreaBounds(!showMainAreaBounds)} className={`p-1.5 rounded transition-colors ${showMainAreaBounds ? 'bg-green-600 text-white' : 'text-gray-500 hover:text-white hover:bg-gray-700'}`} title="Toggle Main Area Filter (for spatial cleanup)"><Scissors className="w-4 h-4" /></button>
         </>)}
         {/* Floor Plan Controls - shown in floorplan and overlay modes */}
         {(viewMode === 'floorplan' || viewMode === 'overlay') && floorplan && (<>
@@ -2321,6 +2428,120 @@ export default function PreviewPanel({
             </>
           )}
 
+          {/* EDITABLE: Main shopping area bounds with drag handles */}
+          {showMainAreaBounds && activeMainArea && (viewMode === 'dwg' || viewMode === 'overlay') && (() => {
+            const topLeft = toScreen(activeMainArea.minX, activeMainArea.maxY)
+            const bottomRight = toScreen(activeMainArea.maxX, activeMainArea.minY)
+            const width = Math.abs(bottomRight.x - topLeft.x)
+            const height = Math.abs(bottomRight.y - topLeft.y)
+            const handleSize = 10
+            const midX = topLeft.x + width / 2
+            const midY = topLeft.y + height / 2
+            
+            // Handle positions: corners and edge midpoints
+            const handles = [
+              { id: 'nw', x: topLeft.x, y: topLeft.y, cursor: 'nw-resize' },
+              { id: 'n', x: midX, y: topLeft.y, cursor: 'n-resize' },
+              { id: 'ne', x: topLeft.x + width, y: topLeft.y, cursor: 'ne-resize' },
+              { id: 'e', x: topLeft.x + width, y: midY, cursor: 'e-resize' },
+              { id: 'se', x: topLeft.x + width, y: topLeft.y + height, cursor: 'se-resize' },
+              { id: 's', x: midX, y: topLeft.y + height, cursor: 's-resize' },
+              { id: 'sw', x: topLeft.x, y: topLeft.y + height, cursor: 'sw-resize' },
+              { id: 'w', x: topLeft.x, y: midY, cursor: 'w-resize' },
+            ]
+            
+            return (
+              <g>
+                <rect
+                  x={topLeft.x}
+                  y={topLeft.y}
+                  width={width}
+                  height={height}
+                  fill="rgba(34, 197, 94, 0.1)"
+                  stroke="#22c55e"
+                  strokeWidth={3}
+                  strokeDasharray="12 6"
+                />
+                {/* Label and button ABOVE the rectangle */}
+                <rect
+                  x={topLeft.x}
+                  y={topLeft.y - 85}
+                  width={320}
+                  height={80}
+                  fill="rgba(0, 0, 0, 0.85)"
+                  rx={6}
+                />
+                <text
+                  x={topLeft.x + 10}
+                  y={topLeft.y - 60}
+                  fill="#22c55e"
+                  fontSize={14}
+                  fontWeight="bold"
+                >
+                  MAIN SHOPPING AREA — Drag handles to adjust
+                </text>
+                <text
+                  x={topLeft.x + 10}
+                  y={topLeft.y - 42}
+                  fill="#86efac"
+                  fontSize={12}
+                >
+                  Items outside will be filtered
+                </text>
+                {/* Drag handles */}
+                {handles.map(h => (
+                  <rect
+                    key={h.id}
+                    x={h.x - handleSize / 2}
+                    y={h.y - handleSize / 2}
+                    width={handleSize}
+                    height={handleSize}
+                    fill="#22c55e"
+                    stroke="#fff"
+                    strokeWidth={2}
+                    style={{ cursor: h.cursor }}
+                    onMouseDown={(e) => {
+                      e.stopPropagation()
+                      setDraggingMainAreaHandle(h.id as any)
+                    }}
+                  />
+                ))}
+                {/* Filter Outside button - ABOVE the rectangle */}
+                <foreignObject x={topLeft.x + 10} y={topLeft.y - 38} width={300} height={36}>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      if (!activeMainArea || !onDeleteFixtures) return
+                      // Find fixtures outside main area
+                      const outsideFixtureIds = importData.fixtures
+                        .filter(f => {
+                          const x = f.pose2d.x
+                          const y = f.pose2d.y
+                          return x < activeMainArea.minX || x > activeMainArea.maxX ||
+                                 y < activeMainArea.minY || y > activeMainArea.maxY
+                        })
+                        .map(f => f.id)
+                      if (outsideFixtureIds.length > 0) {
+                        onDeleteFixtures(outsideFixtureIds)
+                        setShowMainAreaBounds(false)
+                      }
+                    }}
+                    className="px-3 py-1.5 bg-green-600 hover:bg-green-500 text-white text-sm font-medium rounded-md flex items-center gap-2"
+                  >
+                    <Scissors className="w-4 h-4" />
+                    Filter Outside ({importData.fixtures.filter(f => {
+                      if (!activeMainArea) return false
+                      const x = f.pose2d.x
+                      const y = f.pose2d.y
+                      return x < activeMainArea.minX || x > activeMainArea.maxX ||
+                             y < activeMainArea.minY || y > activeMainArea.maxY
+                    }).length} items)
+                  </button>
+                </foreignObject>
+              </g>
+            )
+          })()}
+
           {/* Fixtures - sorted by area (largest first = behind, smallest last = on top) */}
           <g opacity={viewMode === 'overlay' ? 0.4 : 1}>
           {(viewMode === 'dwg' || viewMode === 'overlay') && layerVisibility.base && [...importData.fixtures]
@@ -2707,46 +2928,29 @@ export default function PreviewPanel({
       </div>
 
       {/* Mapping Legend — shown when any fixtures are mapped */}
-      {(viewMode === 'dwg' || viewMode === 'overlay') && !lidarMode && (() => {
-        const typeCounts: Record<string, number> = {}
-        importData.fixtures.forEach(f => {
-          const t = mappings[f.group_id]?.type
-          if (t) typeCounts[t] = (typeCounts[t] || 0) + 1
-        })
-        const legendFill: Record<string, string> = {
-          shelf: '#4f46e5', wall: '#475569', checkout: '#16a34a',
-          entrance: '#d97706', pillar: '#57534e', digital_display: '#7c3aed',
-          fridge: '#0891b2', radio: '#334155', custom: '#64748b',
-        }
-        const entries = Object.entries(typeCounts).sort((a, b) => b[1] - a[1])
-        const unmapped = importData.fixtures.filter(f => !mappings[f.group_id]).length
-        if (entries.length === 0) return null
-        return (
-          <div className="absolute bottom-10 left-3 bg-gray-900/85 backdrop-blur-sm rounded-lg px-2.5 py-2 border border-gray-700/50 z-20 text-[10px]">
-            {entries.map(([type, count]) => (
-              <div key={type} className="flex items-center gap-1.5 py-0.5">
-                <span className="w-2.5 h-2.5 rounded-sm inline-block" style={{ background: legendFill[type] || '#64748b' }} />
-                <span className="text-gray-300 capitalize">{type.replace('_', ' ')}</span>
-                <span className="text-gray-500 ml-auto pl-2">{count}</span>
-              </div>
-            ))}
-            {unmapped > 0 && (
-              <div className="flex items-center gap-1.5 py-0.5 border-t border-gray-700/50 mt-1 pt-1">
-                <span className="w-2.5 h-2.5 rounded-sm inline-block" style={{ background: '#1e293b' }} />
-                <span className="text-gray-500">Unmapped</span>
-                <span className="text-gray-500 ml-auto pl-2">{unmapped}</span>
-              </div>
-            )}
-          </div>
-        )
-      })()}
 
       {/* Info Bar */}
       <div className="h-8 border-t border-border-dark flex items-center px-3 text-xs text-gray-500 bg-panel-bg gap-3">
         <span>
           {importData.units} • 
-          {((importData.bounds.maxX - importData.bounds.minX) * importData.unit_scale_to_m).toFixed(1)}m × 
-          {((importData.bounds.maxY - importData.bounds.minY) * importData.unit_scale_to_m).toFixed(1)}m
+          {(() => {
+            // Use ROI bounds if available, otherwise use fixture bounds
+            if (lidarRoi && lidarRoi.length >= 3) {
+              let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity
+              lidarRoi.forEach(v => {
+                minX = Math.min(minX, v.x)
+                maxX = Math.max(maxX, v.x)
+                minZ = Math.min(minZ, v.z)
+                maxZ = Math.max(maxZ, v.z)
+              })
+              const w = (maxX - minX) * importData.unit_scale_to_m
+              const h = (maxZ - minZ) * importData.unit_scale_to_m
+              return <span className="text-green-400">{w.toFixed(1)}m × {h.toFixed(1)}m (ROI)</span>
+            }
+            const w = (actualBounds.maxX - actualBounds.minX) * importData.unit_scale_to_m
+            const h = (actualBounds.maxY - actualBounds.minY) * importData.unit_scale_to_m
+            return `${w.toFixed(1)}m × ${h.toFixed(1)}m`
+          })()}
         </span>
         {viewMode === 'floorplan' && floorplan && (
           <span className="text-orange-400/70">

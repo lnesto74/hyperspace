@@ -1,19 +1,33 @@
 /**
- * LiveMetricsPanel - Q1 of Neural Dashboard
+ * LiveMetricsPanel - Metrics Tower for the Neural Dashboard
  * 
- * Monospace metrics display matching neural cortex style.
- * Shows real-time venue KPIs with glowing accents.
+ * Vertical stack of animated KPIs: occupancy hero number, sparkline,
+ * velocity/dwell/draw/bounce, top zones bar chart, checkout status.
+ * All live-polled from /api/neural/venue-kpis + real-time props.
+ * Neural style: monospace, dark bg, minimal accent colors.
  */
 
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { useVenue } from '../../context/VenueContext'
 import { API_BASE } from '../../config/api'
+import AnimatedNumber from './AnimatedNumber'
 
 interface LiveMetricsPanelProps {
   totalPax: number
   peakOccupancy: number
   activeZones: number
   avgOccupancy: number
+  batchKpis?: any | null
+}
+
+interface VenueKpis {
+  avgVelocity: number
+  avgDwellSec: number
+  drawRate: number
+  bounceRate: number
+  uniqueVisitors: number
+  topZones: { name: string; peak: number; avg: number }[]
+  sparkline: number[]
 }
 
 interface CheckoutMetrics {
@@ -27,13 +41,16 @@ export default function LiveMetricsPanel({
   totalPax, 
   peakOccupancy, 
   activeZones,
-  avgOccupancy 
+  avgOccupancy,
+  batchKpis,
 }: LiveMetricsPanelProps) {
   const { venue } = useVenue()
+  const [kpis, setKpis] = useState<VenueKpis | null>(null)
   const [checkoutMetrics, setCheckoutMetrics] = useState<CheckoutMetrics | null>(null)
   const [throughput, setThroughput] = useState(0)
   const prevPaxRef = useRef(totalPax)
   const entriesRef = useRef(0)
+  const [, setTick] = useState(0)
   
   // Track entries over time
   useEffect(() => {
@@ -43,15 +60,32 @@ export default function LiveMetricsPanel({
     prevPaxRef.current = totalPax
   }, [totalPax])
 
-  // Fetch checkout metrics (stop polling after 404 to prevent spam)
+  // Use batch data if available, otherwise fall back to individual polling
+  useEffect(() => {
+    if (batchKpis) setKpis(batchKpis)
+  }, [batchKpis])
+
+  const fetchKpis = useCallback(async () => {
+    if (!venue?.id || batchKpis) return
+    try {
+      const res = await fetch(`${API_BASE}/api/neural/venue-kpis?venueId=${venue.id}`)
+      if (res.ok) setKpis(await res.json())
+    } catch (e) { /* silent */ }
+  }, [venue?.id, batchKpis])
+
+  useEffect(() => {
+    if (batchKpis) return
+    fetchKpis()
+    const interval = setInterval(fetchKpis, 8000)
+    return () => clearInterval(interval)
+  }, [fetchKpis, batchKpis])
+
+  // Fetch checkout metrics (stop polling after 404) — kept separate (lightweight)
   const checkoutDisabledRef = useRef(false)
-  
   useEffect(() => {
     if (!venue?.id) return
-    
     const fetchCheckout = async () => {
       if (checkoutDisabledRef.current) return
-      
       try {
         const res = await fetch(`${API_BASE}/api/venues/${venue.id}/checkout/status`)
         if (res.ok) {
@@ -64,91 +98,154 @@ export default function LiveMetricsPanel({
           })
           setThroughput(data.kpi?.throughputPerHour || 0)
         } else if (res.status === 404) {
-          // Endpoint doesn't exist for this venue - stop polling
           checkoutDisabledRef.current = true
         }
-      } catch (err) {
-        // Silent fail
-      }
+      } catch (err) { /* silent */ }
     }
-    
     fetchCheckout()
-    const interval = setInterval(fetchCheckout, 5000)
+    const interval = setInterval(fetchCheckout, 10000)
     return () => clearInterval(interval)
   }, [venue?.id])
 
+  // Tick for timestamp — reduced to every 5s instead of 1s
+  useEffect(() => {
+    const t = setInterval(() => setTick(n => n + 1), 5000)
+    return () => clearInterval(t)
+  }, [])
+
+  const sparkMax = kpis ? Math.max(...kpis.sparkline, 1) : 1
+  const zoneMax = kpis?.topZones?.length ? Math.max(...kpis.topZones.map(z => z.avg), 1) : 1
+
   return (
-    <div className="h-full flex flex-col p-4 font-mono text-[11px]">
-      {/* Header */}
-      <div className="flex items-center gap-2 mb-4 pb-2 border-b border-[rgba(255,255,255,0.06)]">
-        <div className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse shadow-[0_0_8px_rgba(34,211,238,0.6)]" />
-        <span className="text-[10px] uppercase tracking-[0.2em] text-gray-500">VENUE STATUS</span>
-      </div>
-      
-      {/* Main Metric */}
-      <div className="mb-6">
-        <div className="text-gray-500 text-[10px] uppercase tracking-wider mb-1">LIVE OCCUPANCY</div>
-        <div className="flex items-baseline gap-2">
-          <span className="text-4xl font-bold text-white tabular-nums" style={{ textShadow: '0 0 20px rgba(59,130,246,0.3)' }}>
-            {totalPax}
-          </span>
-          <span className="text-gray-500">PAX</span>
-        </div>
-      </div>
-      
-      {/* Metrics Grid */}
-      <div className="grid grid-cols-2 gap-x-4 gap-y-3 flex-1">
-        <MetricRow label="PEAK" value={peakOccupancy} />
-        <MetricRow label="ENTRIES" value={entriesRef.current} />
-        <MetricRow label="ZONES" value={activeZones} suffix="active" />
-        <MetricRow label="AVG/ZONE" value={avgOccupancy.toFixed(1)} />
-        
-        {checkoutMetrics && (
-          <>
-            <div className="col-span-2 border-t border-[rgba(255,255,255,0.04)] pt-2 mt-1">
-              <div className="text-[10px] uppercase tracking-wider text-gray-600 mb-2">CHECKOUT</div>
-            </div>
-            <MetricRow 
-              label="LANES" 
-              value={`${checkoutMetrics.openLanes}/${checkoutMetrics.totalLanes}`} 
-            />
-            <MetricRow 
-              label="WAIT" 
-              value={formatTime(checkoutMetrics.avgWaitSec)} 
-            />
-            <MetricRow label="QUEUE" value={checkoutMetrics.queuePressure.toFixed(1)} suffix="/lane" />
-            <MetricRow label="THRU" value={throughput} suffix="/hr" />
-          </>
-        )}
-      </div>
-      
-      {/* Footer timestamp */}
-      <div className="mt-auto pt-3 border-t border-[rgba(255,255,255,0.04)]">
-        <div className="text-[10px] text-gray-600 tabular-nums">
+    <div className="h-full flex flex-col p-3 font-mono text-[10px] overflow-y-auto neural-scrollbar">
+      {/* ── HEADER ── */}
+      <div className="flex items-center gap-2 mb-3 pb-2 border-b border-white/[0.06]">
+        <div className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse shadow-[0_0_6px_rgba(34,211,238,0.5)]" />
+        <span className="text-[9px] uppercase tracking-[0.2em] text-white/30">Metrics Tower</span>
+        <span className="ml-auto text-[9px] text-white/15 tabular-nums">
           {new Date().toLocaleTimeString('en-US', { hour12: false })}
+        </span>
+      </div>
+
+      {/* ── HERO: OCCUPANCY ── */}
+      <div className="mb-3">
+        <div className="text-white/30 text-[8px] uppercase tracking-wider mb-0.5">Live Occupancy</div>
+        <div className="flex items-baseline gap-1.5">
+          <AnimatedNumber
+            value={totalPax}
+            duration={800}
+            className="text-3xl font-bold text-white tabular-nums"
+          />
+          <span className="text-white/25 text-[9px]">pax</span>
         </div>
       </div>
+
+      {/* ── SPARKLINE ── */}
+      {kpis && kpis.sparkline.length > 0 && (
+        <div className="mb-3 pb-2 border-b border-white/[0.04]">
+          <div className="text-white/20 text-[8px] mb-1">OCCUPANCY · 1h</div>
+          <div className="flex items-end gap-[2px] h-[24px]">
+            {kpis.sparkline.map((v, i) => (
+              <div
+                key={i}
+                className="flex-1 rounded-t-sm transition-all duration-500"
+                style={{
+                  height: `${Math.max(2, (v / sparkMax) * 100)}%`,
+                  background: i === kpis.sparkline.length - 1
+                    ? 'rgba(34,211,238,0.6)'
+                    : `rgba(100,180,255,${0.15 + (v / sparkMax) * 0.35})`,
+                }}
+              />
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* ── KPI GRID ── */}
+      <div className="grid grid-cols-2 gap-x-3 gap-y-2 mb-3 pb-2 border-b border-white/[0.04]">
+        <TowerMetric label="PEAK" value={peakOccupancy} />
+        <TowerMetric label="VISITORS" value={kpis?.uniqueVisitors ?? entriesRef.current} suffix="/hr" />
+        <TowerMetric label="ZONES" value={activeZones} suffix="active" />
+        <TowerMetric label="AVG/ZONE" value={avgOccupancy.toFixed(1)} />
+      </div>
+
+      {/* ── BEHAVIOR ── */}
+      {kpis && (
+        <div className="grid grid-cols-2 gap-x-3 gap-y-2 mb-3 pb-2 border-b border-white/[0.04]">
+          <div className="col-span-2 text-white/20 text-[8px] uppercase tracking-wider">Behavior</div>
+          <TowerMetric label="VELOCITY" value={kpis.avgVelocity} suffix="m/s" color={kpis.avgVelocity > 0.5 ? 'text-cyan-400/70' : 'text-white'} />
+          <TowerMetric label="AVG DWELL" value={formatTime(kpis.avgDwellSec)} color={kpis.avgDwellSec > 30 ? 'text-green-400/70' : 'text-white'} />
+          <TowerMetric label="DRAW" value={kpis.drawRate} suffix="%" color={kpis.drawRate > 30 ? 'text-green-400/70' : 'text-amber-400/60'} />
+          <TowerMetric label="BOUNCE" value={kpis.bounceRate} suffix="%" color={kpis.bounceRate > 50 ? 'text-red-400/70' : 'text-white'} />
+        </div>
+      )}
+
+      {/* ── TOP ZONES ── */}
+      {kpis && kpis.topZones.length > 0 && (
+        <div className="mb-3 pb-2 border-b border-white/[0.04]">
+          <div className="text-white/20 text-[8px] uppercase tracking-wider mb-1.5">Hot Zones</div>
+          <div className="space-y-1">
+            {kpis.topZones.map((z, i) => (
+              <div key={i} className="flex items-center gap-2">
+                <span className="text-white/35 text-[8px] w-[70px] truncate">{z.name}</span>
+                <div className="flex-1 h-[4px] rounded-full bg-white/[0.04] overflow-hidden">
+                  <div
+                    className="h-full rounded-full transition-all duration-700"
+                    style={{
+                      width: `${(z.avg / zoneMax) * 100}%`,
+                      background: i === 0 ? 'rgba(255,100,80,0.6)' : i === 1 ? 'rgba(255,180,50,0.5)' : 'rgba(100,180,255,0.4)',
+                    }}
+                  />
+                </div>
+                <span className="text-white/25 text-[8px] w-[16px] text-right tabular-nums">{z.peak}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* ── CHECKOUT ── */}
+      {checkoutMetrics && (
+        <div className="mb-2">
+          <div className="text-white/20 text-[8px] uppercase tracking-wider mb-1.5">Checkout</div>
+          <div className="grid grid-cols-2 gap-x-3 gap-y-2">
+            <TowerMetric label="LANES" value={`${checkoutMetrics.openLanes}/${checkoutMetrics.totalLanes}`} />
+            <TowerMetric label="WAIT" value={formatTime(checkoutMetrics.avgWaitSec)} />
+            <TowerMetric label="QUEUE" value={checkoutMetrics.queuePressure.toFixed(1)} suffix="/lane" />
+            <TowerMetric label="THRU" value={throughput} suffix="/hr" />
+          </div>
+        </div>
+      )}
+
+      <style>{`
+        .neural-scrollbar::-webkit-scrollbar { width: 3px; }
+        .neural-scrollbar::-webkit-scrollbar-track { background: transparent; }
+        .neural-scrollbar::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.06); border-radius: 2px; }
+      `}</style>
     </div>
   )
 }
 
-function MetricRow({ 
-  label, 
-  value, 
-  suffix, 
-  color = 'text-white' 
-}: { 
-  label: string
-  value: string | number
-  suffix?: string
-  color?: string 
+function TowerMetric({ label, value, suffix, color = 'text-white' }: {
+  label: string; value: string | number; suffix?: string; color?: string
 }) {
+  const isNumber = typeof value === 'number' || (typeof value === 'string' && /^\d+\.?\d*$/.test(value))
+  const numDecimals = typeof value === 'string' && value.includes('.') ? value.split('.')[1]?.length || 0 : 0
   return (
     <div className="flex flex-col">
-      <span className="text-[9px] text-gray-600 uppercase tracking-wider">{label}</span>
-      <div className="flex items-baseline gap-1">
-        <span className={`text-lg font-semibold tabular-nums ${color}`}>{value}</span>
-        {suffix && <span className="text-[10px] text-gray-600">{suffix}</span>}
+      <span className="text-[8px] text-white/20 uppercase tracking-wider">{label}</span>
+      <div className="flex items-baseline gap-0.5">
+        {isNumber ? (
+          <AnimatedNumber
+            value={parseFloat(String(value))}
+            decimals={numDecimals}
+            duration={600}
+            className={`text-[14px] font-semibold tabular-nums ${color}`}
+          />
+        ) : (
+          <span className={`text-[14px] font-semibold tabular-nums ${color}`}>{value}</span>
+        )}
+        {suffix && <span className="text-[8px] text-white/20">{suffix}</span>}
       </div>
     </div>
   )

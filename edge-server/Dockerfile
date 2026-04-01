@@ -10,6 +10,9 @@ RUN npm run build
 FROM node:18-alpine AS production
 WORKDIR /app
 
+# Install Docker CLI for restarting mosquitto container
+RUN apk add --no-cache docker-cli
+
 # Copy backend
 COPY backend/package*.json ./backend/
 RUN cd backend && npm install --production

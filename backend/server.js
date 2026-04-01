@@ -43,6 +43,8 @@ import companiesRoutes from './routes/companies.js';
 import { IntentScorer, ZoneAggregator, BehaviorClusterer, ProfitRadarEngine } from './services/profit-radar/index.js';
 import launchpadRoutes from './routes/launchpad.js';
 import createAiClassifyRoutes from './routes/aiClassify.js';
+import createAiSmartFilterRoutes from './routes/aiSmartFilter.js';
+import createNeuralRoutes from './routes/neural.js';
 
 const PORT = process.env.PORT || 3001;
 const MOCK_LIDAR = process.env.MOCK_LIDAR === 'true';
@@ -325,6 +327,12 @@ app.use('/api/launchpad', launchpadRoutes);
 
 // AI Fixture Classification routes (GPT-4o Vision — optional, needs OPENAI_API_KEY)
 app.use('/api/dwg', createAiClassifyRoutes(db));
+
+// AI Smart Filter routes (GPT-4o Text — multi-language analysis + filtering)
+app.use('/api/dwg', createAiSmartFilterRoutes(db));
+
+// Neural Dashboard routes (funnel, transitions, alerts, media summary)
+app.use('/api/neural', createNeuralRoutes(db));
 
 // Replay Insight routes (parallel, read-only behavior episode system)
 console.log(`⏱️ STARTUP: pre-routes +${Date.now() - _startupT0}ms`);

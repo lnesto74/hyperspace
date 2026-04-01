@@ -524,10 +524,30 @@ function generateLayoutJson(importData, mapping) {
   const pairedCount = layoutFixtures.filter(f => f.mapping?.catalog_asset_id).length;
   const totalCount = fixtures.length;
   
+  // Recalculate bounds from FILTERED fixtures (not original DWG bounds which may include deleted artifacts)
+  let filteredBounds = bounds;
+  if (fixtures.length > 0) {
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    for (const f of fixtures) {
+      const x = f.pose2d?.x || 0;
+      const y = f.pose2d?.y || 0;
+      const hw = (f.footprint?.w || 0) / 2;
+      const hd = (f.footprint?.d || 0) / 2;
+      minX = Math.min(minX, x - hw);
+      maxX = Math.max(maxX, x + hw);
+      minY = Math.min(minY, y - hd);
+      maxY = Math.max(maxY, y + hd);
+    }
+    if (minX !== Infinity) {
+      filteredBounds = { minX, maxX, minY, maxY };
+      console.log(`[generateLayoutJson] Recalculated bounds from ${fixtures.length} fixtures: ${JSON.stringify(filteredBounds)}`);
+    }
+  }
+  
   return {
     units,
     unit_scale_to_m: unitScaleToM,
-    bounds,
+    bounds: filteredBounds,
     fixtures: layoutFixtures,
     paired_count: pairedCount,
     total_count: totalCount,
@@ -838,9 +858,13 @@ export default function createDwgImportRoutes(db) {
       const rawData = JSON.parse(imp.raw_json || '{}');
       const mapping = mappingRow ? JSON.parse(mappingRow.mapping_json || '{}') : { group_mappings: {} };
       
-      // Build import data
+      // Get deleted fixture IDs and filter them out
+      const deletedIds = new Set(JSON.parse(imp.deleted_fixture_ids_json || '[]'));
+      const filteredFixtures = (rawData.fixtures || []).filter(f => !deletedIds.has(f.id));
+      
+      // Build import data with FILTERED fixtures (not raw)
       const importData = {
-        fixtures: rawData.fixtures || [],
+        fixtures: filteredFixtures,
         units: imp.units,
         unitScaleToM: imp.unit_scale_to_m,
         bounds: JSON.parse(imp.bounds_json || '{}'),

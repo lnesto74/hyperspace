@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useCallback, useEffect, useRef, ReactNode } from 'react'
+import { createContext, useContext, useState, useCallback, useEffect, useRef, useMemo, ReactNode } from 'react'
 import { io, Socket } from 'socket.io-client'
 import { Track, TrackWithTrail, LidarStatus } from '../types'
 import { useVenue } from './VenueContext'
@@ -7,6 +7,9 @@ import { API_BASE } from '../config/api'
 const MAX_TRAIL_LENGTH = 50 // ~5 seconds at 10Hz (reduced from 100 to save memory)
 const TRACK_TTL_MS = 5000 // 5 seconds before track is removed
 const CLEANUP_INTERVAL_MS = 1000 // Cleanup stale tracks every 1 second
+const LERP_SPEED = 0.18 // Exponential smoothing factor per frame
+const EXTRAP_FACTOR = 0.001 // Velocity extrapolation: m/s → m/frame (tuned for 60fps)
+const INTERP_TRAIL_INTERVAL = 3 // Add trail point every N interpolation frames
 
 interface TrackingContextType {
   tracks: Map<string, TrackWithTrail>
@@ -17,6 +20,7 @@ interface TrackingContextType {
   setReplayMode: (enabled: boolean) => void
   setReplayTracks: (tracks: Map<string, TrackWithTrail>) => void
   setTrackVisibility: (visible: boolean) => void
+  setInterpolation: (enabled: boolean) => void
 }
 
 const TrackingContext = createContext<TrackingContextType | null>(null)
@@ -30,6 +34,15 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
   const socketRef = useRef<Socket | null>(null)
   const subscribedVenueRef = useRef<string | null>(null)
   const trackLastSeenRef = useRef<Map<string, number>>(new Map())
+  
+  // Interpolation state (only active when Neural Dashboard enables it)
+  const interpEnabledRef = useRef(false)
+  const interpRAFRef = useRef<number | null>(null)
+  const interpFrameRef = useRef(0)
+  // Target positions from socket — extrapolated using velocity between updates
+  const targetTracksRef = useRef<Map<string, Track>>(new Map())
+  // Timestamp when each target was received (for velocity extrapolation)
+  const interpTsRef = useRef<Map<string, number>>(new Map())
   
   // Return replay tracks when in replay mode, otherwise live tracks
   const tracks = isReplayMode ? replayTracks : liveTracks
@@ -98,9 +111,19 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
       if (data.venueId !== subscribedVenueRef.current) return
       if (isReplayMode) return
       
-      // Buffer tracks - will be deduplicated and throttled in flushTrackUpdates
-      pendingTracks.push(...data.tracks)
-      requestAnimationFrame(flushTrackUpdates)
+      if (interpEnabledRef.current) {
+        // Interpolation mode: store target + receive timestamp for velocity extrapolation
+        const now = Date.now()
+        for (const track of data.tracks) {
+          targetTracksRef.current.set(track.trackKey, track)
+          interpTsRef.current.set(track.trackKey, now)
+          trackLastSeenRef.current.set(track.trackKey, now)
+        }
+      } else {
+        // Standard mode: buffer and flush directly (zero overhead)
+        pendingTracks.push(...data.tracks)
+        requestAnimationFrame(flushTrackUpdates)
+      }
     })
 
     socket.on('track_removed', (data: { trackKey: string }) => {
@@ -131,12 +154,15 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
       })
       
       if (staleKeys.length > 0) {
+        // Also purge from interpolation targets so the RAF loop doesn't re-add them
+        staleKeys.forEach(key => {
+          trackLastSeenRef.current.delete(key)
+          targetTracksRef.current.delete(key)
+          interpTsRef.current.delete(key)
+        })
         setLiveTracks(prev => {
           const next = new Map(prev)
-          staleKeys.forEach(key => {
-            next.delete(key)
-            trackLastSeenRef.current.delete(key)
-          })
+          staleKeys.forEach(key => next.delete(key))
           return next
         })
       }
@@ -187,17 +213,110 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
     socketRef.current?.emit('track_visibility', { visible })
   }, [])
 
+  // Interpolation RAF loop — only runs when Neural Dashboard enables it
+  // Throttled to ~30fps to halve React reconciliation load while staying visually smooth
+  const interpLastFlushRef = useRef(0)
+  const INTERP_MIN_INTERVAL = 33 // ~30fps cap
+  
+  const interpLoop = useCallback(() => {
+    if (!interpEnabledRef.current) return
+    
+    const targets = targetTracksRef.current
+    if (targets.size === 0) {
+      interpRAFRef.current = requestAnimationFrame(interpLoop)
+      return
+    }
+    
+    const now = Date.now()
+    
+    // Skip this frame if we updated too recently
+    if (now - interpLastFlushRef.current < INTERP_MIN_INTERVAL) {
+      interpRAFRef.current = requestAnimationFrame(interpLoop)
+      return
+    }
+    interpLastFlushRef.current = now
+    
+    interpFrameRef.current++
+    const addTrail = interpFrameRef.current % INTERP_TRAIL_INTERVAL === 0
+    
+    setLiveTracks(prev => {
+      const next = new Map(prev)
+      
+      for (const [key, target] of targets) {
+        const baseX = target.venuePosition?.x ?? 0
+        const baseZ = target.venuePosition?.z ?? 0
+        const vx = target.velocity?.x ?? 0
+        const vz = target.velocity?.z ?? 0
+        
+        // Extrapolate target forward using velocity so tracks never stall
+        const receivedAt = interpTsRef.current.get(key) ?? now
+        const dt = (now - receivedAt) * EXTRAP_FACTOR
+        const tx = baseX + vx * dt
+        const tz = baseZ + vz * dt
+        
+        const existing = next.get(key)
+        
+        if (existing) {
+          const cx = existing.venuePosition.x
+          const cz = existing.venuePosition.z
+          const nx = cx + (tx - cx) * LERP_SPEED
+          const nz = cz + (tz - cz) * LERP_SPEED
+          
+          const trail = existing.trail || []
+          if (addTrail) {
+            trail.push({ x: nx, y: 0, z: nz })
+            if (trail.length > MAX_TRAIL_LENGTH) trail.shift()
+          }
+          
+          next.set(key, {
+            ...target,
+            venuePosition: { x: nx, y: 0, z: nz },
+            trail,
+          })
+        } else {
+          next.set(key, { ...target, trail: [{ x: baseX, y: 0, z: baseZ }] })
+        }
+      }
+      
+      return next
+    })
+    
+    interpRAFRef.current = requestAnimationFrame(interpLoop)
+  }, [])
+
+  const setInterpolation = useCallback((enabled: boolean) => {
+    interpEnabledRef.current = enabled
+    if (enabled) {
+      // Start interpolation loop
+      if (!interpRAFRef.current) {
+        interpRAFRef.current = requestAnimationFrame(interpLoop)
+      }
+    } else {
+      // Stop interpolation loop, clear targets
+      if (interpRAFRef.current) {
+        cancelAnimationFrame(interpRAFRef.current)
+        interpRAFRef.current = null
+      }
+      targetTracksRef.current.clear()
+      interpTsRef.current.clear()
+      interpFrameRef.current = 0
+    }
+  }, [interpLoop])
+
+  const contextValue = useMemo(() => ({ 
+    tracks, 
+    isConnected, 
+    isReplayMode,
+    subscribe, 
+    unsubscribe,
+    setReplayMode,
+    setReplayTracks,
+    setTrackVisibility,
+    setInterpolation
+  }), [tracks, isConnected, isReplayMode, subscribe, unsubscribe, setReplayMode, setReplayTracks, setTrackVisibility, setInterpolation])
+
   return (
-    <TrackingContext.Provider value={{ 
-      tracks, 
-      isConnected, 
-      isReplayMode,
-      subscribe, 
-      unsubscribe,
-      setReplayMode,
-      setReplayTracks,
-      setTrackVisibility
-    }}>
+    <TrackingContext.Provider value={contextValue}>
       {children}
     </TrackingContext.Provider>
   )

@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Eye, Grid3X3, Box, ArrowUp, Sun, X, Radio, History, Crosshair, LayoutGrid } from 'lucide-react'
+import { Eye, Grid3X3, Box, ArrowUp, Sun, X, Radio, History, Crosshair, LayoutGrid, ChevronLeft, ChevronRight } from 'lucide-react'
 import Sidebar from './Sidebar'
 import RightPanel from './RightPanel'
 import ModeBar from './ModeBar'
@@ -92,6 +92,9 @@ export default function AppShell({ onOpenDwgImporter, onOpenEdgeCommissioning, s
   const [showTimeline, setShowTimeline] = useState(false)
   const [replayTimestamp, setReplayTimestamp] = useState<number | null>(null)
   
+  // Sidebar collapsed state
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  
   // When timeline is shown, we're in replay mode
   const isReplayMode = showTimeline && replayTimestamp !== null
 
@@ -110,8 +113,26 @@ export default function AppShell({ onOpenDwgImporter, onOpenEdgeCommissioning, s
 
   return (
     <div className="h-screen w-screen flex bg-app-bg overflow-hidden">
-      {/* Left Sidebar */}
-      <Sidebar activeTab={activeTab} onTabChange={setActiveTab} onOpenDwgImporter={onOpenDwgImporter} onOpenEdgeCommissioning={onOpenEdgeCommissioning} launchPadOpen={lpOpen} onToggleLaunchPad={() => setLpOpen(!lpOpen)} />
+      {/* Left Sidebar with collapse toggle */}
+      <div className="relative flex">
+        {!sidebarCollapsed && (
+          <Sidebar activeTab={activeTab} onTabChange={setActiveTab} onOpenDwgImporter={onOpenDwgImporter} onOpenEdgeCommissioning={onOpenEdgeCommissioning} launchPadOpen={lpOpen} onToggleLaunchPad={() => setLpOpen(!lpOpen)} />
+        )}
+        {/* Collapse/Expand toggle button */}
+        <button
+          onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
+          className={`absolute top-1/2 -translate-y-1/2 z-50 flex items-center justify-center w-5 h-10 bg-panel-bg border border-border-dark rounded-r-md hover:bg-gray-700 transition-all ${
+            sidebarCollapsed ? 'left-0' : 'left-[280px]'
+          }`}
+          title={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+        >
+          {sidebarCollapsed ? (
+            <ChevronRight className="w-4 h-4 text-gray-400" />
+          ) : (
+            <ChevronLeft className="w-4 h-4 text-gray-400" />
+          )}
+        </button>
+      </div>
       
       {/* Main Content Area with ModeBar + 3D Viewport */}
       <div className="flex-1 min-w-0 flex flex-col overflow-hidden">
@@ -120,18 +141,10 @@ export default function AppShell({ onOpenDwgImporter, onOpenEdgeCommissioning, s
         
         {/* 3D Viewport - with optional Neural Dashboard wrapper */}
         <div className="flex-1 relative overflow-hidden">
-        {neuralDashboardEnabled ? (
-          <NeuralDashboard>
-            <MainViewport 
-              cameraView={cameraView} 
-              lighting={lighting} 
-              tracking={tracking}
-              isReplayMode={isReplayMode}
-              replayTimestamp={replayTimestamp}
-              onCaptureReady={(fn) => setCaptureScreenshot(() => fn)}
-            />
-          </NeuralDashboard>
-        ) : (
+        <NeuralDashboard 
+          enabled={neuralDashboardEnabled}
+          leftOffset={sidebarCollapsed ? 16 : 0}
+        >
           <MainViewport 
             cameraView={cameraView} 
             lighting={lighting} 
@@ -140,7 +153,7 @@ export default function AppShell({ onOpenDwgImporter, onOpenEdgeCommissioning, s
             replayTimestamp={replayTimestamp}
             onCaptureReady={(fn) => setCaptureScreenshot(() => fn)}
           />
-        )}
+        </NeuralDashboard>
 
         {/* Intent Field Overlay (Profit Radar) - only show in default mode */}
         {!neuralDashboardEnabled && <IntentFieldOverlay />}

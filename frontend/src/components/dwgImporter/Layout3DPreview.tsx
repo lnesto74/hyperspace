@@ -134,6 +134,7 @@ export default function Layout3DPreview({ layoutVersionId, importId, lidarInstan
   const [showFixturesLayer, setShowFixturesLayer] = useState(true)
   const [showFloorplanLayer, setShowFloorplanLayer] = useState(true)
   const [showLayersPanel, setShowLayersPanel] = useState(false)
+  const [show3DModels, setShow3DModels] = useState(false) // OFF by default for performance
   const floorplanMeshRef = useRef<THREE.Mesh | null>(null)
 
   // Hover tooltip state
@@ -756,23 +757,64 @@ export default function Layout3DPreview({ layoutVersionId, importId, lidarInstan
     const { fixtures: allFixtures, unit_scale_to_m, bounds } = layoutData
     const scene = sceneRef.current
     
-    // Filter out noise types and specific oversized groups that clutter the 3D scene
+    // Start with all fixtures - DON'T filter by ROI (use ROI for camera positioning only)
+    // The layout already contains only the filtered fixtures from the import
+    let fixtures = allFixtures
+    
+    // Filter out noise types (pillar/entrance) unless it would hide everything
     const HIDDEN_TYPES = new Set(['pillar', 'entrance'])
     const HIDDEN_GROUPS = new Set(['grp_8c6e7b', 'grp_1867a6', 'grp_915c41', 'grp_aba5ea'])
-    const fixtures = allFixtures.filter(f => {
+    const typeFiltered = fixtures.filter(f => {
       const type = f.mapping?.type
       if (type && HIDDEN_TYPES.has(type)) return false
       if (f.group_id && HIDDEN_GROUPS.has(f.group_id)) return false
       return true
     })
-    if (fixtures.length < allFixtures.length) {
-      console.log(`[3D Filter] Removed ${allFixtures.length - fixtures.length} noise fixtures (pillar/entrance with no geometry). Rendering ${fixtures.length}/${allFixtures.length}`)
+    
+    // Use type-filtered if it has results, otherwise keep ROI-filtered
+    if (typeFiltered.length > 0) {
+      if (typeFiltered.length < fixtures.length) {
+        console.log(`[3D] Type filter: removed ${fixtures.length - typeFiltered.length} noise fixtures`)
+      }
+      fixtures = typeFiltered
+    } else if (fixtures.length > 0) {
+      console.warn(`[3D] Type filter would hide all ${fixtures.length} fixtures - keeping them`)
     }
     
-    // Center offset - use scaleCorrection to match LiDAR coordinate system
+    // Center offset - PRIORITY: ROI > fixtures > layout bounds
+    // When ROI exists, center on it (user explicitly defined the area of interest)
     const effectiveScale = unit_scale_to_m * scaleCorrection
-    const centerX = (bounds.minX + bounds.maxX) / 2 * effectiveScale
-    const centerZ = (bounds.minY + bounds.maxY) / 2 * effectiveScale
+    
+    let centerX: number, centerZ: number, centerSource: string
+    
+    if (focusBounds) {
+      // Use ROI center - this is the user's defined area of interest
+      centerX = (focusBounds.minX + focusBounds.maxX) / 2 * effectiveScale
+      centerZ = (focusBounds.minY + focusBounds.maxY) / 2 * effectiveScale
+      centerSource = 'ROI'
+    } else {
+      // Fall back to fixture bounds
+      let fxMinX = Infinity, fxMaxX = -Infinity, fxMinY = Infinity, fxMaxY = -Infinity
+      for (const f of fixtures) {
+        const x = f.pose2d?.x || 0
+        const y = f.pose2d?.y || 0
+        fxMinX = Math.min(fxMinX, x)
+        fxMaxX = Math.max(fxMaxX, x)
+        fxMinY = Math.min(fxMinY, y)
+        fxMaxY = Math.max(fxMaxY, y)
+      }
+      if (fxMinX !== Infinity) {
+        centerX = (fxMinX + fxMaxX) / 2 * effectiveScale
+        centerZ = (fxMinY + fxMaxY) / 2 * effectiveScale
+        centerSource = 'fixtures'
+      } else {
+        centerX = (bounds.minX + bounds.maxX) / 2 * effectiveScale
+        centerZ = (bounds.minY + bounds.maxY) / 2 * effectiveScale
+        centerSource = 'bounds'
+      }
+    }
+    
+    console.log(`[3D] Center calculated from ${centerSource}: (${centerX.toFixed(2)}, ${centerZ.toFixed(2)})`)
     
     // Calculate ACTUAL content bounds from fixtures (not raw DWG bounds which can be huge)
     let contentMinX = Infinity, contentMaxX = -Infinity
@@ -959,10 +1001,14 @@ export default function Layout3DPreview({ layoutVersionId, importId, lidarInstan
       
       // Try to load GLTF model, fallback to box
       const addFixtureMesh = async () => {
-        // Try loading by catalog_asset_id first, then by type
-        let model = await loadModel(catalogAssetId)
-        if (!model && catalogAssetId !== type) {
-          model = await loadModel(type)
+        // Only load 3D models if toggle is ON (default OFF for performance)
+        let model: THREE.Group | null = null
+        if (show3DModels) {
+          // Try loading by catalog_asset_id first, then by type
+          model = await loadModel(catalogAssetId)
+          if (!model && catalogAssetId !== type) {
+            model = await loadModel(type)
+          }
         }
         
         if (idx < 3) {
@@ -1112,9 +1158,9 @@ export default function Layout3DPreview({ layoutVersionId, importId, lidarInstan
 
     // Update camera to fit scene
     if (cameraRef.current && controlsRef.current) {
-      // Priority: (1) saved camera view, (2) focusBounds from ROI, (3) default content bounds
-      if (!loadSavedCameraView()) {
-        if (focusBounds) {
+      // Priority: (1) focusBounds from ROI (skip saved view since ROI changes center), (2) saved camera view, (3) default content bounds
+      // When ROI exists, always use ROI-based camera - saved view would be pointing at wrong location
+      if (focusBounds) {
           const fbCenterX = (focusBounds.minX + focusBounds.maxX) / 2 * effectiveScale - centerX
           const fbCenterZ = (focusBounds.minY + focusBounds.maxY) / 2 * effectiveScale - centerZ
           const fbWidth = (focusBounds.maxX - focusBounds.minX) * effectiveScale
@@ -1130,25 +1176,24 @@ export default function Layout3DPreview({ layoutVersionId, importId, lidarInstan
           controlsRef.current.target.set(fbCenterX, 0, fbCenterZ)
           controlsRef.current.update()
           console.log(`[3D] Camera focused on ROI bounds: center=(${fbCenterX.toFixed(1)}, ${fbCenterZ.toFixed(1)}), size=${fbSize.toFixed(1)}m`)
-        } else {
-          // No saved view and no ROI, use default based on content bounds
-          const maxSize = useContentBounds ? maxContentSize : Math.max(rawBoundsWidth, rawBoundsDepth)
-          
-          // Position camera relative to content center for proper rotation
-          cameraRef.current.position.set(
-            contentCenterX + maxSize * 0.8, 
-            maxSize * 0.6, 
-            contentCenterZ + maxSize * 0.8
-          )
-          // Set rotation target to content center (not origin) for intuitive rotation
-          controlsRef.current.target.set(contentCenterX, 0, contentCenterZ)
-          controlsRef.current.update()
-          console.log(`[3D] Camera target set to content center: (${contentCenterX.toFixed(1)}, 0, ${contentCenterZ.toFixed(1)})`)
-        }
+      } else if (!loadSavedCameraView()) {
+        // No ROI and no saved view, use default based on content bounds
+        const maxSize = useContentBounds ? maxContentSize : Math.max(rawBoundsWidth, rawBoundsDepth)
+        
+        // Position camera relative to content center for proper rotation
+        cameraRef.current.position.set(
+          contentCenterX + maxSize * 0.8, 
+          maxSize * 0.6, 
+          contentCenterZ + maxSize * 0.8
+        )
+        // Set rotation target to content center (not origin) for intuitive rotation
+        controlsRef.current.target.set(contentCenterX, 0, contentCenterZ)
+        controlsRef.current.update()
+        console.log(`[3D] Camera target set to content center: (${contentCenterX.toFixed(1)}, 0, ${contentCenterZ.toFixed(1)})`)
       }
     }
 
-  }, [layoutData, showWireframe, loadModel, customModels, loadSavedCameraView, scaleCorrection, focusBounds])
+  }, [layoutData, showWireframe, loadModel, customModels, loadSavedCameraView, scaleCorrection, focusBounds, show3DModels])
 
   // Toggle fixtures layer visibility
   useEffect(() => {
@@ -1191,23 +1236,28 @@ export default function Layout3DPreview({ layoutVersionId, importId, lidarInstan
       return
     }
     
-    // Calculate center from layout data OR from LiDAR instances themselves
+    // Calculate center - MUST match fixture center calculation (ROI > bounds)
     let centerX = 0, centerZ = 0
-    if (layoutData) {
+    if (focusBounds) {
+      // Use ROI center - same as fixtures
+      const effectiveScale = layoutData ? layoutData.unit_scale_to_m * scaleCorrection : 1
+      centerX = (focusBounds.minX + focusBounds.maxX) / 2 * effectiveScale
+      centerZ = (focusBounds.minY + focusBounds.maxY) / 2 * effectiveScale
+      console.log('LiDAR using ROI center:', centerX.toFixed(2), centerZ.toFixed(2))
+    } else if (layoutData) {
       const { bounds, unit_scale_to_m } = layoutData
       const effectiveScale = unit_scale_to_m * scaleCorrection
       centerX = (bounds.minX + bounds.maxX) / 2 * effectiveScale
       centerZ = (bounds.minY + bounds.maxY) / 2 * effectiveScale
+      console.log('LiDAR using bounds center:', centerX.toFixed(2), centerZ.toFixed(2))
     } else {
       // Fallback: calculate center from LiDAR positions
       const lidarXs = lidarInstances.map(i => i.x_m)
       const lidarZs = lidarInstances.map(i => i.z_m)
       centerX = (Math.min(...lidarXs) + Math.max(...lidarXs)) / 2
       centerZ = (Math.min(...lidarZs) + Math.max(...lidarZs)) / 2
-      console.log('Using LiDAR-based center:', centerX.toFixed(2), centerZ.toFixed(2))
+      console.log('LiDAR using LiDAR-based center:', centerX.toFixed(2), centerZ.toFixed(2))
     }
-    
-    console.log('Center offset:', centerX, centerZ)
     
     // Create reusable geometries for performance
     const deviceGeometry = new THREE.SphereGeometry(0.3, 16, 16)
@@ -1737,6 +1787,20 @@ export default function Layout3DPreview({ layoutVersionId, importId, lidarInstan
                   {showWireframe ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5 text-gray-500" />}
                   Wireframes
                 </span>
+              </label>
+              <div className="border-t border-gray-700 my-1" />
+              <label className="flex items-center gap-2 py-1.5 px-2 rounded hover:bg-gray-700 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={show3DModels}
+                  onChange={(e) => setShow3DModels(e.target.checked)}
+                  className="rounded border-gray-600 bg-gray-700 text-purple-500"
+                />
+                <span className="text-sm text-gray-300 flex items-center gap-1.5">
+                  {show3DModels ? <Box className="w-3.5 h-3.5 text-purple-400" /> : <Grid3X3 className="w-3.5 h-3.5 text-gray-500" />}
+                  3D Models
+                </span>
+                <span className="text-[9px] text-gray-500 ml-auto">{show3DModels ? 'ON' : 'OFF'}</span>
               </label>
             </div>
           )}

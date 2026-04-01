@@ -22,16 +22,16 @@ export default function TrendChart() {
   const [history, setHistory] = useState<DataPoint[]>([])
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const prevTracksRef = useRef(0)
+  const tracksRef = useRef(tracks)
+  tracksRef.current = tracks
   
-  // Update history with current occupancy (with caching to prevent MQTT disconnect drops)
+  // Stable interval that reads tracks via ref — never resets on tracks change
   useEffect(() => {
     const interval = setInterval(() => {
-      const currentCount = tracks.size
+      const currentCount = tracksRef.current.size
       
-      // Skip if tracks suddenly dropped to 0 (likely MQTT disconnect)
-      // Use last known value instead
       if (currentCount === 0 && prevTracksRef.current > 0) {
-        return // Don't update - keep showing last values
+        return
       }
       
       const flow = currentCount - prevTracksRef.current
@@ -49,7 +49,7 @@ export default function TrendChart() {
     }, UPDATE_INTERVAL)
     
     return () => clearInterval(interval)
-  }, [tracks])
+  }, [])
   
   // Draw chart
   useEffect(() => {

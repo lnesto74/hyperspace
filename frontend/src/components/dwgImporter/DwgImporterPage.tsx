@@ -926,52 +926,71 @@ export default function DwgImporterPage({ onClose, onLayoutGenerated }: DwgImpor
       console.log(`[DwgImporter] generateLayout synced layout → ${result.layout_version_id}`)
       onLayoutGenerated?.(result.layout_version_id)
       
-      // Link this layout to the venue and refresh venue objects
-      if (venue?.id) {
-        fetch(`${API_BASE}/api/venues/${venue.id}/dwg-layout`, {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ dwg_layout_version_id: result.layout_version_id })
-        }).catch(err => console.error('Failed to link layout to venue:', err))
-
-        // Refresh venue objects from new layout so MainViewport matches 3D preview
-        try {
-          const sc = (() => { try { const s = localStorage.getItem(`dwg-autoplace-settings-${importData?.filename || 'default'}`); return s ? JSON.parse(s).scaleCorrection || 1.0 : 1.0; } catch { return 1.0; } })()
-          const bsRes = await fetch(`${API_BASE}/api/dwg/layout/${result.layout_version_id}/as-venue-bootstrap?scaleCorrection=${sc}`)
-          if (bsRes.ok) {
-            const bootstrap = await bsRes.json()
-            const DEFAULT_COLORS: Record<string, string> = {
-              shelf: '#4a9eff', wall: '#6b7280', checkout: '#22c55e', entrance: '#f59e0b',
-              pillar: '#9ca3af', digital_display: '#a855f7', radio: '#06b6d4', custom: '#8b5cf6', fridge: '#06b6d4',
-            }
-            const objects = (bootstrap.objectsDraft || []).map((obj: any) => ({
-              ...obj,
-              venueId: venue.id,
-              color: obj.color || DEFAULT_COLORS[obj.type] || DEFAULT_COLORS.custom,
-            }))
-            await fetch(`${API_BASE}/api/venues/${venue.id}`, {
-              method: 'PUT',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                venue: {
-                  id: venue.id,
-                  name: venue.name,
-                  width: bootstrap.venueDefaults.width,
-                  depth: bootstrap.venueDefaults.depth,
-                  height: bootstrap.venueDefaults.height,
-                  tileSize: bootstrap.venueDefaults.tileSize || 1,
-                  scene_source: 'dwg',
-                  dwg_layout_version_id: result.layout_version_id,
-                  dwg_transform_json: JSON.stringify({ scaleCorrection: bootstrap.transform?.scaleCorrection || sc }),
-                },
-                objects,
-              }),
-            })
-            console.log(`[DwgImporter] Venue ${venue.id} refreshed: ${objects.length} objects`)
+      // ALWAYS create a NEW venue for each DWG (like Launchpad flow)
+      // This ensures each DWG gets its own venue instead of overwriting existing venues
+      const sc = (() => { try { const s = localStorage.getItem(`dwg-autoplace-settings-${importData?.filename || 'default'}`); return s ? JSON.parse(s).scaleCorrection || 1.0 : 1.0; } catch { return 1.0; } })()
+      
+      try {
+        const bsRes = await fetch(`${API_BASE}/api/dwg/layout/${result.layout_version_id}/as-venue-bootstrap?scaleCorrection=${sc}`)
+        if (bsRes.ok) {
+          const bootstrap = await bsRes.json()
+          
+          // Generate new venue ID (like Launchpad)
+          const newVenueId = crypto.randomUUID()
+          // Derive venue name from DWG filename (strip ".dwg", " Layout" suffix)
+          const rawName = importData?.filename || 'DWG Venue'
+          const venueName = rawName.replace(/\.dwg\b/i, '').replace(/\s*Layout$/i, '').trim() || 'DWG Venue'
+          
+          const DEFAULT_COLORS: Record<string, string> = {
+            shelf: '#4a9eff', wall: '#6b7280', checkout: '#22c55e', entrance: '#f59e0b',
+            pillar: '#9ca3af', digital_display: '#a855f7', radio: '#06b6d4', custom: '#8b5cf6', fridge: '#06b6d4',
           }
-        } catch (refreshErr) {
-          console.warn('[DwgImporter] Venue refresh after generate failed:', refreshErr)
+          const objects = (bootstrap.objectsDraft || []).map((obj: any) => ({
+            ...obj,
+            venueId: newVenueId,
+            color: obj.color || DEFAULT_COLORS[obj.type] || DEFAULT_COLORS.custom,
+          }))
+          
+          // Create new venue with objects
+          const saveRes = await fetch(`${API_BASE}/api/venues/${newVenueId}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              venue: {
+                id: newVenueId,
+                name: venueName,
+                width: bootstrap.venueDefaults?.width || 30,
+                depth: bootstrap.venueDefaults?.depth || 20,
+                height: bootstrap.venueDefaults?.height || 4,
+                tileSize: bootstrap.venueDefaults?.tileSize || 1,
+                scene_source: 'dwg',
+                dwg_layout_version_id: result.layout_version_id,
+                dwg_transform_json: JSON.stringify({ scaleCorrection: bootstrap.transform?.scaleCorrection || sc }),
+              },
+              objects,
+            }),
+          })
+          
+          if (saveRes.ok) {
+            // Link layout to new venue
+            await fetch(`${API_BASE}/api/venues/${newVenueId}/dwg-layout`, {
+              method: 'PATCH',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ dwg_layout_version_id: result.layout_version_id })
+            }).catch(() => {})
+            
+            // Update layout_version's venue_id
+            await fetch(`${API_BASE}/api/dwg/layout/${result.layout_version_id}/link-venue`, {
+              method: 'PATCH',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ venue_id: newVenueId }),
+            }).catch(() => {})
+            
+            console.log(`[DwgImporter] Created NEW venue "${venueName}" (${newVenueId}) with ${objects.length} objects`)
+          }
         }
+      } catch (createErr) {
+        console.warn('[DwgImporter] Venue creation failed:', createErr)
       }
       
     } catch (err: any) {
@@ -1133,6 +1152,32 @@ export default function DwgImporterPage({ onClose, onLayoutGenerated }: DwgImpor
               }}
               customNames={customNames}
               onUpdateName={handleUpdateGroupName}
+              importId={importData.import_id}
+              onApplyAiFilter={(groupIds: string[]) => {
+                // Delete all fixtures in the filtered groups
+                const fixtureIds = importData.fixtures
+                  .filter(f => groupIds.includes(f.group_id))
+                  .map(f => f.id)
+                handleDeleteFixtures(fixtureIds)
+              }}
+              onApplyAiMappings={(aiMappings: Record<string, { type: string }>) => {
+                // Apply AI-recommended type mappings
+                const newMappings = { ...mappings }
+                for (const [groupId, { type }] of Object.entries(aiMappings)) {
+                  if (!newMappings[groupId]) {
+                    newMappings[groupId] = {
+                      catalog_asset_id: '',
+                      type,
+                      anchor: 'center',
+                      offset_m: { x: 0, y: 0, z: 0 },
+                      rotation_offset_deg: 0
+                    }
+                  } else {
+                    newMappings[groupId] = { ...newMappings[groupId], type }
+                  }
+                }
+                setMappings(newMappings)
+              }}
             />
           </div>
 

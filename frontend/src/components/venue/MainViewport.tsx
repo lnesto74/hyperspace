@@ -233,6 +233,7 @@ export default function MainViewport({
   const [showTracksLayer, setShowTracksLayer] = useState(true)
   const [showDoohLayer, setShowDoohLayer] = useState(true)
   const [showPlanogramLayer, setShowPlanogramLayer] = useState(false)
+  const [show3DModels, setShow3DModels] = useState(false) // OFF by default for performance
   const [planogramSelectedShelfId, setPlanogramSelectedShelfId] = useState<string | null>(null)
   const [planogramHoveredSlotIndex, setPlanogramHoveredSlotIndex] = useState<number | null>(null)
   const [showAxisHelper, setShowAxisHelper] = useState(false)
@@ -3087,8 +3088,8 @@ export default function MainViewport({
           objectMeshesRef.current.set(obj.id, mesh)
           obj3d = mesh
 
-        } else if (customModel) {
-          // Load custom 3D model (GLTF/GLB/OBJ)
+        } else if (customModel && show3DModels) {
+          // Load custom 3D model (GLTF/GLB/OBJ) - only when toggle is ON
           const cacheBuster = `?t=${Date.now()}`
           const loaded = await loadModel(obj.type, `${API_BASE}${customModel.file_path}${cacheBuster}`)
           if (loaded) {
@@ -3234,7 +3235,7 @@ export default function MainViewport({
     }
 
     visibleObjects.forEach(obj => createOrUpdateObject(obj))
-  }, [objects, selectedObjectId, hoveredObjectId, customModels, loadModel, venue?.scene_source, venue?.dwg_layout_version_id, venue?.width, venue?.depth, regions])
+  }, [objects, selectedObjectId, hoveredObjectId, customModels, loadModel, venue?.scene_source, venue?.dwg_layout_version_id, venue?.width, venue?.depth, regions, show3DModels])
 
   // Update LiDAR placements
   useEffect(() => {
@@ -5227,6 +5228,20 @@ export default function MainViewport({
                   {showPlanogramLayer ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5 text-gray-500" />}
                   Planogram
                 </span>
+              </label>
+              <div className="border-t border-gray-700 my-1" />
+              <label className="flex items-center gap-2 py-1.5 px-2 rounded hover:bg-gray-700 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={show3DModels}
+                  onChange={(e) => setShow3DModels(e.target.checked)}
+                  className="rounded border-gray-600 bg-gray-700 text-purple-500"
+                />
+                <span className="text-sm text-gray-300 flex items-center gap-1.5">
+                  {show3DModels ? <Eye className="w-3.5 h-3.5 text-purple-400" /> : <EyeOff className="w-3.5 h-3.5 text-gray-500" />}
+                  3D Models
+                </span>
+                <span className="text-[9px] text-gray-500 ml-auto">{show3DModels ? 'ON' : 'OFF'}</span>
               </label>
               <div className="border-t border-gray-700 my-1" />
               <label className="flex items-center gap-2 py-1.5 px-2 rounded hover:bg-gray-700 cursor-pointer">

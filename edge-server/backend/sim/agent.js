@@ -230,9 +230,29 @@ export class AgentV2 {
   planEntryPath() {
     // Entry: entrance → corridor exit → first browsing target (one continuous path)
     
-    // Wide corridor exit spread to reduce bunching (full corridor width)
-    this.corridorTargetX = 93 + this.rng.next() * 9; // x ≈ 93-102
-    this.corridorTargetZ = 36;  // corridor exit
+    // Dynamic corridor exit based on venue dimensions (not hardcoded!)
+    // Move inward from entrance toward venue center
+    const venueW = this.navGrid.worldWidth;
+    const venueD = this.navGrid.worldDepth;
+    const entranceX = this.navGrid.entrancePos.x;
+    const entranceZ = this.navGrid.entrancePos.z;
+    
+    // Spread agents across a corridor perpendicular to entry direction
+    // Move ~20% into the venue from entrance, spread horizontally
+    const corridorDepth = Math.min(venueD * 0.2, 10); // Max 10m into venue
+    const spreadWidth = Math.min(venueW * 0.3, 15); // Max 15m spread
+    
+    // Determine direction: if entrance near edge, move toward center
+    const centerX = venueW / 2;
+    const centerZ = venueD / 2;
+    
+    // Corridor target: move from entrance toward center, with horizontal spread
+    this.corridorTargetX = entranceX + (centerX - entranceX) * 0.3 + (this.rng.next() - 0.5) * spreadWidth;
+    this.corridorTargetZ = entranceZ + (centerZ - entranceZ) * 0.3;
+    
+    // Clamp to venue bounds with margin
+    this.corridorTargetX = Math.max(2, Math.min(venueW - 2, this.corridorTargetX));
+    this.corridorTargetZ = Math.max(2, Math.min(venueD - 2, this.corridorTargetZ));
     
     const p1 = this.pathPlanner.findPath(this.x, this.z, this.corridorTargetX, this.corridorTargetZ);
     

@@ -1,0 +1,36 @@
+# Dependencies
+node_modules/
+
+# Database files
+backend/database/
+backend/data/
+database/
+*.db
+*.db-journal
+*.sqlite
+
+# Uploads and user data
+uploads/
+
+# Build artifacts
+provider-builds/
+*.tar.gz
+
+# Cache
+.cache/
+**/__pycache__/
+*.pyc
+
+# Large binary/ML files
+*.csv
+*.parquet
+*.pt
+*.pth
+*.onnx
+*.bin
+
+# Secondary projects (not main dev)
+Hyperspace-Landing-Promo/
+
+# Git (usually auto-ignored, explicit for safety)
+.git/

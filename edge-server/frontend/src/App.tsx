@@ -1,5 +1,11 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { Play, Square, Settings, Wifi, WifiOff, Radio, Clock, Users, Move, Save, Check, ShoppingCart, Shuffle, Layers, UserCheck, Coffee, AlertTriangle } from 'lucide-react'
+import { Play, Square, Settings, Wifi, WifiOff, Radio, Clock, Users, Move, Save, Check, ShoppingCart, Shuffle, Layers, UserCheck, Coffee, AlertTriangle, Server, Cloud } from 'lucide-react'
+
+interface BridgeConfig {
+  target: 'production' | 'development' | 'unknown'
+  address: string | null
+  productionAddress: string
+}
 
 interface Config {
   mqttBroker: string
@@ -62,6 +68,8 @@ export default function App() {
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const isUserEditing = useRef(false)
   const initialLoadDone = useRef(false)
+  const [bridgeConfig, setBridgeConfig] = useState<BridgeConfig | null>(null)
+  const [bridgeSwitching, setBridgeSwitching] = useState(false)
 
   const fetchStatus = async () => {
     // Skip config updates while user is editing
@@ -89,8 +97,40 @@ export default function App() {
     }
   }
 
+  const fetchBridgeConfig = async () => {
+    try {
+      const res = await fetch('/api/mqtt-bridge')
+      const data = await res.json()
+      setBridgeConfig(data)
+    } catch (err) {
+      console.error('Failed to fetch bridge config:', err)
+    }
+  }
+
+  const switchBridgeTarget = async (target: 'production' | 'development') => {
+    setBridgeSwitching(true)
+    try {
+      const res = await fetch('/api/mqtt-bridge', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ target }),
+      })
+      const data = await res.json()
+      if (data.success) {
+        // Wait a moment for mosquitto to restart, then refresh bridge config
+        setTimeout(fetchBridgeConfig, 3000)
+      } else {
+        setError(data.error || 'Failed to switch bridge target')
+      }
+    } catch (err) {
+      setError('Failed to switch bridge target')
+    }
+    setBridgeSwitching(false)
+  }
+
   useEffect(() => {
     fetchStatus()
+    fetchBridgeConfig()
     const interval = setInterval(fetchStatus, 2000) // Slower interval
     return () => clearInterval(interval)
   }, [])
@@ -253,6 +293,57 @@ export default function App() {
             <div className="mt-4 p-3 bg-yellow-900/30 border border-yellow-800 rounded-lg text-yellow-400 text-sm">
               Last Error: {status.lastError}
             </div>
+          )}
+        </div>
+
+        {/* MQTT Bridge Target Toggle */}
+        <div className="bg-[#1a1a24] rounded-xl border border-gray-800 p-6 mb-6">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-lg font-semibold text-white flex items-center gap-2">
+              <Server className="w-5 h-5" />
+              MQTT Bridge Target
+            </h2>
+            {bridgeSwitching && (
+              <span className="text-xs text-blue-400 animate-pulse">Switching...</span>
+            )}
+          </div>
+          
+          <div className="grid grid-cols-2 gap-3 mb-3">
+            <button
+              onClick={() => switchBridgeTarget('production')}
+              disabled={bridgeSwitching || status?.isRunning}
+              className={`p-4 rounded-lg border flex flex-col items-center gap-2 transition-colors disabled:opacity-50 ${
+                bridgeConfig?.target === 'production'
+                  ? 'bg-blue-600/20 border-blue-500 text-blue-400'
+                  : 'bg-[#0f0f14] border-gray-700 text-gray-400 hover:border-gray-600'
+              }`}
+            >
+              <Cloud className="w-6 h-6" />
+              <span className="text-sm font-medium">Production</span>
+              <span className="text-[10px] text-gray-500">100.76.196.2</span>
+            </button>
+            <button
+              onClick={() => switchBridgeTarget('development')}
+              disabled={bridgeSwitching || status?.isRunning}
+              className={`p-4 rounded-lg border flex flex-col items-center gap-2 transition-colors disabled:opacity-50 ${
+                bridgeConfig?.target === 'development'
+                  ? 'bg-orange-600/20 border-orange-500 text-orange-400'
+                  : 'bg-[#0f0f14] border-gray-700 text-gray-400 hover:border-gray-600'
+              }`}
+            >
+              <Server className="w-6 h-6" />
+              <span className="text-sm font-medium">Development</span>
+              <span className="text-[10px] text-gray-500">Auto-detect</span>
+            </button>
+          </div>
+          
+          <div className="text-xs text-gray-500 text-center">
+            Current: <span className={bridgeConfig?.target === 'production' ? 'text-blue-400' : 'text-orange-400'}>
+              {bridgeConfig?.address || 'Unknown'}
+            </span>
+          </div>
+          {status?.isRunning && (
+            <p className="text-xs text-yellow-500 text-center mt-2">Stop simulation to change bridge target</p>
           )}
         </div>
 

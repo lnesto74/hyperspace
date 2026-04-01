@@ -11,6 +11,7 @@
 import { useEffect, useState, useRef, useMemo } from 'react'
 import { useTracking } from '../../context/TrackingContext'
 import { useRoi } from '../../context/RoiContext'
+import AnimatedNumber from './AnimatedNumber'
 import { 
   DoorOpen, 
   Navigation, 
@@ -93,6 +94,10 @@ const MAX_VISIBLE_ROWS = 8
 export default function JourneyFlowStream() {
   const { tracks } = useTracking()
   const { regions } = useRoi()
+  const tracksRef = useRef(tracks)
+  const regionsRef = useRef(regions)
+  tracksRef.current = tracks
+  regionsRef.current = regions
   const journeysRef = useRef<Map<string, TrackJourney>>(new Map())
   const [visibleJourneys, setVisibleJourneys] = useState<TrackJourney[]>([])
   const [stateCounts, setStateCounts] = useState<Record<BehaviorState, number>>({
@@ -135,7 +140,7 @@ export default function JourneyFlowStream() {
         arrived: 0, exploring: 0, interested: 0, buying: 0, exiting: 0
       }
       
-      tracks.forEach(track => {
+      tracksRef.current.forEach(track => {
         activeIds.add(track.id)
         const pos = track.venuePosition
         const vel = typeof track.velocity === 'number' && !isNaN(track.velocity) ? track.velocity : 0
@@ -145,7 +150,7 @@ export default function JourneyFlowStream() {
         let category: string | null = null
         let isInCheckout = false
         
-        for (const roi of regions) {
+        for (const roi of regionsRef.current) {
           if (isPointInPolygon(pos.x, pos.z, roi.vertices)) {
             
             if (roiClassification.checkoutRois.has(roi.id)) {
@@ -231,7 +236,7 @@ export default function JourneyFlowStream() {
     }, UPDATE_INTERVAL)
     
     return () => clearInterval(interval)
-  }, [tracks, regions, roiClassification])
+  }, [roiClassification])
   
   const formatTime = (sec: number) => {
     if (sec < 60) return `${Math.round(sec)}s`
@@ -248,7 +253,7 @@ export default function JourneyFlowStream() {
           <div className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse shadow-[0_0_8px_rgba(34,211,238,0.6)]" />
           <span className="text-[10px] uppercase tracking-[0.2em] text-gray-500">LIVE JOURNEYS</span>
         </div>
-        <span className="text-[10px] text-gray-500 tabular-nums">{totalActive} in store</span>
+        <span className="text-[10px] text-gray-500 tabular-nums"><AnimatedNumber value={totalActive} duration={500} /> in store</span>
       </div>
       
       {/* Journey Feed */}

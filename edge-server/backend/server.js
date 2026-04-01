@@ -1218,6 +1218,100 @@ app.post('/api/config', async (req, res) => {
   res.json({ success: true, config, restarted: wasRunning });
 });
 
+// ============================================
+// MQTT Bridge Configuration (Dev/Prod Toggle)
+// ============================================
+const MOSQUITTO_CONF_PATH = '/mosquitto/config/mosquitto.conf';
+const BRIDGE_TARGETS = {
+  production: '100.76.196.2:1883',
+  development: null, // Will be set dynamically from request
+};
+
+// Get current bridge target from mosquitto.conf
+app.get('/api/mqtt-bridge', (req, res) => {
+  try {
+    const confPath = '/app/mosquitto/config/mosquitto.conf';
+    const conf = fs.readFileSync(confPath, 'utf-8');
+    const addressMatch = conf.match(/^address\s+(.+)$/m);
+    const currentAddress = addressMatch ? addressMatch[1].trim() : null;
+    
+    let target = 'unknown';
+    if (currentAddress === BRIDGE_TARGETS.production) {
+      target = 'production';
+    } else if (currentAddress) {
+      target = 'development';
+    }
+    
+    res.json({ 
+      target, 
+      address: currentAddress,
+      productionAddress: BRIDGE_TARGETS.production
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Update bridge target (dev/prod)
+app.post('/api/mqtt-bridge', async (req, res) => {
+  const { target, devAddress } = req.body;
+  
+  if (!target || !['production', 'development'].includes(target)) {
+    return res.status(400).json({ error: 'Invalid target. Must be "production" or "development"' });
+  }
+  
+  let bridgeAddress;
+  if (target === 'production') {
+    bridgeAddress = BRIDGE_TARGETS.production;
+  } else {
+    // For dev, use provided address or auto-detect from request
+    if (devAddress) {
+      bridgeAddress = devAddress;
+    } else {
+      const forwardedFor = req.headers['x-forwarded-for'];
+      const realIp = req.headers['x-real-ip'];
+      const originIp = forwardedFor?.split(',')[0]?.trim() || realIp || req.ip;
+      const cleanIp = originIp.replace('::ffff:', '');
+      bridgeAddress = `${cleanIp}:1883`;
+    }
+  }
+  
+  try {
+    const confPath = '/app/mosquitto/config/mosquitto.conf';
+    let conf = fs.readFileSync(confPath, 'utf-8');
+    
+    // Update the address line
+    conf = conf.replace(/^address\s+.+$/m, `address ${bridgeAddress}`);
+    
+    // Update connection name for clarity
+    const connectionName = target === 'production' ? 'hyperspace-prod' : 'hyperspace-dev';
+    conf = conf.replace(/^connection\s+.+$/m, `connection ${connectionName}`);
+    
+    fs.writeFileSync(confPath, conf);
+    console.log(`[MQTT Bridge] Updated to ${target}: ${bridgeAddress}`);
+    
+    // Restart mosquitto container to apply changes (using docker socket mounted in container)
+    const { exec } = await import('child_process');
+    exec('docker restart edge-mosquitto 2>&1', (err, stdout, stderr) => {
+      if (err) {
+        console.error('[MQTT Bridge] Failed to restart mosquitto:', err.message);
+      } else {
+        console.log('[MQTT Bridge] Mosquitto restarted successfully');
+      }
+    });
+    
+    res.json({ 
+      success: true, 
+      target, 
+      address: bridgeAddress,
+      message: 'Bridge config updated. Mosquitto restarting...'
+    });
+  } catch (err) {
+    console.error('[MQTT Bridge] Failed to update config:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.get('/api/status', (req, res) => {
   let activePeopleCount;
   let simDiagnostics = null;

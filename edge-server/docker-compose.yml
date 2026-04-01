@@ -8,7 +8,7 @@ services:
     ports:
       - "1883:1883"
     volumes:
-      - ./mosquitto/config:/mosquitto/config:ro
+      - ./mosquitto/config:/mosquitto/config
       - ./mosquitto/data:/mosquitto/data
       - ./mosquitto/log:/mosquitto/log
     restart: unless-stopped
@@ -21,6 +21,8 @@ services:
       - "8081:8081"
     volumes:
       - ./data:/app/backend/data
+      - ./mosquitto/config:/app/mosquitto/config
+      - /var/run/docker.sock:/var/run/docker.sock
     environment:
       - PORT=8080
     depends_on:

@@ -5,101 +5,75 @@
  * Inspired by "Cortical Activity" panel in neural dashboards.
  */
 
-import { useMemo, useRef, useEffect } from 'react'
+import { useMemo, useRef, useEffect, useState } from 'react'
 import { useTracking } from '../../context/TrackingContext'
+import { useVenue } from '../../context/VenueContext'
 
-const GRID_COLS = 24
-const GRID_ROWS = 16
 const DOT_SIZE = 8
 const DOT_GAP = 2
+const GRID_UPDATE_INTERVAL = 500 // Rebuild grid at most every 500ms (~2fps)
 
-interface Bounds {
-  minX: number
-  maxX: number
-  minZ: number
-  maxZ: number
+interface ActivityMatrixProps {
+  monochrome?: boolean
 }
 
-export default function ActivityMatrix() {
+export default function ActivityMatrix({ monochrome = false }: ActivityMatrixProps) {
   const { tracks } = useTracking()
+  const { venue } = useVenue()
   const canvasRef = useRef<HTMLCanvasElement>(null)
   
-  // Cache for last known good grid and bounds (prevents drop on MQTT disconnect)
+  // Cache for last known good grid (prevents drop on MQTT disconnect)
   const cachedGridRef = useRef<number[][] | null>(null)
-  const cachedBoundsRef = useRef<Bounds | null>(null)
   const prevTrackCountRef = useRef(0)
+  const tracksRef = useRef(tracks)
+  tracksRef.current = tracks
   
-  // Compute bounds from actual track positions (the real coverage area)
-  const bounds = useMemo((): Bounds | null => {
-    if (tracks.size === 0) {
-      // Return cached bounds if tracks dropped to 0
-      return cachedBoundsRef.current
-    }
-    
-    let minX = Infinity, maxX = -Infinity
-    let minZ = Infinity, maxZ = -Infinity
-    
-    tracks.forEach(track => {
-      const pos = track.venuePosition
-      if (pos.x < minX) minX = pos.x
-      if (pos.x > maxX) maxX = pos.x
-      if (pos.z < minZ) minZ = pos.z
-      if (pos.z > maxZ) maxZ = pos.z
-    })
-    
-    // Add padding (10%) to avoid edge clipping
-    const padX = Math.max((maxX - minX) * 0.1, 1)
-    const padZ = Math.max((maxZ - minZ) * 0.1, 1)
-    
-    const newBounds: Bounds = { 
-      minX: minX - padX, 
-      maxX: maxX + padX, 
-      minZ: minZ - padZ, 
-      maxZ: maxZ + padZ 
-    }
-    
-    // Cache bounds for MQTT disconnect resilience
-    cachedBoundsRef.current = newBounds
-    return newBounds
-  }, [tracks])
-  
-  // Build occupancy grid from track positions with caching
-  const gridData = useMemo(() => {
-    const currentCount = tracks.size
-    
-    // If tracks suddenly dropped to 0, use cached grid
-    if (currentCount === 0 && prevTrackCountRef.current > 0 && cachedGridRef.current) {
-      return cachedGridRef.current
-    }
-    prevTrackCountRef.current = currentCount
-    
-    const grid: number[][] = Array(GRID_ROWS).fill(null).map(() => Array(GRID_COLS).fill(0))
-    
-    if (!bounds) return grid
-    
-    const width = bounds.maxX - bounds.minX
-    const height = bounds.maxZ - bounds.minZ
-    const cellWidth = width / GRID_COLS
-    const cellHeight = height / GRID_ROWS
-    
-    tracks.forEach(track => {
-      const pos = track.venuePosition
-      // Map track position to grid cell using track-derived bounds
-      const col = Math.floor((pos.x - bounds.minX) / cellWidth)
-      const row = Math.floor((pos.z - bounds.minZ) / cellHeight)
+  // Use venue dimensions for grid aspect ratio (match the real store layout)
+  const venueW = venue?.width || 100
+  const venueD = venue?.depth || 100
+  const aspect = venueW / venueD
+  const GRID_COLS = aspect >= 1 ? Math.round(24 * Math.min(aspect, 2)) : 24
+  const GRID_ROWS = aspect >= 1 ? 16 : Math.round(16 * Math.min(1 / aspect, 2))
+
+  // Throttled grid — rebuild on a fixed interval, not on every tracks change
+  const [gridData, setGridData] = useState<number[][]>(() =>
+    Array(GRID_ROWS).fill(null).map(() => Array(GRID_COLS).fill(0))
+  )
+
+  useEffect(() => {
+    const rebuild = () => {
+      const currentTracks = tracksRef.current
+      const currentCount = currentTracks.size
       
-      if (col >= 0 && col < GRID_COLS && row >= 0 && row < GRID_ROWS) {
-        grid[row][col] += 1
+      if (currentCount === 0 && prevTrackCountRef.current > 0 && cachedGridRef.current) {
+        setGridData(cachedGridRef.current)
+        return
       }
-    })
-    
-    // Cache the grid if we have tracks
-    if (currentCount > 0) {
-      cachedGridRef.current = grid
+      prevTrackCountRef.current = currentCount
+      
+      const grid: number[][] = Array(GRID_ROWS).fill(null).map(() => Array(GRID_COLS).fill(0))
+      const cellWidth = venueW / GRID_COLS
+      const cellHeight = venueD / GRID_ROWS
+      
+      currentTracks.forEach(track => {
+        const pos = track.venuePosition
+        const col = Math.floor(pos.x / cellWidth)
+        const row = Math.floor(pos.z / cellHeight)
+        if (col >= 0 && col < GRID_COLS && row >= 0 && row < GRID_ROWS) {
+          grid[row][col] += 1
+        }
+      })
+      
+      if (currentCount > 0) {
+        cachedGridRef.current = grid
+      }
+      setGridData(grid)
     }
     
-    return grid
-  }, [tracks, bounds])
+    rebuild()
+    const interval = setInterval(rebuild, GRID_UPDATE_INTERVAL)
+    return () => clearInterval(interval)
+  }, [GRID_COLS, GRID_ROWS, venueW, venueD])
   
   // Find max for normalization
   const maxVal = useMemo(() => {
@@ -137,7 +111,7 @@ export default function ActivityMatrix() {
         const intensity = val / maxVal
         
         // Color based on intensity (blue → cyan → green → yellow → red)
-        const color = getHeatColor(intensity)
+        const color = monochrome ? getMonoColor(intensity) : getHeatColor(intensity)
         
         ctx.fillStyle = color
         ctx.beginPath()
@@ -153,7 +127,7 @@ export default function ActivityMatrix() {
         }
       })
     })
-  }, [gridData, maxVal])
+  }, [gridData, maxVal, monochrome])
   
   return (
     <div className="h-full flex flex-col p-4 font-mono text-[11px]">
@@ -183,7 +157,7 @@ export default function ActivityMatrix() {
             <div 
               key={i}
               className="w-3 h-3 rounded-sm"
-              style={{ backgroundColor: getHeatColor(v) }}
+              style={{ backgroundColor: monochrome ? getMonoColor(v) : getHeatColor(v) }}
             />
           ))}
         </div>
@@ -219,4 +193,10 @@ function getHeatColor(intensity: number): string {
   }
   
   return `hsl(${h}, ${s * 100}%, ${l * 100}%)`
+}
+
+function getMonoColor(intensity: number): string {
+  const clamped = Math.max(0, Math.min(intensity, 1))
+  const value = Math.round(30 + clamped * 200)
+  return `rgba(${value}, ${value}, ${value}, ${0.5 + clamped * 0.5})`
 }

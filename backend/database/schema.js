@@ -815,6 +815,49 @@ export function initDatabase() {
     );
 
     CREATE INDEX IF NOT EXISTS idx_ai_classify_cache_import_id ON ai_classify_cache(import_id);
+
+    -- ============================================
+    -- AI Smart Filter Cache
+    -- Stores GPT-4o text-based smart filter results (multi-language analysis)
+    -- ============================================
+    CREATE TABLE IF NOT EXISTS ai_smart_filter_cache (
+      id TEXT PRIMARY KEY,
+      import_id TEXT NOT NULL,
+      source_hash TEXT,
+      model TEXT NOT NULL DEFAULT 'gpt-4o',
+      result_json TEXT NOT NULL,
+      prompt_tokens INTEGER,
+      completion_tokens INTEGER,
+      latency_ms INTEGER,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (import_id) REFERENCES dwg_imports(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_ai_smart_filter_cache_import_id ON ai_smart_filter_cache(import_id);
+
+    -- ============================================
+    -- Global Fixture Name Dictionary
+    -- Caches name → classification mappings FOREVER across all imports
+    -- If "Muro" = wall in one DWG, it's wall everywhere
+    -- ============================================
+    CREATE TABLE IF NOT EXISTS fixture_name_dictionary (
+      id TEXT PRIMARY KEY,
+      name_key TEXT NOT NULL UNIQUE,  -- normalized: lowercase(layer + '|' + block_name)
+      layer TEXT,
+      block_name TEXT,
+      category TEXT NOT NULL,         -- shelf, wall, checkout, etc.
+      should_filter INTEGER DEFAULT 0,
+      filter_reason TEXT,
+      confidence REAL DEFAULT 0.8,
+      translated_name TEXT,
+      reasoning TEXT,
+      source TEXT DEFAULT 'ai',       -- 'ai' or 'manual'
+      usage_count INTEGER DEFAULT 1,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_fixture_name_dict_key ON fixture_name_dictionary(name_key);
   `);
 
   // Migration: Add DWG-related columns to venues table if they don't exist
