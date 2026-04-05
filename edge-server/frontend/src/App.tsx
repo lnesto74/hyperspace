@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { Play, Square, Settings, Wifi, WifiOff, Radio, Clock, Users, Move, Save, Check, ShoppingCart, Shuffle, Layers, UserCheck, Coffee, AlertTriangle, Server, Cloud } from 'lucide-react'
+import { Play, Square, Settings, Wifi, WifiOff, Radio, Clock, Users, Move, Save, Check, ShoppingCart, Shuffle, Layers, UserCheck, Coffee, AlertTriangle, Server, Cloud, Eye, Power, Activity } from 'lucide-react'
 
 interface BridgeConfig {
   target: 'production' | 'development' | 'unknown'
@@ -26,15 +26,30 @@ interface Config {
   cashierBreakProb: number
   laneOpenConfirmSec: number
   enableIdConfusion: boolean
+  // Perception adapter
+  perceptionInputTopic: string
+}
+
+interface AdapterStats {
+  framesReceived: number
+  tracksForwarded: number
+  lastPeopleCount: number
+  fps: number
+  errors: number
+  lastError: string | null
+  uptime: number
+  mqttConnected: boolean
 }
 
 interface Status {
   isRunning: boolean
+  edgeMode: 'off' | 'simulate' | 'live'
   mqttConnected: boolean
   tracksSent: number
   uptime: number
   lastError: string | null
   activePeopleCount: number
+  adapter: AdapterStats | null
   config: Config
 }
 
@@ -57,6 +72,7 @@ const defaultConfig: Config = {
   cashierBreakProb: 15,
   laneOpenConfirmSec: 120,
   enableIdConfusion: false,
+  perceptionInputTopic: 'fast3dis/objects',
 }
 
 export default function App() {
@@ -175,27 +191,21 @@ export default function App() {
     }, 500)
   }
 
-  const start = async () => {
+  const switchMode = async (mode: 'off' | 'simulate' | 'live') => {
     setLoading(true)
     setError(null)
     try {
-      const res = await fetch('/api/start', { method: 'POST' })
+      const res = await fetch('/api/edge-mode', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode }),
+      })
       const data = await res.json()
       if (!data.success) {
         setError(data.error)
       }
     } catch (err) {
-      setError('Failed to start simulation')
-    }
-    setLoading(false)
-  }
-
-  const stop = async () => {
-    setLoading(true)
-    try {
-      await fetch('/api/stop', { method: 'POST' })
-    } catch (err) {
-      setError('Failed to stop simulation')
+      setError('Failed to switch mode')
     }
     setLoading(false)
   }
@@ -217,7 +227,9 @@ export default function App() {
           </div>
           <div>
             <h1 className="text-2xl font-bold text-white">Edge LiDAR Server</h1>
-            <p className="text-gray-500 text-sm">Trajectory Simulator</p>
+            <p className="text-gray-500 text-sm">
+              {status?.edgeMode === 'live' ? 'Live Tracks' : status?.edgeMode === 'simulate' ? 'Simulation' : 'Idle'}
+            </p>
           </div>
         </div>
 
@@ -247,7 +259,7 @@ export default function App() {
               <div className="text-xs text-gray-500">People in Scene</div>
             </div>
             <div className="bg-[#0f0f14] rounded-lg p-4 text-center">
-              <div className="text-2xl font-bold text-white">{status?.tracksSent.toLocaleString() || 0}</div>
+              <div className="text-2xl font-bold text-white">{(status?.tracksSent || 0).toLocaleString()}</div>
               <div className="text-xs text-gray-500">Tracks Sent</div>
             </div>
             <div className="bg-[#0f0f14] rounded-lg p-4 text-center">
@@ -255,33 +267,91 @@ export default function App() {
               <div className="text-xs text-gray-500">Uptime</div>
             </div>
             <div className="bg-[#0f0f14] rounded-lg p-4 text-center">
-              <div className={`text-2xl font-bold ${status?.isRunning ? 'text-green-500' : 'text-gray-500'}`}>
-                {status?.isRunning ? 'Running' : 'Stopped'}
+              <div className={`text-2xl font-bold ${
+                status?.edgeMode === 'live' ? 'text-cyan-400' :
+                status?.edgeMode === 'simulate' ? 'text-green-500' : 'text-gray-500'
+              }`}>
+                {status?.edgeMode === 'live' ? 'Live' :
+                 status?.edgeMode === 'simulate' ? 'Sim' : 'Off'}
               </div>
-              <div className="text-xs text-gray-500">Status</div>
+              <div className="text-xs text-gray-500">Mode</div>
             </div>
           </div>
 
-          {/* Start/Stop Button */}
-          <button
-            onClick={status?.isRunning ? stop : start}
-            disabled={loading}
-            className={`w-full py-3 rounded-lg font-semibold flex items-center justify-center gap-2 transition-colors ${
-              status?.isRunning
-                ? 'bg-red-600 hover:bg-red-700 text-white'
-                : 'bg-green-600 hover:bg-green-700 text-white'
-            } ${loading ? 'opacity-50 cursor-not-allowed' : ''}`}
-          >
-            {status?.isRunning ? (
-              <>
-                <Square className="w-5 h-5" /> Stop Simulation
-              </>
-            ) : (
-              <>
-                <Play className="w-5 h-5" /> Start Simulation
-              </>
-            )}
-          </button>
+          {/* Edge Operating Mode */}
+          <div className="mb-4">
+            <label className="block text-sm text-gray-400 mb-2 flex items-center gap-2">
+              <Activity className="w-4 h-4" />
+              Edge Operating Mode
+            </label>
+            <div className="grid grid-cols-3 gap-3">
+              <button
+                onClick={() => switchMode('simulate')}
+                disabled={loading}
+                className={`p-3 rounded-lg border flex flex-col items-center gap-2 transition-colors disabled:opacity-50 ${
+                  status?.edgeMode === 'simulate'
+                    ? 'bg-green-600/20 border-green-500 text-green-400'
+                    : 'bg-[#0f0f14] border-gray-700 text-gray-400 hover:border-gray-600'
+                }`}
+              >
+                <Play className="w-5 h-5" />
+                <span className="text-xs font-medium">Simulate</span>
+              </button>
+              <button
+                onClick={() => switchMode('live')}
+                disabled={loading}
+                className={`p-3 rounded-lg border flex flex-col items-center gap-2 transition-colors disabled:opacity-50 ${
+                  status?.edgeMode === 'live'
+                    ? 'bg-cyan-600/20 border-cyan-500 text-cyan-400'
+                    : 'bg-[#0f0f14] border-gray-700 text-gray-400 hover:border-gray-600'
+                }`}
+              >
+                <Eye className="w-5 h-5" />
+                <span className="text-xs font-medium">Live Tracks</span>
+              </button>
+              <button
+                onClick={() => switchMode('off')}
+                disabled={loading}
+                className={`p-3 rounded-lg border flex flex-col items-center gap-2 transition-colors disabled:opacity-50 ${
+                  status?.edgeMode === 'off' || !status?.edgeMode
+                    ? 'bg-gray-600/20 border-gray-500 text-gray-300'
+                    : 'bg-[#0f0f14] border-gray-700 text-gray-400 hover:border-gray-600'
+                }`}
+              >
+                <Power className="w-5 h-5" />
+                <span className="text-xs font-medium">Off</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Live Tracks Stats (only when in live mode) */}
+          {status?.edgeMode === 'live' && status?.adapter && (
+            <div className="p-4 bg-cyan-900/20 border border-cyan-800/50 rounded-lg mb-4">
+              <h3 className="text-sm font-semibold text-cyan-400 mb-3 flex items-center gap-2">
+                <Eye className="w-4 h-4" /> Perception Adapter
+              </h3>
+              <div className="grid grid-cols-3 gap-3 text-center">
+                <div>
+                  <div className="text-lg font-bold text-white">{status.adapter.fps}</div>
+                  <div className="text-[10px] text-gray-500">FPS</div>
+                </div>
+                <div>
+                  <div className="text-lg font-bold text-white">{status.adapter.framesReceived.toLocaleString()}</div>
+                  <div className="text-[10px] text-gray-500">Frames Rx</div>
+                </div>
+                <div>
+                  <div className="text-lg font-bold text-white">{status.adapter.errors}</div>
+                  <div className="text-[10px] text-gray-500">Errors</div>
+                </div>
+              </div>
+              <div className="mt-3 text-xs text-gray-400">
+                Input: <span className="text-cyan-400 font-mono">{config.perceptionInputTopic || 'fast3dis/objects'}</span>
+              </div>
+              {status.adapter.lastError && (
+                <div className="mt-2 text-xs text-red-400">Last error: {status.adapter.lastError}</div>
+              )}
+            </div>
+          )}
 
           {error && (
             <div className="mt-4 p-3 bg-red-900/30 border border-red-800 rounded-lg text-red-400 text-sm">
@@ -427,6 +497,27 @@ export default function App() {
                 className="w-full bg-[#0f0f14] border border-gray-700 rounded-lg px-4 py-2 text-white focus:border-blue-500 focus:outline-none disabled:opacity-50"
               />
             </div>
+
+            {/* Perception Input Topic (live mode) */}
+            {(status?.edgeMode === 'live' || status?.edgeMode === 'off' || !status?.edgeMode) && (
+              <div>
+                <label className="block text-sm text-gray-400 mb-1">Perception Input Topic</label>
+                <input
+                  type="text"
+                  value={config.perceptionInputTopic}
+                  onChange={(e) => updateConfig({ perceptionInputTopic: e.target.value })}
+                  onFocus={handleFocus}
+                  onBlur={handleBlur}
+                  disabled={status?.edgeMode === 'live'}
+                  className="w-full bg-[#0f0f14] border border-gray-700 rounded-lg px-4 py-2 text-white focus:border-cyan-500 focus:outline-none disabled:opacity-50 font-mono text-sm"
+                  placeholder="fast3dis/objects"
+                />
+                <p className="text-xs text-gray-500 mt-1">MQTT topic where perception software publishes tracks</p>
+              </div>
+            )}
+
+            {/* Simulation-only controls (dimmed when in live mode) */}
+            <div className={status?.edgeMode === 'live' ? 'opacity-30 pointer-events-none' : ''}>
 
             {/* Simulation Mode */}
             <div>
@@ -714,6 +805,8 @@ export default function App() {
                 </div>
               )}
             </div>
+
+            </div>{/* end sim-only wrapper */}
           </div>
         </div>
 

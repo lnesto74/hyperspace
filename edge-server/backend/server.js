@@ -20,6 +20,9 @@ import { SimulatorV2, SIM_CONFIG, STATE } from './sim/index.js';
 // HER (Hyperspace Edge Runtime) Manager
 import { initHerManager, deployHer, stopHer, getHerStatus, getMode, isHerActive } from './her-manager.js';
 
+// Perception Adapter (Fast3D → Hyperspace format bridge)
+import { PerceptionAdapter } from './perception-adapter.js';
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
@@ -68,6 +71,9 @@ const defaultConfig = {
   // Wait time thresholds (minutes) for queue visualization colors
   waitTimeWarningMin: 2, // Green -> Orange threshold
   waitTimeCriticalMin: 5, // Orange -> Red threshold
+  // Perception adapter settings (live tracks mode)
+  perceptionInputTopic: 'fast3dis/objects',
+  perceptionOutputTopic: 'hyperspace/trajectories/{deviceId}',
 };
 
 // SimulatorV2 instance
@@ -86,6 +92,11 @@ try {
   console.error('Failed to load config:', err.message);
 }
 
+// Compose / edge deploy: Mosquitto may use host network (Tailscale); broker is not this container's localhost.
+if (process.env.MQTT_BROKER) {
+  config.mqttBroker = process.env.MQTT_BROKER;
+}
+
 // Save config to file (including backendUrl and mqttBroker for production use)
 const saveConfig = () => {
   try {
@@ -95,6 +106,10 @@ const saveConfig = () => {
     console.error('Failed to save config:', err.message);
   }
 };
+
+// Edge operating mode: 'off' | 'simulate' | 'live'
+let edgeMode = 'off';
+const perceptionAdapter = new PerceptionAdapter();
 
 // Simulation state
 let isRunning = false;
@@ -1264,10 +1279,17 @@ app.post('/api/mqtt-bridge', async (req, res) => {
   if (target === 'production') {
     bridgeAddress = BRIDGE_TARGETS.production;
   } else {
-    // For dev, use provided address or auto-detect from request
+    // For dev, use provided address, derive from backendUrl, or auto-detect from request
     if (devAddress) {
       bridgeAddress = devAddress;
-    } else {
+    } else if (config.backendUrl) {
+      // Derive from backendUrl (most reliable — already has the correct Tailscale IP)
+      try {
+        const backendHost = new URL(config.backendUrl).hostname;
+        bridgeAddress = `${backendHost}:1883`;
+      } catch { bridgeAddress = null; }
+    }
+    if (!bridgeAddress) {
       const forwardedFor = req.headers['x-forwarded-for'];
       const realIp = req.headers['x-real-ip'];
       const originIp = forwardedFor?.split(',')[0]?.trim() || realIp || req.ip;
@@ -1323,15 +1345,20 @@ app.get('/api/status', (req, res) => {
     activePeopleCount = people.filter(p => p.spawned && !p.done).length + queuePeople.length;
   }
   
+  const adapterStats = perceptionAdapter.getStats();
+  const isLive = edgeMode === 'live';
+
   res.json({
     isRunning,
-    mqttConnected: stats.mqttConnected,
-    tracksSent: stats.tracksSent,
-    uptime: stats.startTime ? Math.floor((Date.now() - stats.startTime) / 1000) : 0,
-    lastError: stats.lastError,
-    activePeopleCount,
+    edgeMode,
+    mqttConnected: isLive ? adapterStats.mqttConnected : stats.mqttConnected,
+    tracksSent: isLive ? adapterStats.tracksForwarded : stats.tracksSent,
+    uptime: isLive ? adapterStats.uptime : (stats.startTime ? Math.floor((Date.now() - stats.startTime) / 1000) : 0),
+    lastError: isLive ? adapterStats.lastError : stats.lastError,
+    activePeopleCount: isLive ? adapterStats.lastPeopleCount : activePeopleCount,
     simVersion: config.useSimV2 ? 'V2' : 'V1',
     simDiagnostics,
+    adapter: isLive ? adapterStats : null,
     config,
   });
 });
@@ -2598,15 +2625,78 @@ app.get('/api/edge/mode', (req, res) => {
 
 // ========== END HER API ==========
 
+// ============================================
+// Edge Operating Mode API (off / simulate / live)
+// ============================================
+const stopCurrentMode = () => {
+  if (edgeMode === 'simulate' && isRunning) {
+    stopSimulation();
+  }
+  if (edgeMode === 'live' && perceptionAdapter.running) {
+    perceptionAdapter.stop();
+  }
+  edgeMode = 'off';
+};
+
+app.get('/api/edge-mode', (req, res) => {
+  res.json({
+    mode: edgeMode,
+    adapter: edgeMode === 'live' ? perceptionAdapter.getStats() : null,
+  });
+});
+
+app.post('/api/edge-mode', async (req, res) => {
+  const { mode } = req.body;
+  if (!['off', 'simulate', 'live'].includes(mode)) {
+    return res.status(400).json({ success: false, error: 'Invalid mode. Use off, simulate, or live.' });
+  }
+
+  if (mode === edgeMode) {
+    return res.json({ success: true, mode: edgeMode, message: 'Already in this mode' });
+  }
+
+  console.log(`[EdgeMode] Switching from ${edgeMode} → ${mode}`);
+  stopCurrentMode();
+
+  if (mode === 'simulate') {
+    const result = await startSimulation();
+    if (result.success) edgeMode = 'simulate';
+    return res.json({ ...result, mode: edgeMode });
+  }
+
+  if (mode === 'live') {
+    try {
+      const brokerUrl = config.mqttBroker;
+      const result = await perceptionAdapter.start(
+        brokerUrl,
+        config.perceptionInputTopic,
+        config.perceptionOutputTopic,
+        config.deviceId,
+        config.venueId
+      );
+      if (result.success) edgeMode = 'live';
+      return res.json({ ...result, mode: edgeMode });
+    } catch (err) {
+      return res.json({ success: false, error: err.message, mode: edgeMode });
+    }
+  }
+
+  // mode === 'off'
+  res.json({ success: true, mode: 'off' });
+});
+
+// Legacy start/stop (still used by existing callers; maps to simulate mode)
 app.post('/api/start', async (req, res) => {
+  stopCurrentMode();
   const result = await startSimulation();
+  if (result.success) edgeMode = 'simulate';
   res.json(result);
 });
 
 app.post('/api/stop', (req, res) => {
-  console.log(`[API] POST /api/stop from ${req.ip} - stopping simulation`);
-  const result = stopSimulation();
-  res.json(result);
+  console.log(`[API] POST /api/stop from ${req.ip} - stopping`);
+  stopCurrentMode();
+  res.json({ success: true });
 });
 
 // Serve frontend for all other routes

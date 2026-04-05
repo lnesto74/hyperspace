@@ -11,6 +11,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { useVenue } from '../../context/VenueContext'
 import { API_BASE } from '../../config/api'
 import AnimatedNumber from './AnimatedNumber'
+import Tooltip from './Tooltip'
 
 interface LiveMetricsPanelProps {
   totalPax: number
@@ -121,29 +122,33 @@ export default function LiveMetricsPanel({
       {/* ── HEADER ── */}
       <div className="flex items-center gap-2 mb-3 pb-2 border-b border-white/[0.06]">
         <div className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse shadow-[0_0_6px_rgba(34,211,238,0.5)]" />
-        <span className="text-[9px] uppercase tracking-[0.2em] text-white/30">Metrics Tower</span>
-        <span className="ml-auto text-[9px] text-white/15 tabular-nums">
+        <span className="text-[9px] uppercase tracking-[0.2em] text-white/50">Metrics Tower</span>
+        <span className="ml-auto text-[9px] text-white/40 tabular-nums">
           {new Date().toLocaleTimeString('en-US', { hour12: false })}
         </span>
       </div>
 
       {/* ── HERO: OCCUPANCY ── */}
       <div className="mb-3">
-        <div className="text-white/30 text-[8px] uppercase tracking-wider mb-0.5">Live Occupancy</div>
+        <Tooltip text="People currently detected inside the venue">
+          <div className="text-white/50 text-[8px] uppercase tracking-wider mb-0.5 cursor-help">Live Occupancy</div>
+        </Tooltip>
         <div className="flex items-baseline gap-1.5">
           <AnimatedNumber
             value={totalPax}
             duration={800}
             className="text-3xl font-bold text-white tabular-nums"
           />
-          <span className="text-white/25 text-[9px]">pax</span>
+          <span className="text-white/50 text-[9px]">pax</span>
         </div>
       </div>
 
       {/* ── SPARKLINE ── */}
       {kpis && kpis.sparkline.length > 0 && (
         <div className="mb-3 pb-2 border-b border-white/[0.04]">
-          <div className="text-white/20 text-[8px] mb-1">OCCUPANCY · 1h</div>
+          <Tooltip text="Occupancy trend over the last hour (5-min buckets)">
+            <div className="text-white/50 text-[8px] mb-1 cursor-help">OCCUPANCY · 1h</div>
+          </Tooltip>
           <div className="flex items-end gap-[2px] h-[24px]">
             {kpis.sparkline.map((v, i) => (
               <div
@@ -163,31 +168,33 @@ export default function LiveMetricsPanel({
 
       {/* ── KPI GRID ── */}
       <div className="grid grid-cols-2 gap-x-3 gap-y-2 mb-3 pb-2 border-b border-white/[0.04]">
-        <TowerMetric label="PEAK" value={peakOccupancy} />
-        <TowerMetric label="VISITORS" value={kpis?.uniqueVisitors ?? entriesRef.current} suffix="/hr" />
-        <TowerMetric label="ZONES" value={activeZones} suffix="active" />
-        <TowerMetric label="AVG/ZONE" value={avgOccupancy.toFixed(1)} />
+        <TowerMetric label="PEAK" value={peakOccupancy} tip="Highest simultaneous occupancy this session" />
+        <TowerMetric label="VISITORS" value={kpis?.uniqueVisitors ?? entriesRef.current} suffix="/hr" tip="Unique visitors tracked in the last hour" />
+        <TowerMetric label="ZONES" value={activeZones} suffix="active" tip="Zones with at least 1 person detected" />
+        <TowerMetric label="AVG/ZONE" value={avgOccupancy.toFixed(1)} tip="Average people per zone across all regions" />
       </div>
 
       {/* ── BEHAVIOR ── */}
       {kpis && (
         <div className="grid grid-cols-2 gap-x-3 gap-y-2 mb-3 pb-2 border-b border-white/[0.04]">
-          <div className="col-span-2 text-white/20 text-[8px] uppercase tracking-wider">Behavior</div>
-          <TowerMetric label="VELOCITY" value={kpis.avgVelocity} suffix="m/s" color={kpis.avgVelocity > 0.5 ? 'text-cyan-400/70' : 'text-white'} />
-          <TowerMetric label="AVG DWELL" value={formatTime(kpis.avgDwellSec)} color={kpis.avgDwellSec > 30 ? 'text-green-400/70' : 'text-white'} />
-          <TowerMetric label="DRAW" value={kpis.drawRate} suffix="%" color={kpis.drawRate > 30 ? 'text-green-400/70' : 'text-amber-400/60'} />
-          <TowerMetric label="BOUNCE" value={kpis.bounceRate} suffix="%" color={kpis.bounceRate > 50 ? 'text-red-400/70' : 'text-white'} />
+          <div className="col-span-2 text-white/50 text-[8px] uppercase tracking-wider">Behavior</div>
+          <TowerMetric label="VELOCITY" value={kpis.avgVelocity} suffix="m/s" color={kpis.avgVelocity > 0.5 ? 'text-cyan-400/70' : 'text-white'} tip="Average walking speed of all tracked people" />
+          <TowerMetric label="AVG DWELL" value={formatTime(kpis.avgDwellSec)} color={kpis.avgDwellSec > 30 ? 'text-green-400/70' : 'text-white'} tip="Average time visitors spend inside zones" />
+          <TowerMetric label="DRAW" value={kpis.drawRate} suffix="%" color={kpis.drawRate > 30 ? 'text-green-400/70' : 'text-amber-400/60'} tip="% of passers-by who stop and engage in a zone" />
+          <TowerMetric label="BOUNCE" value={kpis.bounceRate} suffix="%" color={kpis.bounceRate > 50 ? 'text-red-400/70' : 'text-white'} tip="% of visitors who leave a zone in under 5 seconds" />
         </div>
       )}
 
       {/* ── TOP ZONES ── */}
       {kpis && kpis.topZones.length > 0 && (
         <div className="mb-3 pb-2 border-b border-white/[0.04]">
-          <div className="text-white/20 text-[8px] uppercase tracking-wider mb-1.5">Hot Zones</div>
+          <Tooltip text="Top 5 zones by average occupancy (last 5 min)">
+            <div className="text-white/50 text-[8px] uppercase tracking-wider mb-1.5 cursor-help">Hot Zones</div>
+          </Tooltip>
           <div className="space-y-1">
             {kpis.topZones.map((z, i) => (
               <div key={i} className="flex items-center gap-2">
-                <span className="text-white/35 text-[8px] w-[70px] truncate">{z.name}</span>
+                <span className="text-white/60 text-[8px] w-[70px] truncate">{z.name}</span>
                 <div className="flex-1 h-[4px] rounded-full bg-white/[0.04] overflow-hidden">
                   <div
                     className="h-full rounded-full transition-all duration-700"
@@ -197,7 +204,7 @@ export default function LiveMetricsPanel({
                     }}
                   />
                 </div>
-                <span className="text-white/25 text-[8px] w-[16px] text-right tabular-nums">{z.peak}</span>
+                <span className="text-white/50 text-[8px] w-[16px] text-right tabular-nums">{z.peak}</span>
               </div>
             ))}
           </div>
@@ -207,7 +214,7 @@ export default function LiveMetricsPanel({
       {/* ── CHECKOUT ── */}
       {checkoutMetrics && (
         <div className="mb-2">
-          <div className="text-white/20 text-[8px] uppercase tracking-wider mb-1.5">Checkout</div>
+          <div className="text-white/50 text-[8px] uppercase tracking-wider mb-1.5">Checkout</div>
           <div className="grid grid-cols-2 gap-x-3 gap-y-2">
             <TowerMetric label="LANES" value={`${checkoutMetrics.openLanes}/${checkoutMetrics.totalLanes}`} />
             <TowerMetric label="WAIT" value={formatTime(checkoutMetrics.avgWaitSec)} />
@@ -226,14 +233,14 @@ export default function LiveMetricsPanel({
   )
 }
 
-function TowerMetric({ label, value, suffix, color = 'text-white' }: {
-  label: string; value: string | number; suffix?: string; color?: string
+function TowerMetric({ label, value, suffix, color = 'text-white', tip }: {
+  label: string; value: string | number; suffix?: string; color?: string; tip?: string
 }) {
   const isNumber = typeof value === 'number' || (typeof value === 'string' && /^\d+\.?\d*$/.test(value))
   const numDecimals = typeof value === 'string' && value.includes('.') ? value.split('.')[1]?.length || 0 : 0
-  return (
-    <div className="flex flex-col">
-      <span className="text-[8px] text-white/20 uppercase tracking-wider">{label}</span>
+  const inner = (
+    <div className={`flex flex-col ${tip ? 'cursor-help' : ''}`}>
+      <span className="text-[8px] text-white/50 uppercase tracking-wider">{label}</span>
       <div className="flex items-baseline gap-0.5">
         {isNumber ? (
           <AnimatedNumber
@@ -245,10 +252,12 @@ function TowerMetric({ label, value, suffix, color = 'text-white' }: {
         ) : (
           <span className={`text-[14px] font-semibold tabular-nums ${color}`}>{value}</span>
         )}
-        {suffix && <span className="text-[8px] text-white/20">{suffix}</span>}
+        {suffix && <span className="text-[8px] text-white/45">{suffix}</span>}
       </div>
     </div>
   )
+  if (tip) return <Tooltip text={tip}>{inner}</Tooltip>
+  return inner
 }
 
 function formatTime(seconds: number): string {

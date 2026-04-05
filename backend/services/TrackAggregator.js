@@ -1,6 +1,6 @@
 import { EventEmitter } from 'events';
 
-const EMIT_INTERVAL_MS = 50; // 20 fps
+const EMIT_INTERVAL_MS = 100; // 10 fps — sufficient for smooth visualization, halves event loop load
 const TRACK_TTL_MS = 6000; // 6 seconds
 const MAX_TRAIL_LENGTH = 100; // ~10 seconds of trail at 10Hz
 
@@ -33,6 +33,22 @@ export class TrackAggregator extends EventEmitter {
     }
     this.tracks.clear();
     console.log('📊 Track aggregator stopped');
+  }
+
+  /**
+   * Immediately remove all tracks for a venue, emitting track_removed for each
+   * so all connected clients clear their visuals instantly.
+   */
+  flushTracks() {
+    const keys = [...this.tracks.keys()];
+    this.tracks.clear();
+    for (const trackKey of keys) {
+      this.emit('track_removed', { trackKey });
+    }
+    this.emit('tracks_cleared');
+    if (keys.length > 0) {
+      console.log(`📊 Track aggregator flushed ${keys.length} tracks`);
+    }
   }
 
   setPlacement(deviceId, placement) {

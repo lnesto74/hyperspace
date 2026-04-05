@@ -13,7 +13,7 @@ import { v4 as uuidv4 } from 'uuid';
 export const DEFAULT_PARAMS = {
   // Timing/filtering
   T_min_seconds: 0.7,
-  max_gap_seconds: 1.5,
+  max_gap_seconds: 8,
   
   // Speed thresholds
   speed_attention_max_mps: 1.2,

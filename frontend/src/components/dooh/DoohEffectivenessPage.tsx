@@ -192,7 +192,7 @@ export default function DoohEffectivenessPage({ onClose }: DoohEffectivenessPage
   const [editingCampaign, setEditingCampaign] = useState<Campaign | null>(null)
   
   // Time range
-  const [timeRange, setTimeRange] = useState<'hour' | 'day' | 'week'>('day')
+  const [timeRange, setTimeRange] = useState<'hour' | 'day' | 'week' | 'all'>('all')
   
   // Debug panel
   const [showDebug, setShowDebug] = useState(false)
@@ -300,8 +300,14 @@ export default function DoohEffectivenessPage({ onClose }: DoohEffectivenessPage
     
     setLoading(true)
     try {
+      // For 'all' range, use fetchLatestKPIs which finds the actual data range
+      if (timeRange === 'all') {
+        await fetchLatestKPIs()
+        return
+      }
+
       const now = Date.now()
-      let startTs = now - 24 * 60 * 60 * 1000 // Default: last day
+      let startTs = now - 24 * 60 * 60 * 1000
       
       if (timeRange === 'hour') startTs = now - 60 * 60 * 1000
       else if (timeRange === 'week') startTs = now - 7 * 24 * 60 * 60 * 1000
@@ -313,6 +319,13 @@ export default function DoohEffectivenessPage({ onClose }: DoohEffectivenessPage
       if (!res.ok) throw new Error('Failed to fetch KPIs')
       
       const data = await res.json()
+      
+      // If time-bounded query returned nothing, fall back to latest
+      if ((!data.buckets || data.buckets.length === 0) && (!data.summary || !data.summary.totalExposed)) {
+        await fetchLatestKPIs()
+        return
+      }
+      
       setKpiBuckets(data.buckets || [])
       setKpiSummary(data.summary || null)
       setHasAnalyzisData(true)
@@ -322,7 +335,7 @@ export default function DoohEffectivenessPage({ onClose }: DoohEffectivenessPage
     } finally {
       setLoading(false)
     }
-  }, [venue?.id, selectedCampaign, timeRange])
+  }, [venue?.id, selectedCampaign, timeRange, fetchLatestKPIs])
 
   // Run progress state
   const [runProgress, setRunProgress] = useState<{ chunksCompleted: number; totalChunks: number; elapsedS: number } | null>(null)
@@ -464,7 +477,7 @@ export default function DoohEffectivenessPage({ onClose }: DoohEffectivenessPage
     
     try {
       const now = Date.now()
-      let startTs = now - 24 * 60 * 60 * 1000
+      let startTs = timeRange === 'all' ? 0 : now - 24 * 60 * 60 * 1000
       
       if (timeRange === 'hour') startTs = now - 60 * 60 * 1000
       else if (timeRange === 'week') startTs = now - 7 * 24 * 60 * 60 * 1000
@@ -569,7 +582,7 @@ export default function DoohEffectivenessPage({ onClose }: DoohEffectivenessPage
         <div className="flex items-center gap-2">
           {/* Time range selector */}
           <div className="flex bg-gray-700 rounded-lg p-0.5">
-            {(['hour', 'day', 'week'] as const).map((range) => (
+            {(['hour', 'day', 'week', 'all'] as const).map((range) => (
               <button
                 key={range}
                 onClick={() => setTimeRange(range)}
@@ -579,7 +592,7 @@ export default function DoohEffectivenessPage({ onClose }: DoohEffectivenessPage
                     : 'text-gray-400 hover:text-white'
                 }`}
               >
-                {range === 'hour' ? '1H' : range === 'day' ? '24H' : '7D'}
+                {range === 'hour' ? '1H' : range === 'day' ? '24H' : range === 'week' ? '7D' : 'ALL'}
               </button>
             ))}
           </div>

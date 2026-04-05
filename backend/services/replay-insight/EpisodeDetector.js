@@ -101,8 +101,8 @@ export class EpisodeDetectorOrchestrator {
       this.baselineInterval = setInterval(() => this._updateAllBaselines(), BASELINE_INTERVAL_MS);
       this.cleanupInterval = setInterval(() => this._cleanup(), CLEANUP_INTERVAL_MS);
 
-      // Run first detection after 60s (without baselines — detectors handle gracefully)
-      setTimeout(() => this._runDetection(), 60000);
+      // Run first detection after 120s to avoid piling onto the startup event loop load
+      setTimeout(() => this._runDetection(), 120000);
 
       this.isRunning = true;
       console.log('[ReplayInsight] Episode detector started');

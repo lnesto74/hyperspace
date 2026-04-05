@@ -45,8 +45,10 @@ export function initDatabase() {
       }
     }, 5 * 60 * 1000);
   } else {
-    db.pragma('journal_mode = DELETE');
-    db.pragma('synchronous = FULL');
+    db.pragma('journal_mode = WAL');
+    db.pragma('synchronous = NORMAL'); // NORMAL+WAL is crash-safe; FULL adds unnecessary fsync per write in dev
+    db.pragma('cache_size = -8000');   // 8MB page cache for dev
+    console.log('📦 SQLite: WAL mode (development) with NORMAL sync');
   }
 
   // Create tables

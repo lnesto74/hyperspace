@@ -1,12 +1,11 @@
-version: '3.8'
-
 services:
-  # Local MQTT broker with bridge to production
+  # Local MQTT broker with bridge to production.
+  # Host network (Linux): uses host routing/Tailscale so the bridge can reach 100.x brokers.
+  # Perception on the host publishing to 127.0.0.1:1883 still hits this broker.
   mosquitto:
     image: eclipse-mosquitto:2
     container_name: edge-mosquitto
-    ports:
-      - "1883:1883"
+    network_mode: host
     volumes:
       - ./mosquitto/config:/mosquitto/config
       - ./mosquitto/data:/mosquitto/data
@@ -19,12 +18,16 @@ services:
     ports:
       - "8080:8080"
       - "8081:8081"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - ./data:/app/backend/data
       - ./mosquitto/config:/app/mosquitto/config
       - /var/run/docker.sock:/var/run/docker.sock
     environment:
       - PORT=8080
+      # Mosquitto is on the host network; not reachable as localhost inside this container.
+      - MQTT_BROKER=mqtt://host.docker.internal:1883
     depends_on:
       - mosquitto
     restart: unless-stopped

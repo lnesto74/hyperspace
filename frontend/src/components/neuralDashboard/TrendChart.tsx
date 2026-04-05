@@ -6,7 +6,8 @@
  */
 
 import { useState, useEffect, useRef } from 'react'
-import { useTracking } from '../../context/TrackingContext'
+import { useTracksRef } from '../../context/TrackingContext'
+import Tooltip from './Tooltip'
 
 const CHART_POINTS = 60 // 60 data points (last 60 seconds)
 const UPDATE_INTERVAL = 1000 // 1 second
@@ -18,12 +19,10 @@ interface DataPoint {
 }
 
 export default function TrendChart() {
-  const { tracks } = useTracking()
+  const tracksRef = useTracksRef()
   const [history, setHistory] = useState<DataPoint[]>([])
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const prevTracksRef = useRef(0)
-  const tracksRef = useRef(tracks)
-  tracksRef.current = tracks
   
   // Stable interval that reads tracks via ref — never resets on tracks change
   useEffect(() => {
@@ -89,7 +88,7 @@ export default function TrendChart() {
     }
     
     // Draw Y-axis labels
-    ctx.fillStyle = 'rgba(255,255,255,0.3)'
+    ctx.fillStyle = 'rgba(255,255,255,0.5)'
     ctx.font = '9px monospace'
     ctx.textAlign = 'right'
     for (let i = 0; i <= 4; i++) {
@@ -148,7 +147,7 @@ export default function TrendChart() {
     ctx.shadowBlur = 0
     
     // X-axis time labels
-    ctx.fillStyle = 'rgba(255,255,255,0.3)'
+    ctx.fillStyle = 'rgba(255,255,255,0.5)'
     ctx.textAlign = 'center'
     ctx.fillText('-60s', padding.left, height - 5)
     ctx.fillText('-30s', padding.left + chartWidth / 2, height - 5)
@@ -170,15 +169,19 @@ export default function TrendChart() {
       <div className="flex items-center justify-between mb-2">
         <div className="flex items-center gap-2">
           <div className="w-2 h-2 rounded-full bg-blue-400 animate-pulse shadow-[0_0_8px_rgba(59,130,246,0.6)]" />
-          <span className="text-[10px] uppercase tracking-[0.2em] text-gray-500">OCCUPANCY TREND</span>
+          <span className="text-[10px] uppercase tracking-[0.2em] text-white/50">OCCUPANCY TREND</span>
         </div>
         <div className="flex items-center gap-3">
-          <span className="text-[10px] text-gray-500">
-            AVG: <span className="text-white">{avgOccupancy}</span>
-          </span>
-          <span className="text-[10px] text-gray-400">
-            {trend > 0 ? '↑' : trend < 0 ? '↓' : '→'} {Math.abs(trend)}
-          </span>
+          <Tooltip text="Average occupancy over the last 60 seconds">
+            <span className="text-[10px] text-white/50 cursor-help">
+              AVG: <span className="text-white">{avgOccupancy}</span>
+            </span>
+          </Tooltip>
+          <Tooltip text="Change from the previous second">
+            <span className="text-[10px] text-white/60 cursor-help">
+              {trend > 0 ? '↑' : trend < 0 ? '↓' : '→'} {Math.abs(trend)}
+            </span>
+          </Tooltip>
         </div>
       </div>
       

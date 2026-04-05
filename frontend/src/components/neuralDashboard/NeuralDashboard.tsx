@@ -16,8 +16,8 @@
  * └──────────┴────────┴────────┴───────┴───────┴──────────┘
  */
 
-import React, { useRef, useState, useEffect, memo } from 'react'
-import { useTracking } from '../../context/TrackingContext'
+import React, { useRef, useState, useEffect, memo, createContext, useContext } from 'react'
+import { useTrackingActions, useTracksRef } from '../../context/TrackingContext'
 import { useRoi } from '../../context/RoiContext'
 import LiveMetricsPanel from './LiveMetricsPanel'
 import ActivityMatrix from './ActivityMatrix'
@@ -27,21 +27,42 @@ import JourneyFlowGraph from './JourneyFlowGraph'
 import RetailMediaPanel from './RetailMediaPanel'
 import AIDecisionFeed from './AIDecisionFeed'
 import { useNeuralBatch } from './useNeuralBatch'
+import { useXRayData } from './useXRayData'
+import type { XRayData } from './useXRayData'
 
 const LEFT_W = 240
 const RIGHT_W = 260
 const BOTTOM_H = 280
 
+export interface XRayFilters { shelves: boolean; queues: boolean; screens: boolean }
+const defaultFilters: XRayFilters = { shelves: true, queues: true, screens: true }
+
+interface XRayContextValue {
+  xrayMode: boolean
+  xrayData: XRayData | null
+  xrayFilters: XRayFilters
+  setXrayFilters: React.Dispatch<React.SetStateAction<XRayFilters>>
+}
+
+export const XRayContext = createContext<XRayContextValue>({
+  xrayMode: false, xrayData: null, xrayFilters: defaultFilters, setXrayFilters: () => {}
+})
+export const useXRay = () => useContext(XRayContext)
+
 interface NeuralDashboardProps {
-  children: React.ReactNode // The existing MainViewport
-  enabled?: boolean // When false, just render children without dashboard layout
-  leftOffset?: number // Extra padding from left edge when sidebar collapsed
+  children: React.ReactNode
+  enabled?: boolean
+  leftOffset?: number
 }
 
 export default function NeuralDashboard({ children, enabled = true, leftOffset = 0 }: NeuralDashboardProps) {
-  const { tracks, setInterpolation } = useTracking()
+  const { setInterpolation } = useTrackingActions()
+  const tracksRef = useTracksRef()
   const { regions } = useRoi()
   const [monoMode, setMonoMode] = useState(false)
+  const [xrayMode, setXrayMode] = useState(false)
+  const [xrayFilters, setXrayFilters] = useState<XRayFilters>(defaultFilters)
+  const xrayData = useXRayData(enabled && xrayMode)
   
   // Toggle track interpolation when Neural Dashboard is enabled/disabled
   useEffect(() => {
@@ -58,9 +79,7 @@ export default function NeuralDashboard({ children, enabled = true, leftOffset =
   })
   
   const peakRef = useRef(0)
-  const tracksRef = useRef(tracks)
   const regionsRef = useRef(regions)
-  tracksRef.current = tracks
   regionsRef.current = regions
   
   useEffect(() => {
@@ -110,7 +129,7 @@ export default function NeuralDashboard({ children, enabled = true, leftOffset =
       {/* Side panels - absolutely positioned, hidden when disabled */}
       {enabled && (
         <>
-          {/* Monochrome toggle */}
+          {/* Mode toggles */}
           <div
             className="absolute flex gap-2 z-20"
             style={{ top: 8, left: leftOffset + 12 }}
@@ -118,11 +137,29 @@ export default function NeuralDashboard({ children, enabled = true, leftOffset =
             <button
               onClick={() => setMonoMode(!monoMode)}
               className={`px-3 py-1 text-[10px] uppercase tracking-[0.2em] border border-white/10 rounded transition-colors ${
-                monoMode ? 'bg-white/10 text-white' : 'text-gray-400 hover:text-white'
+                monoMode ? 'bg-white/10 text-white' : 'text-white/50 hover:text-white'
               }`}
             >
               {monoMode ? 'B/W MODE' : 'COLOR MODE'}
             </button>
+            <div className="flex border border-white/10 rounded overflow-hidden">
+              <button
+                onClick={() => setXrayMode(false)}
+                className={`px-3 py-1 text-[10px] uppercase tracking-[0.2em] transition-colors ${
+                  !xrayMode ? 'bg-cyan-500/20 text-cyan-300 border-r border-white/10' : 'text-white/40 hover:text-white/70 border-r border-white/10'
+                }`}
+              >
+                LIVE
+              </button>
+              <button
+                onClick={() => setXrayMode(true)}
+                className={`px-3 py-1 text-[10px] uppercase tracking-[0.2em] transition-colors ${
+                  xrayMode ? 'bg-cyan-500/20 text-cyan-300' : 'text-white/40 hover:text-white/70'
+                }`}
+              >
+                X-RAY
+              </button>
+            </div>
           </div>
           {/** Panels filtered when mono mode enabled — memoized to avoid re-renders from tracks context */}
           <MemoizedPanels
@@ -134,15 +171,17 @@ export default function NeuralDashboard({ children, enabled = true, leftOffset =
       )}
       
       {/* 3D Digital Twin (MainViewport) - ALWAYS in same container position */}
-      <div 
-        className="absolute overflow-hidden bg-[#0a0a0f]"
-        style={enabled 
-          ? { top: 0, left: LEFT_W + leftOffset, right: RIGHT_W, bottom: BOTTOM_H }
-          : { top: 0, left: 0, right: 0, bottom: 0 }
-        }
-      >
-        {children}
-      </div>
+      <XRayContext.Provider value={{ xrayMode: enabled && xrayMode, xrayData, xrayFilters, setXrayFilters }}>
+        <div 
+          className="absolute overflow-hidden bg-[#0a0a0f]"
+          style={enabled 
+            ? { top: 0, left: LEFT_W + leftOffset, right: RIGHT_W, bottom: BOTTOM_H }
+            : { top: 0, left: 0, right: 0, bottom: 0 }
+          }
+        >
+          {children}
+        </div>
+      </XRayContext.Provider>
     </div>
   )
 }

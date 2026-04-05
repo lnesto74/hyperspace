@@ -8,13 +8,14 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import { Hand, Move3D, RotateCcw, Save, Download, Layers, Eye, EyeOff, Move, RotateCw } from 'lucide-react'
 import { useVenue } from '../../context/VenueContext'
 import { useLidar } from '../../context/LidarContext'
-import { useTracking } from '../../context/TrackingContext'
+import { useTrackingActions, useTracksRef } from '../../context/TrackingContext'
 import { useRoi } from '../../context/RoiContext'
 import { useReplayInsight } from '../../context/ReplayInsightContext'
 import { useProfitRadar } from '../../context/ProfitRadarContext'
 import { usePlanogram } from '../../context/PlanogramContext'
 import SkuDebugOverlay from './SkuDebugOverlay'
 import { BarChart3, X } from 'lucide-react'
+import { useXRay } from '../neuralDashboard/NeuralDashboard'
 
 
 const COLORS = {
@@ -192,6 +193,9 @@ export default function MainViewport({
   const lidarMeshesRef = useRef<Map<string, THREE.Group>>(new Map())
   const trackMeshesRef = useRef<Map<string, THREE.Group>>(new Map())
   const trailLinesRef = useRef<Map<string, THREE.Line>>(new Map())
+  // Grace period: tracks hidden but not disposed, keyed by trackKey -> hide timestamp
+  const trackGraceRef = useRef<Map<string, number>>(new Map())
+  const TRACK_GRACE_MS = 3000 // Keep meshes alive 3s after track disappears
   // Instanced rendering for tracks - single draw call for all 200+ tracks
   const trackInstancedMeshRef = useRef<THREE.InstancedMesh | null>(null)
   const trackInstanceMapRef = useRef<Map<string, number>>(new Map()) // trackKey -> instanceIndex
@@ -231,6 +235,8 @@ export default function MainViewport({
   const [showGridLayer, setShowGridLayer] = useState(true)
   const [showRoiLayer, setShowRoiLayer] = useState(true)
   const [showTracksLayer, setShowTracksLayer] = useState(true)
+  const showTracksRef = useRef(true)
+  showTracksRef.current = showTracksLayer
   const [showDoohLayer, setShowDoohLayer] = useState(true)
   const [showPlanogramLayer, setShowPlanogramLayer] = useState(false)
   const [show3DModels, setShow3DModels] = useState(false) // OFF by default for performance
@@ -240,6 +246,13 @@ export default function MainViewport({
   const axisHelperRef = useRef<THREE.AxesHelper | null>(null)
   const [showSlotArrows, setShowSlotArrows] = useState(false)
   const slotArrowsRef = useRef<THREE.Group | null>(null)
+  
+  // X-Ray mode
+  const { xrayMode, xrayData, xrayFilters, setXrayFilters } = useXRay()
+  const xrayHalosRef = useRef<Map<string, CSS2DObject>>(new Map())
+  const xrayHaloTiersRef = useRef<Map<string, number>>(new Map())
+  const xrayPrevMaterialsRef = useRef<Map<string, { color: number; opacity: number; transparent: boolean; wireframe: boolean; emissiveHex: number; emissiveIntensity: number }>>(new Map())
+  const preXrayTracksRef = useRef<boolean>(true)
   
   // Object hover tooltip
   const [hoveredObjectTooltip, setHoveredObjectTooltip] = useState<{
@@ -388,7 +401,7 @@ export default function MainViewport({
   const { intentFieldEnabled, zoneField, clusters } = useProfitRadar()
   const intentGlowsRef = useRef<Map<string, THREE.Mesh>>(new Map())
   const intentClusterGroupRef = useRef<THREE.Group | null>(null)
-  const tracksRef = useRef<Map<string, { trail?: { x: number; z: number }[] }>>(new Map())
+  // tracksRef is provided by useTracksRef() — stable ref, never triggers re-renders
   
   // Planogram layer - shelf planogram data
   const { activePlanogram, loadShelfPlanogram, activeShelfPlanogram, activeCatalog, allShelfPlanograms } = usePlanogram()
@@ -655,8 +668,7 @@ export default function MainViewport({
 
   const { venue, objects, selectedObjectId, hoveredObjectId, selectObject, hoverObject, updateObject, removeObject, snapToGrid, copySelectedObjects, pasteObjects } = useVenue()
   const { placements, selectedPlacementId, selectPlacement, updatePlacement, removePlacement, getDeviceById } = useLidar()
-  const { tracks } = useTracking()
-  tracksRef.current = tracks
+  const tracksRef = useTracksRef()
   
   // Stable references for callbacks
   const venueRef = useRef(venue)
@@ -1333,9 +1345,10 @@ export default function MainViewport({
         const distance = Math.sqrt(dx * dx + dy * dy)
         
         if (distance > DRAG_THRESHOLD_PX) {
-          // ROIs can be dragged without SHIFT, objects/lidars require SHIFT
-          const isRoiType = pendingDragRef.current.type === 'roi' || pendingDragRef.current.type === 'roi-vertex'
-          if (isRoiType || !pendingDragRef.current.requiresShift) {
+          // ROI vertices can be dragged freely (precise intentional edit);
+          // ROI polygons and objects/lidars require SHIFT to avoid hijacking orbit rotation
+          const isVertex = pendingDragRef.current.type === 'roi-vertex'
+          if (isVertex || !pendingDragRef.current.requiresShift) {
             startDrag(mouse)
           }
           pendingDragRef.current = null
@@ -2474,13 +2487,29 @@ export default function MainViewport({
     return () => window.removeEventListener('mainviewport-reset-camera', handleCameraReset)
   }, [venue, dwgSceneBounds])
   
-  // Initial camera positioning - only runs ONCE per venue
+  // Initial camera positioning - only runs ONCE per venue.
+  // If a saved view exists in localStorage, restore it instead of the default.
   useEffect(() => {
     if (!controlsRef.current || !cameraRef.current || !venue) return
-    if (cameraInitializedRef.current) return // Already initialized
-    if (isGizmoActiveRef.current) return // Don't reset while using gizmo
-    
-    // For DWG venues, use content-based bounds; for manual venues, use full dimensions
+    if (cameraInitializedRef.current) return
+    if (isGizmoActiveRef.current) return
+
+    const storageKey = `venue-camera-view-${venue.id || 'default'}`
+    const saved = localStorage.getItem(storageKey)
+    if (saved) {
+      try {
+        const v = JSON.parse(saved)
+        cameraRef.current.position.fromArray(v.position)
+        controlsRef.current.target.fromArray(v.target)
+        if (v.zoom) cameraRef.current.zoom = v.zoom
+        cameraRef.current.updateProjectionMatrix()
+        controlsRef.current.update()
+        cameraInitializedRef.current = true
+        console.log('[MainViewport] Restored saved camera view')
+        return
+      } catch { /* fall through to default */ }
+    }
+
     let floorW = venue.width
     let floorD = venue.depth
     let centerX = venue.width / 2
@@ -2504,7 +2533,7 @@ export default function MainViewport({
     
     cameraInitializedRef.current = true
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [venue?.id]) // Only run when venue changes, not when objects/dwgSceneBounds change
+  }, [venue?.id])
 
   // 3D Logo Billboard on back wall
   useEffect(() => {
@@ -3470,356 +3499,364 @@ export default function MainViewport({
     })
   }, [placements, selectedPlacementId, getDeviceById])
 
-  // Update tracks
-  useEffect(() => {
-    if (!sceneRef.current) return
-    const scene = sceneRef.current
-    const currentTrackKeys = new Set(tracks.keys())
+  // Sync Three.js track meshes imperatively via interval (decoupled from React render cycle).
+  // Reads tracksRef.current instead of depending on [tracks], avoiding 30fps useEffect reruns.
+  // Implements a 3s grace period: disappeared tracks are hidden, not immediately disposed.
+  const trackingRef = useRef(tracking)
+  trackingRef.current = tracking
 
-    // Remove old tracks and their trails
-    trackMeshesRef.current.forEach((group, key) => {
-      if (!currentTrackKeys.has(key)) {
-        scene.remove(group)
-        group.traverse(child => {
-          if (child instanceof THREE.Mesh || child instanceof THREE.Line || child instanceof THREE.Points || child instanceof THREE.LineSegments) {
-            child.geometry.dispose()
-            if (Array.isArray(child.material)) {
-              child.material.forEach(m => {
-                // Dispose textures (canvas textures for labels)
-                if (m.map) m.map.dispose()
-                m.dispose()
-              })
-            } else {
-              // Dispose textures (canvas textures for labels)
-              if ((child.material as any).map) (child.material as any).map.dispose()
-              child.material.dispose()
+  useEffect(() => {
+    const SYNC_INTERVAL = 33 // ~30fps mesh sync
+
+    let diagLastMeshCount = 0
+    let diagSyncCount = 0
+
+    const syncTrackMeshes = () => {
+      if (!sceneRef.current) return
+      const scene = sceneRef.current
+      const currentTracks = tracksRef.current
+      const currentDoohScreens = doohScreensRef.current
+      const currentTracking = trackingRef.current
+      const currentTrackKeys = new Set(currentTracks.keys())
+      const now = Date.now()
+      const SEZ_LABEL_DURATION_MS = 60 * 1000
+
+      diagSyncCount++
+      const meshCount = trackMeshesRef.current.size
+      const refCount = currentTracks.size
+      if (Math.abs(meshCount - diagLastMeshCount) > 3 || (diagSyncCount % 300 === 0)) {
+        console.log(`[DIAG] meshSync  meshes=${meshCount}  refTracks=${refCount}  grace=${trackGraceRef.current.size}  sync#=${diagSyncCount}  t=${now}`)
+        diagLastMeshCount = meshCount
+      }
+      // Bulk clear: when all tracks vanish at once (simulator stopped), skip grace period
+      if (refCount === 0 && meshCount > 0) {
+        trackMeshesRef.current.forEach((group, key) => {
+          scene.remove(group)
+          group.traverse(child => {
+            if (child instanceof THREE.Mesh || child instanceof THREE.Line || child instanceof THREE.Points || child instanceof THREE.LineSegments) {
+              child.geometry.dispose()
+              if (Array.isArray(child.material)) {
+                child.material.forEach(m => { if (m.map) m.map.dispose(); m.dispose() })
+              } else {
+                if ((child.material as any).map) (child.material as any).map.dispose()
+                child.material.dispose()
+              }
             }
-          }
-          // Dispose sprite textures (SEZ labels)
-          if (child instanceof THREE.Sprite) {
-            const mat = child.material as THREE.SpriteMaterial
-            if (mat.map) mat.map.dispose()
-            mat.dispose()
+            if (child instanceof THREE.Sprite) {
+              const mat = child.material as THREE.SpriteMaterial
+              if (mat.map) mat.map.dispose()
+              mat.dispose()
+            }
+          })
+          const trail = trailLinesRef.current.get(key)
+          if (trail) {
+            scene.remove(trail)
+            trail.geometry.dispose()
+            ;(trail.material as THREE.Material).dispose()
+            trailLinesRef.current.delete(key)
           }
         })
-        // Also remove trail from scene (O(1) lookup via ref)
-        const trail = trailLinesRef.current.get(key)
-        if (trail) {
-          scene.remove(trail)
-          trail.geometry.dispose()
-          ;(trail.material as THREE.Material).dispose()
-          trailLinesRef.current.delete(key)
-        }
-        // Clean up SEZ entry time tracking to prevent memory leak
-        sezEntryTimesRef.current.delete(key)
-        trackMeshesRef.current.delete(key)
+        trackMeshesRef.current.clear()
+        trackGraceRef.current.clear()
+        sezEntryTimesRef.current.clear()
+        return
       }
-    })
 
-    const now = Date.now()
-    const SEZ_LABEL_DURATION_MS = 60 * 1000 // 1 minute label visibility
-
-    // Add/update tracks
-    tracks.forEach((track, key) => {
-      let group = trackMeshesRef.current.get(key)
-      
-      // Check if person is inside any DOOH SEZ zone
-      const personPos = { x: track.venuePosition.x, z: track.venuePosition.z }
-      let isInSez = false
-      for (const screen of doohScreens) {
-        if (screen.enabled && screen.sezPolygon && screen.sezPolygon.length >= 3) {
-          if (pointInPolygon(personPos, screen.sezPolygon)) {
-            isInSez = true
-            break
+      // Phase 1: Handle disappeared tracks with grace period
+      trackMeshesRef.current.forEach((group, key) => {
+        if (!currentTrackKeys.has(key)) {
+          if (!trackGraceRef.current.has(key)) {
+            trackGraceRef.current.set(key, now)
+            group.visible = false
+            const trail = trailLinesRef.current.get(key)
+            if (trail) trail.visible = false
+          } else if (now - trackGraceRef.current.get(key)! > TRACK_GRACE_MS) {
+            // Grace period expired — dispose
+            trackGraceRef.current.delete(key)
+            scene.remove(group)
+            group.traverse(child => {
+              if (child instanceof THREE.Mesh || child instanceof THREE.Line || child instanceof THREE.Points || child instanceof THREE.LineSegments) {
+                child.geometry.dispose()
+                if (Array.isArray(child.material)) {
+                  child.material.forEach(m => {
+                    if (m.map) m.map.dispose()
+                    m.dispose()
+                  })
+                } else {
+                  if ((child.material as any).map) (child.material as any).map.dispose()
+                  child.material.dispose()
+                }
+              }
+              if (child instanceof THREE.Sprite) {
+                const mat = child.material as THREE.SpriteMaterial
+                if (mat.map) mat.map.dispose()
+                mat.dispose()
+              }
+            })
+            const trail = trailLinesRef.current.get(key)
+            if (trail) {
+              scene.remove(trail)
+              trail.geometry.dispose()
+              ;(trail.material as THREE.Material).dispose()
+              trailLinesRef.current.delete(key)
+            }
+            sezEntryTimesRef.current.delete(key)
+            trackMeshesRef.current.delete(key)
           }
-          // Also check back-facing SEZ for double-sided screens
-          if (screen.doubleSided) {
-            const backPolygon = screen.sezPolygon.map(p => ({
-              x: 2 * screen.position.x - p.x,
-              z: 2 * screen.position.z - p.z,
-            }))
-            if (pointInPolygon(personPos, backPolygon)) {
+        } else {
+          // Track reappeared during grace period — cancel grace, restore visibility
+          if (trackGraceRef.current.has(key)) {
+            trackGraceRef.current.delete(key)
+            group.visible = showTracksRef.current
+            const trail = trailLinesRef.current.get(key)
+            if (trail) trail.visible = showTracksRef.current
+          }
+        }
+      })
+
+      // Phase 2: Add/update tracks
+      currentTracks.forEach((track, key) => {
+        let group = trackMeshesRef.current.get(key)
+
+        const personPos = { x: track.venuePosition.x, z: track.venuePosition.z }
+        let isInSez = false
+        for (const screen of currentDoohScreens) {
+          if (screen.enabled && screen.sezPolygon && screen.sezPolygon.length >= 3) {
+            if (pointInPolygon(personPos, screen.sezPolygon)) {
               isInSez = true
               break
             }
+            if (screen.doubleSided) {
+              const backPolygon = screen.sezPolygon.map(p => ({
+                x: 2 * screen.position.x - p.x,
+                z: 2 * screen.position.z - p.z,
+              }))
+              if (pointInPolygon(personPos, backPolygon)) {
+                isInSez = true
+                break
+              }
+            }
           }
         }
-      }
-      
-      // Track SEZ entry time for label visibility
-      if (isInSez && !sezEntryTimesRef.current.has(key)) {
-        sezEntryTimesRef.current.set(key, now)
-      }
-      
-      // Check if label should be visible (entered SEZ within last minute)
-      const entryTime = sezEntryTimesRef.current.get(key)
-      const showSezLabel = entryTime && (now - entryTime) < SEZ_LABEL_DURATION_MS
-      
-      // Use SEZ influence color (red) if in zone, otherwise normal color
-      let color: number | string = isInSez ? COLORS.sezInfluenced : (
-        track.color || (
-          track.objectType === 'person' ? COLORS.trackPerson 
-          : track.objectType === 'cart' ? COLORS.trackCart 
-          : COLORS.trackUnknown
-        )
-      )
-      
-      // Get bounding box dimensions (default person size)
-      const bbox = track.boundingBox || { width: 0.5, height: 1.7, depth: 0.5 }
-      const cylinderRadius = Math.max(bbox.width, bbox.depth) / 2
-      const cylinderHeight = bbox.height
 
-      if (!group) {
-        group = new THREE.Group()
-
-        // Person cylinder (capsule-like shape)
-        const cylinderGeometry = new THREE.CylinderGeometry(
-          cylinderRadius, cylinderRadius, cylinderHeight, 8 // Reduced from 16 to 8 segments
-        )
-        const cylinderMaterial = new THREE.MeshStandardMaterial({ 
-          color, 
-          emissive: color, 
-          emissiveIntensity: 0.5,
-          transparent: true,
-          opacity: tracking.cylinderOpacity,
-        })
-        const cylinder = new THREE.Mesh(cylinderGeometry, cylinderMaterial)
-        cylinder.userData.isCylinder = true
-        group.add(cylinder) // index 0
-
-        // Top cap (hemisphere) - reduced segments
-        const topCapGeometry = new THREE.SphereGeometry(cylinderRadius, 8, 4, 0, Math.PI * 2, 0, Math.PI / 2)
-        const topCapMaterial = new THREE.MeshStandardMaterial({ 
-          color, 
-          emissive: color, 
-          emissiveIntensity: 0.5,
-          transparent: true,
-          opacity: tracking.cylinderOpacity,
-        })
-        const topCap = new THREE.Mesh(topCapGeometry, topCapMaterial)
-        topCap.position.y = cylinderHeight / 2
-        group.add(topCap) // index 1
-
-        // Bottom cap (hemisphere, flipped) - reduced segments
-        const bottomCapGeometry = new THREE.SphereGeometry(cylinderRadius, 8, 4, 0, Math.PI * 2, 0, Math.PI / 2)
-        const bottomCapMaterial = new THREE.MeshStandardMaterial({ 
-          color, 
-          emissive: color, 
-          emissiveIntensity: 0.5,
-          transparent: true,
-          opacity: tracking.cylinderOpacity,
-        })
-        const bottomCap = new THREE.Mesh(bottomCapGeometry, bottomCapMaterial)
-        bottomCap.rotation.x = Math.PI
-        bottomCap.position.y = -cylinderHeight / 2
-        group.add(bottomCap) // index 2
-        
-        // SEZ influence label - 3D sprite, large and readable
-        const labelCanvas = document.createElement('canvas')
-        const labelCtx = labelCanvas.getContext('2d')!
-        labelCanvas.width = 512
-        labelCanvas.height = 128
-        // Red pill-shaped background
-        labelCtx.fillStyle = 'rgba(220, 38, 38, 0.95)'
-        labelCtx.beginPath()
-        labelCtx.roundRect(8, 8, 496, 112, 56)
-        labelCtx.fill()
-        // Light border
-        labelCtx.strokeStyle = 'rgba(255, 150, 150, 0.9)'
-        labelCtx.lineWidth = 6
-        labelCtx.stroke()
-        // White text - person ID
-        labelCtx.fillStyle = 'white'
-        labelCtx.font = 'bold 64px system-ui, sans-serif'
-        labelCtx.textAlign = 'center'
-        labelCtx.textBaseline = 'middle'
-        const displayId = key.length > 8 ? key.slice(-6) : key
-        labelCtx.fillText(displayId, 256, 68)
-        
-        const labelTexture = new THREE.CanvasTexture(labelCanvas)
-        labelTexture.needsUpdate = true
-        const labelMaterial = new THREE.SpriteMaterial({ 
-          map: labelTexture, 
-          transparent: true,
-          depthTest: false,
-        })
-        const labelSprite = new THREE.Sprite(labelMaterial)
-        // Large readable size - 1.5m wide, positioned above head
-        labelSprite.scale.set(1.5, 0.375, 1)
-        labelSprite.position.y = cylinderHeight / 2 + 0.5
-        labelSprite.visible = false
-        labelSprite.userData.isSezLabel = true
-        group.add(labelSprite) // index 3
-
-        // Point cloud representation (150 scattered points - reduced from 300)
-        const pcPositions = generateCapsulePoints(cylinderRadius, cylinderHeight, 150)
-        const pcGeometry = new THREE.BufferGeometry()
-        pcGeometry.setAttribute('position', new THREE.BufferAttribute(pcPositions, 3))
-        const pcMaterial = new THREE.PointsMaterial({
-          color,
-          size: 0.04,
-          transparent: true,
-          opacity: 0.9,
-          sizeAttenuation: true,
-          depthWrite: false,
-        })
-        const pointCloud = new THREE.Points(pcGeometry, pcMaterial)
-        pointCloud.userData.isPointCloud = true
-        pointCloud.userData.basePositions = new Float32Array(pcPositions)
-        pointCloud.visible = tracking.trackDisplayMode === 'pointcloud'
-        group.add(pointCloud) // index 4
-
-        // Wireframe bounding box
-        const wfBoxGeo = new THREE.BoxGeometry(bbox.width, bbox.height, bbox.depth)
-        const wfEdgesGeo = new THREE.EdgesGeometry(wfBoxGeo)
-        wfBoxGeo.dispose()
-        const wfMaterial = new THREE.LineBasicMaterial({
-          color,
-          transparent: true,
-          opacity: 0.7,
-        })
-        const wireframe = new THREE.LineSegments(wfEdgesGeo, wfMaterial)
-        wireframe.userData.isWireframe = true
-        wireframe.visible = tracking.trackDisplayMode === 'pointcloud'
-        group.add(wireframe) // index 5
-
-        // Set initial cylinder visibility based on mode
-        if (tracking.trackDisplayMode === 'pointcloud') {
-          cylinder.visible = false
-          topCap.visible = false
-          bottomCap.visible = false
+        if (isInSez && !sezEntryTimesRef.current.has(key)) {
+          sezEntryTimesRef.current.set(key, now)
         }
 
-        scene.add(group)
-        trackMeshesRef.current.set(key, group)
-      }
+        const entryTime = sezEntryTimesRef.current.get(key)
+        const showSezLabel = entryTime && (now - entryTime) < SEZ_LABEL_DURATION_MS
 
-      // Update position - center cylinder at person's position, bottom at floor
-      group.position.set(track.venuePosition.x, cylinderHeight / 2, track.venuePosition.z)
+        let color: number | string = isInSez ? COLORS.sezInfluenced : (
+          track.color || (
+            track.objectType === 'person' ? COLORS.trackPerson
+            : track.objectType === 'cart' ? COLORS.trackCart
+            : COLORS.trackUnknown
+          )
+        )
 
-      // Update cylinder size if bounding box changed
-      const cylinder = group.children[0] as THREE.Mesh
-      const topCap = group.children[1] as THREE.Mesh
-      const bottomCap = group.children[2] as THREE.Mesh
-      
-      // Update SEZ label visibility (3D sprite)
-      const sezLabel = group.children[3] as THREE.Sprite | undefined
-      if (sezLabel && sezLabel.userData.isSezLabel) {
-        sezLabel.visible = !!showSezLabel
-        // Large readable size - 1.5m wide, positioned above head
-        sezLabel.scale.set(1.5, 0.375, 1)
-        sezLabel.position.y = cylinderHeight / 2 + 0.5
-      }
+        const bbox = track.boundingBox || { width: 0.5, height: 1.7, depth: 0.5 }
+        const cylinderRadius = Math.max(bbox.width, bbox.depth) / 2
+        const cylinderHeight = bbox.height
 
-      // Update/create trail - reuse geometry buffer in-place to avoid GC pressure
-      // (creating new geometry every frame for 200+ tracks caused Chrome OOM after ~5min)
-      if (track.trail.length > 1) {
-        let trailLine = trailLinesRef.current.get(key)
-        
-        if (!trailLine) {
-          // Pre-allocate buffer for max trail length (reused across all future updates)
-          const MAX_TRAIL = 256
-          const posArray = new Float32Array(MAX_TRAIL * 3)
-          const geom = new THREE.BufferGeometry()
-          geom.setAttribute('position', new THREE.BufferAttribute(posArray, 3))
-          geom.setDrawRange(0, 0)
-          
-          const mat = new THREE.LineBasicMaterial({ 
-            color, 
-            transparent: true, 
-            opacity: 0.8,
+        if (!group) {
+          group = new THREE.Group()
+
+          const cylinderGeometry = new THREE.CylinderGeometry(
+            cylinderRadius, cylinderRadius, cylinderHeight, 8
+          )
+          const cylinderMaterial = new THREE.MeshStandardMaterial({
+            color,
+            emissive: color,
+            emissiveIntensity: 0.5,
+            transparent: true,
+            opacity: currentTracking.cylinderOpacity,
           })
-          
-          trailLine = new THREE.Line(geom, mat)
-          trailLine.frustumCulled = false
-          trailLine.userData.isTrail = true
-          trailLine.userData.trackKey = key
-          scene.add(trailLine)
-          trailLinesRef.current.set(key, trailLine)
+          const cylinder = new THREE.Mesh(cylinderGeometry, cylinderMaterial)
+          cylinder.userData.isCylinder = true
+          group.add(cylinder)
+
+          const topCapGeometry = new THREE.SphereGeometry(cylinderRadius, 8, 4, 0, Math.PI * 2, 0, Math.PI / 2)
+          const topCapMaterial = new THREE.MeshStandardMaterial({
+            color, emissive: color, emissiveIntensity: 0.5,
+            transparent: true, opacity: currentTracking.cylinderOpacity,
+          })
+          const topCap = new THREE.Mesh(topCapGeometry, topCapMaterial)
+          topCap.position.y = cylinderHeight / 2
+          group.add(topCap)
+
+          const bottomCapGeometry = new THREE.SphereGeometry(cylinderRadius, 8, 4, 0, Math.PI * 2, 0, Math.PI / 2)
+          const bottomCapMaterial = new THREE.MeshStandardMaterial({
+            color, emissive: color, emissiveIntensity: 0.5,
+            transparent: true, opacity: currentTracking.cylinderOpacity,
+          })
+          const bottomCap = new THREE.Mesh(bottomCapGeometry, bottomCapMaterial)
+          bottomCap.rotation.x = Math.PI
+          bottomCap.position.y = -cylinderHeight / 2
+          group.add(bottomCap)
+
+          const labelCanvas = document.createElement('canvas')
+          const labelCtx = labelCanvas.getContext('2d')!
+          labelCanvas.width = 512
+          labelCanvas.height = 128
+          labelCtx.fillStyle = 'rgba(220, 38, 38, 0.95)'
+          labelCtx.beginPath()
+          labelCtx.roundRect(8, 8, 496, 112, 56)
+          labelCtx.fill()
+          labelCtx.strokeStyle = 'rgba(255, 150, 150, 0.9)'
+          labelCtx.lineWidth = 6
+          labelCtx.stroke()
+          labelCtx.fillStyle = 'white'
+          labelCtx.font = 'bold 64px system-ui, sans-serif'
+          labelCtx.textAlign = 'center'
+          labelCtx.textBaseline = 'middle'
+          const displayId = key.length > 8 ? key.slice(-6) : key
+          labelCtx.fillText(displayId, 256, 68)
+
+          const labelTexture = new THREE.CanvasTexture(labelCanvas)
+          labelTexture.needsUpdate = true
+          const labelMaterial = new THREE.SpriteMaterial({
+            map: labelTexture, transparent: true, depthTest: false,
+          })
+          const labelSprite = new THREE.Sprite(labelMaterial)
+          labelSprite.scale.set(1.5, 0.375, 1)
+          labelSprite.position.y = cylinderHeight / 2 + 0.5
+          labelSprite.visible = false
+          labelSprite.userData.isSezLabel = true
+          group.add(labelSprite)
+
+          const pcPositions = generateCapsulePoints(cylinderRadius, cylinderHeight, 150)
+          const pcGeometry = new THREE.BufferGeometry()
+          pcGeometry.setAttribute('position', new THREE.BufferAttribute(pcPositions, 3))
+          const pcMaterial = new THREE.PointsMaterial({
+            color, size: 0.04, transparent: true, opacity: 0.9,
+            sizeAttenuation: true, depthWrite: false,
+          })
+          const pointCloud = new THREE.Points(pcGeometry, pcMaterial)
+          pointCloud.userData.isPointCloud = true
+          pointCloud.userData.basePositions = new Float32Array(pcPositions)
+          pointCloud.visible = currentTracking.trackDisplayMode === 'pointcloud'
+          group.add(pointCloud)
+
+          const wfBoxGeo = new THREE.BoxGeometry(bbox.width, bbox.height, bbox.depth)
+          const wfEdgesGeo = new THREE.EdgesGeometry(wfBoxGeo)
+          wfBoxGeo.dispose()
+          const wfMaterial = new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.7 })
+          const wireframe = new THREE.LineSegments(wfEdgesGeo, wfMaterial)
+          wireframe.userData.isWireframe = true
+          wireframe.visible = currentTracking.trackDisplayMode === 'pointcloud'
+          group.add(wireframe)
+
+          if (currentTracking.trackDisplayMode === 'pointcloud') {
+            (group.children[0] as THREE.Mesh).visible = false;
+            (group.children[1] as THREE.Mesh).visible = false;
+            (group.children[2] as THREE.Mesh).visible = false
+          }
+
+          group.visible = showTracksRef.current
+          scene.add(group)
+          trackMeshesRef.current.set(key, group)
         }
-        
-        // Update positions in-place (zero allocations)
-        const posAttr = trailLine.geometry.getAttribute('position') as THREE.BufferAttribute
-        const buf = posAttr.array as Float32Array
-        const maxPts = buf.length / 3
-        const count = Math.min(track.trail.length, maxPts)
-        
-        for (let i = 0; i < count; i++) {
-          buf[i * 3]     = track.trail[i].x
-          buf[i * 3 + 1] = 0.02
-          buf[i * 3 + 2] = track.trail[i].z
+
+        group.position.set(track.venuePosition.x, cylinderHeight / 2, track.venuePosition.z)
+
+        const cylinder = group.children[0] as THREE.Mesh
+        const topCap = group.children[1] as THREE.Mesh
+        const bottomCap = group.children[2] as THREE.Mesh
+
+        const sezLabel = group.children[3] as THREE.Sprite | undefined
+        if (sezLabel && sezLabel.userData.isSezLabel) {
+          sezLabel.visible = !!showSezLabel
+          sezLabel.scale.set(1.5, 0.375, 1)
+          sezLabel.position.y = cylinderHeight / 2 + 0.5
         }
-        
-        posAttr.needsUpdate = true
-        trailLine.geometry.setDrawRange(0, count)
-        
-        // Update trail color to match person (red if SEZ influenced)
-        ;(trailLine.material as THREE.LineBasicMaterial).color.set(color as any)
-      }
 
-      // Toggle visibility based on display mode
-      const isCylinderMode = tracking.trackDisplayMode === 'cylinder'
-      cylinder.visible = isCylinderMode
-      topCap.visible = isCylinderMode
-      bottomCap.visible = isCylinderMode
+        if (track.trail && track.trail.length > 1) {
+          let trailLine = trailLinesRef.current.get(key)
 
-      // Point cloud + wireframe (indices 4 & 5)
-      const pointCloud = group.children[4] as THREE.Points | undefined
-      const wireframe = group.children[5] as THREE.LineSegments | undefined
-      if (pointCloud) pointCloud.visible = !isCylinderMode
-      if (wireframe) wireframe.visible = !isCylinderMode
+          if (!trailLine) {
+            const MAX_TRAIL = 256
+            const posArray = new Float32Array(MAX_TRAIL * 3)
+            const geom = new THREE.BufferGeometry()
+            geom.setAttribute('position', new THREE.BufferAttribute(posArray, 3))
+            geom.setDrawRange(0, 0)
 
-      // Update colors - red translucent if in SEZ, otherwise normal
-      const cylinderMat = cylinder.material as THREE.MeshStandardMaterial
-      const topCapMat = topCap.material as THREE.MeshStandardMaterial
-      const bottomCapMat = bottomCap.material as THREE.MeshStandardMaterial
-      
-      // Adjust opacity - more translucent when influenced
-      const effectiveOpacity = isInSez ? Math.min(tracking.cylinderOpacity, 0.4) : tracking.cylinderOpacity
-      cylinderMat.opacity = effectiveOpacity
-      topCapMat.opacity = effectiveOpacity
-      bottomCapMat.opacity = effectiveOpacity
-      
-      if (typeof color === 'string') {
-        cylinderMat.color.set(color)
-        cylinderMat.emissive.set(color)
-        topCapMat.color.set(color)
-        topCapMat.emissive.set(color)
-        bottomCapMat.color.set(color)
-        bottomCapMat.emissive.set(color)
-        // Update point cloud + wireframe colors
-        if (pointCloud) (pointCloud.material as THREE.PointsMaterial).color.set(color)
-        if (wireframe) (wireframe.material as THREE.LineBasicMaterial).color.set(color)
-      } else {
-        cylinderMat.color.setHex(color)
-        cylinderMat.emissive.setHex(color)
-        topCapMat.color.setHex(color)
-        topCapMat.emissive.setHex(color)
-        bottomCapMat.color.setHex(color)
-        bottomCapMat.emissive.setHex(color)
-        // Update point cloud + wireframe colors
-        if (pointCloud) (pointCloud.material as THREE.PointsMaterial).color.setHex(color)
-        if (wireframe) (wireframe.material as THREE.LineBasicMaterial).color.setHex(color)
-      }
-      
-      // Increase emissive intensity when influenced for "shocked" effect
-      const emissiveIntensity = isInSez ? 0.8 : 0.5
-      cylinderMat.emissiveIntensity = emissiveIntensity
-      topCapMat.emissiveIntensity = emissiveIntensity
-      bottomCapMat.emissiveIntensity = emissiveIntensity
+            const mat = new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.8 })
 
-      // NOTE: Shimmer jitter is now handled in the throttled animate loop (10fps)
-      // to avoid CPU spikes from Socket.IO track updates
-    })
-    
-    // Clean up stale SEZ entry times for tracks that no longer exist
-    sezEntryTimesRef.current.forEach((_, key) => {
-      if (!currentTrackKeys.has(key)) {
-        sezEntryTimesRef.current.delete(key)
-      }
-    })
+            trailLine = new THREE.Line(geom, mat)
+            trailLine.frustumCulled = false
+            trailLine.userData.isTrail = true
+            trailLine.userData.trackKey = key
+            trailLine.visible = showTracksRef.current
+            scene.add(trailLine)
+            trailLinesRef.current.set(key, trailLine)
+          }
 
-  }, [tracks, doohScreens, tracking])
+          const posAttr = trailLine.geometry.getAttribute('position') as THREE.BufferAttribute
+          const buf = posAttr.array as Float32Array
+          const maxPts = buf.length / 3
+          const count = Math.min(track.trail.length, maxPts)
+
+          for (let i = 0; i < count; i++) {
+            buf[i * 3]     = track.trail[i].x
+            buf[i * 3 + 1] = 0.02
+            buf[i * 3 + 2] = track.trail[i].z
+          }
+
+          posAttr.needsUpdate = true
+          trailLine.geometry.setDrawRange(0, count)
+          ;(trailLine.material as THREE.LineBasicMaterial).color.set(color as any)
+        }
+
+        const isCylinderMode = currentTracking.trackDisplayMode === 'cylinder'
+        cylinder.visible = isCylinderMode
+        topCap.visible = isCylinderMode
+        bottomCap.visible = isCylinderMode
+
+        const pointCloud = group.children[4] as THREE.Points | undefined
+        const wireframe = group.children[5] as THREE.LineSegments | undefined
+        if (pointCloud) pointCloud.visible = !isCylinderMode
+        if (wireframe) wireframe.visible = !isCylinderMode
+
+        const cylinderMat = cylinder.material as THREE.MeshStandardMaterial
+        const topCapMat = topCap.material as THREE.MeshStandardMaterial
+        const bottomCapMat = bottomCap.material as THREE.MeshStandardMaterial
+
+        const effectiveOpacity = isInSez ? Math.min(currentTracking.cylinderOpacity, 0.4) : currentTracking.cylinderOpacity
+        cylinderMat.opacity = effectiveOpacity
+        topCapMat.opacity = effectiveOpacity
+        bottomCapMat.opacity = effectiveOpacity
+
+        if (typeof color === 'string') {
+          cylinderMat.color.set(color); cylinderMat.emissive.set(color)
+          topCapMat.color.set(color); topCapMat.emissive.set(color)
+          bottomCapMat.color.set(color); bottomCapMat.emissive.set(color)
+          if (pointCloud) (pointCloud.material as THREE.PointsMaterial).color.set(color)
+          if (wireframe) (wireframe.material as THREE.LineBasicMaterial).color.set(color)
+        } else {
+          cylinderMat.color.setHex(color); cylinderMat.emissive.setHex(color)
+          topCapMat.color.setHex(color); topCapMat.emissive.setHex(color)
+          bottomCapMat.color.setHex(color); bottomCapMat.emissive.setHex(color)
+          if (pointCloud) (pointCloud.material as THREE.PointsMaterial).color.setHex(color)
+          if (wireframe) (wireframe.material as THREE.LineBasicMaterial).color.setHex(color)
+        }
+
+        const emissiveIntensity = isInSez ? 0.8 : 0.5
+        cylinderMat.emissiveIntensity = emissiveIntensity
+        topCapMat.emissiveIntensity = emissiveIntensity
+        bottomCapMat.emissiveIntensity = emissiveIntensity
+      })
+
+      // Clean up stale SEZ entry times
+      sezEntryTimesRef.current.forEach((_, key) => {
+        if (!currentTrackKeys.has(key)) {
+          sezEntryTimesRef.current.delete(key)
+        }
+      })
+    }
+
+    const interval = setInterval(syncTrackMeshes, SYNC_INTERVAL)
+    return () => clearInterval(interval)
+  }, []) // Stable — reads everything via refs
 
   // Render ROIs (regions of interest) as polygons
   useEffect(() => {
@@ -4249,18 +4286,447 @@ export default function MainViewport({
     }
   }, [isInsightMode, selectedEpisode])
   
-  // Toggle layer visibility - Tracks
-  const { setTrackVisibility } = useTracking()
+  // Toggle layer visibility - Tracks (bounding boxes + trail lines)
+  const { setTrackVisibility } = useTrackingActions()
   useEffect(() => {
     trackMeshesRef.current.forEach(group => {
       group.visible = showTracksLayer
     })
-  }, [showTracksLayer, tracks])
+    trailLinesRef.current.forEach(trail => {
+      trail.visible = showTracksLayer
+    })
+  }, [showTracksLayer])
   // Notify backend to throttle KPI processing when tracks are visible (demo mode)
   // Separate effect so it only fires on toggle, not every track update
   useEffect(() => {
     setTrackVisibility(showTracksLayer)
   }, [showTracksLayer])
+
+  // ═══════════ NEURAL X-RAY MODE ═══════════
+  useEffect(() => {
+    const scene = sceneRef.current
+    if (!scene) return
+
+    if (xrayMode) {
+      // --- Transition to X-Ray ---
+      scene.background = new THREE.Color(0x050510)
+
+      // Dim lights
+      if (ambientLightRef.current) ambientLightRef.current.intensity = 0.15
+      if (directionalLightRef.current) directionalLightRef.current.intensity = 0.1
+
+      // Save track state and hide by default (user can re-enable via layer toggle)
+      preXrayTracksRef.current = showTracksLayer
+      setShowTracksLayer(false)
+      // Immediately force-hide all existing tracks + trails (state is async)
+      trackMeshesRef.current.forEach(g => { g.visible = false })
+      trailLinesRef.current.forEach(t => { t.visible = false })
+
+      // Hide ROI fill meshes (keep edges only via reduced opacity)
+      roiMeshesRef.current.forEach(g => { g.visible = false })
+
+      // Switch fixture materials to wireframe glow
+      objectMeshesRef.current.forEach((obj3d, objId) => {
+        obj3d.traverse(child => {
+          if (child instanceof THREE.Mesh && !child.userData.isEdgeLines) {
+            const mat = child.material as THREE.MeshStandardMaterial
+            if (!xrayPrevMaterialsRef.current.has(child.uuid)) {
+              xrayPrevMaterialsRef.current.set(child.uuid, {
+                color: mat.color.getHex(),
+                opacity: mat.opacity,
+                transparent: mat.transparent,
+                wireframe: mat.wireframe,
+                emissiveHex: mat.emissive.getHex(),
+                emissiveIntensity: mat.emissiveIntensity,
+              })
+            }
+            mat.transparent = true
+            mat.opacity = 0.06
+            mat.wireframe = false
+            mat.depthWrite = false
+            mat.emissive.setHex(mat.color.getHex())
+            mat.emissiveIntensity = 0.15
+            mat.needsUpdate = true
+          }
+          // Brighten edge lines
+          if (child instanceof THREE.LineSegments || child instanceof THREE.Line) {
+            const lm = child.material as THREE.LineBasicMaterial
+            if (lm.color) {
+              lm.color.setHex(0x00ffff)
+              lm.opacity = 0.7
+              lm.transparent = true
+              lm.needsUpdate = true
+            }
+          }
+        })
+      })
+
+      // Hide grid, keep floor dark
+      if (gridRef.current) gridRef.current.visible = false
+    } else {
+      // --- Restore from X-Ray ---
+      scene.background = new THREE.Color(0x0f0f14)
+
+      if (ambientLightRef.current) ambientLightRef.current.intensity = lighting.ambientIntensity
+      if (directionalLightRef.current) directionalLightRef.current.intensity = lighting.directionalIntensity
+
+      // Restore tracks to pre-xray state
+      setShowTracksLayer(preXrayTracksRef.current)
+      roiMeshesRef.current.forEach(g => { g.visible = showRoiLayer })
+
+      // Restore fixture materials
+      objectMeshesRef.current.forEach((obj3d) => {
+        obj3d.traverse(child => {
+          if (child instanceof THREE.Mesh && !child.userData.isEdgeLines) {
+            const prev = xrayPrevMaterialsRef.current.get(child.uuid)
+            if (prev) {
+              const mat = child.material as THREE.MeshStandardMaterial
+              mat.color.setHex(prev.color)
+              mat.opacity = prev.opacity
+              mat.transparent = prev.transparent
+              mat.wireframe = prev.wireframe
+              mat.depthWrite = prev.opacity >= 1.0
+              mat.emissive.setHex(prev.emissiveHex)
+              mat.emissiveIntensity = prev.emissiveIntensity
+              mat.needsUpdate = true
+            }
+          }
+          if (child instanceof THREE.LineSegments || child instanceof THREE.Line) {
+            const lm = child.material as THREE.LineBasicMaterial
+            if (lm.color) {
+              lm.color.setHex(0x00ffff)
+              lm.opacity = 0.6
+              lm.transparent = true
+              lm.needsUpdate = true
+            }
+          }
+        })
+      })
+      xrayPrevMaterialsRef.current.clear()
+
+      if (gridRef.current) gridRef.current.visible = showGridLayer
+    }
+  }, [xrayMode])
+
+  // ═══════════ X-RAY KPI HALOS (A: category consolidation, B: filter, D: threshold) ═══════════
+  const XRAY_MIN_VISITS = 2        // Strategy D: minimum activity to show a halo
+  const XRAY_MAX_CATEGORIES = 12   // Strategy A: cap total category halos
+
+  useEffect(() => {
+    const scene = sceneRef.current
+    if (!scene) return
+
+    // Remove old halos
+    xrayHalosRef.current.forEach(halo => {
+      scene.remove(halo)
+      halo.element.remove()
+    })
+    xrayHalosRef.current.clear()
+    xrayHaloTiersRef.current.clear()
+
+    if (!xrayMode || !xrayData) return
+
+    // ─── Shelf halos: category consolidation + per-shelf for categorized shelves ───
+    if (xrayFilters.shelves) {
+      // Step 1: Category-level summary halos (one per product category)
+      const categoryMap = new Map<string, { visits: number; dwells: number; engagements: number; avgDwellWeighted: number; peakOccupancy: number; cx: number; cz: number; count: number }>()
+      // Step 2: Per-shelf halos for shelves WITH categories (merged L/R)
+      const shelfMap = new Map<string, { name: string; cat: string; visits: number; dwells: number; engagements: number; avgDwellW: number; peakOcc: number; cx: number; cz: number; count: number }>()
+
+      for (const zone of xrayData.zones) {
+        if (zone.template !== 'shelf-engagement' || !zone.position) continue
+        const hasCat = zone.categories && zone.categories.length > 0
+        const cat = hasCat ? zone.categories![0] : null
+
+        // Only aggregate into category map if zone has a real category
+        if (cat) {
+          const existing = categoryMap.get(cat)
+          if (existing) {
+            existing.visits += zone.visits; existing.dwells += zone.dwells; existing.engagements += zone.engagements
+            existing.avgDwellWeighted += zone.avgDwellSec * zone.visits
+            existing.peakOccupancy = Math.max(existing.peakOccupancy, zone.peakOccupancy)
+            existing.cx += zone.position.x; existing.cz += zone.position.z; existing.count += 1
+          } else {
+            categoryMap.set(cat, { visits: zone.visits, dwells: zone.dwells, engagements: zone.engagements, avgDwellWeighted: zone.avgDwellSec * zone.visits, peakOccupancy: zone.peakOccupancy, cx: zone.position.x, cz: zone.position.z, count: 1 })
+          }
+        }
+
+        // Per-shelf merged L/R (only for categorized shelves)
+        if (cat && zone.shelfId) {
+          const existing = shelfMap.get(zone.shelfId)
+          if (existing) {
+            existing.visits += zone.visits; existing.dwells += zone.dwells; existing.engagements += zone.engagements
+            existing.avgDwellW += zone.avgDwellSec * zone.visits; existing.peakOcc = Math.max(existing.peakOcc, zone.peakOccupancy)
+            existing.cx += zone.position.x; existing.cz += zone.position.z; existing.count += 1
+          } else {
+            const shelfLabel = zone.name.replace(/\s*-\s*Engagement.*$/i, '')
+            shelfMap.set(zone.shelfId, { name: shelfLabel, cat, visits: zone.visits, dwells: zone.dwells, engagements: zone.engagements, avgDwellW: zone.avgDwellSec * zone.visits, peakOcc: zone.peakOccupancy, cx: zone.position.x, cz: zone.position.z, count: 1 })
+          }
+        }
+      }
+
+      // Create category summary halos (tier 2 — visible at medium+ zoom)
+      for (const [catName, agg] of categoryMap) {
+        const avgDwell = agg.visits > 0 ? agg.avgDwellWeighted / agg.visits : 0
+        const convRate = agg.engagements > 0 && agg.visits > 0 ? ((agg.engagements / agg.visits) * 100).toFixed(0) : '0'
+        const cx = agg.cx / agg.count, cz = agg.cz / agg.count
+
+        const el = document.createElement('div')
+        el.className = 'xray-halo'
+        el.dataset.tier = '2'
+        el.innerHTML = `
+          <div class="xray-halo-tag">${catName}</div>
+          <div class="xray-halo-body">
+            <div class="xray-halo-row"><span class="xray-halo-val">${agg.visits}</span> <span class="xray-halo-lbl">visits</span> <span class="xray-halo-val">${avgDwell.toFixed(1)}s</span> <span class="xray-halo-lbl">dwell</span></div>
+            <div class="xray-halo-row"><span class="xray-halo-val">${convRate}%</span> <span class="xray-halo-lbl">engage</span> <span class="xray-halo-val">${agg.peakOccupancy}</span> <span class="xray-halo-lbl">peak</span></div>
+          </div>
+        `
+        const haloId = `cat:${catName}`
+        const label = new CSS2DObject(el)
+        label.position.set(cx, 3.5, cz)
+        scene.add(label)
+        xrayHalosRef.current.set(haloId, label)
+        xrayHaloTiersRef.current.set(haloId, 2)
+      }
+
+      // Create per-shelf halos (tier 3 — close zoom only)
+      for (const [shelfId, s] of shelfMap) {
+        const avgDwell = s.visits > 0 ? s.avgDwellW / s.visits : 0
+        const cx = s.cx / s.count, cz = s.cz / s.count
+
+        const el = document.createElement('div')
+        el.className = 'xray-halo'
+        el.dataset.tier = '3'
+        el.innerHTML = `
+          <div class="xray-halo-tag">${s.name} <span style="opacity:.5;font-size:8px">${s.cat}</span></div>
+          <div class="xray-halo-body">
+            <div class="xray-halo-row"><span class="xray-halo-val">${s.visits}</span> <span class="xray-halo-lbl">visits</span> <span class="xray-halo-val">${avgDwell.toFixed(1)}s</span> <span class="xray-halo-lbl">dwell</span></div>
+          </div>
+        `
+        const haloId = `shelf:${shelfId}`
+        const label = new CSS2DObject(el)
+        label.position.set(cx, 2.8, cz)
+        scene.add(label)
+        xrayHalosRef.current.set(haloId, label)
+        xrayHaloTiersRef.current.set(haloId, 3)
+      }
+    }
+
+    // ─── Queue / checkout zones: individual halos with Y-stagger to avoid overlap ───
+    if (xrayFilters.queues) {
+      const queueZones = xrayData.zones.filter(z =>
+        z.template === 'cashier-queue' && z.position
+      )
+      // Merge Service+Queue per checkout name
+      const checkoutMap = new Map<string, { visits: number; avgWaitMs: number; queueDepth: number; cx: number; cz: number; count: number }>()
+      for (const z of queueZones) {
+        const cName = z.name.replace(/\s*-\s*(Queue|Service)\s*/i, '')
+        const existing = checkoutMap.get(cName)
+        const wait = (z as any).avgWaitMs || 0
+        const depth = (z as any).queueDepth || z.peakOccupancy
+        if (existing) {
+          existing.visits += z.visits; existing.avgWaitMs = Math.max(existing.avgWaitMs, wait)
+          existing.queueDepth = Math.max(existing.queueDepth, depth)
+          existing.cx += z.position.x; existing.cz += z.position.z; existing.count += 1
+        } else {
+          checkoutMap.set(cName, { visits: z.visits, avgWaitMs: wait, queueDepth: depth, cx: z.position.x, cz: z.position.z, count: 1 })
+        }
+      }
+
+      // Sort by position (x then z) for consistent stagger order
+      const checkouts = [...checkoutMap.entries()]
+        .map(([name, d]) => ({ name, ...d, cx: d.cx / d.count, cz: d.cz / d.count }))
+        .sort((a, b) => a.cx - b.cx || a.cz - b.cz)
+
+      // Y-stagger: cycle through 3 heights so adjacent checkouts don't overlap
+      const Y_LEVELS = [2.5, 4.5, 6.5]
+
+      for (let i = 0; i < checkouts.length; i++) {
+        const c = checkouts[i]
+        const avgWaitSec = c.avgWaitMs > 0 ? (c.avgWaitMs / 1000).toFixed(0) : '—'
+        const status = c.queueDepth > 6 ? 'BUSY' : c.queueDepth > 3 ? 'MODERATE' : 'OK'
+        const statusClass = c.queueDepth > 6 ? 'xray-status-red' : c.queueDepth > 3 ? 'xray-status-amber' : 'xray-status-green'
+        const shortName = c.name.replace('Checkout ', '#')
+
+        const el = document.createElement('div')
+        el.className = 'xray-halo xray-halo-compact'
+        el.innerHTML = `
+          <div class="xray-halo-tag xray-tag-queue">${shortName}</div>
+          <div class="xray-halo-body">
+            <div class="xray-halo-row"><span class="xray-halo-val">${avgWaitSec}s</span> <span class="xray-halo-lbl">w</span> <span class="xray-halo-val">${c.queueDepth}</span> <span class="xray-halo-lbl">q</span> <span class="xray-halo-badge ${statusClass}">${status}</span></div>
+          </div>
+        `
+
+        const haloId = `checkout:${c.name}`
+        const label = new CSS2DObject(el)
+        const yLevel = Y_LEVELS[i % Y_LEVELS.length]
+        label.position.set(c.cx, yLevel, c.cz)
+        scene.add(label)
+        xrayHalosRef.current.set(haloId, label)
+      }
+    }
+
+    // ─── Other non-shelf, non-queue zones (tier 3) ───
+    const miscZones = xrayData.zones.filter(z =>
+      z.template !== 'shelf-engagement' && z.template !== 'cashier-queue' &&
+      z.position && z.visits >= XRAY_MIN_VISITS
+    )
+    for (const zone of miscZones) {
+      const el = document.createElement('div')
+      el.className = 'xray-halo'
+      el.dataset.tier = '3'
+      el.innerHTML = `
+        <div class="xray-halo-tag xray-tag-zone">${zone.name}</div>
+        <div class="xray-halo-body">
+          <div class="xray-halo-row"><span class="xray-halo-val">${zone.visits}</span> <span class="xray-halo-lbl">visits</span> <span class="xray-halo-val">${zone.avgDwellSec.toFixed(1)}s</span> <span class="xray-halo-lbl">dwell</span></div>
+        </div>
+      `
+
+      const label = new CSS2DObject(el)
+      label.position.set(zone.position.x, 3.5, zone.position.z)
+      scene.add(label)
+      xrayHalosRef.current.set(zone.roiId, label)
+      xrayHaloTiersRef.current.set(zone.roiId, 3)
+    }
+
+    // ─── DOOH Screen halos (tier 1 — always visible) ───
+    if (xrayFilters.screens) {
+      for (const screen of xrayData.doohScreens) {
+        if (!screen.position) continue
+
+        const el = document.createElement('div')
+        el.className = 'xray-halo xray-halo-dooh'
+        el.dataset.tier = '1'
+
+        const liftStr = screen.liftRel !== null && screen.liftRel !== undefined
+          ? `${screen.liftRel >= 0 ? '▲' : '▼'} ${(Math.abs(screen.liftRel) * 100).toFixed(0)}%`
+          : '—'
+        const liftClass = screen.liftRel >= 0 ? 'xray-lift-pos' : 'xray-lift-neg'
+
+        el.innerHTML = `
+          <div class="xray-halo-tag xray-tag-dooh">📺 ${screen.name.replace('Digital_display ', 'DS-')}</div>
+          <div class="xray-halo-body">
+            <div class="xray-halo-row"><span class="xray-halo-val">${screen.exposures}</span> <span class="xray-halo-lbl">exp</span> <span class="xray-halo-val">${screen.avgAqs.toFixed(0)}</span> <span class="xray-halo-lbl">AQS</span></div>
+            <div class="xray-halo-row"><span class="xray-halo-val">${screen.conversionRate.toFixed(1)}%</span> <span class="xray-halo-lbl">conv</span> <span class="${liftClass}">${liftStr}</span> <span class="xray-halo-lbl">lift</span></div>
+            ${screen.campaignName ? `<div class="xray-halo-campaign">${screen.campaignName}</div>` : ''}
+          </div>
+        `
+
+        const label = new CSS2DObject(el)
+        label.position.set(screen.position.x, 4.5, screen.position.z)
+        scene.add(label)
+        xrayHalosRef.current.set(screen.screenId, label)
+        xrayHaloTiersRef.current.set(screen.screenId, 1)
+      }
+    }
+
+    // ─── Hover-to-explode: spiral fan-out of overlapping halos ───
+    const OVERLAP_PX = 60
+    let collapseTimer: ReturnType<typeof setTimeout> | null = null
+    let activeGroupInners: HTMLElement[] = []
+
+    // Wrap each halo's DOM children in an inner div for independent translation
+    const allHaloEls: HTMLElement[] = []
+    xrayHalosRef.current.forEach(cssObj => {
+      const el = cssObj.element as HTMLElement
+      const inner = document.createElement('div')
+      inner.className = 'xray-halo-inner'
+      while (el.firstChild) inner.appendChild(el.firstChild)
+      el.appendChild(inner)
+      allHaloEls.push(el)
+    })
+
+    // Archimedean spiral positions: r = a + b*θ
+    const spiralPositions = (count: number, cardW: number, cardH: number): { x: number; y: number }[] => {
+      if (count <= 1) return [{ x: 0, y: 0 }]
+      const positions: { x: number; y: number }[] = [{ x: 0, y: 0 }] // center stays
+      const minGap = Math.max(cardW, cardH) + 8 // minimum distance between card centers
+      const angleStep = 0.85 // radians per step — controls tightness
+      const radiusGrowth = minGap / (2 * Math.PI) * angleStep // grow enough each revolution to not overlap
+      let angle = 0
+      let radius = minGap * 0.7 // start first ring at ~card-width away
+      for (let i = 1; i < count; i++) {
+        angle += angleStep
+        radius += radiusGrowth
+        positions.push({
+          x: Math.cos(angle) * radius,
+          y: Math.sin(angle) * radius,
+        })
+      }
+      return positions
+    }
+
+    const collapseGroup = () => {
+      for (const inner of activeGroupInners) {
+        inner.style.transform = ''
+        inner.style.zIndex = ''
+      }
+      activeGroupInners = []
+    }
+
+    const handleEnter = (e: Event) => {
+      if (collapseTimer) { clearTimeout(collapseTimer); collapseTimer = null }
+      const target = e.currentTarget as HTMLElement
+      const inner = target.querySelector('.xray-halo-inner') as HTMLElement | null
+      if (!inner) return
+
+      if (activeGroupInners.includes(inner) && activeGroupInners.length > 1) return
+
+      collapseGroup()
+
+      const tRect = target.getBoundingClientRect()
+      const tCx = tRect.left + tRect.width / 2
+      const tCy = tRect.top + tRect.height / 2
+
+      const group: { el: HTMLElement; inner: HTMLElement; cx: number; cy: number }[] = []
+      for (const el of allHaloEls) {
+        if (el.offsetParent === null) continue
+        const r = el.getBoundingClientRect()
+        const cx = r.left + r.width / 2
+        const cy = r.top + r.height / 2
+        if (Math.hypot(cx - tCx, cy - tCy) < OVERLAP_PX) {
+          const inn = el.querySelector('.xray-halo-inner') as HTMLElement
+          if (inn) group.push({ el, inner: inn, cx, cy })
+        }
+      }
+
+      if (group.length <= 1) return
+
+      activeGroupInners = group.map(g => g.inner)
+
+      // Measure a representative card to size the spiral
+      const sampleRect = group[0].inner.getBoundingClientRect()
+      const cardW = sampleRect.width || 90
+      const cardH = sampleRect.height || 40
+      const positions = spiralPositions(group.length, cardW, cardH)
+
+      // Stagger animation delay for a blossoming effect
+      group.forEach((g, i) => {
+        const p = positions[i]
+        const delay = i * 30 // ms stagger
+        g.inner.style.transition = `transform 0.35s cubic-bezier(0.34, 1.56, 0.64, 1) ${delay}ms`
+        g.inner.style.transform = `translate(${p.x.toFixed(0)}px, ${p.y.toFixed(0)}px)`
+        g.inner.style.zIndex = `${200 + i}`
+      })
+    }
+
+    const handleLeave = () => {
+      if (collapseTimer) clearTimeout(collapseTimer)
+      collapseTimer = setTimeout(() => {
+        activeGroupInners.forEach((inner, i) => {
+          inner.style.transition = `transform 0.25s cubic-bezier(0.5, 0, 0.75, 0) ${i * 15}ms`
+        })
+        requestAnimationFrame(collapseGroup)
+      }, 300)
+    }
+
+    for (const el of allHaloEls) {
+      el.addEventListener('mouseenter', handleEnter)
+      el.addEventListener('mouseleave', handleLeave)
+    }
+
+  }, [xrayMode, xrayData, xrayFilters])
+
   
   // Load shelf planogram when planogramSelectedShelfId changes
   useEffect(() => {
@@ -4399,7 +4865,8 @@ export default function MainViewport({
     const viewData = {
       position: cameraRef.current.position.toArray(),
       target: controlsRef.current.target.toArray(),
-      zoom: cameraRef.current.zoom
+      zoom: cameraRef.current.zoom,
+      fov: cameraRef.current.fov
     }
     localStorage.setItem(cameraStorageKey, JSON.stringify(viewData))
     setHasSavedView(true)
@@ -4419,6 +4886,7 @@ export default function MainViewport({
       cameraRef.current.position.fromArray(viewData.position)
       controlsRef.current.target.fromArray(viewData.target)
       if (viewData.zoom) cameraRef.current.zoom = viewData.zoom
+      if (viewData.fov) cameraRef.current.fov = viewData.fov
       cameraRef.current.updateProjectionMatrix()
       controlsRef.current.update()
     } catch (err) {
@@ -4896,6 +5364,23 @@ export default function MainViewport({
       {/* Camera Controls Toolbar */}
       <div className="h-10 border-b border-border-dark flex items-center px-3 gap-2 bg-panel-bg flex-shrink-0">
         <span className="text-sm font-medium text-white">3D Venue</span>
+        {xrayMode && (
+          <div className="flex gap-1 ml-3">
+            {(['shelves', 'queues', 'screens'] as const).map(key => (
+              <button
+                key={key}
+                onClick={() => setXrayFilters(f => ({ ...f, [key]: !f[key] }))}
+                className={`px-2 py-0.5 text-[9px] uppercase tracking-[0.15em] border rounded transition-colors ${
+                  xrayFilters[key]
+                    ? 'border-cyan-500/40 bg-cyan-500/15 text-cyan-300'
+                    : 'border-white/10 text-white/30 hover:text-white/50'
+                }`}
+              >
+                {key === 'shelves' ? '🛒' : key === 'queues' ? '🚶' : '📺'} {key}
+              </button>
+            ))}
+          </div>
+        )}
         <div className="flex-1" />
         
         {/* Pan/Rotate Mode */}

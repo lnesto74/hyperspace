@@ -9,9 +9,10 @@
  */
 
 import { useEffect, useState, useRef, useMemo } from 'react'
-import { useTracking } from '../../context/TrackingContext'
+import { useTracksRef } from '../../context/TrackingContext'
 import { useRoi } from '../../context/RoiContext'
 import AnimatedNumber from './AnimatedNumber'
+import Tooltip from './Tooltip'
 import { 
   DoorOpen, 
   Navigation, 
@@ -56,12 +57,12 @@ const CATEGORY_ICONS: Record<string, React.ElementType> = {
 }
 
 // State config
-const STATE_CONFIG: Record<BehaviorState, { label: string; color: string; Icon: React.ElementType }> = {
-  arrived:    { label: 'ARRIVED',    color: 'text-cyan-400',   Icon: DoorOpen },
-  exploring:  { label: 'EXPLORING',  color: 'text-purple-400', Icon: Navigation },
-  interested: { label: 'INTERESTED', color: 'text-green-400',  Icon: Eye },
-  buying:     { label: 'BUYING',     color: 'text-amber-400',  Icon: CreditCard },
-  exiting:    { label: 'EXITING',    color: 'text-red-400',    Icon: LogOut },
+const STATE_CONFIG: Record<BehaviorState, { label: string; color: string; Icon: React.ElementType; tip: string }> = {
+  arrived:    { label: 'ARRIVED',    color: 'text-cyan-400',   Icon: DoorOpen,    tip: 'Just entered the venue (< 5s)' },
+  exploring:  { label: 'EXPLORING',  color: 'text-purple-400', Icon: Navigation,  tip: 'Walking through the store' },
+  interested: { label: 'INTERESTED', color: 'text-green-400',  Icon: Eye,         tip: 'Stopped in a zone (speed < 0.3 m/s)' },
+  buying:     { label: 'BUYING',     color: 'text-amber-400',  Icon: CreditCard,  tip: 'Inside a checkout zone' },
+  exiting:    { label: 'EXITING',    color: 'text-red-400',    Icon: LogOut,       tip: 'No longer detected, leaving' },
 }
 
 // Short hash from track ID
@@ -92,11 +93,9 @@ const UPDATE_INTERVAL = 500
 const MAX_VISIBLE_ROWS = 8
 
 export default function JourneyFlowStream() {
-  const { tracks } = useTracking()
+  const tracksRef = useTracksRef()
   const { regions } = useRoi()
-  const tracksRef = useRef(tracks)
   const regionsRef = useRef(regions)
-  tracksRef.current = tracks
   regionsRef.current = regions
   const journeysRef = useRef<Map<string, TrackJourney>>(new Map())
   const [visibleJourneys, setVisibleJourneys] = useState<TrackJourney[]>([])
@@ -251,15 +250,17 @@ export default function JourneyFlowStream() {
       <div className="flex items-center justify-between mb-2 pb-2 border-b border-[rgba(255,255,255,0.06)]">
         <div className="flex items-center gap-2">
           <div className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse shadow-[0_0_8px_rgba(34,211,238,0.6)]" />
-          <span className="text-[10px] uppercase tracking-[0.2em] text-gray-500">LIVE JOURNEYS</span>
+          <span className="text-[10px] uppercase tracking-[0.2em] text-white/50">LIVE JOURNEYS</span>
         </div>
-        <span className="text-[10px] text-gray-500 tabular-nums"><AnimatedNumber value={totalActive} duration={500} /> in store</span>
+        <Tooltip text="Total people currently tracked in the venue">
+          <span className="text-[10px] text-white/50 tabular-nums cursor-help"><AnimatedNumber value={totalActive} duration={500} /> in store</span>
+        </Tooltip>
       </div>
       
       {/* Journey Feed */}
       <div className="flex-1 overflow-hidden space-y-1">
         {visibleJourneys.length === 0 ? (
-          <div className="flex items-center justify-center h-full text-gray-600 text-[10px]">
+          <div className="flex items-center justify-center h-full text-white/30 text-[10px]">
             No active journeys
           </div>
         ) : (
@@ -276,7 +277,7 @@ export default function JourneyFlowStream() {
                 className="flex items-center gap-2 py-1 px-2 rounded bg-[rgba(255,255,255,0.02)] hover:bg-[rgba(255,255,255,0.04)] transition-colors"
               >
                 {/* Track ID */}
-                <span className="text-[10px] text-gray-400 font-bold w-10">
+                <span className="text-[10px] text-white/60 font-bold w-10">
                   #{journey.shortId}
                 </span>
                 
@@ -288,14 +289,14 @@ export default function JourneyFlowStream() {
                 
                 {/* Zone */}
                 <div className="flex items-center gap-1 flex-1 min-w-0">
-                  <CategoryIcon className="w-3 h-3 text-gray-500 flex-shrink-0" />
-                  <span className="text-[10px] text-gray-400 truncate">
+                  <CategoryIcon className="w-3 h-3 text-white/40 flex-shrink-0" />
+                  <span className="text-[10px] text-white/60 truncate">
                     {journey.zoneName || 'Store'}
                   </span>
                 </div>
                 
                 {/* Time */}
-                <span className="text-[10px] text-gray-600 tabular-nums w-10 text-right">
+                <span className="text-[10px] text-white/45 tabular-nums w-10 text-right">
                   {formatTime(journey.timeInState)}
                 </span>
               </div>
@@ -307,12 +308,14 @@ export default function JourneyFlowStream() {
       {/* State Summary */}
       <div className="flex items-center justify-between mt-2 pt-2 border-t border-[rgba(255,255,255,0.04)]">
         {Object.entries(STATE_CONFIG).map(([state, config]) => (
-          <div key={state} className="flex items-center gap-1">
-            <config.Icon className={`w-3 h-3 ${stateCounts[state as BehaviorState] > 0 ? config.color : 'text-gray-700'}`} />
-            <span className={`text-[9px] tabular-nums ${stateCounts[state as BehaviorState] > 0 ? 'text-gray-400' : 'text-gray-700'}`}>
-              {stateCounts[state as BehaviorState]}
-            </span>
-          </div>
+          <Tooltip key={state} text={config.tip}>
+            <div className="flex items-center gap-1 cursor-help">
+              <config.Icon className={`w-3 h-3 ${stateCounts[state as BehaviorState] > 0 ? config.color : 'text-white/20'}`} />
+              <span className={`text-[9px] tabular-nums ${stateCounts[state as BehaviorState] > 0 ? 'text-white/60' : 'text-white/20'}`}>
+                {stateCounts[state as BehaviorState]}
+              </span>
+            </div>
+          </Tooltip>
         ))}
       </div>
     </div>

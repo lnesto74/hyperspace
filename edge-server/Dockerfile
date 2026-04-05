@@ -2,9 +2,12 @@
 FROM node:18-alpine AS frontend-build
 WORKDIR /app/frontend
 COPY frontend/package*.json ./
+# Many hosts set NODE_ENV=production, which skips devDependencies (TypeScript, Vite, etc.)
+ENV NODE_ENV=development
 RUN npm install
 COPY frontend/ ./
-RUN npm run build
+# Vite compiles TS; avoid `tsc` CLI (broken if host node_modules overwrote image — use .dockerignore).
+RUN npx vite build
 
 # Production stage
 FROM node:18-alpine AS production

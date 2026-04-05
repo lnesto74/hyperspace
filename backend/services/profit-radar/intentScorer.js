@@ -95,8 +95,8 @@ export class IntentScorer {
 
   start() {
     if (this.interval) return;
-    this.interval = setInterval(() => this.tick(), 3000); // 0.33Hz (intent scores are smoothed, don't need 1s precision)
-    console.log('📡 IntentScorer started (0.33Hz)');
+    this.interval = setInterval(() => this.tick(), 15000); // 0.067Hz — intent scores are smoothed, 15s is fine
+    console.log('📡 IntentScorer started (0.067Hz / 15s)');
   }
 
   stop() {
@@ -112,29 +112,46 @@ export class IntentScorer {
     const allEntries = [...tracks.values()];
     const now = Date.now();
 
+    // Build spatial grid for O(N) nearest-neighbor instead of O(N²)
+    const grid = new Map();
+    const CELL = 3; // 3m cells — matches the 5m neighbor radius
+    for (const entry of allEntries) {
+      const p = entry.track.venuePosition;
+      const key = `${Math.floor(p.x / CELL)},${Math.floor(p.z / CELL)}`;
+      if (!grid.has(key)) grid.set(key, []);
+      grid.get(key).push(entry);
+    }
+
     for (const entry of allEntries) {
       const { track, trail } = entry;
       const features = extractFeatures(trail);
-      const neighbor = this._findNearest(track.trackKey, track.venuePosition, allEntries);
+      const neighbor = this._findNearestGrid(track.trackKey, track.venuePosition, grid, CELL);
       const axes = scoreAxes(features, neighbor);
       this.trackAxes.set(track.trackKey, { axes, position: track.venuePosition, trail, timestamp: now });
     }
 
-    // Prune stale
     for (const [key, val] of this.trackAxes) {
-      if (now - val.timestamp > 8000) this.trackAxes.delete(key);
+      if (now - val.timestamp > 20000) this.trackAxes.delete(key);
     }
     const _elapsed = Date.now() - _t0;
     if (_elapsed > 50) console.warn(`⏱️ IntentScorer.tick took ${_elapsed}ms (${allEntries.length} tracks)`);
   }
 
-  _findNearest(selfKey, pos, allEntries) {
+  _findNearestGrid(selfKey, pos, grid, cellSize) {
+    const cx = Math.floor(pos.x / cellSize);
+    const cz = Math.floor(pos.z / cellSize);
     let minDist = Infinity;
     let best = null;
-    for (const e of allEntries) {
-      if (e.track.trackKey === selfKey) continue;
-      const d = dist2D(pos, e.track.venuePosition);
-      if (d < minDist) { minDist = d; best = e; }
+    for (let dx = -1; dx <= 1; dx++) {
+      for (let dz = -1; dz <= 1; dz++) {
+        const cell = grid.get(`${cx + dx},${cz + dz}`);
+        if (!cell) continue;
+        for (const e of cell) {
+          if (e.track.trackKey === selfKey) continue;
+          const d = dist2D(pos, e.track.venuePosition);
+          if (d < minDist) { minDist = d; best = e; }
+        }
+      }
     }
     if (!best || minDist > 5) return { dist: 999 };
     return { dist: minDist, headingAlign: 0.5, speedAlign: 0.5 };

@@ -34,17 +34,26 @@ export function useNeuralBatch(range: string = '1h') {
 
   const fetchBatch = useCallback(async () => {
     if (!venue?.id) return
+    const t0 = performance.now()
     try {
       setLoading(true)
       const res = await fetch(
         `${API_BASE}/api/neural/batch?venueId=${venue.id}&range=${rangeRef.current}`
       )
+      const elapsed = Math.round(performance.now() - t0)
       if (res.ok) {
         const json = await res.json()
         setData(json)
+        if (elapsed > 500) {
+          console.warn(`[DIAG] batch fetch SLOW  ${elapsed}ms  status=${res.status}  t=${Date.now()}`)
+        } else {
+          console.log(`[DIAG] batch fetch OK  ${elapsed}ms  t=${Date.now()}`)
+        }
+      } else {
+        console.warn(`[DIAG] batch fetch FAIL  ${elapsed}ms  status=${res.status}  t=${Date.now()}`)
       }
     } catch (e) {
-      // silent — individual panels show their own empty states
+      console.warn(`[DIAG] batch fetch ERROR  ${Math.round(performance.now() - t0)}ms  err=${e}  t=${Date.now()}`)
     } finally {
       setLoading(false)
     }

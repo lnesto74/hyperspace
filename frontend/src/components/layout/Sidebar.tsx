@@ -11,6 +11,7 @@ import PlanogramPanel from '../planogram/PlanogramPanel'
 import WhiteLabelSettings from '../settings/WhiteLabelSettings'
 import SimulatorControl from '../settings/SimulatorControl'
 import { useVenue } from '../../context/VenueContext'
+import LogoCarousel from './LogoCarousel'
 
 interface SidebarProps {
   activeTab: SidebarTab
@@ -83,8 +84,8 @@ export default function Sidebar({ activeTab, onTabChange, onOpenDwgImporter, onO
       `}</style>
       <div className="h-20 border-b border-border-dark flex items-center px-4">
         <div className="flex items-center gap-3">
-          <img src="/hyperspace-logo.png" alt="" className="w-14 h-14 object-contain" onError={(e) => { (e.target as HTMLImageElement).src = '/hyperspace.svg'; }} />
-          <h1 className="sidebar-gradient-text text-xl">Hyperspace</h1>
+          <LogoCarousel />
+          <h1 className="sidebar-gradient-text text-xl font-bold tracking-wide">Hyperspace</h1>
         </div>
       </div>
 

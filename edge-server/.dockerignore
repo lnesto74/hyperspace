@@ -1,0 +1,6 @@
+# Never copy host node_modules over the image's `npm install` layer (breaks .bin/tsc on Linux)
+frontend/node_modules
+backend/node_modules
+frontend/dist
+.git
+**/.DS_Store

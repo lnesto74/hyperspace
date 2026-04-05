@@ -10,6 +10,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { useVenue } from '../../context/VenueContext'
 import { API_BASE } from '../../config/api'
 import AnimatedNumber from './AnimatedNumber'
+import Tooltip from './Tooltip'
 
 interface FunnelStage {
   id: string
@@ -32,6 +33,14 @@ const STAGE_COLORS = [
   'rgba(180, 100, 255, 0.7)', // BASKET — purple
   'rgba(255, 180, 50, 0.8)',  // CHECKOUT — amber
 ]
+
+const STAGE_TIPS: Record<string, string> = {
+  entry: 'All unique visitors detected in the venue',
+  shop: 'Visitors who entered at least 1 product zone',
+  engage: 'Visitors who dwelled in a product zone',
+  basket: 'Visitors engaged in 3+ different product zones',
+  checkout: 'Visitors who entered a checkout zone',
+}
 
 export default function ConversionFunnel({ batchFunnel }: { batchFunnel?: FunnelData | null }) {
   const { venue } = useVenue()
@@ -85,7 +94,7 @@ export default function ConversionFunnel({ batchFunnel }: { batchFunnel?: Funnel
     <div className="h-full flex flex-col p-3 font-mono text-[10px]">
       {/* Header */}
       <div className="flex items-center justify-between mb-2">
-        <div className="text-[11px] text-white/60 tracking-wider uppercase">
+        <div className="text-[11px] text-white/70 tracking-wider uppercase">
           Engagement Funnel
         </div>
         <div className="flex gap-1">
@@ -96,7 +105,7 @@ export default function ConversionFunnel({ batchFunnel }: { batchFunnel?: Funnel
               className={`px-1.5 py-0.5 rounded text-[9px] transition-colors ${
                 range === r 
                   ? 'bg-white/10 text-white' 
-                  : 'text-white/30 hover:text-white/50'
+                  : 'text-white/45 hover:text-white/70'
               }`}
             >
               {r}
@@ -110,9 +119,11 @@ export default function ConversionFunnel({ batchFunnel }: { batchFunnel?: Funnel
         {data?.stages?.map((stage, i) => (
           <div key={stage.id} className="flex items-center gap-2">
             {/* Label */}
-            <div className="w-[52px] text-right text-white/40 text-[9px] shrink-0">
-              {stage.label}
-            </div>
+            <Tooltip text={STAGE_TIPS[stage.id] || stage.label}>
+              <div className="w-[52px] text-right text-white/60 text-[9px] shrink-0 cursor-help">
+                {stage.label}
+              </div>
+            </Tooltip>
 
             {/* Bar container */}
             <div className="flex-1 h-[18px] bg-white/[0.03] rounded-sm relative overflow-hidden">
@@ -142,9 +153,9 @@ export default function ConversionFunnel({ batchFunnel }: { batchFunnel?: Funnel
               {i > 0 && stage.dropPct > 0 ? (
                 <span className="text-red-400/70 text-[9px]">-{stage.dropPct}%</span>
               ) : i === 0 ? (
-                <span className="text-white/20 text-[9px]">100%</span>
+                <span className="text-white/45 text-[9px]">100%</span>
               ) : (
-                <span className="text-white/20 text-[9px]">—</span>
+                <span className="text-white/45 text-[9px]">—</span>
               )}
             </div>
           </div>
@@ -156,7 +167,7 @@ export default function ConversionFunnel({ batchFunnel }: { batchFunnel?: Funnel
         <div className="mt-2 pt-2 border-t border-white/[0.04]">
           <div className="flex items-center gap-1.5">
             <div className="w-1.5 h-1.5 rounded-full bg-red-400/60 animate-pulse" />
-            <span className="text-white/40 text-[9px]">
+            <span className="text-white/60 text-[9px]">
               Biggest leak: {data.biggestLeak.from} → {data.biggestLeak.to}{' '}
               <span className="text-red-400/70">({data.biggestLeak.lost} lost, -{data.biggestLeak.dropPct}%)</span>
             </span>

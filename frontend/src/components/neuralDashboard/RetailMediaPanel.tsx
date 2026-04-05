@@ -9,6 +9,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { useVenue } from '../../context/VenueContext'
 import { API_BASE } from '../../config/api'
 import AnimatedNumber from './AnimatedNumber'
+import Tooltip from './Tooltip'
 
 interface CampaignSummary {
   id: string
@@ -31,6 +32,7 @@ interface MediaData {
   avgConversionRate: number
   totalExposures: number
   enabled: boolean
+  dataRange?: string
 }
 
 const ROI_COLORS = {
@@ -42,33 +44,31 @@ const ROI_COLORS = {
 export default function RetailMediaPanel({ batchMedia }: { batchMedia?: MediaData | null } = {}) {
   const { venue } = useVenue()
   const [data, setData] = useState<MediaData | null>(null)
-  const [range, setRange] = useState<'1h' | '24h' | '7d'>('24h')
+  const [range, setRange] = useState<'1h' | '24h' | '7d' | 'all'>('all')
 
-  // Use batch data if available
+  // Use batch data as initial seed, but allow range buttons to override
   useEffect(() => {
-    if (batchMedia) setData(batchMedia)
+    if (batchMedia && !data) setData(batchMedia)
   }, [batchMedia])
 
   const fetchMedia = useCallback(async () => {
-    if (!venue?.id || batchMedia) return
+    if (!venue?.id) return
     try {
       const res = await fetch(`${API_BASE}/api/neural/media-summary?venueId=${venue.id}&range=${range}`)
       if (res.ok) {
         const json = await res.json()
-        if (!json.enabled) console.warn('[RetailMedia] DOOH Attribution not enabled on backend')
         setData(json)
       }
     } catch (e) {
       // silent
     }
-  }, [venue?.id, range, batchMedia])
+  }, [venue?.id, range])
 
   useEffect(() => {
-    if (batchMedia) return
     fetchMedia()
     const interval = setInterval(fetchMedia, 30000)
     return () => clearInterval(interval)
-  }, [fetchMedia, batchMedia])
+  }, [fetchMedia])
 
   // Not enabled
   if (data && !data.enabled) {
@@ -85,18 +85,18 @@ export default function RetailMediaPanel({ batchMedia }: { batchMedia?: MediaDat
     <div className="h-full flex flex-col p-3 font-mono text-[10px]">
       {/* Header */}
       <div className="flex items-center justify-between mb-2">
-        <div className="text-[11px] text-white/60 tracking-wider uppercase">
+        <div className="text-[11px] text-white/70 tracking-wider uppercase">
           Retail Media
         </div>
         <div className="flex gap-1">
-          {(['1h', '24h', '7d'] as const).map(r => (
+          {(['1h', '24h', '7d', 'all'] as const).map(r => (
             <button
               key={r}
               onClick={() => setRange(r)}
               className={`px-1.5 py-0.5 rounded text-[9px] transition-colors ${
                 range === r 
                   ? 'bg-white/10 text-white' 
-                  : 'text-white/30 hover:text-white/50'
+                  : 'text-white/45 hover:text-white/70'
               }`}
             >
               {r}
@@ -105,26 +105,39 @@ export default function RetailMediaPanel({ batchMedia }: { batchMedia?: MediaDat
         </div>
       </div>
 
+      {/* Data range indicator */}
+      {data && data.dataRange && data.dataRange !== range && data.campaigns.length > 0 && (
+        <div className="text-[8px] text-amber-400/50 mb-1 text-center">
+          Showing all-time data (no events in {range} window)
+        </div>
+      )}
+
       {/* Summary row */}
       {data && data.campaigns.length > 0 && (
         <div className="flex items-center gap-3 mb-2 pb-2 border-b border-white/[0.04]">
-          <div>
-            <div className="text-white/30 text-[8px]">ACTIVE</div>
-            <AnimatedNumber value={data.activeCampaigns} duration={600} className="text-white/70 text-[12px]" />
-          </div>
-          <div>
-            <div className="text-white/30 text-[8px]">EXPOSURES</div>
-            <AnimatedNumber value={data.totalExposures} duration={600} className="text-white/70 text-[12px]" />
-          </div>
-          <div>
-            <div className="text-white/30 text-[8px]">AVG CONV</div>
+          <Tooltip text="Number of currently running DOOH campaigns">
+            <div className="cursor-help">
+              <div className="text-white/50 text-[8px]">ACTIVE</div>
+              <AnimatedNumber value={data.activeCampaigns} duration={600} className="text-white/70 text-[12px]" />
+            </div>
+          </Tooltip>
+          <Tooltip text="Total people exposed to media content">
+            <div className="cursor-help">
+              <div className="text-white/50 text-[8px]">EXPOSURES</div>
+              <AnimatedNumber value={data.totalExposures} duration={600} className="text-white/70 text-[12px]" />
+            </div>
+          </Tooltip>
+          <Tooltip text="Average conversion rate across active campaigns">
+            <div className="cursor-help">
+              <div className="text-white/50 text-[8px]">AVG CONV</div>
             <AnimatedNumber
               value={data.avgConversionRate}
               suffix="%"
               duration={600}
               className={`text-[12px] ${data.avgConversionRate > 20 ? 'text-green-400/70' : data.avgConversionRate > 5 ? 'text-white/50' : 'text-red-400/70'}`}
             />
-          </div>
+            </div>
+          </Tooltip>
         </div>
       )}
 
@@ -140,18 +153,20 @@ export default function RetailMediaPanel({ batchMedia }: { batchMedia?: MediaDat
               <div className="flex items-center justify-between mb-1">
                 <div className="flex items-center gap-1.5">
                   <div className={`w-1.5 h-1.5 rounded-full ${camp.isActive ? 'bg-green-400/60' : 'bg-white/20'}`} />
-                  <span className="text-white/60 text-[9px] truncate max-w-[100px]">
+                  <span className="text-white/70 text-[9px] truncate max-w-[100px]">
                     {camp.name}
                   </span>
-                  <span className="text-white/20 text-[8px]">{camp.screens}scr</span>
+                  <span className="text-white/45 text-[8px]">{camp.screens}scr</span>
                 </div>
                 <span className={`text-[9px] ${roiCfg.text}`}>
                   {roiCfg.label} {camp.conversionRate}%
                 </span>
               </div>
               <div className="flex items-center justify-between text-[8px]">
-                <span className="text-white/25">{camp.targetType} · {camp.exposures} exp</span>
-                <span className="text-white/25">DCI {camp.avgDci}{camp.liftRel != null ? ` · lift ${camp.liftRel > 0 ? '+' : ''}${camp.liftRel}%` : ''}</span>
+                <span className="text-white/50">{camp.targetType} · {camp.exposures} exp</span>
+                <Tooltip text="Dwell-Conversion Index — media effectiveness score">
+                  <span className="text-white/50 cursor-help">DCI {camp.avgDci}{camp.liftRel != null ? ` · lift ${camp.liftRel > 0 ? '+' : ''}${camp.liftRel}%` : ''}</span>
+                </Tooltip>
               </div>
             </div>
           )
@@ -167,8 +182,9 @@ export default function RetailMediaPanel({ batchMedia }: { batchMedia?: MediaDat
         )}
         {/* Campaigns exist but zero exposures */}
         {data && data.campaigns?.length > 0 && data.totalExposures === 0 && (
-          <div className="mt-1 pt-1 border-t border-white/[0.04] text-[8px] text-white/15 text-center">
-            Run DOOH Attribution analysis to populate exposure data
+          <div className="mt-1 pt-1 border-t border-white/[0.04] text-[8px] text-white/20 text-center">
+            <div>Awaiting exposure data...</div>
+            <div className="text-white/10 mt-0.5">Auto-processing active · Run attribution in PEBLE for instant results</div>
           </div>
         )}
       </div>

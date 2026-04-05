@@ -10,6 +10,8 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useVenue } from '../../context/VenueContext'
 import { API_BASE } from '../../config/api'
+import Tooltip from './Tooltip'
+import AlertDetailModal from './AlertDetailModal'
 
 interface Alert {
   id: string
@@ -20,14 +22,17 @@ interface Alert {
   action: string
   timestamp: number
   zoneId?: string
+  zoneIds?: string[]
+  categories?: string[]
+  shelfName?: string
   firstSeen: number
 }
 
-const TYPE_CONFIG: Record<string, { icon: string; color: string; glow: string }> = {
-  queue_risk:     { icon: '⏱', color: 'rgba(255, 80, 80, 0.8)',   glow: 'rgba(255, 80, 80, 0.15)' },
-  low_engagement: { icon: '◇', color: 'rgba(255, 180, 50, 0.8)',  glow: 'rgba(255, 180, 50, 0.15)' },
-  bottleneck:     { icon: '⬡', color: 'rgba(255, 120, 50, 0.8)',  glow: 'rgba(255, 120, 50, 0.15)' },
-  media_roi:      { icon: '◈', color: 'rgba(180, 100, 255, 0.8)', glow: 'rgba(180, 100, 255, 0.15)' },
+const TYPE_CONFIG: Record<string, { icon: string; color: string; glow: string; tip: string }> = {
+  queue_risk:     { icon: '⏱', color: 'rgba(255, 80, 80, 0.8)',   glow: 'rgba(255, 80, 80, 0.15)',  tip: 'Checkout zone with elevated wait times' },
+  low_engagement: { icon: '◇', color: 'rgba(255, 180, 50, 0.8)',  glow: 'rgba(255, 180, 50, 0.15)', tip: 'Product zone with below-average dwell rates' },
+  bottleneck:     { icon: '⬡', color: 'rgba(255, 120, 50, 0.8)',  glow: 'rgba(255, 120, 50, 0.15)', tip: 'Zone with slow flow and high occupancy' },
+  media_roi:      { icon: '◈', color: 'rgba(180, 100, 255, 0.8)', glow: 'rgba(180, 100, 255, 0.15)', tip: 'DOOH campaign underperforming targets' },
 }
 
 export default function AIDecisionFeed({ batchAlerts }: { batchAlerts?: { alerts: any[]; count: number } | null } = {}) {
@@ -38,6 +43,7 @@ export default function AIDecisionFeed({ batchAlerts }: { batchAlerts?: { alerts
   const dismissedRef = useRef<Set<string>>(new Set())
   const [, setTick] = useState(0)
   const scrollRef = useRef<HTMLDivElement>(null)
+  const [detailAlert, setDetailAlert] = useState<Alert | null>(null)
 
   const rebuildVisible = useCallback(() => {
     const sorted = Array.from(alertMapRef.current.values())
@@ -126,15 +132,15 @@ export default function AIDecisionFeed({ batchAlerts }: { batchAlerts?: { alerts
       <div className="px-3 pt-3 pb-2 flex items-center justify-between">
         <div className="flex items-center gap-1.5">
           <div className={`w-1.5 h-1.5 rounded-full ${visibleAlerts.length > 0 ? 'bg-green-400/80 animate-pulse' : 'bg-white/20'}`} />
-          <span className="text-[11px] text-white/60 tracking-wider uppercase">
+          <span className="text-[11px] text-white/70 tracking-wider uppercase">
             Alerts
           </span>
-          <span className="text-white/25 text-[9px]">{visibleAlerts.length}</span>
+          <span className="text-white/50 text-[9px]">{visibleAlerts.length}</span>
         </div>
         {visibleAlerts.length > 0 && (
           <button
             onClick={dismissAll}
-            className="text-[8px] text-white/25 hover:text-white/50 transition-colors px-1.5 py-0.5 rounded hover:bg-white/[0.05]"
+            className="text-[8px] text-white/40 hover:text-white/60 transition-colors px-1.5 py-0.5 rounded hover:bg-white/[0.05]"
           >
             CLEAR ALL
           </button>
@@ -150,16 +156,17 @@ export default function AIDecisionFeed({ batchAlerts }: { batchAlerts?: { alerts
           return (
             <div
               key={alert.id}
-              className="group rounded-md border transition-all duration-500 relative"
+              className="group rounded-md border transition-all duration-500 relative cursor-pointer hover:border-white/10"
               style={{
                 background: isNew ? cfg.glow : 'rgba(255,255,255,0.02)',
                 borderColor: isNew ? cfg.color : 'rgba(255,255,255,0.04)',
                 animation: isNew ? 'slideInRight 0.4s cubic-bezier(0.4, 0, 0.2, 1)' : 'none',
               }}
+              onClick={() => setDetailAlert(alert)}
             >
               {/* Dismiss button (visible on hover) */}
               <button
-                onClick={() => dismissOne(alert.id)}
+                onClick={(e) => { e.stopPropagation(); dismissOne(alert.id) }}
                 className="absolute top-1.5 right-1.5 w-4 h-4 flex items-center justify-center rounded text-white/0 group-hover:text-white/40 hover:!text-white/70 hover:bg-white/[0.08] transition-all text-[10px]"
               >
                 ×
@@ -168,9 +175,11 @@ export default function AIDecisionFeed({ batchAlerts }: { batchAlerts?: { alerts
               <div className="p-2.5 pr-6">
                 {/* Top row: icon + title + severity */}
                 <div className="flex items-center gap-1.5 mb-1">
-                  <span style={{ color: cfg.color }} className="text-[11px]">
-                    {cfg.icon}
-                  </span>
+                  <Tooltip text={cfg.tip}>
+                    <span style={{ color: cfg.color }} className="text-[11px] cursor-help">
+                      {cfg.icon}
+                    </span>
+                  </Tooltip>
                   <span className="text-[9px] font-bold tracking-wider" style={{ color: cfg.color }}>
                     {alert.title}
                   </span>
@@ -182,17 +191,32 @@ export default function AIDecisionFeed({ batchAlerts }: { batchAlerts?: { alerts
                 </div>
 
                 {/* Message */}
-                <div className="text-white/50 text-[9px] leading-relaxed mb-1">
+                <div className="text-white/70 text-[9px] leading-relaxed mb-1">
                   {alert.message}
                 </div>
+
+                {/* Product categories */}
+                {alert.categories && alert.categories.length > 0 && (
+                  <div className="flex items-center gap-1 flex-wrap mb-1">
+                    <span className="text-[7px] text-white/30">PRODUCTS:</span>
+                    {alert.categories.slice(0, 4).map(cat => (
+                      <span key={cat} className="text-[7px] px-1 py-0.5 rounded bg-white/[0.06] text-white/55">
+                        {cat}
+                      </span>
+                    ))}
+                    {alert.categories.length > 4 && (
+                      <span className="text-[7px] text-white/30">+{alert.categories.length - 4}</span>
+                    )}
+                  </div>
+                )}
 
                 {/* Action + time */}
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-1">
-                    <span className="text-[8px] text-white/20">→</span>
-                    <span className="text-[8px] text-cyan-400/50 italic">{alert.action}</span>
+                    <span className="text-[8px] text-white/40">→</span>
+                    <span className="text-[8px] text-cyan-400/80 italic">{alert.action}</span>
                   </div>
-                  <span className="text-white/15 text-[8px]">{timeAgo(alert.firstSeen)}</span>
+                  <span className="text-white/40 text-[8px]">{timeAgo(alert.firstSeen)}</span>
                 </div>
               </div>
             </div>
@@ -218,6 +242,10 @@ export default function AIDecisionFeed({ batchAlerts }: { batchAlerts?: { alerts
         .neural-scrollbar::-webkit-scrollbar-track { background: transparent; }
         .neural-scrollbar::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.06); border-radius: 2px; }
       `}</style>
+
+      {detailAlert && (
+        <AlertDetailModal alert={detailAlert} onClose={() => setDetailAlert(null)} />
+      )}
     </div>
   )
 }

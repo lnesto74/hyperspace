@@ -15,7 +15,7 @@ import { pointInPolygon, distance2D } from '../dooh/DoohKpiEngine.js';
 
 // Default campaign parameters
 export const DEFAULT_CAMPAIGN_PARAMS = {
-  action_window_minutes: 10,
+  action_window_minutes: 15,
   match_time_bucket_min: 15,
   control_matches_M: 5,
   min_controls_required: 3,
@@ -550,9 +550,9 @@ export class DoohAttributionEngine {
   /**
    * Calculate DCI using batch-loaded positions (OPTIMIZED)
    */
-  calculateDCIFast(trackKey, exposureEndTs, targetPosition, allPositions, windowS = 10) {
+  calculateDCIFast(trackKey, exposureEndTs, targetPosition, allPositions, windowS = 30) {
     const positions = allPositions.get(trackKey) || [];
-    if (positions.length < 4) return null;
+    if (positions.length < 3) return 0;
 
     const preStart = exposureEndTs - (windowS * 1000);
     const postEnd = exposureEndTs + (windowS * 1000);
@@ -560,7 +560,7 @@ export class DoohAttributionEngine {
     const preSamples = positions.filter(p => p.timestamp >= preStart && p.timestamp < exposureEndTs);
     const postSamples = positions.filter(p => p.timestamp >= exposureEndTs && p.timestamp <= postEnd);
 
-    if (preSamples.length < 2 || postSamples.length < 2) return null;
+    if (preSamples.length < 2 || postSamples.length < 2) return 0;
 
     const preFirst = preSamples[0];
     const preLast = preSamples[preSamples.length - 1];
@@ -574,7 +574,7 @@ export class DoohAttributionEngine {
     const postDz = postLast.z - postFirst.z;
     const postMag = Math.sqrt(postDx * postDx + postDz * postDz);
 
-    if (preMag < 0.1 || postMag < 0.1) return null;
+    if (preMag < 0.05 || postMag < 0.05) return 0;
 
     const preDir = { x: preDx / preMag, z: preDz / preMag };
     const postDir = { x: postDx / postMag, z: postDz / postMag };
@@ -583,7 +583,7 @@ export class DoohAttributionEngine {
     const toTargetZ = targetPosition.z - postFirst.z;
     const toTargetMag = Math.sqrt(toTargetX * toTargetX + toTargetZ * toTargetZ);
     
-    if (toTargetMag < 0.1) return null;
+    if (toTargetMag < 0.1) return 0;
     
     const toTarget = { x: toTargetX / toTargetMag, z: toTargetZ / toTargetMag };
 
@@ -1046,6 +1046,7 @@ export class DoohAttributionEngine {
         buckets.set(bucketStart, {
           exposed: [],
           controls: [],
+          controlTracksSeen: new Set(),
         });
       }
 
@@ -1059,12 +1060,14 @@ export class DoohAttributionEngine {
         outcomeJson: event.outcome_json ? JSON.parse(event.outcome_json) : null,
       });
 
-      // Get controls for this event
+      // Get controls for this event — deduplicate by track_key
       const controls = this.db.prepare(`
         SELECT * FROM dooh_control_matches WHERE attribution_event_id = ?
       `).all(event.id);
 
       for (const ctrl of controls) {
+        if (bucket.controlTracksSeen.has(ctrl.control_track_key)) continue;
+        bucket.controlTracksSeen.add(ctrl.control_track_key);
         bucket.controls.push({
           converted: ctrl.control_converted === 1,
           ttaS: ctrl.control_tta_s,

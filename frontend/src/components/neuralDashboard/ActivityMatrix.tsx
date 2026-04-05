@@ -6,8 +6,9 @@
  */
 
 import { useMemo, useRef, useEffect, useState } from 'react'
-import { useTracking } from '../../context/TrackingContext'
+import { useTracksRef } from '../../context/TrackingContext'
 import { useVenue } from '../../context/VenueContext'
+import Tooltip from './Tooltip'
 
 const DOT_SIZE = 8
 const DOT_GAP = 2
@@ -18,15 +19,13 @@ interface ActivityMatrixProps {
 }
 
 export default function ActivityMatrix({ monochrome = false }: ActivityMatrixProps) {
-  const { tracks } = useTracking()
+  const tracksRef = useTracksRef()
   const { venue } = useVenue()
   const canvasRef = useRef<HTMLCanvasElement>(null)
   
   // Cache for last known good grid (prevents drop on MQTT disconnect)
   const cachedGridRef = useRef<number[][] | null>(null)
   const prevTrackCountRef = useRef(0)
-  const tracksRef = useRef(tracks)
-  tracksRef.current = tracks
   
   // Use venue dimensions for grid aspect ratio (match the real store layout)
   const venueW = venue?.width || 100
@@ -135,9 +134,13 @@ export default function ActivityMatrix({ monochrome = false }: ActivityMatrixPro
       <div className="flex items-center justify-between mb-3">
         <div className="flex items-center gap-2">
           <div className="w-2 h-2 rounded-full bg-purple-400 animate-pulse shadow-[0_0_8px_rgba(167,139,250,0.6)]" />
-          <span className="text-[10px] uppercase tracking-[0.2em] text-gray-500">SPATIAL ACTIVITY</span>
+          <Tooltip text="Heatmap of track density across the venue floor plan">
+            <span className="text-[10px] uppercase tracking-[0.2em] text-white/50 cursor-help">SPATIAL ACTIVITY</span>
+          </Tooltip>
         </div>
-        <span className="text-[10px] text-gray-600 tabular-nums">{tracks.size} tracks</span>
+        <Tooltip text="Number of people currently being tracked">
+          <span className="text-[10px] text-white/45 tabular-nums cursor-help">{tracksRef.current.size} tracks</span>
+        </Tooltip>
       </div>
       
       {/* Matrix Canvas */}
@@ -151,7 +154,7 @@ export default function ActivityMatrix({ monochrome = false }: ActivityMatrixPro
       
       {/* Legend */}
       <div className="flex items-center justify-between mt-3 pt-2 border-t border-[rgba(255,255,255,0.04)]">
-        <span className="text-[9px] text-gray-600">LOW</span>
+        <span className="text-[9px] text-white/45">LOW</span>
         <div className="flex gap-0.5">
           {[0.1, 0.3, 0.5, 0.7, 0.9].map((v, i) => (
             <div 
@@ -161,7 +164,7 @@ export default function ActivityMatrix({ monochrome = false }: ActivityMatrixPro
             />
           ))}
         </div>
-        <span className="text-[9px] text-gray-600">HIGH</span>
+        <span className="text-[9px] text-white/45">HIGH</span>
       </div>
     </div>
   )

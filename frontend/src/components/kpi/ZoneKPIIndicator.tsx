@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useMemo } from 'react'
 import { ArrowUp, ArrowDown, ArrowRight } from 'lucide-react'
-import { useTracking } from '../../context/TrackingContext'
+import { useTracksRef } from '../../context/TrackingContext'
 import { useRoi } from '../../context/RoiContext'
 
 // Point-in-polygon test using ray casting
@@ -131,118 +131,86 @@ function TrendArrow({ current, previous }: { current: number; previous: number }
 }
 
 export default function ZoneKPIIndicator({ roiId, roiName, roiColor, highlighted = false, onClick }: ZoneKPIIndicatorProps) {
-  const { tracks } = useTracking()
+  const tracksRef = useTracksRef()
   const { regions } = useRoi()
-  const [baseKpiData, setBaseKpiData] = useState<LiveKPIData | null>(null)
   const previousOccupancyRef = useRef(0)
   const peakOccupancyRef = useRef(0)
   const totalEntriesRef = useRef(0)
   const lastTracksInZoneRef = useRef<Set<string>>(new Set())
-  const isMountedRef = useRef(true)
+  const trackEntryTimesRef = useRef<Map<string, number>>(new Map())
 
-  // Get the ROI vertices for this zone
   const roiVertices = useMemo(() => {
     const roi = regions.find(r => r.id === roiId)
     return roi?.vertices || []
   }, [regions, roiId])
+  const roiVerticesRef = useRef(roiVertices)
+  roiVerticesRef.current = roiVertices
 
-  // Compute LIVE occupancy from current tracks using point-in-polygon
-  const liveOccupancy = useMemo(() => {
-    if (roiVertices.length < 3) return 0
-    
-    let count = 0
-    const currentTracksInZone = new Set<string>()
-    
-    tracks.forEach((track, trackKey) => {
-      const pos = track.venuePosition
-      if (isPointInPolygon(pos.x, pos.z, roiVertices)) {
-        count++
-        currentTracksInZone.add(trackKey)
-      }
-    })
-    
-    // Track entries (new tracks entering zone)
-    currentTracksInZone.forEach(tk => {
-      if (!lastTracksInZoneRef.current.has(tk)) {
-        totalEntriesRef.current++
-      }
-    })
-    lastTracksInZoneRef.current = currentTracksInZone
-    
-    // Update peak
-    if (count > peakOccupancyRef.current) {
-      peakOccupancyRef.current = count
-    }
-    
-    return count
-  }, [tracks, roiVertices])
+  const [kpiData, setKpiData] = useState<LiveKPIData>({
+    currentOccupancy: 0,
+    peakOccupancy: 0,
+    avgOccupancy: 0,
+    totalEntries: 0,
+    dwellRate: 0,
+    previousOccupancy: 0,
+    avgWaitingTime: 0,
+  })
 
-  // Track entry times for waiting time calculation (client-side, no polling)
-  const trackEntryTimesRef = useRef<Map<string, number>>(new Map())
-  
-  // Calculate waiting time from tracks (same approach as occupancy - no API calls)
-  const avgWaitingTime = useMemo(() => {
-    if (roiVertices.length < 3) return 0
-    
-    const now = Date.now()
-    const currentEntryTimes = new Map<string, number>()
-    let totalWaitMs = 0
-    let count = 0
-    
-    tracks.forEach((track, trackKey) => {
-      const pos = track.venuePosition
-      if (isPointInPolygon(pos.x, pos.z, roiVertices)) {
-        // Track is in zone - check if we have an entry time
-        const existingEntry = trackEntryTimesRef.current.get(trackKey)
-        if (existingEntry) {
-          currentEntryTimes.set(trackKey, existingEntry)
-          totalWaitMs += now - existingEntry
-        } else {
-          // New entry - record current time
-          currentEntryTimes.set(trackKey, now)
-        }
-        count++
-      }
-    })
-    
-    // Update ref with current entry times
-    trackEntryTimesRef.current = currentEntryTimes
-    
-    // Return average in minutes
-    return count > 0 ? (totalWaitMs / count) / 60000 : 0
-  }, [tracks, roiVertices])
-
-  // Initialize base KPI data once (no polling needed)
   useEffect(() => {
-    isMountedRef.current = true
-    setBaseKpiData({
-      currentOccupancy: 0,
-      peakOccupancy: 0,
-      avgOccupancy: 0,
-      totalEntries: 0,
-      dwellRate: 0,
-      previousOccupancy: 0,
-      avgWaitingTime: 0,
-    })
-    return () => { isMountedRef.current = false }
-  }, [roiId])
+    const KPI_INTERVAL = 500
+    const tick = () => {
+      const verts = roiVerticesRef.current
+      if (verts.length < 3) return
+      const tracks = tracksRef.current
 
-  // Build live KPI data combining base + live occupancy + waiting time
-  const kpiData = useMemo(() => {
-    if (!baseKpiData) return null
-    
-    const prev = previousOccupancyRef.current
-    previousOccupancyRef.current = liveOccupancy
-    
-    return {
-      ...baseKpiData,
-      currentOccupancy: liveOccupancy,
-      peakOccupancy: Math.max(peakOccupancyRef.current, liveOccupancy),
-      totalEntries: totalEntriesRef.current,
-      previousOccupancy: prev,
-      avgWaitingTime: avgWaitingTime, // Calculated from tracks (no API)
+      let occupancy = 0
+      const currentInZone = new Set<string>()
+      const now = Date.now()
+      const newEntryTimes = new Map<string, number>()
+      let totalWaitMs = 0
+      let waitCount = 0
+
+      tracks.forEach((track, trackKey) => {
+        const pos = track.venuePosition
+        if (isPointInPolygon(pos.x, pos.z, verts)) {
+          occupancy++
+          currentInZone.add(trackKey)
+          const existingEntry = trackEntryTimesRef.current.get(trackKey)
+          if (existingEntry) {
+            newEntryTimes.set(trackKey, existingEntry)
+            totalWaitMs += now - existingEntry
+          } else {
+            newEntryTimes.set(trackKey, now)
+          }
+          waitCount++
+        }
+      })
+
+      currentInZone.forEach(tk => {
+        if (!lastTracksInZoneRef.current.has(tk)) totalEntriesRef.current++
+      })
+      lastTracksInZoneRef.current = currentInZone
+      trackEntryTimesRef.current = newEntryTimes
+      if (occupancy > peakOccupancyRef.current) peakOccupancyRef.current = occupancy
+
+      const prev = previousOccupancyRef.current
+      previousOccupancyRef.current = occupancy
+      const avgWait = waitCount > 0 ? (totalWaitMs / waitCount) / 60000 : 0
+
+      setKpiData({
+        currentOccupancy: occupancy,
+        peakOccupancy: peakOccupancyRef.current,
+        avgOccupancy: 0,
+        totalEntries: totalEntriesRef.current,
+        dwellRate: 0,
+        previousOccupancy: prev,
+        avgWaitingTime: avgWait,
+      })
     }
-  }, [baseKpiData, liveOccupancy, avgWaitingTime])
+    const id = setInterval(tick, KPI_INTERVAL)
+    tick()
+    return () => clearInterval(id)
+  }, [roiId])
 
   if (!kpiData) {
     return (

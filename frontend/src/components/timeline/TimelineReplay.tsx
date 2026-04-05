@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { Play, Pause, SkipBack, SkipForward, Clock, ChevronDown, MapPin, RefreshCw } from 'lucide-react'
-import { useTracking } from '../../context/TrackingContext'
+import { useTrackingActions } from '../../context/TrackingContext'
 import { TrackWithTrail } from '../../types'
 import TimelineInsightMarkers from '../replay-insight/TimelineInsightMarkers'
 import { API_BASE } from '../../config/api'
@@ -43,7 +43,7 @@ const KPI_OPTIONS: KPIOption[] = [
 ]
 
 export default function TimelineReplay({ venueId, isOpen, onTimeChange }: TimelineReplayProps) {
-  const { setReplayMode, setReplayTracks } = useTracking()
+  const { setReplayMode, setReplayTracks } = useTrackingActions()
   const [timelineData, setTimelineData] = useState<TimeSlot[]>([])
   const [currentIndex, setCurrentIndex] = useState(0)
   const [isPlaying, setIsPlaying] = useState(false)

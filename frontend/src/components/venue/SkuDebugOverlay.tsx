@@ -1,7 +1,7 @@
 import { useEffect, useState, useRef, useCallback } from 'react'
 import * as THREE from 'three'
 import { useVenue } from '../../context/VenueContext'
-import { useTracking } from '../../context/TrackingContext'
+import { useTracksRef } from '../../context/TrackingContext'
 import { Package, Eye, Clock } from 'lucide-react'
 import { API_BASE } from '../../config/api'
 
@@ -59,14 +59,12 @@ interface SkuDebugOverlayProps {
 
 export default function SkuDebugOverlay({ enabled, containerRef, cameraRef, onHoverShelf, autoShowSlotHighlight, onAutoSlotPositions }: SkuDebugOverlayProps) {
   const { venue, objects } = useVenue()
-  const { tracks } = useTracking()
+  const tracksRef = useTracksRef()
   const [trackDetections, setTrackDetections] = useState<Map<string, TrackSkuDetection>>(new Map())
   const [hoveredCard, setHoveredCard] = useState<string | null>(null)
   const detectionCacheRef = useRef<Map<string, { timestamp: number; skus: DetectedSku[] }>>(new Map())
   const dwellTimersRef = useRef<Map<string, number>>(new Map())
   const lastSeenTimesRef = useRef<Map<string, number>>(new Map())
-  const tracksRef = useRef(tracks)
-  tracksRef.current = tracks
   
   // Detect SKUs for each tracked person
   const detectSkusForTrack = useCallback(async (trackKey: string, position: { x: number; z: number }) => {
@@ -275,7 +273,7 @@ export default function SkuDebugOverlay({ enabled, containerRef, cameraRef, onHo
       {/* Always-visible indicator when SKU debug is ON */}
       <div className="absolute bottom-4 left-4 bg-green-600/90 text-white text-xs px-3 py-1.5 rounded-full font-medium z-50 flex items-center gap-2">
         <div className="w-2 h-2 rounded-full bg-white animate-pulse" />
-        SKU Debug ON | {trackDetections.size} detections | {tracks.size} tracks
+        SKU Debug ON | {trackDetections.size} detections | {tracksRef.current.size} tracks
       </div>
       {/* SKU Detection Panel - Left Side (Status card on top of track cards) */}
       {detectionsArray.length > 0 && (
@@ -289,7 +287,7 @@ export default function SkuDebugOverlay({ enabled, containerRef, cameraRef, onHo
             <div className="text-[10px] text-gray-400 space-y-1">
               <div className="flex justify-between">
                 <span>Tracked persons:</span>
-                <span className="text-white">{tracks.size}</span>
+                <span className="text-white">{tracksRef.current.size}</span>
               </div>
               <div className="flex justify-between">
                 <span>In shelf zones:</span>

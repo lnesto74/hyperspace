@@ -139,13 +139,15 @@ export class ShelfAnalyticsAdapter {
   queryEngagementsForTrack(venueId, trackKey, startTs, endTs, targetJson) {
     const { type, ids } = targetJson;
     
+    const SHELF_MIN_DWELL_MS = 3000;
+
     // Use pre-loaded zone visits if available (batch mode)
     let visits;
     if (this._zoneVisitsIndex) {
       const allVisits = this._zoneVisitsIndex.get(trackKey) || [];
       visits = allVisits.filter(v =>
         v.start_time >= startTs && v.start_time <= endTs &&
-        (v.is_dwell === 1 || v.is_engagement === 1)
+        (v.is_dwell === 1 || v.is_engagement === 1 || v.duration_ms >= SHELF_MIN_DWELL_MS)
       );
     } else {
       // Fallback: individual query
@@ -160,9 +162,9 @@ export class ShelfAnalyticsAdapter {
           AND zv.track_key = ?
           AND zv.start_time >= ?
           AND zv.start_time <= ?
-          AND (zv.is_dwell = 1 OR zv.is_engagement = 1)
+          AND (zv.is_dwell = 1 OR zv.is_engagement = 1 OR zv.duration_ms >= ?)
         ORDER BY zv.start_time ASC
-      `).all(venueId, trackKey, startTs, endTs);
+      `).all(venueId, trackKey, startTs, endTs, SHELF_MIN_DWELL_MS);
     }
 
     for (const visit of visits) {
@@ -180,10 +182,10 @@ export class ShelfAnalyticsAdapter {
             endTs: visit.end_time,
             durationMs: visit.duration_ms,
             dwellS: visit.duration_ms / 1000,
-            effectiveDwellS: visit.is_engagement ? visit.duration_ms / 1000 : (visit.duration_ms / 1000) * 0.7,
-            isDwell: visit.is_dwell === 1,
-            isEngagement: visit.is_engagement === 1,
-            engagementStrength: visit.is_engagement ? 'strong' : (visit.is_dwell ? 'moderate' : 'weak'),
+            effectiveDwellS: (visit.is_engagement === 1 || visit.duration_ms >= 8000) ? visit.duration_ms / 1000 : (visit.duration_ms / 1000) * 0.7,
+            isDwell: visit.is_dwell === 1 || visit.duration_ms >= 3000,
+            isEngagement: visit.is_engagement === 1 || visit.duration_ms >= 8000,
+            engagementStrength: (visit.is_engagement === 1 || visit.duration_ms >= 10000) ? 'strong' : ((visit.is_dwell === 1 || visit.duration_ms >= 5000) ? 'moderate' : 'weak'),
             shelfId: metadata.shelfId,
             ...shelfMatch
           };

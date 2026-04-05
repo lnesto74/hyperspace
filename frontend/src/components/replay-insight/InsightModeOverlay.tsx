@@ -9,7 +9,7 @@
 import { useEffect, useCallback, useState, useRef, useMemo } from 'react';
 import { X, Play, Pause, RotateCcw } from 'lucide-react';
 import { useReplayInsight } from '../../context/ReplayInsightContext';
-import { useTracking } from '../../context/TrackingContext';
+import { useTrackingActions } from '../../context/TrackingContext';
 
 type TrackPosition = { timestamp: number; x: number; z: number; vx?: number; vz?: number };
 
@@ -20,7 +20,7 @@ export default function InsightModeOverlay() {
     exitInsightMode,
   } = useReplayInsight();
 
-  const { setReplayMode, setReplayTracks } = useTracking();
+  const { setReplayMode, setReplayTracks } = useTrackingActions();
   
   // Playback state
   const [isPlaying, setIsPlaying] = useState(false);

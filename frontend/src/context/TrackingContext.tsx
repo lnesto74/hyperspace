@@ -5,11 +5,18 @@ import { useVenue } from './VenueContext'
 import { API_BASE } from '../config/api'
 
 const MAX_TRAIL_LENGTH = 50 // ~5 seconds at 10Hz (reduced from 100 to save memory)
-const TRACK_TTL_MS = 5000 // 5 seconds before track is removed
+const TRACK_TTL_MS = 20000 // 20s — generous margin to survive backend event-loop stalls without removing tracks
 const CLEANUP_INTERVAL_MS = 1000 // Cleanup stale tracks every 1 second
 const LERP_SPEED = 0.18 // Exponential smoothing factor per frame
 const EXTRAP_FACTOR = 0.001 // Velocity extrapolation: m/s → m/frame (tuned for 60fps)
 const INTERP_TRAIL_INTERVAL = 3 // Add trail point every N interpolation frames
+
+// Diagnostic logging — filter browser console with "[DIAG]"
+const DIAG = true
+let diagLastTrackCount = 0
+let diagLastSocketTs = 0
+let diagInterpFrameCount = 0
+let diagInterpDrops = 0
 
 interface TrackingContextType {
   tracks: Map<string, TrackWithTrail>
@@ -24,6 +31,29 @@ interface TrackingContextType {
 }
 
 const TrackingContext = createContext<TrackingContextType | null>(null)
+
+/**
+ * Stable actions context — holds only callback functions (setTrackVisibility,
+ * setInterpolation, subscribe, etc.) whose identity never changes. Components
+ * that only need to *control* tracking (not read tracks) use useTrackingActions()
+ * to avoid re-rendering when tracks update.
+ */
+interface TrackingActionsType {
+  subscribe: (venueId: string) => void
+  unsubscribe: (venueId: string) => void
+  setReplayMode: (enabled: boolean) => void
+  setReplayTracks: (tracks: Map<string, TrackWithTrail>) => void
+  setTrackVisibility: (visible: boolean) => void
+  setInterpolation: (enabled: boolean) => void
+}
+const TrackingActionsContext = createContext<TrackingActionsType | null>(null)
+
+/**
+ * Stable ref context — provides a ref to the latest tracks Map without triggering
+ * re-renders when tracks change. Dashboard panels that only need tracks in throttled
+ * intervals should use useTracksRef() instead of useTracking().
+ */
+const TracksRefContext = createContext<React.MutableRefObject<Map<string, TrackWithTrail>> | null>(null)
 
 export function TrackingProvider({ children }: { children: ReactNode }) {
   const { venue } = useVenue()
@@ -46,6 +76,11 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
   
   // Return replay tracks when in replay mode, otherwise live tracks
   const tracks = isReplayMode ? replayTracks : liveTracks
+  
+  // Stable ref always points to latest tracks — consumers using useTracksRef() 
+  // won't re-render when tracks change
+  const stableTracksRef = useRef(tracks)
+  stableTracksRef.current = tracks
 
   useEffect(() => {
     const socket = io(`${API_BASE}/tracking`, {
@@ -54,14 +89,20 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
     })
 
     socket.on('connect', () => {
+      if (DIAG) console.log(`[DIAG] Socket CONNECTED  id=${socket.id}  t=${Date.now()}`)
       setIsConnected(true)
       if (subscribedVenueRef.current) {
         socket.emit('subscribe', { venueId: subscribedVenueRef.current })
       }
     })
 
-    socket.on('disconnect', () => {
+    socket.on('disconnect', (reason) => {
+      if (DIAG) console.warn(`[DIAG] Socket DISCONNECTED  reason="${reason}"  t=${Date.now()}`)
       setIsConnected(false)
+    })
+
+    socket.io.on('reconnect_attempt', (attempt) => {
+      if (DIAG) console.warn(`[DIAG] Socket RECONNECT attempt #${attempt}  t=${Date.now()}`)
     })
 
     // Throttle track updates to reduce memory pressure (target ~15fps instead of 30fps)
@@ -92,11 +133,11 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
         
         for (const [, track] of latestByKey) {
           const existing = next.get(track.trackKey)
-          const trail = existing?.trail || []
-          
-          trail.push({ ...track.venuePosition })
+          // Clone trail to prevent cross-snapshot mutation
+          const oldTrail = existing?.trail || []
+          let trail = [...oldTrail, { ...track.venuePosition }]
           if (trail.length > MAX_TRAIL_LENGTH) {
-            trail.shift()
+            trail = trail.slice(trail.length - MAX_TRAIL_LENGTH)
           }
           
           next.set(track.trackKey, { ...track, trail })
@@ -110,17 +151,24 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
     socket.on('tracks', (data: { venueId: string, tracks: Track[] }) => {
       if (data.venueId !== subscribedVenueRef.current) return
       if (isReplayMode) return
+
+      const now = Date.now()
+
+      if (DIAG) {
+        const gap = diagLastSocketTs ? now - diagLastSocketTs : 0
+        diagLastSocketTs = now
+        if (gap > 2000) {
+          console.warn(`[DIAG] Socket tracks GAP  ${gap}ms since last emission  n=${data.tracks.length}  t=${now}`)
+        }
+      }
       
       if (interpEnabledRef.current) {
-        // Interpolation mode: store target + receive timestamp for velocity extrapolation
-        const now = Date.now()
         for (const track of data.tracks) {
           targetTracksRef.current.set(track.trackKey, track)
           interpTsRef.current.set(track.trackKey, now)
           trackLastSeenRef.current.set(track.trackKey, now)
         }
       } else {
-        // Standard mode: buffer and flush directly (zero overhead)
         pendingTracks.push(...data.tracks)
         requestAnimationFrame(flushTrackUpdates)
       }
@@ -128,12 +176,22 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
 
     socket.on('track_removed', (data: { trackKey: string }) => {
       if (isReplayMode) return
+      if (DIAG) console.log(`[DIAG] track_removed event  key=${data.trackKey}  t=${Date.now()}`)
       setLiveTracks(prev => {
         const next = new Map(prev)
         next.delete(data.trackKey)
         return next
       })
       trackLastSeenRef.current.delete(data.trackKey)
+    })
+
+    socket.on('tracks_cleared', () => {
+      if (isReplayMode) return
+      if (DIAG) console.log(`[DIAG] tracks_cleared event  t=${Date.now()}`)
+      setLiveTracks(new Map())
+      trackLastSeenRef.current.clear()
+      targetTracksRef.current.clear()
+      interpTsRef.current.clear()
     })
 
     socket.on('lidar_status', (data: { deviceId: string, status: LidarStatus, message?: string }) => {
@@ -154,7 +212,10 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
       })
       
       if (staleKeys.length > 0) {
-        // Also purge from interpolation targets so the RAF loop doesn't re-add them
+        if (DIAG) {
+          const total = trackLastSeenRef.current.size
+          console.warn(`[DIAG] TTL cleanup  removing=${staleKeys.length}  remaining=${total - staleKeys.length}  t=${now}`)
+        }
         staleKeys.forEach(key => {
           trackLastSeenRef.current.delete(key)
           targetTracksRef.current.delete(key)
@@ -163,6 +224,9 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
         setLiveTracks(prev => {
           const next = new Map(prev)
           staleKeys.forEach(key => next.delete(key))
+          if (DIAG && next.size === 0 && prev.size > 0) {
+            console.error(`[DIAG] ALL TRACKS REMOVED by TTL cleanup!  was=${prev.size}  t=${Date.now()}`)
+          }
           return next
         })
       }
@@ -234,6 +298,19 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
       interpRAFRef.current = requestAnimationFrame(interpLoop)
       return
     }
+
+    if (DIAG) {
+      const frameDelta = now - interpLastFlushRef.current
+      diagInterpFrameCount++
+      if (frameDelta > 200) {
+        diagInterpDrops++
+        console.warn(`[DIAG] Interp FRAME DROP  delta=${frameDelta}ms  targets=${targets.size}  drop#=${diagInterpDrops}  t=${now}`)
+      }
+      if (diagInterpFrameCount % 300 === 0) {
+        console.log(`[DIAG] Interp heartbeat  frames=${diagInterpFrameCount}  drops=${diagInterpDrops}  targets=${targets.size}  t=${now}`)
+      }
+    }
+
     interpLastFlushRef.current = now
     
     interpFrameRef.current++
@@ -241,6 +318,14 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
     
     setLiveTracks(prev => {
       const next = new Map(prev)
+
+      if (DIAG) {
+        const countDiff = prev.size - diagLastTrackCount
+        if (Math.abs(countDiff) > 5) {
+          console.warn(`[DIAG] Track count JUMP  ${diagLastTrackCount} → ${prev.size}  (${countDiff > 0 ? '+' : ''}${countDiff})  t=${now}`)
+        }
+        diagLastTrackCount = prev.size
+      }
       
       for (const [key, target] of targets) {
         const baseX = target.venuePosition?.x ?? 0
@@ -248,7 +333,6 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
         const vx = target.velocity?.x ?? 0
         const vz = target.velocity?.z ?? 0
         
-        // Extrapolate target forward using velocity so tracks never stall
         const receivedAt = interpTsRef.current.get(key) ?? now
         const dt = (now - receivedAt) * EXTRAP_FACTOR
         const tx = baseX + vx * dt
@@ -262,10 +346,12 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
           const nx = cx + (tx - cx) * LERP_SPEED
           const nz = cz + (tz - cz) * LERP_SPEED
           
-          const trail = existing.trail || []
+          let trail: { x: number; y: number; z: number }[]
           if (addTrail) {
-            trail.push({ x: nx, y: 0, z: nz })
-            if (trail.length > MAX_TRAIL_LENGTH) trail.shift()
+            trail = existing.trail ? [...existing.trail, { x: nx, y: 0, z: nz }] : [{ x: nx, y: 0, z: nz }]
+            if (trail.length > MAX_TRAIL_LENGTH) trail = trail.slice(trail.length - MAX_TRAIL_LENGTH)
+          } else {
+            trail = existing.trail || []
           }
           
           next.set(key, {
@@ -285,14 +371,15 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const setInterpolation = useCallback((enabled: boolean) => {
+    if (DIAG) console.log(`[DIAG] setInterpolation  enabled=${enabled}  t=${Date.now()}`)
     interpEnabledRef.current = enabled
     if (enabled) {
-      // Start interpolation loop
+      diagInterpFrameCount = 0
+      diagInterpDrops = 0
       if (!interpRAFRef.current) {
         interpRAFRef.current = requestAnimationFrame(interpLoop)
       }
     } else {
-      // Stop interpolation loop, clear targets
       if (interpRAFRef.current) {
         cancelAnimationFrame(interpRAFRef.current)
         interpRAFRef.current = null
@@ -315,10 +402,23 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
     setInterpolation
   }), [tracks, isConnected, isReplayMode, subscribe, unsubscribe, setReplayMode, setReplayTracks, setTrackVisibility, setInterpolation])
 
+  const actionsValue = useMemo(() => ({
+    subscribe,
+    unsubscribe,
+    setReplayMode,
+    setReplayTracks,
+    setTrackVisibility,
+    setInterpolation
+  }), [subscribe, unsubscribe, setReplayMode, setReplayTracks, setTrackVisibility, setInterpolation])
+
   return (
-    <TrackingContext.Provider value={contextValue}>
-      {children}
-    </TrackingContext.Provider>
+    <TracksRefContext.Provider value={stableTracksRef}>
+      <TrackingActionsContext.Provider value={actionsValue}>
+        <TrackingContext.Provider value={contextValue}>
+          {children}
+        </TrackingContext.Provider>
+      </TrackingActionsContext.Provider>
+    </TracksRefContext.Provider>
   )
 }
 
@@ -328,4 +428,31 @@ export function useTracking() {
     throw new Error('useTracking must be used within a TrackingProvider')
   }
   return context
+}
+
+/**
+ * Returns stable action callbacks only — never re-renders due to tracks changes.
+ * Use in components that need to *control* tracking (toggle visibility, enable
+ * interpolation, etc.) without subscribing to track data.
+ */
+export function useTrackingActions() {
+  const ctx = useContext(TrackingActionsContext)
+  if (!ctx) {
+    throw new Error('useTrackingActions must be used within a TrackingProvider')
+  }
+  return ctx
+}
+
+/**
+ * Returns a stable ref to the latest tracks Map.
+ * Components using this hook will NOT re-render when tracks change — 
+ * they should read ref.current inside their own intervals/callbacks.
+ * Use this for dashboard panels that poll tracks at low frequency (1-2fps).
+ */
+export function useTracksRef() {
+  const ref = useContext(TracksRefContext)
+  if (!ref) {
+    throw new Error('useTracksRef must be used within a TrackingProvider')
+  }
+  return ref
 }

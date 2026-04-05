@@ -1,5 +1,6 @@
 import { EventEmitter } from 'events';
 import fs from 'fs';
+import { writeFile } from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
@@ -1246,28 +1247,27 @@ export class TrajectoryStorageService extends EventEmitter {
     const timestamp = _t0;
     let totalPositions = 0;
     
+    // Snapshot and clear buffers synchronously (fast, no I/O)
+    const snapshots = [];
     for (const [venueId, positions] of this.buffer.entries()) {
       totalPositions += positions.length;
       if (positions.length === 0) continue;
-      
+      snapshots.push({ venueId, positions: [...positions] });
+      this.buffer.set(venueId, []);
+    }
+
+    // Write files asynchronously to avoid blocking the event loop
+    for (const { venueId, positions } of snapshots) {
       const filename = `positions_${venueId}_${timestamp}.json`;
       const filepath = path.join(this.dataDir, filename);
+      const data = JSON.stringify({ venueId, timestamp, positions });
       
-      try {
-        fs.writeFileSync(filepath, JSON.stringify({
-          venueId,
-          timestamp,
-          positions,
-        }));
-        
-        // Clear the buffer after successful write
-        this.buffer.set(venueId, []);
-      } catch (err) {
+      writeFile(filepath, data).catch(err => {
         console.error('Failed to flush trajectory buffer:', err);
-      }
+      });
     }
     const _elapsed = Date.now() - _t0;
-    if (_elapsed > 50) console.warn(`⏱️ flushBuffer took ${_elapsed}ms (${totalPositions} positions)`);
+    if (_elapsed > 10) console.warn(`⏱️ flushBuffer took ${_elapsed}ms (${totalPositions} positions, async write)`);
   }
 
   /**
@@ -1279,8 +1279,10 @@ export class TrajectoryStorageService extends EventEmitter {
     const filepath = path.join(this.dataDir, filename);
     
     try {
-      // Append single line (NDJSON format - one JSON object per line)
-      fs.appendFileSync(filepath, JSON.stringify(visit) + '\n');
+      // Append single line (NDJSON format) — async to avoid blocking event loop
+      fs.appendFile(filepath, JSON.stringify(visit) + '\n', (err) => {
+        if (err) console.error('Failed to write visit file (async):', err);
+      });
     } catch (err) {
       console.error('Failed to write visit to file:', err);
     }
@@ -1290,19 +1292,23 @@ export class TrajectoryStorageService extends EventEmitter {
    * Sync JSON files to SQLite database
    */
   syncToDatabase() {
-    // Process position files one-at-a-time, chunking large files into
-    // 500-row transactions with setImmediate between each chunk.
-    // This keeps each blocking slice under ~30ms so tracks keep emitting.
+    // Fully async pipeline: read dir → read each file → chunk → insert → yield
+    // Each step yields the event loop so track emissions are never blocked.
     const _t0 = Date.now();
-    const files = fs.readdirSync(this.dataDir).filter(f => f.startsWith('positions_'));
+    const CHUNK_SIZE = 500;
     const MAX_FILES = 12;
-    const CHUNK_SIZE = 500; // max rows per transaction (~30ms at 60µs/row)
+
+    let files;
+    try {
+      files = fs.readdirSync(this.dataDir).filter(f => f.startsWith('positions_'));
+    } catch { return; }
+
     const batch = files.slice(0, MAX_FILES);
-    
     if (files.length > MAX_FILES) {
       console.warn(`⚠️ syncPositionFiles: ${files.length} accumulated files (processing ${MAX_FILES})`);
     }
-    
+    if (batch.length === 0) return;
+
     const insertStmt = this.db.prepare(`
       INSERT INTO track_positions (venue_id, track_key, timestamp, position_x, position_z, velocity_x, velocity_z, roi_id)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -1312,66 +1318,65 @@ export class TrajectoryStorageService extends EventEmitter {
         insertStmt.run(venueId, pos.trackKey, pos.timestamp, pos.x, pos.z, pos.vx, pos.vz, pos.roiIds?.[0] || null);
       }
     });
-    
-    // Build a flat work queue: [{positions, venueId, filepath, isLastChunk}]
-    const workQueue = [];
-    for (const file of batch) {
-      const filepath = path.join(this.dataDir, file);
-      try {
-        const content = fs.readFileSync(filepath, 'utf-8');
-        const data = JSON.parse(content);
-        const positions = data.positions || [];
-        // Split into chunks
-        for (let i = 0; i < positions.length; i += CHUNK_SIZE) {
-          const chunk = positions.slice(i, i + CHUNK_SIZE);
-          const isLastChunk = (i + CHUNK_SIZE >= positions.length);
-          workQueue.push({ chunk, venueId: data.venueId, filepath, isLastChunk });
-        }
-        if (positions.length === 0) {
-          // Empty file — still need to delete it
-          workQueue.push({ chunk: [], venueId: data.venueId, filepath, isLastChunk: true });
-        }
-      } catch (err) {
-        console.error(`Failed to read position file ${file}:`, err);
-        // Try to delete corrupt file
-        try { fs.unlinkSync(filepath); } catch {}
-      }
-    }
-    
-    let workIdx = 0;
-    const processNextChunk = () => {
-      if (workIdx >= workQueue.length) {
-        // All position chunks done — now sync visits
-        setImmediate(() => {
-          try {
-            const _t2 = Date.now();
-            this.syncVisitFiles();
-            const _total = Date.now() - _t0;
-            if (_total > 50) console.warn(`⏱️ syncToDatabase took ${_total}ms (${batch.length} pos files, ${workQueue.length} chunks, visits=${Date.now() - _t2}ms)`);
-          } catch (err) { console.error('Failed to sync visits:', err); }
-        });
+
+    let fileIdx = 0;
+    let pendingChunks = [];
+    let chunkIdx = 0;
+    let totalChunks = 0;
+
+    const processNextStep = () => {
+      // If we have pending chunks for the current file, process one
+      if (chunkIdx < pendingChunks.length) {
+        const work = pendingChunks[chunkIdx++];
+        try {
+          if (work.chunk.length > 0) insertChunk(work.chunk, work.venueId);
+          if (work.isLastChunk) {
+            try { fs.unlinkSync(work.filepath); } catch {}
+          }
+        } catch (err) { console.error('Failed to process position chunk:', err); }
+        totalChunks++;
+        setImmediate(processNextStep);
         return;
       }
-      
-      const work = workQueue[workIdx++];
-      try {
-        if (work.chunk.length > 0) {
-          insertChunk(work.chunk, work.venueId);
+
+      // Move to next file — read it on this tick, then yield before processing
+      if (fileIdx < batch.length) {
+        const file = batch[fileIdx++];
+        const filepath = path.join(this.dataDir, file);
+        pendingChunks = [];
+        chunkIdx = 0;
+        try {
+          const content = fs.readFileSync(filepath, 'utf-8');
+          const data = JSON.parse(content);
+          const positions = data.positions || [];
+          for (let i = 0; i < positions.length; i += CHUNK_SIZE) {
+            const chunk = positions.slice(i, i + CHUNK_SIZE);
+            pendingChunks.push({ chunk, venueId: data.venueId, filepath, isLastChunk: (i + CHUNK_SIZE >= positions.length) });
+          }
+          if (positions.length === 0) {
+            pendingChunks.push({ chunk: [], venueId: data.venueId, filepath, isLastChunk: true });
+          }
+        } catch (err) {
+          console.error(`Failed to read position file ${file}:`, err);
+          try { fs.unlinkSync(filepath); } catch {}
         }
-        // Delete file only after its last chunk is inserted
-        if (work.isLastChunk) {
-          fs.unlinkSync(work.filepath);
-        }
-      } catch (err) {
-        console.error(`Failed to process position chunk:`, err);
+        // Yield after file read before processing its chunks
+        setImmediate(processNextStep);
+        return;
       }
-      
-      // Yield event loop between chunks
-      setImmediate(processNextChunk);
+
+      // All files done — sync visits on next tick
+      setImmediate(() => {
+        try {
+          const _t2 = Date.now();
+          this.syncVisitFiles();
+          const _total = Date.now() - _t0;
+          if (_total > 50) console.warn(`⏱️ syncToDatabase took ${_total}ms (${batch.length} pos files, ${totalChunks} chunks, visits=${Date.now() - _t2}ms)`);
+        } catch (err) { console.error('Failed to sync visits:', err); }
+      });
     };
-    
-    // Start the chain
-    setImmediate(processNextChunk);
+
+    setImmediate(processNextStep);
   }
 
   /**
@@ -1699,7 +1704,9 @@ export class TrajectoryStorageService extends EventEmitter {
         INSERT INTO zone_occupancy (venue_id, roi_id, timestamp, occupancy_count)
         VALUES (?, ?, ?, ?)
       `);
-      
+
+      // Pre-compute occupancy counts (CPU work, no I/O)
+      const occupancyCounts = [];
       for (const roi of rois) {
         let count = 0;
         for (const track of tracks.values()) {
@@ -1707,12 +1714,22 @@ export class TrajectoryStorageService extends EventEmitter {
             count++;
           }
         }
-        
-        insertStmt.run(venueId, roi.id, now, count);
-        
-        // Evaluate alert rules for this ROI
+        occupancyCounts.push({ roi, count });
+      }
+
+      // Batch all INSERTs into a single transaction (1 fsync instead of N)
+      const insertAll = this.db.transaction((entries) => {
+        for (const { roi, count } of entries) {
+          insertStmt.run(venueId, roi.id, now, count);
+        }
+      });
+      insertAll(occupancyCounts);
+
+      // Evaluate alert rules outside the transaction (reads only, no write contention)
+      for (const { roi, count } of occupancyCounts) {
         this.evaluateAlertRules(venueId, roi.id, roi.name, { occupancy: count });
       }
+
       const _elapsed = Date.now() - _t0;
       if (_elapsed > 50) console.warn(`⏱️ recordOccupancy took ${_elapsed}ms (${rois.length} rois, ${tracks.size} tracks)`);
     } catch (err) {

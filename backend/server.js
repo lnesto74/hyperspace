@@ -91,6 +91,8 @@ const io = new Server(httpServer, {
     origin: '*',
     methods: ['GET', 'POST'],
   },
+  pingTimeout: 30000,  // 30s (default 20s) — tolerate event-loop stalls from SQLite without disconnecting
+  pingInterval: 25000, // 25s heartbeat interval
 });
 
 // Initialize database
@@ -180,11 +182,29 @@ function getCachedRois(venueId) {
   return parsedRois;
 }
 
+let diagLastEmitTs = 0;
+let diagEmitCount = 0;
+const KPI_RECORD_INTERVAL_MS = 5000; // Only run heavy KPI recording every 5s
+const lastKpiRecordTime = new Map();
+
 trackAggregator.on('tracks', (data) => {
-  // CRITICAL: Emit tracks FIRST, don't block with KPI recording
+  const now = Date.now();
+  diagEmitCount++;
+  const gap = diagLastEmitTs ? now - diagLastEmitTs : 0;
+  diagLastEmitTs = now;
+  if (gap > 2000 || diagEmitCount % 600 === 0) {
+    console.log(`[DIAG] emit tracks  n=${data.tracks.length}  gap=${gap}ms  emit#=${diagEmitCount}  t=${now}`);
+  }
+
+  // Socket emission is always immediate — never block this
   io.of('/tracking').to(`venue:${data.venueId}`).emit('tracks', data);
   
-  // Record KPI data asynchronously using setImmediate to not block track emission
+  // Throttle KPI recording: only process every 2s instead of every 50ms emission.
+  // This reduces event loop load from ~20 heavy batches/s to ~0.5/s.
+  const lastKpi = lastKpiRecordTime.get(data.venueId) || 0;
+  if (now - lastKpi < KPI_RECORD_INTERVAL_MS) return;
+  lastKpiRecordTime.set(data.venueId, now);
+
   setImmediate(() => {
     const _t0 = Date.now();
     const parsedRois = getCachedRois(data.venueId);
@@ -193,11 +213,15 @@ trackAggregator.on('tracks', (data) => {
       trajectoryStorage.recordTrackPosition(data.venueId, track, parsedRois);
     }
     
-    // Record occupancy snapshot every 5 seconds (reduced from 2s to lower PIP load)
-    const now = Date.now();
+    const kpiElapsed = Date.now() - _t0;
+    if (kpiElapsed > 100) {
+      console.warn(`[DIAG] KPI recording SLOW  ${kpiElapsed}ms  tracks=${data.tracks.length}  t=${Date.now()}`);
+    }
+
+    const now2 = Date.now();
     const lastRecord = lastOccupancyRecordTime.get(data.venueId) || 0;
-    if (now - lastRecord >= 5000) {
-      lastOccupancyRecordTime.set(data.venueId, now);
+    if (now2 - lastRecord >= 10000) {
+      lastOccupancyRecordTime.set(data.venueId, now2);
       const tracksMap = new Map(data.tracks.map(t => [t.trackKey, t]));
       trajectoryStorage.recordOccupancy(data.venueId, parsedRois, tracksMap);
     }
@@ -211,6 +235,10 @@ trackAggregator.on('track_removed', (data) => {
   
   // End any active sessions for this track
   trajectoryStorage.endTrackSessions(data.trackKey);
+});
+
+trackAggregator.on('tracks_cleared', () => {
+  io.of('/tracking').emit('tracks_cleared');
 });
 
 // Socket.IO tracking namespace
@@ -399,6 +427,8 @@ app.post('/api/edge-simulator/stop', async (req, res) => {
     const response = await fetch(`${edgeUrl}/api/stop`, { method: 'POST' });
     const data = await response.json();
     console.log('🛑 Edge simulator stopped on', edgeUrl, ':', data);
+    // Immediately flush all tracks so clients clear visuals instantly
+    trackAggregator.flushTracks();
     res.json({ success: true, edgeUrl, ...data });
   } catch (err) {
     console.error('❌ Failed to stop edge simulator:', err.message);
@@ -1132,6 +1162,87 @@ app.get('/api/profit-radar/insights', (req, res) => {
 
 // Setup point cloud WebSocket proxy
 setupPointCloudWebSocket(httpServer);
+
+// ========== BACKGROUND DOOH EXPOSURE + ATTRIBUTION ==========
+// Periodically generates exposure events and attribution analysis
+// for venues with active campaigns and fresh tracking data.
+if (process.env.FEATURE_DOOH_ATTRIBUTION === 'true') {
+  const DOOH_BG_INTERVAL = 5 * 60 * 1000; // 5 minutes
+  const DOOH_LOOKBACK_MS = 10 * 60 * 1000; // process last 10 min each cycle
+  let _doohBgRunning = false;
+
+  const runDoohBackground = async () => {
+    if (_doohBgRunning) return;
+    _doohBgRunning = true;
+    const t0 = Date.now();
+    try {
+      const venues = db.prepare(`
+        SELECT DISTINCT dc.venue_id
+        FROM dooh_campaigns dc
+        JOIN dooh_screens ds ON ds.venue_id = dc.venue_id AND ds.enabled = 1
+        WHERE dc.enabled = 1
+      `).all();
+
+      const { DoohKpiEngine } = await import('./services/dooh/DoohKpiEngine.js');
+      const { DoohAttributionEngine } = await import('./services/dooh_attribution/DoohAttributionEngine.js');
+
+      for (const { venue_id } of venues) {
+        const hasRecentTracks = db.prepare(
+          `SELECT 1 FROM track_positions WHERE venue_id = ? AND timestamp > ? LIMIT 1`
+        ).get(venue_id, t0 - DOOH_LOOKBACK_MS);
+        if (!hasRecentTracks) continue;
+
+        // Yield to event loop between venues
+        await new Promise(r => setImmediate(r));
+
+        const now = Date.now();
+        const startTs = now - DOOH_LOOKBACK_MS;
+
+        // 1. Exposure detection
+        const kpiEngine = new DoohKpiEngine(db);
+        const expResult = await kpiEngine.run(venue_id, startTs, now);
+        if (expResult.events > 0) {
+          console.log(`[DOOH-BG] ${venue_id.substring(0,8)}: ${expResult.events} new exposure events`);
+        }
+
+        // Yield again before attribution (heavy)
+        await new Promise(r => setImmediate(r));
+
+        // 2. Attribution analysis for each active campaign
+        const attrEngine = new DoohAttributionEngine(db);
+        const campaigns = db.prepare(
+          'SELECT id FROM dooh_campaigns WHERE venue_id = ? AND enabled = 1'
+        ).all(venue_id);
+
+        for (const camp of campaigns) {
+          try {
+            await new Promise(r => setImmediate(r));
+            const attrResult = await attrEngine.run(venue_id, camp.id, startTs, now);
+            if (attrResult.attributionEvents > 0) {
+              attrEngine.aggregateKPIs(venue_id, camp.id, startTs, now);
+              console.log(`[DOOH-BG] Campaign ${camp.id.substring(0,8)}: ${attrResult.attributionEvents} attr events, ${attrResult.converted} conversions`);
+            }
+          } catch (e) {
+            if (!e.message?.includes('No exposure events')) {
+              console.warn(`[DOOH-BG] Attribution error for campaign ${camp.id.substring(0,8)}:`, e.message);
+            }
+          }
+        }
+      }
+    } catch (e) {
+      console.error('[DOOH-BG] Error:', e.message);
+    } finally {
+      _doohBgRunning = false;
+      const elapsed = Date.now() - t0;
+      if (elapsed > 5000) console.log(`[DOOH-BG] Cycle took ${(elapsed/1000).toFixed(1)}s`);
+    }
+  };
+
+  // First run after 30s startup delay, then every 5 minutes
+  setTimeout(runDoohBackground, 30000);
+  setInterval(runDoohBackground, DOOH_BG_INTERVAL);
+  console.log('📊 DOOH background processing enabled (5min cycle)');
+}
 
 // Diagnostic: when does the event loop first become available?
 const _syncSetupDone = Date.now();
