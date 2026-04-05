@@ -309,6 +309,7 @@ const STEP_ORDER: LaunchPadStepId[] = [
   'place_lidars',
   'commission_edge',
   'pair_devices',
+  'deploy_her',
   'validate_stream',
   'go_live',
 ]

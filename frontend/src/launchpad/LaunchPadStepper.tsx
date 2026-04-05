@@ -1170,12 +1170,26 @@ function StepDataDisplay({ step, availableImports, onSelectImport, geometry, onA
     }
 
     case 'go_live': {
-      const d = data as { isLive?: boolean; activeTrackCount?: number }
-      if (!d?.isLive) return null
+      const d = data as { isLive?: boolean; activeTrackCount?: number; trackingSubscribed?: boolean }
       return (
-        <div className={`${s} text-green-400 flex items-center gap-1.5`}>
-          <span className="w-1.5 h-1.5 bg-green-400 rounded-full animate-pulse" />
-          Live · {d.activeTrackCount} tracks
+        <div className="space-y-2">
+          {d?.trackingSubscribed && (
+            <div className="flex items-center gap-2 bg-green-500/10 border border-green-500/20 rounded-md px-2.5 py-2">
+              <span className="w-2 h-2 bg-green-400 rounded-full animate-pulse" />
+              <span className="text-[11px] text-green-300 font-medium">
+                {d.isLive ? `Live — ${d.activeTrackCount} tracks` : 'Configuration deployed'}
+              </span>
+            </div>
+          )}
+          <button
+            onClick={(e) => {
+              e.stopPropagation()
+              window.dispatchEvent(new CustomEvent('launchpad-go-live', { detail: {} }))
+            }}
+            className="w-full h-8 flex items-center justify-center gap-1.5 bg-green-500/15 border border-green-500/30 rounded-lg text-green-400 hover:bg-green-500/25 transition-colors text-[11px] font-medium"
+          >
+            <Rocket className="w-3.5 h-3.5" /> Launch Neural Dashboard
+          </button>
         </div>
       )
     }

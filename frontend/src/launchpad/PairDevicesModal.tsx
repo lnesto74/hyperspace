@@ -232,7 +232,7 @@ export default function PairDevicesModal({
   const isLidarPaired = (lidar: EdgeLidar) => pairings.some(p => p.lidarId === lidar.lidarId || p.lidarIp === lidar.ip)
   const pairedCount = pairings.length
   const totalPlacements = placements.length
-  const canConfirm = pairedCount > 0
+  const canConfirm = !isLoading
 
   // Handle confirm
   const handleConfirm = () => {
@@ -542,7 +542,7 @@ export default function PairDevicesModal({
           <div className="px-4 py-3 border-t border-gray-800 flex items-center justify-between">
             <div className="text-[11px] text-gray-500">
               {pairedCount === 0 ? (
-                'Drag LiDARs to placements to pair them'
+                <span className="text-amber-400">No devices paired — will use simulation mode</span>
               ) : pairedCount === totalPlacements ? (
                 <span className="text-green-400">All placements paired!</span>
               ) : (
@@ -555,7 +555,7 @@ export default function PairDevicesModal({
               className="px-4 py-2 flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 disabled:bg-gray-700 disabled:text-gray-500 text-white text-sm font-medium rounded-lg transition-colors"
             >
               <Check className="w-4 h-4" />
-              Confirm Pairing
+              {pairedCount === 0 ? 'Skip (Simulation)' : 'Confirm Pairing'}
             </button>
           </div>
         </div>

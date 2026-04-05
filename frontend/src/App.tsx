@@ -478,6 +478,73 @@ function MainApp() {
       loadVenue(venue.id).catch(err => console.warn('Failed to reload venue:', err))
     }
   }, [viewMode, venue?.id, loadVenue])
+
+  // Listen for LaunchPad go-live event — load venue, start simulator, enable Neural Dashboard
+  useEffect(() => {
+    const handler = async (e: Event) => {
+      const detail = (e as CustomEvent).detail || {}
+      console.log('[App] LaunchPad go-live event received', detail)
+
+      // 1. Determine venueId from event or launchpad session
+      const session = loadSession()
+      const venueId = detail.venueId || session?.venueId
+      const layoutVersionId = (session?.steps?.find((s: any) => s.id === 'select_dwg')?.data as any)?.layoutVersionId
+
+      // 2. Load the venue into the 3D scene
+      if (venueId) {
+        try {
+          if (layoutVersionId) localStorage.setItem('venueDwg-selectedLayout', layoutVersionId)
+          await loadVenue(venueId)
+          if (layoutVersionId) {
+            window.dispatchEvent(new CustomEvent('dwgLayoutSelected', { detail: { layoutId: layoutVersionId } }))
+          }
+          setTimeout(() => window.dispatchEvent(new Event('mainviewport-reset-camera')), 200)
+        } catch (err) {
+          console.warn('[App] go-live: failed to load venue', err)
+        }
+      }
+
+      // 3. Configure + start the simulator with 200 agents
+      try {
+        const venueRes = venueId ? await fetch(`${API_BASE}/api/venues/${venueId}`) : null
+        const venueData = venueRes?.ok ? (await venueRes.json()).venue : null
+
+        await fetch(`${API_BASE}/api/edge-simulator/config`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            targetPeopleCount: 200,
+            avgStayTime: 5,
+            frequencyHz: 14,
+            simulationMode: 'mixed',
+            queueSpawnInterval: 6,
+            enableCashiers: true,
+            cashierShiftMin: 60,
+            cashierBreakProb: 15,
+            laneOpenConfirmSec: 120,
+            enableIdConfusion: false,
+            ...(venueId && { venueId }),
+            ...(venueData && { venueWidth: venueData.width, venueDepth: venueData.depth }),
+          }),
+        })
+        await fetch(`${API_BASE}/api/edge-simulator/start`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({}),
+        })
+        console.log('[App] Simulator started with 200 agents for venue', venueId)
+      } catch (err) {
+        console.warn('[App] go-live: simulator start failed (non-blocking)', err)
+      }
+
+      // 4. Enable Neural Dashboard + switch to main view + close launchpad
+      setNeuralDashboardEnabled(true)
+      setViewModeInternal('main')
+      setLaunchPadOpen(false)
+    }
+    window.addEventListener('launchpad-go-live', handler)
+    return () => window.removeEventListener('launchpad-go-live', handler)
+  }, [loadVenue])
   
   return (
     <ViewModeContext.Provider value={{ mode: viewMode, setMode: setViewMode, launchPadOpen, setLaunchPadOpen, neuralDashboardEnabled, setNeuralDashboardEnabled }}>

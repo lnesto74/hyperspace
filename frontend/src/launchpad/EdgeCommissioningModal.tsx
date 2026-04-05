@@ -144,7 +144,7 @@ export default function EdgeCommissioningModal({
   // Computed values
   const selectedEdge = edges.find(e => e.edgeId === selectedEdgeId)
   const onlineEdges = edges.filter(e => e.online)
-  const canConfirm = selectedEdge?.online && lidars.length > 0
+  const canConfirm = selectedEdge?.online === true
 
   // Handle confirm
   const handleConfirm = useCallback(() => {
@@ -393,11 +393,12 @@ export default function EdgeCommissioningModal({
             </button>
             {!canConfirm && (
               <div className="text-[9px] text-gray-600 text-center mt-2">
-                {!selectedEdge?.online
-                  ? 'Select an online Edge device'
-                  : lidars.length === 0
-                  ? 'No LiDARs available'
-                  : ''}
+                Select an online Edge device
+              </div>
+            )}
+            {canConfirm && lidars.length === 0 && (
+              <div className="text-[9px] text-amber-500 text-center mt-2">
+                No LiDARs commissioned yet — you can commission them in the next step
               </div>
             )}
           </div>
