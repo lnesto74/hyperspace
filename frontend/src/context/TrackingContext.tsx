@@ -106,12 +106,12 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
     })
 
     // Throttle track updates to reduce memory pressure (target ~15fps instead of 30fps)
-    let pendingTracks: Track[] = []
+    let pendingBatches: Track[][] = []
     let lastFlushTime = 0
     const MIN_FLUSH_INTERVAL = 66 // ~15fps max update rate (was ~30fps)
     
     const flushTrackUpdates = () => {
-      if (pendingTracks.length === 0) return
+      if (pendingBatches.length === 0) return
       
       const now = Date.now()
       // Skip if we flushed too recently
@@ -121,27 +121,36 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
       }
       lastFlushTime = now
       
-      // Only keep the latest position per track (skip intermediate positions)
+      // Use the LAST complete batch as the authoritative set of active tracks.
+      // The TrackAggregator emits a full snapshot every 100ms, so the latest
+      // batch represents ALL currently active tracks — anything not in it is gone.
+      const lastBatch = pendingBatches[pendingBatches.length - 1]
       const latestByKey = new Map<string, Track>()
-      for (const track of pendingTracks) {
+      for (const track of lastBatch) {
         latestByKey.set(track.trackKey, track)
       }
-      pendingTracks = []
+      pendingBatches = []
       
       setLiveTracks(prev => {
-        const next = new Map(prev)
+        const next = new Map<string, TrackWithTrail>()
         
-        for (const [, track] of latestByKey) {
-          const existing = next.get(track.trackKey)
-          // Clone trail to prevent cross-snapshot mutation
+        for (const [key, track] of latestByKey) {
+          const existing = prev.get(key)
           const oldTrail = existing?.trail || []
           let trail = [...oldTrail, { ...track.venuePosition }]
           if (trail.length > MAX_TRAIL_LENGTH) {
             trail = trail.slice(trail.length - MAX_TRAIL_LENGTH)
           }
           
-          next.set(track.trackKey, { ...track, trail })
-          trackLastSeenRef.current.set(track.trackKey, now)
+          next.set(key, { ...track, trail })
+          trackLastSeenRef.current.set(key, now)
+        }
+
+        if (DIAG && prev.size !== next.size) {
+          const removed = [...prev.keys()].filter(k => !next.has(k))
+          if (removed.length > 0) {
+            console.log(`[DIAG] Snapshot reconciliation removed ${removed.length} stale tracks: ${removed.join(', ')}  t=${now}`)
+          }
         }
         
         return next
@@ -163,13 +172,31 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
       }
       
       if (interpEnabledRef.current) {
+        // Build a Set of trackKeys in this snapshot to prune stale targets
+        const incomingKeys = new Set<string>()
         for (const track of data.tracks) {
           targetTracksRef.current.set(track.trackKey, track)
           interpTsRef.current.set(track.trackKey, now)
           trackLastSeenRef.current.set(track.trackKey, now)
+          incomingKeys.add(track.trackKey)
+        }
+        // Remove targets missing from this full snapshot for longer than the
+        // aggregator TTL (6s) + a small buffer.  The aggregator emits a complete
+        // set every 100ms, so a track absent for >7s is genuinely gone.
+        const INTERP_MISSING_GRACE_MS = 7000
+        for (const key of targetTracksRef.current.keys()) {
+          if (!incomingKeys.has(key)) {
+            const lastSeen = trackLastSeenRef.current.get(key) ?? 0
+            if (now - lastSeen > INTERP_MISSING_GRACE_MS) {
+              targetTracksRef.current.delete(key)
+              interpTsRef.current.delete(key)
+              trackLastSeenRef.current.delete(key)
+              if (DIAG) console.log(`[DIAG] Interp removed missing target  key=${key}  age=${now - lastSeen}ms  t=${now}`)
+            }
+          }
         }
       } else {
-        pendingTracks.push(...data.tracks)
+        pendingBatches.push(data.tracks)
         requestAnimationFrame(flushTrackUpdates)
       }
     })
@@ -183,6 +210,8 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
         return next
       })
       trackLastSeenRef.current.delete(data.trackKey)
+      targetTracksRef.current.delete(data.trackKey)
+      interpTsRef.current.delete(data.trackKey)
     })
 
     socket.on('tracks_cleared', () => {
@@ -286,12 +315,25 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
     if (!interpEnabledRef.current) return
     
     const targets = targetTracksRef.current
+    const now = Date.now()
+
+    // Prune stale targets that haven't received an update within TTL
+    for (const [key] of targets) {
+      const lastSeen = trackLastSeenRef.current.get(key)
+      if (lastSeen && now - lastSeen > TRACK_TTL_MS) {
+        targets.delete(key)
+        interpTsRef.current.delete(key)
+        trackLastSeenRef.current.delete(key)
+        if (DIAG) console.log(`[DIAG] Interp pruned stale target  key=${key}  t=${now}`)
+      }
+    }
+
     if (targets.size === 0) {
+      // No active targets — clear any leftover liveTracks from interpolation
+      setLiveTracks(prev => prev.size === 0 ? prev : new Map())
       interpRAFRef.current = requestAnimationFrame(interpLoop)
       return
     }
-    
-    const now = Date.now()
     
     // Skip this frame if we updated too recently
     if (now - interpLastFlushRef.current < INTERP_MIN_INTERVAL) {
@@ -317,7 +359,7 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
     const addTrail = interpFrameRef.current % INTERP_TRAIL_INTERVAL === 0
     
     setLiveTracks(prev => {
-      const next = new Map(prev)
+      const next = new Map<string, TrackWithTrail>()
 
       if (DIAG) {
         const countDiff = prev.size - diagLastTrackCount
@@ -327,6 +369,8 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
         diagLastTrackCount = prev.size
       }
       
+      // Only include tracks that exist in targetTracksRef — this is the
+      // authoritative set of active tracks when interpolation is on.
       for (const [key, target] of targets) {
         const baseX = target.venuePosition?.x ?? 0
         const baseZ = target.venuePosition?.z ?? 0
@@ -338,7 +382,7 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
         const tx = baseX + vx * dt
         const tz = baseZ + vz * dt
         
-        const existing = next.get(key)
+        const existing = prev.get(key)
         
         if (existing) {
           const cx = existing.venuePosition.x

@@ -114,7 +114,7 @@ class MqttTrajectoryService {
       // Handle single track format from edge server
       // Message: { id, deviceId, venueId, position, velocity, objectType, color, boundingBox }
       if (data.position && !data.tracks) {
-        const trackKey = `${data.deviceId || deviceId}-${data.id}`
+        const trackKey = `${data.deviceId || deviceId}:${data.id}`
         const color = data.color || this.getColorForTrack(trackKey)
         const venueId = data.venueId || 'default'
         
@@ -162,7 +162,7 @@ class MqttTrajectoryService {
       const processedTracks = []
 
       for (const track of data.tracks) {
-        const trackKey = track.trackKey || `${deviceId}-${track.id}`
+        const trackKey = track.trackKey || `${deviceId}:${track.id}`
         const color = this.getColorForTrack(trackKey)
         
         const processedTrack = {
