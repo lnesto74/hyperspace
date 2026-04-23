@@ -1,5 +1,5 @@
 import { useMemo, useEffect, useRef } from 'react'
-import { Layers, CheckCircle2, AlertCircle, Search, Trash2, Pencil, Check, X, Sparkles, Loader2, Filter, Wand2 } from 'lucide-react'
+import { Layers, CheckCircle2, AlertCircle, Search, Trash2, Pencil, Check, X, Sparkles, Loader2, Filter, Wand2, MousePointerClick } from 'lucide-react'
 import { useState } from 'react'
 import type { DwgGroup, GroupMapping, DwgFixture } from './DwgImporterPage'
 import { API_BASE } from '../../config/api'
@@ -43,6 +43,11 @@ interface GroupListPanelProps {
   importId?: string
   onApplyAiFilter?: (groupIds: string[]) => void
   onApplyAiMappings?: (mappings: Record<string, { type: string }>) => void
+  /**
+   * Select all fixtures belonging to a group on the 2-D canvas. Distinct from
+   * `onSelectGroup` which just highlights the row / opens the mapping panel.
+   */
+  onSelectFixturesInGroup?: (groupId: string) => void
 }
 
 export default function GroupListPanel({ 
@@ -58,7 +63,8 @@ export default function GroupListPanel({
   unitScaleToM = 1,
   importId,
   onApplyAiFilter,
-  onApplyAiMappings
+  onApplyAiMappings,
+  onSelectFixturesInGroup,
 }: GroupListPanelProps) {
   // AI Smart Filter state
   const [aiFilterLoading, setAiFilterLoading] = useState(false)
@@ -443,6 +449,18 @@ export default function GroupListPanel({
                     {group.count}
                   </span>
                   <span className="text-[10px] text-gray-500">instances</span>
+                  {(isHovered || isSelected) && onSelectFixturesInGroup && (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        onSelectFixturesInGroup(group.group_id)
+                      }}
+                      className="p-1 rounded bg-blue-900/50 hover:bg-blue-700 text-blue-300 hover:text-white transition-colors"
+                      title={`Select all ${group.count} fixtures on canvas`}
+                    >
+                      <MousePointerClick className="w-3 h-3" />
+                    </button>
+                  )}
                   {(isHovered || isSelected) && onDeleteGroup && (
                     <button
                       onClick={(e) => {

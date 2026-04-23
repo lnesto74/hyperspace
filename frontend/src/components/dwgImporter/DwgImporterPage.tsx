@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
-import { FileUp, Box, ArrowLeft, AlertCircle, CheckCircle2, Loader2, Eye, Box as Box3D } from 'lucide-react'
+import { FileUp, Box, ArrowLeft, AlertCircle, CheckCircle2, Loader2, Eye, Box as Box3D, Sliders } from 'lucide-react'
 import { useVenue } from '../../context/VenueContext'
 import UploadCard from './UploadCard'
 import GroupListPanel from './GroupListPanel'
@@ -7,6 +7,7 @@ import MappingPanel from './MappingPanel'
 import PreviewPanel from './PreviewPanel'
 import Layout3DPreview from './Layout3DPreview'
 import DwgImportsList from './DwgImportsList'
+import PrefilterStudio, { PrefilterDryRunResult, PrefilterSettings } from './PrefilterStudio'
 import { API_BASE } from '../../config/api'
 
 
@@ -137,6 +138,17 @@ export default function DwgImporterPage({ onClose, onLayoutGenerated }: DwgImpor
   const [showUploadView, setShowUploadView] = useState(false)
   const [deletedFixtureIds, setDeletedFixtureIds] = useState<Set<string>>(new Set())
   const [customNames, setCustomNames] = useState<Record<string, string>>({})
+
+  // Prefilter Studio state ─ a slide-in panel that lets the user tune the
+  // geometric prefilter (layer blocklist, size cap, cluster picker…) with a
+  // live preview, then Apply or Revert. When a dry-run is active we also
+  // overlay the would-be-dropped fixtures on the 2-D canvas.
+  const [showPrefilterStudio, setShowPrefilterStudio] = useState(false)
+  const [prefilterPreview, setPrefilterPreview] = useState<PrefilterDryRunResult | null>(null)
+  const keptPreviewSet = useMemo(() => {
+    if (!prefilterPreview?.kept_fixture_ids) return null
+    return new Set(prefilterPreview.kept_fixture_ids)
+  }, [prefilterPreview])
   
   // Scale correction for DXF units (read from autoplace settings where PreviewPanel stores it)
   const autoplaceStorageKey = `dwg-autoplace-settings-${importData?.filename || 'default'}`
@@ -1072,6 +1084,18 @@ export default function DwgImporterPage({ onClose, onLayoutGenerated }: DwgImpor
               </span>
             )}
             <button
+              onClick={() => setShowPrefilterStudio(v => !v)}
+              className={`px-3 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-2 ${
+                showPrefilterStudio
+                  ? 'bg-highlight text-white'
+                  : 'bg-gray-800 hover:bg-gray-700 text-gray-200'
+              }`}
+              title="Open Prefilter Studio to tune which CAD entities become fixtures"
+            >
+              <Sliders className="w-4 h-4" />
+              Prefilter
+            </button>
+            <button
               onClick={handleGenerate}
               disabled={isGenerating}
               className={`px-4 py-2 rounded-lg text-white font-medium transition-colors flex items-center gap-2 ${
@@ -1160,6 +1184,13 @@ export default function DwgImporterPage({ onClose, onLayoutGenerated }: DwgImpor
                   .map(f => f.id)
                 handleDeleteFixtures(fixtureIds)
               }}
+              onSelectFixturesInGroup={(groupId: string) => {
+                const ids = importData.fixtures
+                  .filter(f => f.group_id === groupId)
+                  .map(f => f.id)
+                setSelectedFixtureIds(new Set(ids))
+                setSelectedGroupId(groupId)
+              }}
               onApplyAiMappings={(aiMappings: Record<string, { type: string }>) => {
                 // Apply AI-recommended type mappings
                 const newMappings = { ...mappings }
@@ -1242,6 +1273,7 @@ export default function DwgImporterPage({ onClose, onLayoutGenerated }: DwgImpor
                   onDeleteFixtures={handleDeleteFixtures}
                   onHoverFixture={setHoveredFixtureId}
                   hoveredFixtureId={hoveredFixtureId}
+                  dropPreviewKeepIds={keptPreviewSet}
                   // LiDAR mode props
                   lidarMode={lidarMode}
                   onToggleLidarMode={() => setLidarMode(!lidarMode)}
@@ -1268,8 +1300,26 @@ export default function DwgImporterPage({ onClose, onLayoutGenerated }: DwgImpor
             </div>
           </div>
 
-          {/* Right Panel - Mapping (only shown when a fixture group is selected) */}
-          {selectedGroupId && (
+          {/* Right Panel - Prefilter Studio takes priority over mapping */}
+          {showPrefilterStudio ? (
+            <div className="w-96 border-l border-border-dark overflow-hidden flex flex-col bg-panel-bg">
+              <PrefilterStudio
+                importId={importData.import_id}
+                currentFixtureCount={importData.fixtures.length}
+                onPreview={(result, _settings: PrefilterSettings) => setPrefilterPreview(result)}
+                onApplied={() => {
+                  setShowPrefilterStudio(false)
+                  setPrefilterPreview(null)
+                  // Reload the import so the groups + fixtures reflect the new filter
+                  loadExistingImport(importData.import_id)
+                }}
+                onClose={() => {
+                  setShowPrefilterStudio(false)
+                  setPrefilterPreview(null)
+                }}
+              />
+            </div>
+          ) : selectedGroupId ? (
             <div className="w-80 border-l border-border-dark overflow-hidden flex flex-col">
               <MappingPanel
                 group={importData.groups.find(g => g.group_id === selectedGroupId) || null}
@@ -1279,7 +1329,7 @@ export default function DwgImporterPage({ onClose, onLayoutGenerated }: DwgImpor
                 unitScaleToM={importData.unit_scale_to_m * scaleCorrection}
               />
             </div>
-          )}
+          ) : null}
         </div>
       )}
     </div>

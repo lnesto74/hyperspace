@@ -160,6 +160,99 @@ const DXF_UNITS = {
 // Grouping tolerance in mm
 const GROUPING_TOLERANCE_MM = 25;
 
+// ─── Geometric Prefilter Configuration ──────────────────────────────
+// Calibrated against real grocery-store DWGs (TREVIGLIO Schematico.dwg,
+// 3500 m², 8071 raw fixtures across 1024 groups). The largest legitimate
+// in-store fixture is a checkout row / freezer island ≈ 10 m long; any
+// closed polyline or block reference larger than this is almost always
+// CAD background (walls, building elevations, parcel outlines, sheet
+// borders, georeferenced markers).
+
+const PREFILTER_DEFAULTS = {
+  // Drop fixtures whose max(w, d) in METRES exceeds this.
+  // Set to "truly nothing in a retail space is this big" — 60 m covers even
+  // the longest imaginable hypermarket gondola run / freezer wall. The real
+  // fine-grained work is done by `relativeSizeOutlier` which adapts to the
+  // drawing's own population.
+  maxFixtureSizeM: 60,
+
+  // Drop polyline-only (no block) singletons (count == 1) whose max(w, d)
+  // in METRES exceeds this. The threshold must be high enough that real
+  // shelf runs (which can be 5–30 m and each a unique length) survive.
+  // Only truly massive lone polylines (site boundaries, sheet borders)
+  // get caught. The relative-size filter handles the medium range.
+  maxPolylineSingletonSizeM: 50,
+
+  // ── Relative-size outlier filter ────────────────────────────────
+  // Targets the "giant rectangle" problem: sheet borders, site-plan
+  // boundaries, and viewport rectangles that are MUCH larger than any
+  // real fixture — without nuking legitimate large shelves. We compute
+  // the Pth percentile fixture size (default P95) and drop anything
+  // whose size exceeds `relativeSizeMultiplier × P95`.
+  //
+  //  • If the fixture population is ~1-4 m and P95 ≈ 4 m, anything
+  //    > 8×4 = 32 m is almost certainly CAD background.
+  //  • If the store has legitimate 25 m gondola runs (rare but possible),
+  //    they sit inside the population and pass through cleanly.
+  //
+  // This filter is scale-adaptive — the user never has to pick a number
+  // that works for THEIR drawing, and a 30 m shelf won't be punished
+  // just because most other stores have 3 m shelves.
+  relativeSizePercentile: 95,
+  relativeSizeMultiplier: 8,
+  // Safety: never drop more than this fraction in one pass.
+  relativeSizeMaxDropFraction: 0.3,
+
+  // Iterative MAD (Median Absolute Deviation) coordinate filter. Each pass
+  // recomputes median + MAD on survivors and drops anything outside
+  // `madSpread × MAD` from the median (per axis). Iterating with shrinking
+  // spread converges to the densest cluster — essential when a DXF contains
+  // multiple stacked floor-plan sheets (a common Italian CAD convention).
+  // Pass 1 removes extreme geo-reference outliers (km-scale).
+  // Pass 2 tightens around the main building.
+  // Pass 3 isolates the densest sheet/floor.
+  madSpreads: [20, 15, 12],
+
+  // Safety: if iterative MAD would drop more than this fraction of fixtures
+  // in a single pass, that pass is skipped (protects clean single-cluster
+  // imports from being over-filtered).
+  madMaxDropFraction: 0.5,
+
+  // Primary-cluster detection (sliding window). Scans for the densest axis-
+  // aligned window of `clusterWindowM` metres on each axis independently,
+  // then keeps only fixtures that fall inside both windows (with margin).
+  // This is what isolates ONE floor plan from a DXF that contains multiple
+  // stacked sheets (very common in Italian architectural sets that include
+  // Pianta Piano Terra, Piano 1, Pianta Copertura, sezioni... in one file).
+  // Set clusterWindowM = 0 to disable.
+  clusterWindowM: 1000,
+  clusterMarginM: 200,
+  // Skip cluster picking if it would keep less than this fraction of fixtures
+  // (protects single-cluster imports — if the densest window already contains
+  // most fixtures, we don't need to crop).
+  clusterMinKeepFraction: 0.25,
+
+  // Skip degenerate fixtures (w or d below this in METRES). 1 mm.
+  minFixtureSizeM: 0.001,
+
+  // Layer name regex blocklist — CONSERVATIVE by default.
+  // Only block layers that are definitely CAD system / non-plottable junk.
+  // Architectural layers (walls, partitions, doors) are NOT blocked by
+  // default — they often contain the store's perimeter and fixtures.
+  // The Prefilter Studio shows per-layer item counts so the user can
+  // enable additional patterns after visually inspecting the preview.
+  layerBlocklist: [
+    /^defpoints$/i,
+    /nonplott|non[-_ ]?plott/i,
+    /^viewport(s)?$/i,
+    /^title[-_ ]?block$/i,
+    /^cartiglio/i,
+    /^border$/i,
+    /^sheet$/i,
+  ],
+};
+
+
 /**
  * Parse DXF file and extract fixture candidates
  */
@@ -277,8 +370,8 @@ function processInsertEntity(entity, blocks) {
     },
     footprint: {
       kind: 'rect',
-      w: blockBounds.w * scaleX,
-      d: blockBounds.d * scaleY,
+      w: Math.abs(blockBounds.w * scaleX),
+      d: Math.abs(blockBounds.d * scaleY),
       points: []
     }
   };
@@ -486,6 +579,336 @@ function generateGroupKey(fixture, toleranceMm) {
 }
 
 /**
+ * Geometric prefilter — remove CAD artifacts before they become fixture groups.
+ *
+ * Pipeline (each step removes a different class of noise):
+ *   1. Layer blocklist        → architectural drafting layers (walls, elevations…)
+ *   2. Degenerate fixtures    → zero/near-zero footprint
+ *   3. Absolute size cap      → entities larger than any real in-store fixture
+ *   4. Polyline singletons    → unique large closed polylines (boundaries)
+ *   5. MAD coordinate cluster → entities placed kilometres from the floor plan
+ *
+ * Returns { fixtures, bounds, stats } where stats reports per-step removals.
+ */
+function prefilterFixtures(fixtures, unitScaleToM, opts = {}) {
+  const cfg = { ...PREFILTER_DEFAULTS, ...opts };
+  // Step enable flags (all default ON — a step is only skipped when
+  // explicitly disabled by the UI).
+  const enable = {
+    layerBlock: opts.enableLayerBlock !== false,
+    degenerate: opts.enableDegenerate !== false,
+    sizeCap: opts.enableSizeCap !== false,
+    relativeSizeOutlier: opts.enableRelativeSizeOutlier !== false,
+    polylineSingleton: opts.enablePolylineSingleton !== false,
+    madOutlier: opts.enableMadOutlier !== false,
+    clusterPicker: opts.enableClusterPicker !== false,
+  };
+  const u = unitScaleToM || 0.001;
+  const stats = {
+    input: fixtures.length,
+    droppedByLayer: 0,
+    droppedByDegenerate: 0,
+    droppedBySize: 0,
+    droppedByRelativeSize: 0,
+    droppedByPolylineSingleton: 0,
+    droppedByCoordinateOutlier: 0,
+    droppedByCluster: 0,
+    kept: 0,
+    droppedSamples: { layer: [], size: [], relativeSize: [], polylineSingleton: [], coordinateOutlier: [] },
+    relativeSize: null,
+    // Per-layer hit counts for the UI:
+    //   layerHits[<pattern source>][<layer name>] = count
+    // so the Prefilter Studio can show "rule /muratur/i caught 412 items
+    // across layer X, Y, Z".
+    layerHits: {},
+    // Per-layer totals (what the file actually contains, before any filter)
+    layerTotals: {},
+  };
+
+  const sample = (bucket, item) => {
+    const arr = stats.droppedSamples[bucket];
+    if (arr.length < 5) arr.push(item);
+  };
+
+  const sizeM = f => Math.max(f.footprint.w || 0, f.footprint.d || 0) * u;
+  const minDimM = f => Math.min(f.footprint.w || 0, f.footprint.d || 0) * u;
+
+  // Count per-layer totals from the input set (for UI display)
+  for (const f of fixtures) {
+    const layer = f.source?.layer || '(no-layer)';
+    stats.layerTotals[layer] = (stats.layerTotals[layer] || 0) + 1;
+  }
+
+  // Normalise layer blocklist — accept strings from the API and compile them
+  // into RegExp objects. We also keep the original source string so we can
+  // emit it back in `layerHits` for the UI.
+  const compiledBlocklist = (cfg.layerBlocklist || []).map(rx => {
+    if (rx instanceof RegExp) return { re: rx, src: rx.source, flags: rx.flags };
+    if (typeof rx === 'string') {
+      try { return { re: new RegExp(rx, 'i'), src: rx, flags: 'i' }; }
+      catch { return null; }
+    }
+    if (rx && typeof rx === 'object' && typeof rx.pattern === 'string') {
+      try {
+        return { re: new RegExp(rx.pattern, rx.flags || 'i'), src: rx.pattern, flags: rx.flags || 'i' };
+      } catch { return null; }
+    }
+    return null;
+  }).filter(Boolean);
+
+  // Step 1: Layer name blocklist
+  let kept = fixtures.filter(f => {
+    if (!enable.layerBlock) return true;
+    const layer = f.source?.layer || '';
+    const hit = compiledBlocklist.find(p => p.re.test(layer));
+    if (hit) {
+      stats.droppedByLayer++;
+      const src = hit.src;
+      stats.layerHits[src] = stats.layerHits[src] || {};
+      stats.layerHits[src][layer] = (stats.layerHits[src][layer] || 0) + 1;
+      sample('layer', { layer, block: f.source?.block || null, w_m: +(sizeM(f)).toFixed(2) });
+      return false;
+    }
+    return true;
+  });
+
+  // Step 2: Degenerate (zero / near-zero) footprints
+  kept = kept.filter(f => {
+    if (!enable.degenerate) return true;
+    if (sizeM(f) < cfg.minFixtureSizeM || minDimM(f) < cfg.minFixtureSizeM) {
+      stats.droppedByDegenerate++;
+      return false;
+    }
+    return true;
+  });
+
+  // Step 3: Absolute size cap (any dimension over maxFixtureSizeM)
+  kept = kept.filter(f => {
+    if (!enable.sizeCap) return true;
+    if (sizeM(f) > cfg.maxFixtureSizeM) {
+      stats.droppedBySize++;
+      sample('size', {
+        layer: f.source?.layer,
+        block: f.source?.block || null,
+        w_m: +(f.footprint.w * u).toFixed(2),
+        d_m: +(f.footprint.d * u).toFixed(2),
+      });
+      return false;
+    }
+    return true;
+  });
+
+  // Step 3.5: Relative-size outlier — scale-adaptive "massive rectangle" filter.
+  // Computes the Pth percentile size of the surviving population and drops
+  // anything more than `relativeSizeMultiplier ×` that percentile. Works
+  // whether the store has 1 m baskets or 30 m gondola runs.
+  if (enable.relativeSizeOutlier && kept.length >= 20) {
+    const sizes = kept.map(sizeM).sort((a, b) => a - b);
+    const pct = Math.min(99, Math.max(50, cfg.relativeSizePercentile));
+    const p = sizes[Math.floor(sizes.length * (pct / 100))] || 0;
+    const threshold = p * cfg.relativeSizeMultiplier;
+
+    if (p > 0 && threshold > 0) {
+      const candidates = kept.filter(f => sizeM(f) > threshold);
+      const dropFraction = candidates.length / kept.length;
+
+      stats.relativeSize = {
+        percentile: pct,
+        p_m: +p.toFixed(3),
+        multiplier: cfg.relativeSizeMultiplier,
+        threshold_m: +threshold.toFixed(2),
+        candidates: candidates.length,
+        dropFraction: +dropFraction.toFixed(3),
+        skipped: false,
+      };
+
+      if (dropFraction > cfg.relativeSizeMaxDropFraction) {
+        // Too many "outliers" → likely this threshold is wrong for this
+        // drawing (maybe an almost-uniform population). Skip for safety.
+        stats.relativeSize.skipped = true;
+      } else {
+        const toDrop = new Set(candidates.map(f => f.id));
+        kept = kept.filter(f => {
+          if (!toDrop.has(f.id)) return true;
+          stats.droppedByRelativeSize++;
+          sample('relativeSize', {
+            layer: f.source?.layer,
+            block: f.source?.block || null,
+            w_m: +(f.footprint.w * u).toFixed(2),
+            d_m: +(f.footprint.d * u).toFixed(2),
+            max_m: +(sizeM(f)).toFixed(2),
+            threshold_m: +threshold.toFixed(2),
+          });
+          return false;
+        });
+      }
+    }
+  }
+
+  // Step 4: Polyline-only singletons (no block, count==1, oversized)
+  // Build a count of polyline fixtures per (layer + rounded size) key first.
+  const polyKey = f => {
+    const wKey = Math.round((f.footprint.w || 0) / 25) * 25;
+    const dKey = Math.round((f.footprint.d || 0) / 25) * 25;
+    return `${f.source?.layer}|${wKey}x${dKey}`;
+  };
+  const polyCount = new Map();
+  for (const f of kept) {
+    if (f.source?.block) continue;
+    const k = polyKey(f);
+    polyCount.set(k, (polyCount.get(k) || 0) + 1);
+  }
+  kept = kept.filter(f => {
+    if (!enable.polylineSingleton) return true;
+    if (f.source?.block) return true;
+    if (sizeM(f) <= cfg.maxPolylineSingletonSizeM) return true;
+    if ((polyCount.get(polyKey(f)) || 0) <= 1) {
+      stats.droppedByPolylineSingleton++;
+      sample('polylineSingleton', {
+        layer: f.source?.layer,
+        w_m: +(f.footprint.w * u).toFixed(2),
+        d_m: +(f.footprint.d * u).toFixed(2),
+      });
+      return false;
+    }
+    return true;
+  });
+
+  // Step 5: Iterative MAD coordinate filter — converges to densest cluster.
+  // Critical for multi-sheet DXFs (site plan + floor plans stacked along Y).
+  const spreads = Array.isArray(cfg.madSpreads) ? cfg.madSpreads
+    : (typeof cfg.madSpread === 'number' ? [cfg.madSpread] : []);
+  if (enable.madOutlier && kept.length >= 20 && spreads.length > 0) {
+    const passInfo = [];
+    for (let pass = 0; pass < spreads.length; pass++) {
+      if (kept.length < 20) break;
+      const spread = spreads[pass];
+      const mid = arr => arr[Math.floor(arr.length / 2)];
+      const xs = kept.map(f => f.pose2d?.x ?? 0).slice().sort((a, b) => a - b);
+      const ys = kept.map(f => f.pose2d?.y ?? 0).slice().sort((a, b) => a - b);
+      const medianX = mid(xs);
+      const medianY = mid(ys);
+      const devX = kept.map(f => Math.abs((f.pose2d?.x ?? 0) - medianX)).sort((a, b) => a - b);
+      const devY = kept.map(f => Math.abs((f.pose2d?.y ?? 0) - medianY)).sort((a, b) => a - b);
+      const madX = Math.max(mid(devX), 1);
+      const madY = Math.max(mid(devY), 1);
+      const limitX = spread * madX;
+      const limitY = spread * madY;
+
+      const candidate = [];
+      const removed = [];
+      for (const f of kept) {
+        const dx = Math.abs((f.pose2d?.x ?? 0) - medianX);
+        const dy = Math.abs((f.pose2d?.y ?? 0) - medianY);
+        if (dx > limitX || dy > limitY) removed.push(f);
+        else candidate.push(f);
+      }
+      const dropFrac = removed.length / kept.length;
+      // Safety: skip pass if it would over-prune (single-cluster file already converged)
+      if (dropFrac > cfg.madMaxDropFraction) {
+        passInfo.push({ pass: pass + 1, spread, skipped: true, wouldDrop: removed.length });
+        continue;
+      }
+      stats.droppedByCoordinateOutlier += removed.length;
+      for (const f of removed.slice(0, 5)) {
+        sample('coordinateOutlier', {
+          layer: f.source?.layer,
+          block: f.source?.block || null,
+          x_m: +((f.pose2d?.x ?? 0) * u).toFixed(1),
+          y_m: +((f.pose2d?.y ?? 0) * u).toFixed(1),
+          pass: pass + 1,
+        });
+      }
+      passInfo.push({
+        pass: pass + 1, spread,
+        dropped: removed.length,
+        kept: candidate.length,
+        median_m: { x: +(medianX * u).toFixed(1), y: +(medianY * u).toFixed(1) },
+        mad_m: { x: +(madX * u).toFixed(2), y: +(madY * u).toFixed(2) },
+      });
+      kept = candidate;
+    }
+    stats.madPasses = passInfo;
+  }
+
+  // Step 6: Primary-cluster detection — densest window on each axis.
+  // Finds the densest 1D window of `clusterWindowM` along X and Y separately,
+  // then keeps only fixtures inside BOTH windows (plus margin).
+  if (enable.clusterPicker && cfg.clusterWindowM > 0 && kept.length >= 50) {
+    const winSize = cfg.clusterWindowM / u; // back to DXF units
+    const margin = cfg.clusterMarginM / u;
+
+    // Find densest 1D window of size `winSize` for an axis (returns [lo, hi])
+    const densestWindow = (vals) => {
+      const sorted = vals.slice().sort((a, b) => a - b);
+      let bestStart = sorted[0], bestCount = 0, j = 0;
+      for (let i = 0; i < sorted.length; i++) {
+        if (j < i) j = i;
+        while (j < sorted.length && sorted[j] - sorted[i] <= winSize) j++;
+        const count = j - i;
+        if (count > bestCount) { bestCount = count; bestStart = sorted[i]; }
+      }
+      return { lo: bestStart - margin, hi: bestStart + winSize + margin, count: bestCount };
+    };
+
+    const xs = kept.map(f => f.pose2d?.x ?? 0);
+    const ys = kept.map(f => f.pose2d?.y ?? 0);
+    const wx = densestWindow(xs);
+    const wy = densestWindow(ys);
+
+    const inside = kept.filter(f => {
+      const x = f.pose2d?.x ?? 0;
+      const y = f.pose2d?.y ?? 0;
+      return x >= wx.lo && x <= wx.hi && y >= wy.lo && y <= wy.hi;
+    });
+
+    const keepFrac = inside.length / kept.length;
+    stats.cluster = {
+      windowM: cfg.clusterWindowM,
+      marginM: cfg.clusterMarginM,
+      window_x_m: { lo: +(wx.lo * u).toFixed(1), hi: +(wx.hi * u).toFixed(1) },
+      window_y_m: { lo: +(wy.lo * u).toFixed(1), hi: +(wy.hi * u).toFixed(1) },
+      droppedOutside: kept.length - inside.length,
+      kept: inside.length,
+      keepFraction: +keepFrac.toFixed(3),
+    };
+    if (keepFrac >= cfg.clusterMinKeepFraction) {
+      stats.droppedByCluster = kept.length - inside.length;
+      kept = inside;
+    } else {
+      stats.cluster.skipped = true;
+      stats.droppedByCluster = 0;
+    }
+  } else {
+    stats.droppedByCluster = 0;
+  }
+
+  // Recompute bounds from survivors
+  const bounds = { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity };
+  for (const f of kept) {
+    const x = f.pose2d?.x ?? 0;
+    const y = f.pose2d?.y ?? 0;
+    const hw = (f.footprint?.w || 0) / 2;
+    const hd = (f.footprint?.d || 0) / 2;
+    bounds.minX = Math.min(bounds.minX, x - hw);
+    bounds.minY = Math.min(bounds.minY, y - hd);
+    bounds.maxX = Math.max(bounds.maxX, x + hw);
+    bounds.maxY = Math.max(bounds.maxY, y + hd);
+  }
+  if (bounds.minX === Infinity) {
+    bounds.minX = 0; bounds.minY = 0; bounds.maxX = 0; bounds.maxY = 0;
+  }
+
+  stats.kept = kept.length;
+  stats.boundsM = {
+    width: +((bounds.maxX - bounds.minX) * u).toFixed(2),
+    depth: +((bounds.maxY - bounds.minY) * u).toFixed(2),
+  };
+
+  return { fixtures: kept, bounds, stats };
+}
+
+/**
  * Generate layout JSON from fixtures and mapping
  */
 function generateLayoutJson(importData, mapping) {
@@ -612,7 +1035,43 @@ export default function createDwgImportRoutes(db) {
       
       // Parse DXF
       const parsed = parseDxfFile(filePath);
-      
+
+      // Always preserve the ORIGINAL (pre-filter) fixture list so the
+      // Prefilter Studio UI can re-run the filter with different thresholds
+      // without needing to re-parse or re-upload the DXF.
+      const originalFixtures = parsed.fixtures.slice();
+      const originalBounds = { ...parsed.bounds };
+
+      // Geometric prefilter — strip CAD artifacts (walls, elevations, sheet
+      // borders, geo-reference markers) before they pollute groups + bounds.
+      // Skipped via ?nofilter=1 query param or { prefilter: false } body flag.
+      const skipPrefilter = req.query.nofilter === '1' || req.body?.prefilter === false;
+      let prefilterStats = null;
+      if (!skipPrefilter) {
+        const before = {
+          count: parsed.fixtures.length,
+          width: ((parsed.bounds.maxX - parsed.bounds.minX) * parsed.unitScaleToM).toFixed(1),
+          depth: ((parsed.bounds.maxY - parsed.bounds.minY) * parsed.unitScaleToM).toFixed(1),
+        };
+        const result = prefilterFixtures(parsed.fixtures, parsed.unitScaleToM);
+        parsed.fixtures = result.fixtures;
+        parsed.bounds = result.bounds;
+        prefilterStats = result.stats;
+        console.log(
+          `[DWG Prefilter] ${before.count} → ${result.fixtures.length} fixtures ` +
+          `(layer:${result.stats.droppedByLayer}, ` +
+          `degen:${result.stats.droppedByDegenerate}, ` +
+          `size:${result.stats.droppedBySize}, ` +
+          `polySingleton:${result.stats.droppedByPolylineSingleton}, ` +
+          `coordOutlier:${result.stats.droppedByCoordinateOutlier}, ` +
+          `cluster:${result.stats.droppedByCluster})`
+        );
+        console.log(
+          `[DWG Prefilter] bounds ${before.width}m × ${before.depth}m → ` +
+          `${result.stats.boundsM.width}m × ${result.stats.boundsM.depth}m`
+        );
+      }
+
       // Group fixtures
       const groups = groupFixtures(parsed.fixtures);
       
@@ -630,7 +1089,13 @@ export default function createDwgImportRoutes(db) {
         parsed.units,
         parsed.unitScaleToM,
         JSON.stringify(parsed.bounds),
-        JSON.stringify({ fixtures: parsed.fixtures, layers: parsed.layers }),
+        JSON.stringify({
+          fixtures: parsed.fixtures,
+          originalFixtures,
+          originalBounds,
+          layers: parsed.layers,
+          prefilter: prefilterStats,
+        }),
         'parsed',
         now,
         now
@@ -667,6 +1132,7 @@ export default function createDwgImportRoutes(db) {
         fixture_count: parsed.fixtures.length,
         group_count: groups.length,
         layers: parsed.layers,
+        prefilter: prefilterStats,
         groups: groups.map(g => ({
           group_id: g.group_id,
           layer: g.layer,
@@ -723,6 +1189,217 @@ export default function createDwgImportRoutes(db) {
     }
   });
   
+  /**
+   * GET /api/dwg/import/:import_id/prefilter-defaults
+   * Returns the default prefilter configuration + the list of layers present
+   * in the import (with per-layer totals). Used by the Prefilter Studio UI
+   * to render sliders and the editable layer-blocklist.
+   */
+  router.get('/import/:import_id/prefilter-defaults', (req, res) => {
+    try {
+      const imp = db.prepare('SELECT * FROM dwg_imports WHERE id = ?').get(req.params.import_id);
+      if (!imp) return res.status(404).json({ error: 'Import not found' });
+      const rawData = JSON.parse(imp.raw_json || '{}');
+      const originalFixtures = rawData.originalFixtures || rawData.fixtures || [];
+
+      const layerTotals = {};
+      for (const f of originalFixtures) {
+        const layer = f.source?.layer || '(no-layer)';
+        layerTotals[layer] = (layerTotals[layer] || 0) + 1;
+      }
+
+      res.json({
+        import_id: req.params.import_id,
+        unit_scale_to_m: imp.unit_scale_to_m,
+        has_original_fixtures: !!rawData.originalFixtures,
+        original_fixture_count: originalFixtures.length,
+        defaults: {
+          maxFixtureSizeM: PREFILTER_DEFAULTS.maxFixtureSizeM,
+          maxPolylineSingletonSizeM: PREFILTER_DEFAULTS.maxPolylineSingletonSizeM,
+          relativeSizePercentile: PREFILTER_DEFAULTS.relativeSizePercentile,
+          relativeSizeMultiplier: PREFILTER_DEFAULTS.relativeSizeMultiplier,
+          relativeSizeMaxDropFraction: PREFILTER_DEFAULTS.relativeSizeMaxDropFraction,
+          madSpreads: PREFILTER_DEFAULTS.madSpreads,
+          madMaxDropFraction: PREFILTER_DEFAULTS.madMaxDropFraction,
+          clusterWindowM: PREFILTER_DEFAULTS.clusterWindowM,
+          clusterMarginM: PREFILTER_DEFAULTS.clusterMarginM,
+          clusterMinKeepFraction: PREFILTER_DEFAULTS.clusterMinKeepFraction,
+          minFixtureSizeM: PREFILTER_DEFAULTS.minFixtureSizeM,
+          layerBlocklist: PREFILTER_DEFAULTS.layerBlocklist.map(rx => ({
+            pattern: rx.source,
+            flags: rx.flags || 'i',
+          })),
+        },
+        // Patterns that are NOT active by default but the Studio can
+        // offer as one-click additions for aggressive cleanup.
+        suggestedBlocklist: [
+          { pattern: 'muratur', flags: 'i', label: 'Walls (murature)' },
+          { pattern: 'pilastr', flags: 'i', label: 'Columns (pilastri)' },
+          { pattern: 'tavolat', flags: 'i', label: 'Partitions (tavolati)' },
+          { pattern: 'serrament', flags: 'i', label: 'Doors/Windows (serramenti)' },
+          { pattern: '^0s-?epdm', flags: 'i', label: 'Roofing (EPDM)' },
+          { pattern: 'prospetto', flags: 'i', label: 'Elevations (prospetto)' },
+          { pattern: 'proiezion', flags: 'i', label: 'Projections (proiezioni)' },
+          { pattern: 'contorno[-_ ]?retin', flags: 'i', label: 'Hatching borders' },
+          { pattern: '^retini', flags: 'i', label: 'Hatching fills' },
+          { pattern: 'segnaletica', flags: 'i', label: 'Signage' },
+          { pattern: 'poligoni', flags: 'i', label: 'Polygon dumps' },
+          { pattern: 'pavimentazion', flags: 'i', label: 'Paving' },
+          { pattern: 'cordoli', flags: 'i', label: 'Curbs' },
+          { pattern: 'parapett', flags: 'i', label: 'Railings' },
+          { pattern: 'struttura[-_ ]?cement', flags: 'i', label: 'Structural concrete' },
+          { pattern: 'sigillatur', flags: 'i', label: 'Sealants' },
+          { pattern: 'viteri', flags: 'i', label: 'Hardware/fittings' },
+          { pattern: 'caditoi', flags: 'i', label: 'Drains' },
+          { pattern: 'confin', flags: 'i', label: 'Boundaries' },
+          { pattern: 'riferiment', flags: 'i', label: 'Reference markers' },
+          { pattern: 'catastal', flags: 'i', label: 'Cadastral' },
+          { pattern: 'parcheggi', flags: 'i', label: 'Parking' },
+          { pattern: 'cespugl', flags: 'i', label: 'Bushes/landscaping' },
+          { pattern: 'alber', flags: 'i', label: 'Trees' },
+        ],
+        layer_totals: layerTotals,
+      });
+    } catch (err) {
+      console.error('Prefilter defaults error:', err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  /**
+   * POST /api/dwg/import/:import_id/reprefilter — Re-run the geometric prefilter
+   * on an existing import's raw fixtures (no re-upload required).
+   *
+   * Body (all optional):
+   *   dryRun: boolean                       — compute only, don't write
+   *   reset: boolean                        — restore originalFixtures AS-IS
+   *                                           (all steps disabled, no filtering)
+   *   maxFixtureSizeM, maxPolylineSingletonSizeM, minFixtureSizeM,
+   *   madSpreads (array), madMaxDropFraction,
+   *   clusterWindowM, clusterMarginM, clusterMinKeepFraction
+   *   layerBlocklist: [{ pattern: string, flags?: string }, ...]
+   *                                         — replaces the default blocklist
+   *   enableLayerBlock, enableDegenerate, enableSizeCap,
+   *   enablePolylineSingleton, enableMadOutlier, enableClusterPicker
+   *                                         — per-step toggles (default true)
+   */
+  router.post('/import/:import_id/reprefilter', (req, res) => {
+    try {
+      const imp = db.prepare('SELECT * FROM dwg_imports WHERE id = ?').get(req.params.import_id);
+      if (!imp) return res.status(404).json({ error: 'Import not found' });
+
+      const rawData = JSON.parse(imp.raw_json || '{}');
+      const rawFixtures = rawData.originalFixtures || rawData.fixtures || [];
+      if (!Array.isArray(rawFixtures) || rawFixtures.length === 0) {
+        return res.status(400).json({ error: 'No fixtures stored for this import' });
+      }
+
+      const dryRun = req.body?.dryRun === true;
+      const reset = req.body?.reset === true;
+
+      // Build prefilter options from the request body. Numeric fields and
+      // array fields are passed through; step-toggles stay as booleans.
+      const opts = {};
+      for (const k of [
+        'maxFixtureSizeM', 'maxPolylineSingletonSizeM', 'minFixtureSizeM',
+        'madMaxDropFraction', 'clusterWindowM', 'clusterMarginM',
+        'clusterMinKeepFraction',
+        'relativeSizePercentile', 'relativeSizeMultiplier', 'relativeSizeMaxDropFraction',
+      ]) {
+        if (typeof req.body?.[k] === 'number') opts[k] = req.body[k];
+      }
+      if (Array.isArray(req.body?.madSpreads)) opts.madSpreads = req.body.madSpreads;
+      if (Array.isArray(req.body?.layerBlocklist)) opts.layerBlocklist = req.body.layerBlocklist;
+      for (const k of [
+        'enableLayerBlock', 'enableDegenerate', 'enableSizeCap',
+        'enableRelativeSizeOutlier',
+        'enablePolylineSingleton', 'enableMadOutlier', 'enableClusterPicker',
+      ]) {
+        if (typeof req.body?.[k] === 'boolean') opts[k] = req.body[k];
+      }
+
+      // Reset mode disables every filter step → returns the full original set.
+      if (reset) {
+        opts.enableLayerBlock = false;
+        opts.enableDegenerate = false;
+        opts.enableSizeCap = false;
+        opts.enableRelativeSizeOutlier = false;
+        opts.enablePolylineSingleton = false;
+        opts.enableMadOutlier = false;
+        opts.enableClusterPicker = false;
+      }
+
+      const result = prefilterFixtures(rawFixtures, imp.unit_scale_to_m, opts);
+      const groups = groupFixtures(result.fixtures);
+
+      console.log(
+        `[DWG Reprefilter ${req.params.import_id}] ` +
+        `${rawFixtures.length} → ${result.fixtures.length} fixtures, ` +
+        `${groups.length} groups (dryRun=${dryRun}, reset=${reset})`
+      );
+
+      if (!dryRun) {
+        const newRaw = {
+          ...rawData,
+          originalFixtures: rawFixtures,
+          originalBounds: rawData.originalBounds || null,
+          fixtures: result.fixtures,
+          prefilter: result.stats,
+          prefilterOpts: {
+            ...opts,
+            reset: reset || undefined,
+          },
+        };
+        const now = new Date().toISOString();
+
+        const tx = db.transaction(() => {
+          db.prepare(`
+            UPDATE dwg_imports
+            SET bounds_json = ?, raw_json = ?, updated_at = ?
+            WHERE id = ?
+          `).run(
+            JSON.stringify(result.bounds),
+            JSON.stringify(newRaw),
+            now,
+            req.params.import_id
+          );
+
+          db.prepare('DELETE FROM dwg_groups WHERE import_id = ?').run(req.params.import_id);
+          const insertGroup = db.prepare(`
+            INSERT INTO dwg_groups (id, import_id, group_id, layer, block_name, count, size_w, size_d, members_json, meta_json, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `);
+          for (const g of groups) {
+            insertGroup.run(
+              uuidv4(), req.params.import_id, g.group_id,
+              g.layer, g.block, g.count, g.size.w, g.size.d,
+              JSON.stringify(g.members), JSON.stringify({}), now
+            );
+          }
+        });
+        tx();
+      }
+
+      // On dryRun also return the kept fixture IDs so the canvas can
+      // render a diff (fixtures not in this set get the "dropped" style).
+      const keptIds = dryRun ? result.fixtures.map(f => f.id) : null;
+
+      res.json({
+        import_id: req.params.import_id,
+        dry_run: dryRun,
+        reset,
+        fixture_count: result.fixtures.length,
+        group_count: groups.length,
+        bounds: result.bounds,
+        prefilter: result.stats,
+        kept_fixture_ids: keptIds,
+      });
+    } catch (err) {
+      console.error('Reprefilter error:', err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   /**
    * GET /api/dwg/imports - List all imports
    */

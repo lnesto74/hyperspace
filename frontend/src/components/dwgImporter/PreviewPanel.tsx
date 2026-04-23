@@ -1,5 +1,5 @@
 import { useMemo, useRef, useEffect, useState, useCallback } from 'react'
-import { ZoomIn, ZoomOut, Maximize2, Grid, MousePointer2, Square, Move, Focus, Save, Download, Radio, Play, Wand2, Trash2, Pencil, Check, X, Settings, Plus, Bug, Layers, Eye, ImagePlus, Ruler, FileDown, RotateCw, Scissors, Image as ImageIcon } from 'lucide-react'
+import { ZoomIn, ZoomOut, Maximize2, Grid, MousePointer2, Square, Move, Focus, Save, Download, Radio, Play, Wand2, Trash2, Pencil, Check, X, Settings, Plus, Bug, Layers, Eye, ImagePlus, Ruler, FileDown, RotateCw, Scissors, Image as ImageIcon, Crop } from 'lucide-react'
 import type { ImportData, GroupMapping, LidarModel, LidarInstance, SimulationResult, AutoplaceSettings } from './DwgImporterPage'
 import LidarDebugPanel from './LidarDebugPanel'
 import { API_BASE } from '../../config/api'
@@ -18,6 +18,12 @@ interface PreviewPanelProps {
   onDeleteFixtures?: (fixtureIds: string[]) => void
   onHoverFixture?: (fixtureId: string | null) => void
   hoveredFixtureId?: string | null
+  /**
+   * When set, fixtures NOT in this set are rendered with a "would be dropped"
+   * preview style (hollow red outline). Populated by the Prefilter Studio
+   * dry-run so users can visually inspect tuning changes before applying.
+   */
+  dropPreviewKeepIds?: Set<string> | null
   // LiDAR mode props
   lidarMode?: boolean
   onToggleLidarMode?: () => void
@@ -79,6 +85,7 @@ export default function PreviewPanel({
   onDeleteFixtures,
   onHoverFixture,
   hoveredFixtureId,
+  dropPreviewKeepIds = null,
   // LiDAR props
   lidarMode = false,
   onToggleLidarMode,
@@ -643,9 +650,49 @@ export default function PreviewPanel({
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [selectedFixtureIds, onDeleteFixtures])
 
+  // Calculate ACTUAL bounds from current (filtered) fixtures for accurate display.
+  // Uses robust percentile-based bounds (P1-P99) so that a handful of position
+  // outliers (fixtures from other floor-plan sheets stacked in the same DXF)
+  // don't blow up the view to hundreds of km.
+  const actualBounds = useMemo(() => {
+    if (importData.fixtures.length === 0) return importData.bounds
+    const xs: number[] = []
+    const ys: number[] = []
+    for (const f of importData.fixtures) {
+      const x = f.pose2d?.x || 0
+      const y = f.pose2d?.y || 0
+      const hw = (f.footprint?.w || 0) / 2
+      const hd = (f.footprint?.d || 0) / 2
+      xs.push(x - hw, x + hw)
+      ys.push(y - hd, y + hd)
+    }
+    xs.sort((a, b) => a - b)
+    ys.sort((a, b) => a - b)
+    const n = xs.length
+    if (n === 0) return importData.bounds
+    const loIdx = Math.floor(n * 0.01)
+    const hiIdx = Math.min(n - 1, Math.floor(n * 0.99))
+    const minX = xs[loIdx]
+    const maxX = xs[hiIdx]
+    const minY = ys[loIdx]
+    const maxY = ys[hiIdx]
+    const padX = (maxX - minX) * 0.02
+    const padY = (maxY - minY) * 0.02
+    return {
+      minX: minX - padX,
+      maxX: maxX + padX,
+      minY: minY - padY,
+      maxY: maxY + padY,
+    }
+  }, [importData.fixtures, importData.bounds])
+
   // Calculate view transform
   const viewTransform = useMemo(() => {
-    const { bounds, unit_scale_to_m } = importData
+    // Use actualBounds (percentile-based) so the view focuses on the
+    // dense cluster of fixtures, not a handful of position outliers
+    // at ±600 km that make the real store invisible.
+    const bounds = actualBounds
+    const { unit_scale_to_m } = importData
     const padding = 40
 
     const drawingWidth = (bounds.maxX - bounds.minX) * unit_scale_to_m
@@ -653,8 +700,8 @@ export default function PreviewPanel({
 
     const availableWidth = dimensions.width - padding * 2
     const availableHeight = dimensions.height - padding * 2
-    const scaleX = availableWidth / drawingWidth
-    const scaleY = availableHeight / drawingHeight
+    const scaleX = availableWidth / Math.max(drawingWidth, 0.1)
+    const scaleY = availableHeight / Math.max(drawingHeight, 0.1)
     const baseScale = Math.min(scaleX, scaleY, 100)
 
     const offsetX = (dimensions.width - drawingWidth * baseScale) / 2
@@ -670,7 +717,7 @@ export default function PreviewPanel({
       bounds,
       unit_scale_to_m
     }
-  }, [importData, dimensions, zoom, panOffset])
+  }, [actualBounds, importData, dimensions, zoom, panOffset])
 
   // Calculate main shopping area bounds (from LAYOUT/LEGNO fixtures)
   const mainAreaBounds = useMemo(() => {
@@ -715,22 +762,7 @@ export default function PreviewPanel({
   // The active main area (editable if set, otherwise calculated)
   const activeMainArea = editableMainArea || mainAreaBounds
 
-  // Calculate ACTUAL bounds from current (filtered) fixtures for accurate display
-  const actualBounds = useMemo(() => {
-    if (importData.fixtures.length === 0) return importData.bounds
-    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity
-    for (const f of importData.fixtures) {
-      const x = f.pose2d?.x || 0
-      const y = f.pose2d?.y || 0
-      const hw = (f.footprint?.w || 0) / 2
-      const hd = (f.footprint?.d || 0) / 2
-      minX = Math.min(minX, x - hw)
-      maxX = Math.max(maxX, x + hw)
-      minY = Math.min(minY, y - hd)
-      maxY = Math.max(maxY, y + hd)
-    }
-    return minX !== Infinity ? { minX, maxX, minY, maxY } : importData.bounds
-  }, [importData.fixtures, importData.bounds])
+  // (actualBounds is defined above viewTransform)
 
   // Convert DXF coordinates to screen coordinates
   // Note: Y is inverted (DXF Y+ is up, screen Y+ is down)
@@ -1334,6 +1366,46 @@ export default function PreviewPanel({
         <div className="w-px h-5 bg-gray-700 mx-2" />
         <button onClick={() => setShowGrid(!showGrid)} className={`p-1.5 rounded transition-colors ${showGrid ? 'bg-gray-700 text-white' : 'text-gray-500 hover:text-white'}`} title="Toggle Grid"><Grid className="w-4 h-4" /></button>
         <button onClick={() => setShowMainAreaBounds(!showMainAreaBounds)} className={`p-1.5 rounded transition-colors ${showMainAreaBounds ? 'bg-green-600 text-white' : 'text-gray-500 hover:text-white hover:bg-gray-700'}`} title="Toggle Main Area Filter (for spatial cleanup)"><Scissors className="w-4 h-4" /></button>
+        {/* Selection actions — only visible when there's an active selection. */}
+        {selectedFixtureIds.size > 0 && (
+          <>
+            <div className="w-px h-5 bg-gray-700 mx-2" />
+            <span className="text-xs text-highlight font-medium">
+              {selectedFixtureIds.size} selected
+            </span>
+            <button
+              onClick={() => onDeleteFixtures?.(Array.from(selectedFixtureIds))}
+              className="p-1.5 rounded text-red-400 hover:text-white hover:bg-red-600 transition-colors"
+              title="Delete selected fixtures (Del)"
+            >
+              <Trash2 className="w-4 h-4" />
+            </button>
+            <button
+              onClick={() => {
+                if (!onDeleteFixtures) return
+                const selected = selectedFixtureIds
+                const inverseIds = importData.fixtures
+                  .filter(f => !selected.has(f.id))
+                  .map(f => f.id)
+                if (inverseIds.length > 0) {
+                  onDeleteFixtures(inverseIds)
+                  onSelectFixtures([])
+                }
+              }}
+              className="p-1.5 rounded text-amber-400 hover:text-white hover:bg-amber-600 transition-colors"
+              title="Keep only selected — delete everything else"
+            >
+              <Crop className="w-4 h-4" />
+            </button>
+            <button
+              onClick={() => onSelectFixtures([])}
+              className="p-1.5 rounded text-gray-400 hover:text-white hover:bg-gray-700 transition-colors"
+              title="Clear selection"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </>
+        )}
         </>)}
         {/* Floor Plan Controls - shown in floorplan and overlay modes */}
         {(viewMode === 'floorplan' || viewMode === 'overlay') && floorplan && (<>
@@ -2550,6 +2622,9 @@ export default function PreviewPanel({
             const isSelected = selectedFixtureIds.has(fixture.id)
             const isHovered = hoveredFixtureId === fixture.id
             const isMapped = !!mappings[fixture.group_id]
+            // When the Prefilter Studio is dry-running, flag anything not in
+            // the "kept" set as "would be dropped" so we can render it in red.
+            const wouldBeDropped = dropPreviewKeepIds !== null && !dropPreviewKeepIds.has(fixture.id)
             const pos = toScreen(fixture.pose2d.x, fixture.pose2d.y)
             const w = toScreenSize(fixture.footprint.w)
             const d = toScreenSize(fixture.footprint.d)
@@ -2570,6 +2645,7 @@ export default function PreviewPanel({
             let fillColor = '#1e293b' // Dark slate
             let strokeColor = '#475569'
             let strokeWidth = 1
+            let fillOpacity: number | undefined
 
             if (isSelected) {
               fillColor = '#1d4ed8' // Blue for selected
@@ -2582,6 +2658,15 @@ export default function PreviewPanel({
             } else if (isMapped && mappedType) {
               fillColor = TYPE_FILL[mappedType] || TYPE_FILL.custom
               strokeColor = TYPE_STROKE[mappedType] || TYPE_STROKE.custom
+            }
+
+            // Drop-preview style overrides everything except active selection so
+            // the user can still pick items in "about to drop" state.
+            if (wouldBeDropped && !isSelected) {
+              fillColor = '#7f1d1d'   // dark red
+              strokeColor = '#ef4444' // bright red-500
+              strokeWidth = 1.5
+              fillOpacity = 0.15
             }
 
             if (fixture.footprint.kind === 'poly' && fixture.footprint.points.length > 2) {
@@ -2597,8 +2682,10 @@ export default function PreviewPanel({
                   key={fixture.id}
                   points={points}
                   fill={fillColor}
+                  fillOpacity={fillOpacity}
                   stroke={strokeColor}
                   strokeWidth={strokeWidth}
+                  strokeDasharray={wouldBeDropped ? '4 2' : undefined}
                   className="cursor-pointer hover:brightness-125"
                   onMouseEnter={() => onHoverFixture?.(fixture.id)}
                   onMouseLeave={() => onHoverFixture?.(null)}
@@ -2648,8 +2735,10 @@ export default function PreviewPanel({
                   width={w}
                   height={d}
                   fill={fillColor}
+                  fillOpacity={fillOpacity}
                   stroke={strokeColor}
                   strokeWidth={strokeWidth}
+                  strokeDasharray={wouldBeDropped ? '4 2' : undefined}
                   rx={2}
                   className="hover:brightness-125"
                 />
