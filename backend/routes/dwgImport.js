@@ -2404,24 +2404,34 @@ export default function createDwgImportRoutes(db) {
         console.log(`[DWG Bootstrap] ROI spatial filter (meters): ${beforeFilter} → ${fixtures.length} fixtures`);
       }
       
-      // Calculate content bounds from fixtures (for venue sizing)
-      let fMinX = Infinity, fMaxX = -Infinity, fMinY = Infinity, fMaxY = -Infinity;
+      // Calculate content bounds from fixtures using P1/P99 percentile (robust to outliers)
+      const allXs = [];
+      const allYs = [];
       fixtures.forEach(f => {
         const { footprint, pose2d } = f;
         const points = footprint?.points || [];
         if (points.length > 0) {
-          points.forEach(pt => {
-            fMinX = Math.min(fMinX, pt.x); fMaxX = Math.max(fMaxX, pt.x);
-            fMinY = Math.min(fMinY, pt.y); fMaxY = Math.max(fMaxY, pt.y);
-          });
+          points.forEach(pt => { allXs.push(pt.x); allYs.push(pt.y); });
         } else if (pose2d) {
           const hw = (footprint?.w || 1000) / 2;
           const hd = (footprint?.d || 1000) / 2;
-          fMinX = Math.min(fMinX, pose2d.x - hw); fMaxX = Math.max(fMaxX, pose2d.x + hw);
-          fMinY = Math.min(fMinY, pose2d.y - hd); fMaxY = Math.max(fMaxY, pose2d.y + hd);
+          allXs.push(pose2d.x - hw, pose2d.x + hw);
+          allYs.push(pose2d.y - hd, pose2d.y + hd);
         }
       });
-      if (!isFinite(fMinX)) { fMinX = 0; fMaxX = 20000; fMinY = 0; fMaxY = 15000; }
+      let fMinX, fMaxX, fMinY, fMaxY;
+      if (allXs.length === 0) {
+        fMinX = 0; fMaxX = 20000; fMinY = 0; fMaxY = 15000;
+      } else {
+        allXs.sort((a, b) => a - b);
+        allYs.sort((a, b) => a - b);
+        const n = allXs.length;
+        const loIdx = Math.floor(n * 0.01);
+        const hiIdx = Math.min(n - 1, Math.floor(n * 0.99));
+        fMinX = allXs[loIdx]; fMaxX = allXs[hiIdx];
+        fMinY = allYs[loIdx]; fMaxY = allYs[hiIdx];
+        console.log(`[DWG Bootstrap] Percentile bounds P1/P99 (n=${n}): X [${fMinX.toFixed(1)}, ${fMaxX.toFixed(1)}] Y [${fMinY.toFixed(1)}, ${fMaxY.toFixed(1)}]`);
+      }
       
       const padding = 4; // 4m padding on each side
       let venueWidth, venueDepth;

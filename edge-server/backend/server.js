@@ -1615,6 +1615,114 @@ async function detectLsLidarUdp(timeout = 2000) {
   });
 }
 
+// Detect LiDARs from ARP table — works even when this machine is NOT the
+// configured destination IP. LiDARs continuously ARP for their dest IP,
+// so their MACs appear in the neighbor table after a ping sweep.
+async function detectLidarsFromArp(subnet = '192.168.1', startHost = 200, endHost = 250) {
+  const { exec } = await import('child_process');
+  const { promisify } = await import('util');
+  const execAsync = promisify(exec);
+
+  // Ping sweep to populate ARP table (parallel, 1s timeout each)
+  const pingPromises = [];
+  for (let i = startHost; i <= endHost; i++) {
+    const ip = `${subnet}.${i}`;
+    pingPromises.push(
+      execAsync(`ping -c 1 -W 1 ${ip} 2>/dev/null`).catch(() => null)
+    );
+  }
+  await Promise.all(pingPromises);
+
+  // Read ARP/neighbor table
+  let arpOutput = '';
+  try {
+    const { stdout } = await execAsync('ip neigh show 2>/dev/null || arp -a 2>/dev/null');
+    arpOutput = stdout;
+  } catch (e) {
+    console.log('[ARP Discovery] Failed to read ARP table:', e.message);
+    return [];
+  }
+
+  const reachableIps = [];
+  for (let i = startHost; i <= endHost; i++) {
+    const ip = `${subnet}.${i}`;
+    // Match entries that are REACHABLE, STALE, or DELAY (i.e., have a valid MAC)
+    const regex = new RegExp(`${ip.replace(/\./g, '\\.')}\\b.*(?:REACHABLE|STALE|DELAY|lladdr)`, 'i');
+    if (regex.test(arpOutput)) {
+      reachableIps.push(ip);
+    }
+  }
+
+  console.log(`[ARP Discovery] Found ${reachableIps.length} reachable hosts in ${subnet}.${startHost}-${endHost}: ${reachableIps.join(', ')}`);
+  return reachableIps;
+}
+
+// Classify a reachable IP as a LiDAR by probing known ports
+async function classifyLidar(ip, timeout = 1500) {
+  // Try TCP port 80 first (RoboSense web UI)
+  const tryTcp = (port) => new Promise((resolve) => {
+    const socket = new net.Socket();
+    socket.setTimeout(timeout);
+    socket.on('connect', () => { socket.destroy(); resolve(true); });
+    socket.on('error', () => { socket.destroy(); resolve(false); });
+    socket.on('timeout', () => { socket.destroy(); resolve(false); });
+    socket.connect(port, ip);
+  });
+
+  // Check RoboSense (HTTP on port 80)
+  if (await tryTcp(80)) {
+    let config = null;
+    try {
+      const configRes = await getLidarConfigViaHttp(ip);
+      if (configRes.success) config = configRes.config;
+    } catch (e) {}
+
+    let mac = '';
+    try {
+      const { exec } = await import('child_process');
+      const { promisify } = await import('util');
+      const { stdout } = await promisify(exec)(`arp -n ${ip} 2>/dev/null || arp ${ip} 2>/dev/null`);
+      const m = stdout.match(/([0-9a-fA-F]{2}[:-]){5}[0-9a-fA-F]{2}/);
+      if (m) mac = m[0].toLowerCase();
+    } catch (e) {}
+
+    return {
+      lidarId: `lidar-${ip.replace(/\./g, '-')}`,
+      ip, mac,
+      vendor: 'RoboSense',
+      model: 'RS16',
+      port: 80,
+      reachable: true,
+      ports: [80, config?.msopPort || 6699, config?.difopPort || 7788],
+      msopPort: config?.msopPort || 6699,
+      difopPort: config?.difopPort || 7788,
+    };
+  }
+
+  // Check LS LiDAR (TCP 2369 — data port that's usually open even for unicast)
+  if (await tryTcp(2369) || await tryTcp(2368)) {
+    return {
+      lidarId: `lidar-${ip.replace(/\./g, '-')}`,
+      ip,
+      vendor: 'LSLidar',
+      model: 'C16/C32',
+      port: 2369,
+      reachable: true,
+      configurable: true,
+    };
+  }
+
+  // Fallback: it responded to ping but no known LiDAR port — still report it
+  return {
+    lidarId: `lidar-${ip.replace(/\./g, '-')}`,
+    ip,
+    vendor: 'Unknown',
+    model: 'Unknown',
+    port: 0,
+    reachable: true,
+  };
+}
+
 // Scan a single IP for LiDAR devices (TCP-based for RoboSense, etc.)
 async function probeLidarIp(ip, timeout = 2000) {
   const results = [];
@@ -1748,6 +1856,24 @@ app.post('/api/edge/lidar/scan', async (req, res) => {
   } catch (err) {
     console.log('[Edge Commissioning] LS Lidar UDP detection failed:', err.message);
   }
+
+  // Step 4: ARP-based discovery — catches LiDARs whose UDP destination IP
+  // is a different machine (e.g., Master sees LiDARs targeting the Slave)
+  console.log('[Edge Commissioning] ARP-based discovery (ping sweep + classify)...');
+  try {
+    const existingIps2 = new Set(foundLidars.map(l => l.ip));
+    const arpIps = await detectLidarsFromArp(baseSubnet, 200, 250);
+    const newIps = arpIps.filter(ip => !existingIps2.has(ip));
+    if (newIps.length > 0) {
+      const classified = await Promise.all(newIps.map(ip => classifyLidar(ip, 1500)));
+      for (const lidar of classified) {
+        if (lidar) foundLidars.push(lidar);
+      }
+      console.log(`[Edge Commissioning] ARP discovery found ${newIps.length} additional LiDARs`);
+    }
+  } catch (err) {
+    console.log('[Edge Commissioning] ARP discovery failed:', err.message);
+  }
   
   const scanDuration = Date.now() - startTime;
   console.log(`[Edge Commissioning] Scan complete: found ${foundLidars.length} LiDARs in ${scanDuration}ms`);
@@ -1800,12 +1926,31 @@ app.get('/api/edge/lidar/inventory', async (req, res) => {
         }
       };
       
-      // Quick TCP probe for RoboSense on expanded IP range (200-230)
+      // ARP-based discovery + TCP classification (finds ALL LiDARs regardless of
+      // whether their UDP destination matches this machine's IP)
+      const existingIps = new Set(lidarInventory.map(l => l.ip));
+      try {
+        const arpIps = await detectLidarsFromArp('192.168.1', 200, 250);
+        const newIps = arpIps.filter(ip => !existingIps.has(ip));
+        if (newIps.length > 0) {
+          const classified = await Promise.all(newIps.map(ip => classifyLidar(ip, 1000)));
+          for (const lidar of classified) {
+            if (lidar && !lidarInventory.some(l => l.ip === lidar.ip)) {
+              lidarInventory.push(lidar);
+            }
+          }
+        }
+      } catch (e) {
+        console.log('[Edge Commissioning] ARP inventory scan failed:', e.message);
+      }
+
+      // Also try direct TCP probe for RoboSense on 200-250 (catches any missed by ARP)
       const roboIps = [];
-      for (let i = 200; i <= 230; i++) roboIps.push(`192.168.1.${i}`);
+      for (let i = 200; i <= 250; i++) {
+        const ip = `192.168.1.${i}`;
+        if (!lidarInventory.some(l => l.ip === ip)) roboIps.push(ip);
+      }
       const roboChecks = await Promise.all(roboIps.map(async (ip) => {
-        // Skip if already detected as LS Lidar
-        if (lsLidars.some(l => l.ip === ip)) return null;
         try {
           const isOpen = await new Promise((resolve) => {
             const socket = new net.Socket();
@@ -1816,20 +1961,15 @@ app.get('/api/edge/lidar/inventory', async (req, res) => {
             socket.connect(80, ip);
           });
           if (isOpen) {
-            // Try to get actual config including custom ports
             let config = null;
             try {
               const configRes = await getLidarConfigViaHttp(ip);
               if (configRes.success) config = configRes.config;
             } catch (e) {}
-            
-            // Get MAC from ARP table (populated by TCP connection)
             const mac = await getMacFromArp(ip);
-            
             return {
               lidarId: `lidar-${ip.replace(/\./g, '-')}`,
-              ip,
-              mac,
+              ip, mac,
               vendor: 'RoboSense',
               model: 'RS16',
               reachable: true,
@@ -1842,7 +1982,6 @@ app.get('/api/edge/lidar/inventory', async (req, res) => {
         return null;
       }));
       
-      // Add detected RoboSense LiDARs
       for (const robo of roboChecks) {
         if (robo && !lidarInventory.some(l => l.ip === robo.ip)) {
           lidarInventory.push(robo);
@@ -2000,7 +2139,7 @@ app.post('/api/edge/lidar/commission', async (req, res) => {
     currentIp = '192.168.1.200', 
     newIp,
     label,
-    destIp = '192.168.1.102' // Edge server's IP for receiving data
+    destIp = getEdgeLanIp()
   } = req.body;
   
   const assignedIp = newIp || getNextAvailableIp();
@@ -2109,7 +2248,7 @@ app.delete('/api/edge/lidar/commissioned/:id', (req, res) => {
 
 // POST /api/edge/lidar/set-ip - Try to change LiDAR IP via HTTP (supports port config)
 app.post('/api/edge/lidar/set-ip', async (req, res) => {
-  const { currentIp = '192.168.1.200', newIp, destIp = '192.168.1.102', msopPort, difopPort } = req.body;
+  const { currentIp = '192.168.1.200', newIp, destIp = getEdgeLanIp(), msopPort, difopPort } = req.body;
   
   if (!newIp) {
     return res.status(400).json({ ok: false, error: 'newIp is required' });
