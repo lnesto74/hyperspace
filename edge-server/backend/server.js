@@ -1657,9 +1657,10 @@ async function detectLidarsFromArp(subnet = '192.168.1', startHost = 200, endHos
   return reachableIps;
 }
 
-// Classify a reachable IP as a LiDAR by probing known ports
+// Classify a reachable IP as a LiDAR by probing known ports.
+// LS LiDARs are UDP-only (no TCP ports open) — if an IP responds to ping
+// but has no open TCP ports, it's almost certainly an LS LiDAR in this subnet.
 async function classifyLidar(ip, timeout = 1500) {
-  // Try TCP port 80 first (RoboSense web UI)
   const tryTcp = (port) => new Promise((resolve) => {
     const socket = new net.Socket();
     socket.setTimeout(timeout);
@@ -1669,6 +1670,16 @@ async function classifyLidar(ip, timeout = 1500) {
     socket.connect(port, ip);
   });
 
+  const getMac = async () => {
+    try {
+      const { exec } = await import('child_process');
+      const { promisify } = await import('util');
+      const { stdout } = await promisify(exec)(`arp -n ${ip} 2>/dev/null || arp ${ip} 2>/dev/null`);
+      const m = stdout.match(/([0-9a-fA-F]{2}[:-]){5}[0-9a-fA-F]{2}/);
+      return m ? m[0].toLowerCase() : '';
+    } catch (e) { return ''; }
+  };
+
   // Check RoboSense (HTTP on port 80)
   if (await tryTcp(80)) {
     let config = null;
@@ -1676,16 +1687,7 @@ async function classifyLidar(ip, timeout = 1500) {
       const configRes = await getLidarConfigViaHttp(ip);
       if (configRes.success) config = configRes.config;
     } catch (e) {}
-
-    let mac = '';
-    try {
-      const { exec } = await import('child_process');
-      const { promisify } = await import('util');
-      const { stdout } = await promisify(exec)(`arp -n ${ip} 2>/dev/null || arp ${ip} 2>/dev/null`);
-      const m = stdout.match(/([0-9a-fA-F]{2}[:-]){5}[0-9a-fA-F]{2}/);
-      if (m) mac = m[0].toLowerCase();
-    } catch (e) {}
-
+    const mac = await getMac();
     return {
       lidarId: `lidar-${ip.replace(/\./g, '-')}`,
       ip, mac,
@@ -1699,27 +1701,18 @@ async function classifyLidar(ip, timeout = 1500) {
     };
   }
 
-  // Check LS LiDAR (TCP 2369 — data port that's usually open even for unicast)
-  if (await tryTcp(2369) || await tryTcp(2368)) {
-    return {
-      lidarId: `lidar-${ip.replace(/\./g, '-')}`,
-      ip,
-      vendor: 'LSLidar',
-      model: 'C16/C32',
-      port: 2369,
-      reachable: true,
-      configurable: true,
-    };
-  }
-
-  // Fallback: it responded to ping but no known LiDAR port — still report it
+  // No TCP port 80 → assume LS LiDAR (they are UDP-only, respond to ping
+  // but have zero open TCP ports). In a LiDAR-dedicated 192.168.1.200+
+  // subnet, any pingable device without HTTP is an LS LiDAR.
+  const mac = await getMac();
   return {
     lidarId: `lidar-${ip.replace(/\./g, '-')}`,
-    ip,
-    vendor: 'Unknown',
-    model: 'Unknown',
-    port: 0,
+    ip, mac,
+    vendor: 'LSLidar',
+    model: 'C16/C32',
+    port: 2369,
     reachable: true,
+    configurable: true,
   };
 }
 
@@ -1996,7 +1989,6 @@ app.get('/api/edge/lidar/inventory', async (req, res) => {
   }
   
   try {
-    // Quick TCP ping to check if each LiDAR is actually reachable
     const checkReachableTcp = (ip, port = 80, timeout = 1500) => {
       return new Promise((resolve) => {
         try {
@@ -2007,28 +1999,33 @@ app.get('/api/edge/lidar/inventory', async (req, res) => {
           socket.on('timeout', () => { socket.destroy(); resolve(false); });
           socket.connect(port, ip);
         } catch (err) {
-          console.error(`[Edge Commissioning] Ping error for ${ip}:`, err.message);
           resolve(false);
         }
       });
+    };
+
+    // ICMP ping check for devices without TCP ports (LS LiDARs)
+    const checkReachablePing = async (ip) => {
+      try {
+        const { exec } = await import('child_process');
+        const { promisify } = await import('util');
+        const { stdout } = await promisify(exec)(`ping -c 1 -W 1 ${ip} 2>/dev/null`);
+        return stdout.includes('1 received') || stdout.includes('bytes from');
+      } catch (e) { return false; }
     };
     
     // Check all LiDARs in parallel
     const lidarsWithStatus = await Promise.all(
       lidarInventory.map(async (lidar) => {
         try {
-          // LS Lidar: trust the scan result (UDP-only, no TCP check possible)
-          // For others: do TCP check
-          const isLsLidar = lidar.vendor === 'LSLidar';
-          if (isLsLidar) {
-            // LS Lidar was detected via UDP during scan, so it's reachable
-            // The scan already verified it by receiving UDP packets
-            return { ...lidar, reachable: true };
+          if (lidar.vendor === 'RoboSense') {
+            const reachable = await checkReachableTcp(lidar.ip, lidar.ports?.[0] || 80);
+            return { ...lidar, reachable };
           }
-          const reachable = await checkReachableTcp(lidar.ip, lidar.ports?.[0] || 80);
+          // LS LiDAR and others: use ICMP ping (they have no TCP ports)
+          const reachable = await checkReachablePing(lidar.ip);
           return { ...lidar, reachable };
         } catch (err) {
-          console.error(`[Edge Commissioning] Error checking ${lidar.ip}:`, err.message);
           return { ...lidar, reachable: false };
         }
       })
