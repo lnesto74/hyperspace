@@ -330,7 +330,10 @@ export function EdgeCommissioningProvider({ children }: Props) {
 
   // Fetch edge inventory (cached LiDAR list) and auto-register detected LiDARs
   const fetchEdgeInventory = useCallback(async (edgeId: string, venueId?: string) => {
-    setIsLoadingInventory(true)
+    // Only show loading spinner on first load, not on refreshes
+    if (!edgeInventory || edgeInventory.lidars.length === 0) {
+      setIsLoadingInventory(true)
+    }
     try {
       const res = await fetch(`${API_BASE}/api/edge-commissioning/edge/${edgeId}/inventory`)
       if (!res.ok) throw new Error('Inventory fetch failed')

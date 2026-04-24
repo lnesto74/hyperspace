@@ -102,21 +102,13 @@ export default function EdgeCommissioningPage({ onClose }: { onClose: () => void
   // Get merged LiDAR list (commissioned + scanned)
   const mergedLidars = getMergedLidars()
 
-  // Fetch inventory when edge is selected + auto-refresh every 30 seconds
+  // Fetch inventory once when edge is selected (no auto-poll — use scan button to refresh)
   useEffect(() => {
     if (selectedEdgeId) {
       fetchEdgeInventory(selectedEdgeId)
       fetchEdgeStatus(selectedEdgeId)
-      
-      // Auto-refresh inventory every 30 seconds to keep LiDAR status current
-      const pollInterval = setInterval(() => {
-        fetchEdgeInventory(selectedEdgeId)
-        fetchEdgeStatus(selectedEdgeId)
-      }, 30000)
-      
-      return () => clearInterval(pollInterval)
     }
-  }, [selectedEdgeId, fetchEdgeInventory, fetchEdgeStatus])
+  }, [selectedEdgeId])
 
   const selectedEdge = edges.find(e => e.edgeId === selectedEdgeId)
   const edgeStatus = selectedEdgeId ? edgeStatuses.get(selectedEdgeId) : null
@@ -580,8 +572,14 @@ export default function EdgeCommissioningPage({ onClose }: { onClose: () => void
               {/* LiDAR Actions Bar */}
               {selectedEdge && (
                 <div className="p-2 border-b border-gray-700 flex items-center justify-between bg-gray-800/50">
-                  <span className="text-xs text-gray-400">
+                  <span className="text-xs text-gray-400 flex items-center gap-1.5">
                     {selectedEdge.hostname}
+                    {mergedLidars.length > 0 && (
+                      <span className="text-gray-500">· {mergedLidars.filter(l => l.reachable).length}/{mergedLidars.length} online</span>
+                    )}
+                    {(isLoadingInventory || isScanningLidars) && mergedLidars.length > 0 && (
+                      <RefreshCw className="w-3 h-3 animate-spin text-gray-600" />
+                    )}
                   </span>
                   <div className="flex items-center gap-1">
                     <button
@@ -631,7 +629,7 @@ export default function EdgeCommissioningPage({ onClose }: { onClose: () => void
                     <Radio className="w-8 h-8 mx-auto mb-2 opacity-50" />
                     <p>Select an edge device</p>
                   </div>
-                ) : isLoadingInventory ? (
+                ) : isLoadingInventory && mergedLidars.length === 0 ? (
                   <div className="text-center text-gray-500 py-8">
                     <RefreshCw className="w-6 h-6 mx-auto mb-2 animate-spin" />
                     <p className="text-sm">Loading inventory...</p>

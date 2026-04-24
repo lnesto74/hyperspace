@@ -1623,12 +1623,12 @@ async function detectLidarsFromArp(subnet = '192.168.1', startHost = 200, endHos
   const { promisify } = await import('util');
   const execAsync = promisify(exec);
 
-  // Ping sweep to populate ARP table (parallel, 1s timeout each)
+  // Ping sweep to populate ARP table (parallel, 2 pings each for reliability)
   const pingPromises = [];
   for (let i = startHost; i <= endHost; i++) {
     const ip = `${subnet}.${i}`;
     pingPromises.push(
-      execAsync(`ping -c 1 -W 1 ${ip} 2>/dev/null`).catch(() => null)
+      execAsync(`ping -c 2 -W 2 -i 0.3 ${ip} 2>/dev/null`).catch(() => null)
     );
   }
   await Promise.all(pingPromises);
@@ -1884,7 +1884,9 @@ app.post('/api/edge/lidar/scan', async (req, res) => {
 
 // Track last scan time for staleness check
 let lastScanTime = 0;
-const SCAN_STALE_MS = 10000; // Consider inventory stale after 10 seconds
+const SCAN_STALE_MS = 60000; // Re-scan every 60 seconds (not every request)
+let lastReachabilityCheck = 0;
+const REACHABILITY_STALE_MS = 30000; // Re-check reachability every 30 seconds
 
 // GET /api/edge/lidar/inventory - Get discovered LiDAR devices with live reachability check
 app.get('/api/edge/lidar/inventory', async (req, res) => {
@@ -1989,7 +1991,19 @@ app.get('/api/edge/lidar/inventory', async (req, res) => {
   }
   
   try {
-    const checkReachableTcp = (ip, port = 80, timeout = 1500) => {
+    // Only re-check reachability if enough time has passed; otherwise return
+    // cached results. This prevents flickering when the UI polls frequently.
+    const reachabilityStale = Date.now() - lastReachabilityCheck > REACHABILITY_STALE_MS;
+
+    if (!reachabilityStale && lidarInventory.length > 0) {
+      console.log(`[Edge Commissioning] Inventory: returning cached (${lidarInventory.length} LiDARs, checked ${Math.round((Date.now() - lastReachabilityCheck) / 1000)}s ago)`);
+      return res.json({
+        lidars: lidarInventory,
+        lastScanTime: new Date(lastScanTime).toISOString(),
+      });
+    }
+
+    const checkReachableTcp = (ip, port = 80, timeout = 2000) => {
       return new Promise((resolve) => {
         try {
           const socket = new net.Socket();
@@ -2004,13 +2018,14 @@ app.get('/api/edge/lidar/inventory', async (req, res) => {
       });
     };
 
-    // ICMP ping check for devices without TCP ports (LS LiDARs)
+    // ICMP ping check for devices without TCP ports (LS LiDARs).
+    // Uses 3 pings with 2s deadline — if ANY reply arrives, it's online.
     const checkReachablePing = async (ip) => {
       try {
         const { exec } = await import('child_process');
         const { promisify } = await import('util');
-        const { stdout } = await promisify(exec)(`ping -c 1 -W 1 ${ip} 2>/dev/null`);
-        return stdout.includes('1 received') || stdout.includes('bytes from');
+        const { stdout } = await promisify(exec)(`ping -c 3 -W 2 -i 0.3 ${ip} 2>/dev/null`);
+        return /[1-3] received/.test(stdout) || stdout.includes('bytes from');
       } catch (e) { return false; }
     };
     
@@ -2030,6 +2045,11 @@ app.get('/api/edge/lidar/inventory', async (req, res) => {
         }
       })
     );
+
+    // Update the cached inventory with reachability status
+    lidarInventory.length = 0;
+    lidarInventory.push(...lidarsWithStatus);
+    lastReachabilityCheck = Date.now();
     
     const onlineCount = lidarsWithStatus.filter(l => l.reachable).length;
     console.log(`[Edge Commissioning] Inventory: ${onlineCount}/${lidarsWithStatus.length} LiDARs online`);
