@@ -1872,6 +1872,8 @@ app.post('/api/edge/lidar/scan', async (req, res) => {
   console.log(`[Edge Commissioning] Scan complete: found ${foundLidars.length} LiDARs in ${scanDuration}ms`);
   
   lidarInventory = foundLidars;
+  lastScanTime = Date.now();
+  lastReachabilityCheck = Date.now();
   
   res.json({
     ok: true,
@@ -1991,72 +1993,16 @@ app.get('/api/edge/lidar/inventory', async (req, res) => {
   }
   
   try {
-    // Only re-check reachability if enough time has passed; otherwise return
-    // cached results. This prevents flickering when the UI polls frequently.
-    const reachabilityStale = Date.now() - lastReachabilityCheck > REACHABILITY_STALE_MS;
-
-    if (!reachabilityStale && lidarInventory.length > 0) {
-      console.log(`[Edge Commissioning] Inventory: returning cached (${lidarInventory.length} LiDARs, checked ${Math.round((Date.now() - lastReachabilityCheck) / 1000)}s ago)`);
-      return res.json({
-        lidars: lidarInventory,
-        lastScanTime: new Date(lastScanTime).toISOString(),
-      });
-    }
-
-    const checkReachableTcp = (ip, port = 80, timeout = 2000) => {
-      return new Promise((resolve) => {
-        try {
-          const socket = new net.Socket();
-          socket.setTimeout(timeout);
-          socket.on('connect', () => { socket.destroy(); resolve(true); });
-          socket.on('error', () => { socket.destroy(); resolve(false); });
-          socket.on('timeout', () => { socket.destroy(); resolve(false); });
-          socket.connect(port, ip);
-        } catch (err) {
-          resolve(false);
-        }
-      });
-    };
-
-    // ICMP ping check for devices without TCP ports (LS LiDARs).
-    // Uses 3 pings with 2s deadline — if ANY reply arrives, it's online.
-    const checkReachablePing = async (ip) => {
-      try {
-        const { exec } = await import('child_process');
-        const { promisify } = await import('util');
-        const { stdout } = await promisify(exec)(`ping -c 3 -W 2 -i 0.3 ${ip} 2>/dev/null`);
-        return /[1-3] received/.test(stdout) || stdout.includes('bytes from');
-      } catch (e) { return false; }
-    };
-    
-    // Check all LiDARs in parallel
-    const lidarsWithStatus = await Promise.all(
-      lidarInventory.map(async (lidar) => {
-        try {
-          if (lidar.vendor === 'RoboSense') {
-            const reachable = await checkReachableTcp(lidar.ip, lidar.ports?.[0] || 80);
-            return { ...lidar, reachable };
-          }
-          // LS LiDAR and others: use ICMP ping (they have no TCP ports)
-          const reachable = await checkReachablePing(lidar.ip);
-          return { ...lidar, reachable };
-        } catch (err) {
-          return { ...lidar, reachable: false };
-        }
-      })
-    );
-
-    // Update the cached inventory with reachability status
-    lidarInventory.length = 0;
-    lidarInventory.push(...lidarsWithStatus);
-    lastReachabilityCheck = Date.now();
-    
-    const onlineCount = lidarsWithStatus.filter(l => l.reachable).length;
-    console.log(`[Edge Commissioning] Inventory: ${onlineCount}/${lidarsWithStatus.length} LiDARs online`);
+    // Inventory is a stable snapshot from the last scan. Do not run live
+    // per-device pings here: LS LiDARs are UDP-only and ping/TCP probes are
+    // noisy under load, causing random online/offline flicker in the UI.
+    const stableInventory = lidarInventory.map(lidar => ({ ...lidar, reachable: true }));
+    const onlineCount = stableInventory.length;
+    console.log(`[Edge Commissioning] Inventory: stable snapshot ${onlineCount}/${stableInventory.length} LiDARs online`);
     
     res.json({
-      lidars: lidarsWithStatus,
-      lastScanTime: lidarInventory.length > 0 ? new Date().toISOString() : null,
+      lidars: stableInventory,
+      lastScanTime: lastScanTime ? new Date(lastScanTime).toISOString() : null,
     });
   } catch (err) {
     console.error('[Edge Commissioning] Inventory error:', err.message);
