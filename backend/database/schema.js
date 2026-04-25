@@ -101,6 +101,8 @@ export function initDatabase() {
       max_capacity INTEGER DEFAULT 300,
       default_dwell_threshold_sec INTEGER DEFAULT 60,
       default_engagement_threshold_sec INTEGER DEFAULT 120,
+      grid_extent_multiplier REAL NOT NULL DEFAULT 1.2,
+      grid_opacity REAL NOT NULL DEFAULT 0.35,
       scene_source TEXT NOT NULL DEFAULT 'manual',
       dwg_layout_version_id TEXT DEFAULT NULL,
       dwg_transform_json TEXT DEFAULT NULL,
@@ -1085,6 +1087,14 @@ export function initDatabase() {
       db.exec("ALTER TABLE venues ADD COLUMN place_id TEXT DEFAULT NULL");
       console.log('📦 Migration: Added place_id column to venues');
     }
+    if (venueColumnNames.length > 0 && !venueColumnNames.includes('grid_extent_multiplier')) {
+      db.exec("ALTER TABLE venues ADD COLUMN grid_extent_multiplier REAL NOT NULL DEFAULT 1.2");
+      console.log('📦 Migration: Added grid_extent_multiplier column to venues');
+    }
+    if (venueColumnNames.length > 0 && !venueColumnNames.includes('grid_opacity')) {
+      db.exec("ALTER TABLE venues ADD COLUMN grid_opacity REAL NOT NULL DEFAULT 0.35");
+      console.log('📦 Migration: Added grid_opacity column to venues');
+    }
   } catch (migrationErr) {
     // Table may not exist yet, that's fine
   }
@@ -1108,8 +1118,8 @@ export const venueQueries = {
   
   create: (db, venue) => {
     const stmt = db.prepare(`
-      INSERT INTO venues (id, name, width, depth, height, tile_size, scene_source, dwg_layout_version_id, dwg_transform_json, company_id, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO venues (id, name, width, depth, height, tile_size, scene_source, dwg_layout_version_id, dwg_transform_json, company_id, grid_extent_multiplier, grid_opacity, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     return stmt.run(
       venue.id,
@@ -1122,6 +1132,8 @@ export const venueQueries = {
       venue.dwgLayoutVersionId || null,
       venue.dwgTransformJson ? JSON.stringify(venue.dwgTransformJson) : null,
       venue.company_id || venue.companyId || null,
+      venue.gridExtentMultiplier ?? venue.grid_extent_multiplier ?? 1.2,
+      venue.gridOpacity ?? venue.grid_opacity ?? 0.35,
       venue.createdAt,
       venue.updatedAt
     );
@@ -1133,6 +1145,8 @@ export const venueQueries = {
         scene_source = COALESCE(?, scene_source),
         dwg_layout_version_id = COALESCE(?, dwg_layout_version_id),
         company_id = COALESCE(?, company_id),
+        grid_extent_multiplier = COALESCE(?, grid_extent_multiplier),
+        grid_opacity = COALESCE(?, grid_opacity),
         updated_at = ?
       WHERE id = ?
     `);
@@ -1145,6 +1159,8 @@ export const venueQueries = {
       venue.scene_source || null,
       venue.dwg_layout_version_id || null,
       venue.company_id || venue.companyId || null,
+      venue.gridExtentMultiplier ?? venue.grid_extent_multiplier ?? null,
+      venue.gridOpacity ?? venue.grid_opacity ?? null,
       new Date().toISOString(),
       id
     );

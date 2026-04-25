@@ -15,6 +15,19 @@ const EDGE_PORT = parseInt(process.env.EDGE_PORT) || 8080;
 const EDGE_WS_PORT = parseInt(process.env.EDGE_WS_PORT) || 8081;
 const EDGE_HOSTNAME_PATTERNS = ['edge', 'ulisse', 'lidar-edge', 'concentrator'];
 
+function getEquivalentVenueIds(db, venueId) {
+  if (!venueId) return [];
+  const venue = db.prepare('SELECT id, dwg_layout_version_id FROM venues WHERE id = ?').get(venueId);
+  if (!venue?.dwg_layout_version_id) return [venueId];
+
+  const rows = db.prepare('SELECT id FROM venues WHERE dwg_layout_version_id = ?').all(venue.dwg_layout_version_id);
+  return Array.from(new Set([venueId, ...rows.map(r => r.id)]));
+}
+
+function placeholders(values) {
+  return values.map(() => '?').join(',');
+}
+
 // Helper: Get edge device IP from tailscale status
 async function getEdgeDevices() {
   let devices = [];
@@ -733,8 +746,9 @@ router.get('/pairings', (req, res) => {
     const params = [];
 
     if (venueId) {
-      query += ' AND venue_id = ?';
-      params.push(venueId);
+      const venueIds = getEquivalentVenueIds(db, venueId);
+      query += ` AND venue_id IN (${placeholders(venueIds)})`;
+      params.push(...venueIds);
     }
     if (edgeId) {
       query += ' AND edge_id = ?';
@@ -819,14 +833,16 @@ router.delete('/pairings/cleanup-orphaned', (req, res) => {
       return res.status(400).json({ error: 'venueId query parameter is required' });
     }
 
+    const venueIds = getEquivalentVenueIds(db, venueId);
+
     // Find orphaned pairings (placement_id not in lidar_instances or lidar_placements)
     const orphanedPairings = db.prepare(`
       SELECT p.id, p.placement_id, p.lidar_id 
       FROM edge_lidar_pairings p
-      WHERE p.venue_id = ?
+      WHERE p.venue_id IN (${placeholders(venueIds)})
         AND p.placement_id NOT IN (SELECT id FROM lidar_instances)
         AND p.placement_id NOT IN (SELECT id FROM lidar_placements)
-    `).all(venueId);
+    `).all(...venueIds);
 
     if (orphanedPairings.length === 0) {
       return res.json({ success: true, deleted: 0, message: 'No orphaned pairings found' });
@@ -835,10 +851,10 @@ router.delete('/pairings/cleanup-orphaned', (req, res) => {
     // Delete orphaned pairings
     const result = db.prepare(`
       DELETE FROM edge_lidar_pairings 
-      WHERE venue_id = ?
+      WHERE venue_id IN (${placeholders(venueIds)})
         AND placement_id NOT IN (SELECT id FROM lidar_instances)
         AND placement_id NOT IN (SELECT id FROM lidar_placements)
-    `).run(venueId);
+    `).run(...venueIds);
 
     console.log(`🧹 Cleaned up ${result.changes} orphaned pairings for venue ${venueId}`);
     res.json({ 
@@ -863,7 +879,11 @@ router.delete('/pairings/by-placement/:placementId', (req, res) => {
       return res.status(400).json({ error: 'venueId query parameter is required' });
     }
 
-    const result = db.prepare('DELETE FROM edge_lidar_pairings WHERE venue_id = ? AND placement_id = ?').run(venueId, placementId);
+    const venueIds = getEquivalentVenueIds(db, venueId);
+    const result = db.prepare(`
+      DELETE FROM edge_lidar_pairings
+      WHERE venue_id IN (${placeholders(venueIds)}) AND placement_id = ?
+    `).run(...venueIds, placementId);
 
     res.json({ success: true, deleted: result.changes });
   } catch (err) {
@@ -907,11 +927,13 @@ router.post('/edge/:edgeId/deploy', async (req, res) => {
     // Validate edge
     const edge = await validateEdgeIp(edgeId);
 
-    // Get all pairings for this edge+venue
+    // Get all pairings for this edge+venue. Treat venues sharing the same DWG
+    // layout as equivalent so pairings made from the DWG map are visible here.
+    const venueIds = getEquivalentVenueIds(db, venueId);
     const pairings = db.prepare(`
       SELECT * FROM edge_lidar_pairings 
-      WHERE venue_id = ? AND edge_id = ?
-    `).all(venueId, edgeId);
+      WHERE venue_id IN (${placeholders(venueIds)}) AND edge_id = ?
+    `).all(...venueIds, edgeId);
 
     if (pairings.length === 0) {
       return res.status(400).json({ error: 'No pairings found for this edge and venue' });
@@ -1276,9 +1298,10 @@ router.get('/export-config', async (req, res) => {
       `).all(venue.dwg_layout_version_id);
     }
 
-    // Get pairings
-    let pairingsQuery = 'SELECT * FROM edge_lidar_pairings WHERE venue_id = ?';
-    const params = [venueId];
+    // Get pairings. Treat venues sharing the same DWG layout as equivalent.
+    const venueIds = getEquivalentVenueIds(db, venueId);
+    let pairingsQuery = `SELECT * FROM edge_lidar_pairings WHERE venue_id IN (${placeholders(venueIds)})`;
+    const params = [...venueIds];
     if (edgeId) {
       pairingsQuery += ' AND edge_id = ?';
       params.push(edgeId);

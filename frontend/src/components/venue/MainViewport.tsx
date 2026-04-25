@@ -2354,8 +2354,8 @@ export default function MainViewport({
         return {
           centerX: (oMinX + oMaxX) / 2,
           centerZ: (oMinZ + oMaxZ) / 2,
-          floorW: Math.max(objW * 1.2, 5),
-          floorD: Math.max(objD * 1.2, 5),
+          floorW: Math.max(objW, 5),
+          floorD: Math.max(objD, 5),
           source: 'objects-p10-p90',
         }
       }
@@ -2381,8 +2381,8 @@ export default function MainViewport({
         return {
           centerX: (roiMinX + roiMaxX) / 2,
           centerZ: (roiMinZ + roiMaxZ) / 2,
-          floorW: Math.max(roiW * 1.2, 5),
-          floorD: Math.max(roiD * 1.2, 5),
+          floorW: Math.max(roiW, 5),
+          floorD: Math.max(roiD, 5),
           source: 'roi-sane',
         }
       }
@@ -2421,12 +2421,23 @@ export default function MainViewport({
       console.log(`[MainViewport] DWG venue — ${dwgSceneBounds.source}: floor ${floorW.toFixed(1)}×${floorD.toFixed(1)}m, center (${centerX.toFixed(1)}, ${centerZ.toFixed(1)})`)
     }
 
+    const extentMultiplier = venue.gridExtentMultiplier ?? 1.2
+    floorW *= extentMultiplier
+    floorD *= extentMultiplier
+
     // Create grid. Use readable meter-based cells and make the grid/floor at
-    // least 20% larger than the DWG/ROI footprint.
+    // least the configured amount larger than the DWG/ROI footprint.
     const gridSize = Math.max(floorW, floorD)
     const cellSize = gridSize > 120 ? 5 : gridSize > 60 ? 2 : 1
     const divisions = Math.max(1, Math.ceil(gridSize / cellSize))
     const grid = new THREE.GridHelper(gridSize, divisions, COLORS.gridCenter, COLORS.grid)
+    const gridOpacity = venue.gridOpacity ?? 0.35
+    const gridMaterials = Array.isArray(grid.material) ? grid.material : [grid.material]
+    gridMaterials.forEach(mat => {
+      mat.transparent = true
+      mat.opacity = gridOpacity
+      mat.depthWrite = false
+    })
     grid.position.set(centerX, 0.01, centerZ)
     scene.add(grid)
     gridRef.current = grid
@@ -2437,6 +2448,8 @@ export default function MainViewport({
       color: COLORS.floor,
       roughness: 0.9,
       metalness: 0.1,
+      transparent: true,
+      opacity: Math.min(0.9, Math.max(0.15, gridOpacity + 0.15)),
     })
     const floor = new THREE.Mesh(floorGeometry, floorMaterial)
     floor.rotation.x = -Math.PI / 2
@@ -2447,7 +2460,7 @@ export default function MainViewport({
 
     // Camera — only set on first render, NOT on object changes
     // (dwgSceneBounds depends on objects, so this would reset camera during drag)
-  }, [venue?.width, venue?.depth, venue?.tileSize, venue?.scene_source, venue?.dwg_layout_version_id, dwgSceneBounds])
+  }, [venue?.width, venue?.depth, venue?.tileSize, venue?.scene_source, venue?.dwg_layout_version_id, venue?.gridExtentMultiplier, venue?.gridOpacity, dwgSceneBounds])
 
   // Reset camera initialized flag when venue changes
   useEffect(() => {

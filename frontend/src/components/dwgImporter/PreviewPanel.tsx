@@ -48,7 +48,7 @@ interface PreviewPanelProps {
   layoutVersionId?: string | null  // For saving ROI by layout version ID
   lidarPairingMode?: boolean
   onToggleLidarPairingMode?: () => void
-  lidarPairings?: Array<{ placementId: string; lidarIp?: string; lidarId: string }>
+  lidarPairings?: Array<{ placementId: string; lidarIp?: string; lidarId: string; reachable?: boolean }>
 }
 
 type Tool = 'pan' | 'select' | 'rectangle' | 'place_lidar' | 'draw_roi' | 'move_floorplan' | 'calibrate_floorplan' | 'crop_floorplan'
@@ -2937,6 +2937,8 @@ export default function PreviewPanel({
           {/* LiDAR markers - top layer for reliable selection even with overlapping range circles */}
           {viewMode !== 'floorplan' && layerVisibility.lidarDevices && lidarInstances.map((inst) => {
             const pairing = lidarPairings.find(p => p.placementId === inst.id)
+            const pairedOnline = pairing?.reachable === true
+            const pairedOffline = !!pairing && pairing.reachable === false
             const effectiveScale = importData.unit_scale_to_m * scaleCorrection
             // Use dragged position if this LiDAR is being dragged
             const isBeingDragged = draggingLidarId === inst.id
@@ -2975,8 +2977,8 @@ export default function PreviewPanel({
                   cx={pos.x}
                   cy={pos.y}
                   r={isSelected ? 12 : isDragging ? 11 : 8}
-                  fill={pairing ? '#0e7490' : isDragging ? '#f59e0b' : isSelected ? '#3b82f6' : inst.source === 'auto' ? '#22c55e' : '#1e40af'}
-                  stroke={pairing ? '#67e8f9' : isDragging ? '#fbbf24' : isSelected ? '#60a5fa' : inst.source === 'auto' ? '#4ade80' : '#3b82f6'}
+                  fill={pairedOnline ? '#15803d' : pairedOffline ? '#991b1b' : pairing ? '#0e7490' : isDragging ? '#f59e0b' : isSelected ? '#3b82f6' : inst.source === 'auto' ? '#22c55e' : '#1e40af'}
+                  stroke={pairedOnline ? '#4ade80' : pairedOffline ? '#f87171' : pairing ? '#67e8f9' : isDragging ? '#fbbf24' : isSelected ? '#60a5fa' : inst.source === 'auto' ? '#4ade80' : '#3b82f6'}
                   strokeWidth={isSelected || isDragging ? 3 : 2}
                   pointerEvents="none"
                 />

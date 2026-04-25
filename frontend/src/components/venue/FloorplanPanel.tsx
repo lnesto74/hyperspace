@@ -508,6 +508,36 @@ export default function FloorplanPanel({ onOpenDwgImporter, launchPadOpen, onTog
                   <option value="2">2m</option>
                 </select>
               </div>
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="block text-[10px] text-gray-500">Grid Area</label>
+                  <span className="text-[10px] text-gray-400">{Math.round((venue.gridExtentMultiplier ?? 1.2) * 100)}%</span>
+                </div>
+                <input
+                  type="range"
+                  min="1"
+                  max="2"
+                  step="0.05"
+                  value={venue.gridExtentMultiplier ?? 1.2}
+                  onChange={e => updateVenue({ gridExtentMultiplier: parseFloat(e.target.value) })}
+                  className="w-full accent-highlight"
+                />
+              </div>
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="block text-[10px] text-gray-500">Grid Transparency</label>
+                  <span className="text-[10px] text-gray-400">{Math.round((1 - (venue.gridOpacity ?? 0.35)) * 100)}%</span>
+                </div>
+                <input
+                  type="range"
+                  min="0.1"
+                  max="1"
+                  step="0.05"
+                  value={venue.gridOpacity ?? 0.35}
+                  onChange={e => updateVenue({ gridOpacity: parseFloat(e.target.value) })}
+                  className="w-full accent-highlight"
+                />
+              </div>
             </div>
           )}
         </div>

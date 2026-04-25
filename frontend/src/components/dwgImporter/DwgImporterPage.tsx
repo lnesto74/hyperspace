@@ -777,6 +777,10 @@ export default function DwgImporterPage({ onClose, onLayoutGenerated }: DwgImpor
   const selectedPlacementPairing = selectedLidarInstanceId
     ? edgePairings.find(p => p.placementId === selectedLidarInstanceId)
     : null
+  const edgePairingsWithStatus = useMemo(() => edgePairings.map(pairing => {
+    const lidar = edgeInventory.find(l => l.lidarId === pairing.lidarId || l.ip === pairing.lidarIp)
+    return { ...pairing, reachable: lidar?.reachable ?? false }
+  }), [edgePairings, edgeInventory])
 
   const loadPairings = useCallback(async (venueId: string) => {
     const res = await fetch(`${API_BASE}/api/edge-commissioning/pairings?venueId=${venueId}`)
@@ -1518,7 +1522,7 @@ export default function DwgImporterPage({ onClose, onLayoutGenerated }: DwgImpor
                     setLidarMode(true)
                     setShowPrefilterStudio(false)
                   }}
-                  lidarPairings={edgePairings}
+                  lidarPairings={edgePairingsWithStatus}
                 />
               )}
             </div>

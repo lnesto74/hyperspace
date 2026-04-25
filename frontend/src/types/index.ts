@@ -6,6 +6,8 @@ export interface Venue {
   depth: number;
   height: number;
   tileSize: number;
+  gridExtentMultiplier?: number;
+  gridOpacity?: number;
   createdAt: string;
   updatedAt: string;
   scene_source?: 'manual' | 'dwg';
