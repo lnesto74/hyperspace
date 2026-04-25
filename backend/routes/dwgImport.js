@@ -1642,9 +1642,11 @@ export default function createDwgImportRoutes(db) {
       
       // Update import status
       db.prepare('UPDATE dwg_imports SET status = ?, updated_at = ? WHERE id = ?').run('generated', now, req.params.import_id);
+      const updatedLayout = db.prepare('SELECT venue_id FROM dwg_layout_versions WHERE id = ?').get(layoutVersionId);
       
       res.json({
         layout_version_id: layoutVersionId,
+        venue_id: updatedLayout?.venue_id || req.body.venue_id || imp.venue_id || null,
         previous_layout_id: allLayouts.length > 1 ? allLayouts[1].id : null,
         layout: layoutJson
       });

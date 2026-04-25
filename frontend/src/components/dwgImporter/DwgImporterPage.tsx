@@ -1122,7 +1122,7 @@ export default function DwgImporterPage({ onClose, onLayoutGenerated }: DwgImpor
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          venue_id: venue?.id,
+          venue_id: generatedVenueId || venue?.id,
           name: `${importData.filename} Layout`,
           scale_correction: scaleCorrection,
         })
@@ -1154,15 +1154,15 @@ export default function DwgImporterPage({ onClose, onLayoutGenerated }: DwgImpor
       }
       
       setGeneratedLayoutId(result.layout_version_id)
-      setGeneratedVenueId(null)
       // Sync to localStorage so LaunchPad + DwgContext see the correct DWG
       localStorage.setItem('venueDwg-selectedLayout', result.layout_version_id)
       window.dispatchEvent(new CustomEvent('dwgLayoutSelected', { detail: { layoutId: result.layout_version_id } }))
       console.log(`[DwgImporter] generateLayout synced layout → ${result.layout_version_id}`)
       onLayoutGenerated?.(result.layout_version_id)
       
-      // ALWAYS create a NEW venue for each DWG (like Launchpad flow)
-      // This ensures each DWG gets its own venue instead of overwriting existing venues
+      // Materialize the DWG layout into a venue. Re-generate must update the
+      // already-linked venue in-place; otherwise the 3D Venue page can keep
+      // showing an older duplicate that still contains deleted DWG fixtures.
       const sc = (() => { try { const s = localStorage.getItem(`dwg-autoplace-settings-${importData?.filename || 'default'}`); return s ? JSON.parse(s).scaleCorrection || 1.0 : 1.0; } catch { return 1.0; } })()
       
       try {
@@ -1170,8 +1170,8 @@ export default function DwgImporterPage({ onClose, onLayoutGenerated }: DwgImpor
         if (bsRes.ok) {
           const bootstrap = await bsRes.json()
           
-          // Generate new venue ID (like Launchpad)
-          const newVenueId = crypto.randomUUID()
+          const targetVenueId = generatedVenueId || result.venue_id || null
+          const materializedVenueId = targetVenueId || crypto.randomUUID()
           // Derive venue name from DWG filename (strip ".dwg", " Layout" suffix)
           const rawName = importData?.filename || 'DWG Venue'
           const venueName = rawName.replace(/\.dwg\b/i, '').replace(/\s*Layout$/i, '').trim() || 'DWG Venue'
@@ -1182,18 +1182,18 @@ export default function DwgImporterPage({ onClose, onLayoutGenerated }: DwgImpor
           }
           const objects = (bootstrap.objectsDraft || []).map((obj: any) => ({
             ...obj,
-            venueId: newVenueId,
+            venueId: materializedVenueId,
             color: obj.color || DEFAULT_COLORS[obj.type] || DEFAULT_COLORS.custom,
           }))
           
-          // Create new venue with objects
-          const saveRes = await fetch(`${API_BASE}/api/venues/${newVenueId}`, {
+          // Create once, then update the same linked venue on every regenerate.
+          const saveRes = await fetch(`${API_BASE}/api/venues/${materializedVenueId}`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               venue: {
-                id: newVenueId,
-                name: venueName,
+                id: materializedVenueId,
+                name: targetVenueId ? (venue?.name || venueName) : venueName,
                 width: bootstrap.venueDefaults?.width || 30,
                 depth: bootstrap.venueDefaults?.depth || 20,
                 height: bootstrap.venueDefaults?.height || 4,
@@ -1208,9 +1208,9 @@ export default function DwgImporterPage({ onClose, onLayoutGenerated }: DwgImpor
           })
           
           if (saveRes.ok) {
-            setGeneratedVenueId(newVenueId)
+            setGeneratedVenueId(materializedVenueId)
             // Link layout to new venue
-            await fetch(`${API_BASE}/api/venues/${newVenueId}/dwg-layout`, {
+            await fetch(`${API_BASE}/api/venues/${materializedVenueId}/dwg-layout`, {
               method: 'PATCH',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ dwg_layout_version_id: result.layout_version_id })
@@ -1220,10 +1220,10 @@ export default function DwgImporterPage({ onClose, onLayoutGenerated }: DwgImpor
             await fetch(`${API_BASE}/api/dwg/layout/${result.layout_version_id}/link-venue`, {
               method: 'PATCH',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ venue_id: newVenueId }),
+              body: JSON.stringify({ venue_id: materializedVenueId }),
             }).catch(() => {})
             
-            console.log(`[DwgImporter] Created NEW venue "${venueName}" (${newVenueId}) with ${objects.length} objects`)
+            console.log(`[DwgImporter] ${targetVenueId ? 'Updated' : 'Created'} venue "${venueName}" (${materializedVenueId}) with ${objects.length} objects`)
           }
         }
       } catch (createErr) {
@@ -1235,7 +1235,7 @@ export default function DwgImporterPage({ onClose, onLayoutGenerated }: DwgImpor
     } finally {
       setIsGenerating(false)
     }
-  }, [importData, venue?.id, saveMappings, onLayoutGenerated])
+  }, [importData, generatedVenueId, venue?.id, venue?.name, venue?.company_id, saveMappings, onLayoutGenerated, scaleCorrection])
 
   // Count unmapped groups
   const unmappedCount = importData 
