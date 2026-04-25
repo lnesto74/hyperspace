@@ -4382,8 +4382,9 @@ export default function MainViewport({
           )
           mesh.name = 'VenueFloorplanOverlay'
           mesh.position.set(worldCenter.x, 0.015, worldCenter.z)
-          // Match Layout3DPreview: this is a 180-degree X-axis flip from the old venue overlay.
+          // Keep the overlay aligned with the map axes while testing the requested 180-degree flips.
           mesh.rotation.x = Math.PI / 2
+          mesh.rotation.y = Math.PI
           if (transform.rotation) mesh.rotation.z = -transform.rotation * Math.PI / 180
           mesh.renderOrder = 1
           sceneRef.current.add(mesh)
@@ -5741,7 +5742,7 @@ export default function MainViewport({
       <div ref={containerRef} className="flex-1 relative">
         <div
           ref={axisContainerRef}
-          className="absolute top-4 left-4 z-40 rounded-xl overflow-hidden border border-blue-400/40 shadow-2xl pointer-events-none"
+          className="absolute top-4 right-4 z-40 rounded-xl overflow-hidden border border-blue-400/40 shadow-2xl pointer-events-none"
           style={{ width: 124, height: 124 }}
           title="Axis gizmo: X red, Y green/depth, Z blue/up"
         />
