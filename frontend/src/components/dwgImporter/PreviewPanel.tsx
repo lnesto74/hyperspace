@@ -1,5 +1,5 @@
 import { useMemo, useRef, useEffect, useState, useCallback } from 'react'
-import { ZoomIn, ZoomOut, Maximize2, Grid, MousePointer2, Square, Move, Focus, Save, Download, Radio, Play, Wand2, Trash2, Pencil, Check, X, Settings, Plus, Bug, Layers, Eye, ImagePlus, Ruler, FileDown, RotateCw, Scissors, Image as ImageIcon, Crop } from 'lucide-react'
+import { ZoomIn, ZoomOut, Maximize2, Grid, MousePointer2, Square, Move, Focus, Save, Download, Radio, Play, Wand2, Trash2, Pencil, Check, X, Settings, Plus, Bug, Layers, Eye, ImagePlus, Ruler, FileDown, RotateCw, Scissors, Image as ImageIcon, Crop, Link2 } from 'lucide-react'
 import type { ImportData, GroupMapping, LidarModel, LidarInstance, SimulationResult, AutoplaceSettings } from './DwgImporterPage'
 import LidarDebugPanel from './LidarDebugPanel'
 import { API_BASE } from '../../config/api'
@@ -46,6 +46,9 @@ interface PreviewPanelProps {
   onSetLidarRoi?: (roi: RoiVertex[] | null) => void
   onRefreshModels?: () => Promise<void>
   layoutVersionId?: string | null  // For saving ROI by layout version ID
+  lidarPairingMode?: boolean
+  onToggleLidarPairingMode?: () => void
+  lidarPairings?: Array<{ placementId: string; lidarIp?: string; lidarId: string }>
 }
 
 type Tool = 'pan' | 'select' | 'rectangle' | 'place_lidar' | 'draw_roi' | 'move_floorplan' | 'calibrate_floorplan' | 'crop_floorplan'
@@ -107,7 +110,10 @@ export default function PreviewPanel({
   lidarRoi: lidarRoiProp,
   onSetLidarRoi,
   onRefreshModels,
-  layoutVersionId
+  layoutVersionId,
+  lidarPairingMode = false,
+  onToggleLidarPairingMode,
+  lidarPairings = []
 }: PreviewPanelProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const [dimensions, setDimensions] = useState({ width: 800, height: 600 })
@@ -1820,6 +1826,18 @@ export default function PreviewPanel({
             <Play className="w-3 h-3" />
             {isSimulating ? 'Simulating...' : 'Simulate'}
           </button>
+
+          <button
+            onClick={onToggleLidarPairingMode}
+            disabled={!lidarEnabled || lidarInstances.length === 0}
+            className={`px-2 py-1 disabled:bg-gray-600 text-white text-xs rounded flex items-center gap-1 ${
+              lidarPairingMode ? 'bg-cyan-600 hover:bg-cyan-500 ring-2 ring-cyan-400' : 'bg-gray-700 hover:bg-gray-600'
+            }`}
+            title="Pair physical LiDAR IPs to these DWG placements"
+          >
+            <Link2 className="w-3 h-3" />
+            Pair Devices
+          </button>
           
           {simulationResult && (
             <span className="text-xs text-green-400 ml-2">
@@ -2894,6 +2912,7 @@ export default function PreviewPanel({
           {/* LiDAR Instances - visible in DWG and Overlay when layer enabled */}
           {viewMode !== 'floorplan' && layerVisibility.lidarDevices && lidarInstances.map((inst) => {
             const model = lidarModels.find(m => m.id === inst.model_id)
+            const pairing = lidarPairings.find(p => p.placementId === inst.id)
             const range = inst.range_m || model?.range_m || 10
             const effectiveScale = importData.unit_scale_to_m * scaleCorrection
             // Use dragged position if this LiDAR is being dragged
@@ -2926,12 +2945,13 @@ export default function PreviewPanel({
                   r={18}
                   fill="transparent"
                   stroke="none"
-                  className={isDragging ? 'cursor-grabbing' : 'cursor-grab'}
+                  className={lidarPairingMode ? 'cursor-pointer' : isDragging ? 'cursor-grabbing' : 'cursor-grab'}
                   onMouseDown={(e) => {
                     if (e.button !== 0) return
                     e.stopPropagation()
                     e.preventDefault()
                     onSelectLidarInstance?.(inst.id)
+                    if (lidarPairingMode) return
                     const rect = containerRef.current?.getBoundingClientRect()
                     if (!rect) return
                     const mousePos = { x: e.clientX - rect.left, y: e.clientY - rect.top }
@@ -2945,8 +2965,8 @@ export default function PreviewPanel({
                   cx={pos.x}
                   cy={pos.y}
                   r={isSelected ? 12 : isDragging ? 11 : 8}
-                  fill={isDragging ? '#f59e0b' : isSelected ? '#3b82f6' : inst.source === 'auto' ? '#22c55e' : '#1e40af'}
-                  stroke={isDragging ? '#fbbf24' : isSelected ? '#60a5fa' : inst.source === 'auto' ? '#4ade80' : '#3b82f6'}
+                  fill={pairing ? '#0e7490' : isDragging ? '#f59e0b' : isSelected ? '#3b82f6' : inst.source === 'auto' ? '#22c55e' : '#1e40af'}
+                  stroke={pairing ? '#67e8f9' : isDragging ? '#fbbf24' : isSelected ? '#60a5fa' : inst.source === 'auto' ? '#4ade80' : '#3b82f6'}
                   strokeWidth={isSelected || isDragging ? 3 : 2}
                   pointerEvents="none"
                 />
@@ -2970,6 +2990,18 @@ export default function PreviewPanel({
                     strokeDasharray="3 3"
                     pointerEvents="none"
                   />
+                )}
+                {pairing && (
+                  <text
+                    x={pos.x + 14}
+                    y={pos.y - 12}
+                    fill="#67e8f9"
+                    fontSize="11"
+                    fontWeight="600"
+                    pointerEvents="none"
+                  >
+                    {pairing.lidarIp?.split('.').pop() || pairing.lidarId}
+                  </text>
                 )}
               </g>
             )

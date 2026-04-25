@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
-import { FileUp, Box, ArrowLeft, AlertCircle, CheckCircle2, Loader2, Eye, Box as Box3D, Sliders } from 'lucide-react'
+import { FileUp, Box, ArrowLeft, AlertCircle, CheckCircle2, Loader2, Eye, Box as Box3D, Sliders, Link2, RefreshCw, Wifi, WifiOff, X } from 'lucide-react'
 import { useVenue } from '../../context/VenueContext'
 import UploadCard from './UploadCard'
 import GroupListPanel from './GroupListPanel'
@@ -33,6 +33,32 @@ export interface LidarInstance {
   yaw_deg: number
   source: 'manual' | 'auto'
   range_m?: number
+}
+
+interface EdgeDevice {
+  edgeId: string
+  hostname: string
+  displayName?: string
+  tailscaleIp: string
+  online: boolean
+}
+
+interface EdgeLidar {
+  lidarId: string
+  ip: string
+  vendor?: string
+  model?: string
+  reachable: boolean
+}
+
+interface EdgePairing {
+  id: string
+  venueId: string
+  edgeId: string
+  edgeTailscaleIp?: string
+  placementId: string
+  lidarId: string
+  lidarIp?: string
 }
 
 export interface SimulationResult {
@@ -156,11 +182,18 @@ export default function DwgImporterPage({ onClose, onLayoutGenerated }: DwgImpor
   const [retailCategories, setRetailCategories] = useState<RetailCategory[]>([])
   const [isGenerating, setIsGenerating] = useState(false)
   const [generatedLayoutId, setGeneratedLayoutId] = useState<string | null>(null)
+  const [generatedVenueId, setGeneratedVenueId] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [show3DPreview, setShow3DPreview] = useState(false)
   const [showUploadView, setShowUploadView] = useState(false)
   const [deletedFixtureIds, setDeletedFixtureIds] = useState<Set<string>>(new Set())
   const [customNames, setCustomNames] = useState<Record<string, string>>({})
+  const [showLidarPairing, setShowLidarPairing] = useState(false)
+  const [edgeDevices, setEdgeDevices] = useState<EdgeDevice[]>([])
+  const [selectedPairingEdgeId, setSelectedPairingEdgeId] = useState<string | null>(null)
+  const [edgeInventory, setEdgeInventory] = useState<EdgeLidar[]>([])
+  const [edgePairings, setEdgePairings] = useState<EdgePairing[]>([])
+  const [isLoadingPairingData, setIsLoadingPairingData] = useState(false)
 
   // Prefilter Studio state ─ a slide-in panel that lets the user tune the
   // geometric prefilter (layer blocklist, size cap, cluster picker…) with a
@@ -739,6 +772,98 @@ export default function DwgImporterPage({ onClose, onLayoutGenerated }: DwgImpor
     }
   }, [generatedLayoutId, selectedLidarModelId])
 
+  const pairingVenueId = generatedVenueId || venue?.id || null
+  const selectedPairingEdge = edgeDevices.find(edge => edge.edgeId === selectedPairingEdgeId) || null
+  const selectedPlacementPairing = selectedLidarInstanceId
+    ? edgePairings.find(p => p.placementId === selectedLidarInstanceId)
+    : null
+
+  const loadPairings = useCallback(async (venueId: string) => {
+    const res = await fetch(`${API_BASE}/api/edge-commissioning/pairings?venueId=${venueId}`)
+    if (res.ok) {
+      const data = await res.json()
+      setEdgePairings(data.pairings || [])
+    }
+  }, [])
+
+  const loadPairingInventory = useCallback(async (edgeId: string) => {
+    const res = await fetch(`${API_BASE}/api/edge-commissioning/edge/${edgeId}/inventory`)
+    if (res.ok) {
+      const data = await res.json()
+      setEdgeInventory(data.lidars || [])
+    }
+  }, [])
+
+  const loadPairingData = useCallback(async () => {
+    if (!pairingVenueId) return
+    setIsLoadingPairingData(true)
+    try {
+      const edgesRes = await fetch(`${API_BASE}/api/edge-commissioning/scan-edges`)
+      if (edgesRes.ok) {
+        const data = await edgesRes.json()
+        const edges = data.edges || []
+        setEdgeDevices(edges)
+        const edgeId = selectedPairingEdgeId || edges.find((e: EdgeDevice) => e.online)?.edgeId || edges[0]?.edgeId || null
+        if (edgeId && edgeId !== selectedPairingEdgeId) {
+          setSelectedPairingEdgeId(edgeId)
+        }
+        if (edgeId) {
+          await loadPairingInventory(edgeId)
+        }
+      }
+      await loadPairings(pairingVenueId)
+    } finally {
+      setIsLoadingPairingData(false)
+    }
+  }, [pairingVenueId, selectedPairingEdgeId, loadPairingInventory, loadPairings])
+
+  useEffect(() => {
+    if (!showLidarPairing) return
+    loadPairingData()
+  }, [showLidarPairing, loadPairingData])
+
+  useEffect(() => {
+    if (!showLidarPairing || !selectedPairingEdgeId) return
+    loadPairingInventory(selectedPairingEdgeId)
+  }, [showLidarPairing, selectedPairingEdgeId, loadPairingInventory])
+
+  const handlePairSelectedPlacement = useCallback(async (lidar: EdgeLidar) => {
+    if (!pairingVenueId || !selectedPairingEdge || !selectedLidarInstanceId) return
+    const conflicting = edgePairings.find(p => p.lidarIp === lidar.ip && p.placementId !== selectedLidarInstanceId)
+    if (conflicting && !window.confirm(`${lidar.ip} is already paired to another placement. Move it here?`)) return
+    if (conflicting) {
+      await fetch(`${API_BASE}/api/edge-commissioning/pairings/by-placement/${conflicting.placementId}?venueId=${pairingVenueId}`, {
+        method: 'DELETE',
+      }).catch(() => {})
+    }
+
+    const res = await fetch(`${API_BASE}/api/edge-commissioning/pairings`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        venueId: pairingVenueId,
+        edgeId: selectedPairingEdge.edgeId,
+        edgeTailscaleIp: selectedPairingEdge.tailscaleIp,
+        placementId: selectedLidarInstanceId,
+        lidarId: lidar.lidarId,
+        lidarIp: lidar.ip,
+      }),
+    })
+    if (res.ok) {
+      await loadPairings(pairingVenueId)
+    }
+  }, [pairingVenueId, selectedPairingEdge, selectedLidarInstanceId, edgePairings, loadPairings])
+
+  const handleUnpairSelectedPlacement = useCallback(async () => {
+    if (!pairingVenueId || !selectedLidarInstanceId) return
+    const res = await fetch(`${API_BASE}/api/edge-commissioning/pairings/by-placement/${selectedLidarInstanceId}?venueId=${pairingVenueId}`, {
+      method: 'DELETE',
+    })
+    if (res.ok) {
+      setEdgePairings(prev => prev.filter(p => p.placementId !== selectedLidarInstanceId))
+    }
+  }, [pairingVenueId, selectedLidarInstanceId])
+
   // Handle file upload
   const handleUpload = useCallback(async (file: File) => {
     setError(null)
@@ -852,6 +977,7 @@ export default function DwgImporterPage({ onClose, onLayoutGenerated }: DwgImpor
       
       setImportData(data)
       setGeneratedLayoutId(null)
+      setGeneratedVenueId(null)
       setShow3DPreview(false)
       // Track the active import for LaunchPad (even before a layout is generated)
       localStorage.setItem('launchpad-activeImportId', importId)
@@ -872,6 +998,7 @@ export default function DwgImporterPage({ onClose, onLayoutGenerated }: DwgImpor
           // Use the most recent active layout
           const activeLayout = layouts.find((l: any) => l.is_active) || layouts[0]
           setGeneratedLayoutId(activeLayout.id)
+          setGeneratedVenueId(activeLayout.venue_id || null)
           // Sync to localStorage so LaunchPad + DwgContext see the correct DWG
           localStorage.setItem('venueDwg-selectedLayout', activeLayout.id)
           window.dispatchEvent(new CustomEvent('dwgLayoutSelected', { detail: { layoutId: activeLayout.id } }))
@@ -1018,6 +1145,7 @@ export default function DwgImporterPage({ onClose, onLayoutGenerated }: DwgImpor
       }
       
       setGeneratedLayoutId(result.layout_version_id)
+      setGeneratedVenueId(null)
       // Sync to localStorage so LaunchPad + DwgContext see the correct DWG
       localStorage.setItem('venueDwg-selectedLayout', result.layout_version_id)
       window.dispatchEvent(new CustomEvent('dwgLayoutSelected', { detail: { layoutId: result.layout_version_id } }))
@@ -1071,6 +1199,7 @@ export default function DwgImporterPage({ onClose, onLayoutGenerated }: DwgImpor
           })
           
           if (saveRes.ok) {
+            setGeneratedVenueId(newVenueId)
             // Link layout to new venue
             await fetch(`${API_BASE}/api/venues/${newVenueId}/dwg-layout`, {
               method: 'PATCH',
@@ -1149,6 +1278,7 @@ export default function DwgImporterPage({ onClose, onLayoutGenerated }: DwgImpor
                 setImportData(null)
                 setMappings({})
                 setGeneratedLayoutId(null)
+                setGeneratedVenueId(null)
                 setShow3DPreview(false)
                 setShowUploadView(false)
               }}
@@ -1382,12 +1512,19 @@ export default function DwgImporterPage({ onClose, onLayoutGenerated }: DwgImpor
                   lidarRoi={lidarRoi}
                   onSetLidarRoi={handleSetLidarRoi}
                   layoutVersionId={generatedLayoutId}
+                  lidarPairingMode={showLidarPairing}
+                  onToggleLidarPairingMode={() => {
+                    setShowLidarPairing(v => !v)
+                    setLidarMode(true)
+                    setShowPrefilterStudio(false)
+                  }}
+                  lidarPairings={edgePairings}
                 />
               )}
             </div>
           </div>
 
-          {/* Right Panel - Prefilter Studio takes priority over mapping */}
+          {/* Right Panel - Prefilter Studio takes priority over pairing/mapping */}
           {showPrefilterStudio ? (
             <div className="w-96 border-l border-border-dark overflow-hidden flex flex-col bg-panel-bg">
               <PrefilterStudio
@@ -1405,6 +1542,104 @@ export default function DwgImporterPage({ onClose, onLayoutGenerated }: DwgImpor
                   setPrefilterPreview(null)
                 }}
               />
+            </div>
+          ) : showLidarPairing ? (
+            <div className="w-96 border-l border-border-dark overflow-hidden flex flex-col bg-panel-bg">
+              <div className="p-4 border-b border-border-dark">
+                <div className="flex items-center justify-between mb-1">
+                  <h2 className="text-sm font-medium text-white flex items-center gap-2">
+                    <Link2 className="w-4 h-4 text-cyan-400" />
+                    LiDAR Pairing
+                  </h2>
+                  <button onClick={() => setShowLidarPairing(false)} className="p-1 text-gray-400 hover:text-white">
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+                <p className="text-xs text-gray-500">Select a DWG LiDAR marker, then assign a physical device.</p>
+              </div>
+
+              <div className="p-3 border-b border-border-dark space-y-2">
+                <label className="text-xs text-gray-400">Edge Server</label>
+                <div className="flex gap-2">
+                  <select
+                    value={selectedPairingEdgeId || ''}
+                    onChange={(e) => setSelectedPairingEdgeId(e.target.value || null)}
+                    className="flex-1 bg-gray-800 border border-border-dark rounded px-2 py-1.5 text-sm text-white"
+                  >
+                    <option value="">Select edge...</option>
+                    {edgeDevices.map(edge => (
+                      <option key={edge.edgeId} value={edge.edgeId}>
+                        {edge.displayName || edge.hostname} ({edge.tailscaleIp})
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    onClick={loadPairingData}
+                    className="px-2 rounded bg-gray-800 hover:bg-gray-700 text-gray-300"
+                    title="Refresh edges, inventory and pairings"
+                  >
+                    <RefreshCw className={`w-4 h-4 ${isLoadingPairingData ? 'animate-spin' : ''}`} />
+                  </button>
+                </div>
+              </div>
+
+              <div className="p-3 border-b border-border-dark bg-gray-900/40">
+                <div className="text-xs text-gray-400 mb-1">Selected Placement</div>
+                {selectedLidarInstanceId ? (
+                  <div className="text-sm text-white space-y-1">
+                    <div className="font-mono">{selectedLidarInstanceId.slice(0, 8)}</div>
+                    {selectedPlacementPairing ? (
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-cyan-300">Paired to {selectedPlacementPairing.lidarIp || selectedPlacementPairing.lidarId}</span>
+                        <button onClick={handleUnpairSelectedPlacement} className="text-xs text-red-300 hover:text-red-200">Unpair</button>
+                      </div>
+                    ) : (
+                      <div className="text-amber-300 text-xs">Unpaired</div>
+                    )}
+                  </div>
+                ) : (
+                  <div className="text-xs text-gray-500">Click a LiDAR marker on the DWG map.</div>
+                )}
+              </div>
+
+              <div className="flex-1 overflow-auto p-3 space-y-2">
+                <div className="flex items-center justify-between">
+                  <div className="text-xs text-gray-400">Physical LiDARs</div>
+                  <div className="text-[11px] text-gray-500">{edgeInventory.length} devices</div>
+                </div>
+                {edgeInventory.length === 0 ? (
+                  <div className="text-xs text-gray-500 py-6 text-center">No inventory loaded. Choose an edge and refresh.</div>
+                ) : edgeInventory
+                  .slice()
+                  .sort((a, b) => Number(a.ip.split('.').pop()) - Number(b.ip.split('.').pop()))
+                  .map(lidar => {
+                    const paired = edgePairings.find(p => p.lidarIp === lidar.ip)
+                    const isCurrent = selectedPlacementPairing?.lidarIp === lidar.ip
+                    return (
+                      <button
+                        key={lidar.lidarId || lidar.ip}
+                        onClick={() => handlePairSelectedPlacement(lidar)}
+                        disabled={!selectedLidarInstanceId || !selectedPairingEdge}
+                        className={`w-full text-left p-2 rounded border transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
+                          isCurrent
+                            ? 'bg-cyan-900/40 border-cyan-500 text-cyan-100'
+                            : paired
+                              ? 'bg-gray-800 border-gray-700 text-gray-400'
+                              : 'bg-gray-800/70 border-gray-700 hover:border-cyan-600 text-gray-200'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="font-mono text-sm">{lidar.ip}</span>
+                          {lidar.reachable ? <Wifi className="w-3.5 h-3.5 text-green-400" /> : <WifiOff className="w-3.5 h-3.5 text-red-400" />}
+                        </div>
+                        <div className="text-[11px] text-gray-500 mt-0.5">
+                          {lidar.vendor || 'LiDAR'} {lidar.model ? `· ${lidar.model}` : ''}
+                          {paired && !isCurrent ? ` · paired to ${paired.placementId.slice(0, 8)}` : ''}
+                        </div>
+                      </button>
+                    )
+                  })}
+              </div>
             </div>
           ) : selectedGroupId ? (
             <div className="w-80 border-l border-border-dark overflow-hidden flex flex-col">
