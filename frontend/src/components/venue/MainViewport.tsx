@@ -207,6 +207,7 @@ export default function MainViewport({
   const drawingMarkersRef = useRef<THREE.Group | null>(null)
   const gridRef = useRef<THREE.GridHelper | null>(null)
   const floorRef = useRef<THREE.Mesh | null>(null)
+  const floorplanOverlayRef = useRef<THREE.Mesh | null>(null)
   const logoBillboardRef = useRef<THREE.Mesh | null>(null)
   const textureLoaderRef = useRef(new THREE.TextureLoader())
   const ambientLightRef = useRef<THREE.AmbientLight | null>(null)
@@ -233,6 +234,7 @@ export default function MainViewport({
   const [showObjectsLayer, setShowObjectsLayer] = useState(true)
   const [showLidarLayer, setShowLidarLayer] = useState(true)
   const [showGridLayer, setShowGridLayer] = useState(true)
+  const [showFloorplanOverlayLayer, setShowFloorplanOverlayLayer] = useState(false)
   const [showRoiLayer, setShowRoiLayer] = useState(true)
   const [showTracksLayer, setShowTracksLayer] = useState(true)
   const showTracksRef = useRef(true)
@@ -4223,6 +4225,92 @@ export default function MainViewport({
     if (gridRef.current) gridRef.current.visible = showGridLayer
     if (floorRef.current) floorRef.current.visible = showGridLayer
   }, [showGridLayer])
+
+  // Render/toggle DWG floorplan image overlay in the main 3D Venue.
+  // Off by default; uses the same floor-plane orientation as DWG Importer 3D Preview.
+  useEffect(() => {
+    const scene = sceneRef.current
+    if (!scene) return
+
+    if (floorplanOverlayRef.current) {
+      scene.remove(floorplanOverlayRef.current)
+      floorplanOverlayRef.current.geometry.dispose()
+      if (floorplanOverlayRef.current.material instanceof THREE.Material) {
+        floorplanOverlayRef.current.material.dispose()
+      }
+      floorplanOverlayRef.current = null
+    }
+
+    if (!showFloorplanOverlayLayer || !venue?.dwg_layout_version_id) return
+
+    let cancelled = false
+    const loadOverlay = async () => {
+      try {
+        const layoutRes = await fetch(`${API_BASE}/api/dwg/layout/${venue.dwg_layout_version_id}`)
+        if (!layoutRes.ok) return
+        const layoutData = await layoutRes.json()
+        const importId = layoutData.import_id
+        const layout = layoutData.layout
+        if (!importId || !layout?.bounds) return
+
+        const metaRes = await fetch(`${API_BASE}/api/dwg/import/${importId}/floorplan`)
+        if (!metaRes.ok) return
+        const metaData = await metaRes.json()
+        if (!metaData.floorplan) return
+
+        const fp = metaData.floorplan
+        const transform = fp.transform || { x: 0, y: 0, scaleX: 1, scaleY: 1, rotation: 0, opacity: 0.5 }
+        const effectiveScale = (layout.unit_scale_to_m || 0.001) * (() => {
+          try {
+            const parsed = JSON.parse(venue.dwg_transform_json || '{}')
+            return parsed.scaleCorrection || 1
+          } catch { return 1 }
+        })()
+        const bounds = layout.bounds
+        const centerX = (bounds.minX + bounds.maxX) / 2 * effectiveScale
+        const centerZ = (bounds.minY + bounds.maxY) / 2 * effectiveScale
+
+        textureLoaderRef.current.load(`${API_BASE}/api/dwg/import/${importId}/floorplan/image`, texture => {
+          if (cancelled || !sceneRef.current) return
+          const imgW = texture.image.width
+          const imgH = texture.image.height
+          const dxfW = imgW * transform.scaleX
+          const dxfH = imgH * transform.scaleY
+          const planeW = dxfW * effectiveScale
+          const planeD = dxfH * effectiveScale
+          const imgCenterDxfX = transform.x + dxfW / 2
+          const imgCenterDxfY = transform.y + dxfH / 2
+          const sceneX = imgCenterDxfX * effectiveScale - centerX
+          const sceneZ = imgCenterDxfY * effectiveScale - centerZ
+
+          const mesh = new THREE.Mesh(
+            new THREE.PlaneGeometry(planeW, planeD),
+            new THREE.MeshBasicMaterial({
+              map: texture,
+              transparent: true,
+              opacity: transform.opacity ?? 0.5,
+              side: THREE.DoubleSide,
+              depthWrite: false,
+            })
+          )
+          mesh.name = 'VenueFloorplanOverlay'
+          mesh.position.set(sceneX, 0.015, sceneZ)
+          mesh.rotation.x = Math.PI / 2
+          if (transform.rotation) mesh.rotation.z = -transform.rotation * Math.PI / 180
+          mesh.renderOrder = 1
+          sceneRef.current.add(mesh)
+          floorplanOverlayRef.current = mesh
+        })
+      } catch (err) {
+        console.warn('[MainViewport] Failed to load DWG floorplan overlay:', err)
+      }
+    }
+    loadOverlay()
+
+    return () => {
+      cancelled = true
+    }
+  }, [showFloorplanOverlayLayer, venue?.dwg_layout_version_id, venue?.dwg_transform_json])
   
   // Toggle layer visibility - ROI Zones
   useEffect(() => {
@@ -5684,6 +5772,20 @@ export default function MainViewport({
                   Grid & Floor
                 </span>
               </label>
+              {(venue?.scene_source === 'dwg' || !!venue?.dwg_layout_version_id) && (
+                <label className="flex items-center gap-2 py-1.5 px-2 rounded hover:bg-gray-700 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={showFloorplanOverlayLayer}
+                    onChange={(e) => setShowFloorplanOverlayLayer(e.target.checked)}
+                    className="rounded border-gray-600 bg-gray-700 text-orange-500"
+                  />
+                  <span className="text-sm text-gray-300 flex items-center gap-1.5">
+                    {showFloorplanOverlayLayer ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5 text-gray-500" />}
+                    Floorplan Overlay
+                  </span>
+                </label>
+              )}
               <label className="flex items-center gap-2 py-1.5 px-2 rounded hover:bg-gray-700 cursor-pointer">
                 <input
                   type="checkbox"
