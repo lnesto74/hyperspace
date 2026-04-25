@@ -364,6 +364,7 @@ export default function PreviewPanel({
 
   // 2D hover tooltip state
   const [tooltip2D, setTooltip2D] = useState<{ x: number; y: number; fixture: any } | null>(null)
+  const [lidarTooltip2D, setLidarTooltip2D] = useState<{ x: number; y: number; data: any } | null>(null)
 
   // Save autoplace settings whenever they change
   useEffect(() => {
@@ -2936,6 +2937,7 @@ export default function PreviewPanel({
 
           {/* LiDAR markers - top layer for reliable selection even with overlapping range circles */}
           {viewMode !== 'floorplan' && layerVisibility.lidarDevices && lidarInstances.map((inst) => {
+            const model = lidarModels.find(m => m.id === inst.model_id)
             const pairing = lidarPairings.find(p => p.placementId === inst.id)
             const pairedOnline = pairing?.reachable === true
             const pairedOffline = !!pairing && pairing.reachable === false
@@ -2958,6 +2960,18 @@ export default function PreviewPanel({
                   fill="transparent"
                   stroke="none"
                   className={lidarPairingMode ? 'cursor-pointer' : isDragging ? 'cursor-grabbing' : 'cursor-grab'}
+                  onMouseEnter={(e) => setLidarTooltip2D({
+                    x: e.clientX,
+                    y: e.clientY,
+                    data: {
+                      ip: pairing?.lidarIp || 'Unpaired',
+                      type: model?.name || inst.model_id || 'Unknown',
+                      status: pairedOnline ? 'Online' : pairedOffline ? 'Offline' : pairing ? 'Unknown' : 'Unpaired',
+                      placementId: inst.id,
+                    }
+                  })}
+                  onMouseMove={(e) => setLidarTooltip2D(prev => prev ? { ...prev, x: e.clientX, y: e.clientY } : prev)}
+                  onMouseLeave={() => setLidarTooltip2D(null)}
                   onMouseDown={(e) => {
                     if (e.button !== 0) return
                     e.stopPropagation()
@@ -3057,6 +3071,22 @@ export default function PreviewPanel({
                 <span className="text-gray-500">Layer:</span>
                 <span className="text-gray-400 truncate">{tooltip2D.fixture.layer}</span>
               </>}
+            </div>
+          </div>
+        )}
+        {lidarTooltip2D && (
+          <div
+            className="fixed z-30 pointer-events-none bg-gray-900/95 border border-gray-600 rounded-lg shadow-xl px-3 py-2 text-xs font-mono text-gray-300"
+            style={{ left: lidarTooltip2D.x + 12, top: lidarTooltip2D.y - 10, maxWidth: 280 }}
+          >
+            <div className="font-bold text-white text-sm mb-1">LiDAR {lidarTooltip2D.data.ip}</div>
+            <div className="grid grid-cols-2 gap-x-3 gap-y-0.5">
+              <span className="text-gray-500">Status:</span>
+              <span className={lidarTooltip2D.data.status === 'Online' ? 'text-green-400' : lidarTooltip2D.data.status === 'Offline' ? 'text-red-400' : 'text-blue-300'}>{lidarTooltip2D.data.status}</span>
+              <span className="text-gray-500">Type:</span>
+              <span>{lidarTooltip2D.data.type}</span>
+              <span className="text-gray-500">Placement:</span>
+              <span className="text-gray-400 truncate">{lidarTooltip2D.data.placementId?.slice(0, 8)}</span>
             </div>
           </div>
         )}

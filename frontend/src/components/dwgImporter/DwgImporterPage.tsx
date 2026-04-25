@@ -779,7 +779,7 @@ export default function DwgImporterPage({ onClose, onLayoutGenerated }: DwgImpor
     : null
   const edgePairingsWithStatus = useMemo(() => edgePairings.map(pairing => {
     const lidar = edgeInventory.find(l => l.lidarId === pairing.lidarId || l.ip === pairing.lidarIp)
-    return { ...pairing, reachable: lidar?.reachable ?? false }
+    return { ...pairing, reachable: lidar?.reachable }
   }), [edgePairings, edgeInventory])
 
   const loadPairings = useCallback(async (venueId: string) => {
@@ -825,6 +825,11 @@ export default function DwgImporterPage({ onClose, onLayoutGenerated }: DwgImpor
     if (!showLidarPairing) return
     loadPairingData()
   }, [showLidarPairing, loadPairingData])
+
+  useEffect(() => {
+    if (!pairingVenueId) return
+    loadPairings(pairingVenueId)
+  }, [pairingVenueId, loadPairings])
 
   useEffect(() => {
     if (!showLidarPairing || !selectedPairingEdgeId) return
@@ -1474,6 +1479,7 @@ export default function DwgImporterPage({ onClose, onLayoutGenerated }: DwgImpor
                   lidarModels={lidarModels}
                   scaleCorrection={scaleCorrection}
                   focusBounds={roiFocusBounds}
+                  lidarPairings={edgePairingsWithStatus}
                 />
               ) : (
                 <PreviewPanel

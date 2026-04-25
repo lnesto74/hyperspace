@@ -81,6 +81,7 @@ interface Layout3DPreviewProps {
   focusBounds?: FocusBounds
   /** Optional classifications to apply types to raw import fixtures */
   classifications?: FixtureClassification[]
+  lidarPairings?: Array<{ placementId: string; lidarIp?: string; lidarId: string; reachable?: boolean }>
 }
 
 interface CustomModel {
@@ -101,7 +102,7 @@ const TYPE_COLORS: Record<string, number> = {
   default: 0x4b5563
 }
 
-export default function Layout3DPreview({ layoutVersionId, importId, lidarInstances = [], lidarModels = [], scaleCorrection = 1.0, simulationResult = null, focusBounds, classifications }: Layout3DPreviewProps) {
+export default function Layout3DPreview({ layoutVersionId, importId, lidarInstances = [], lidarModels = [], scaleCorrection = 1.0, simulationResult = null, focusBounds, classifications, lidarPairings = [] }: Layout3DPreviewProps) {
   console.log('Layout3DPreview render - lidarInstances:', lidarInstances.length, 'lidarModels:', lidarModels.length)
   
   const containerRef = useRef<HTMLDivElement>(null)
@@ -142,6 +143,7 @@ export default function Layout3DPreview({ layoutVersionId, importId, lidarInstan
   const tooltipWorldPosRef = useRef<THREE.Vector3 | null>(null)
   const tooltipDivRef = useRef<HTMLDivElement>(null)
   const fixturePositionsRef = useRef<Array<{ pos: THREE.Vector3; info: any }>>([])
+  const sceneCenterRef = useRef(new THREE.Vector3(0, 0, 0))
 
   // Toggle pan mode - swap left mouse button behavior
   const togglePanMode = useCallback(() => {
@@ -159,11 +161,13 @@ export default function Layout3DPreview({ layoutVersionId, importId, lidarInstan
       }
     } else {
       // Normal mode: left click = rotate, right click = pan
+      controlsRef.current.target.copy(sceneCenterRef.current)
       controlsRef.current.mouseButtons = {
         LEFT: THREE.MOUSE.ROTATE,
         MIDDLE: THREE.MOUSE.DOLLY,
         RIGHT: THREE.MOUSE.PAN
       }
+      controlsRef.current.update()
     }
   }, [panMode])
 
@@ -872,6 +876,7 @@ export default function Layout3DPreview({ layoutVersionId, importId, lidarInstan
     // Calculate center of actual content (to position grid there)
     const contentCenterX = useContentBounds ? (contentMinX + contentMaxX) / 2 : 0
     const contentCenterZ = useContentBounds ? (contentMinZ + contentMaxZ) / 2 : 0
+    sceneCenterRef.current.set(contentCenterX, 0, contentCenterZ)
     
     console.log(`Raw DWG bounds: ${rawBoundsWidth.toFixed(1)}m x ${rawBoundsDepth.toFixed(1)}m`)
     console.log(`Content bounds: ${contentWidth.toFixed(1)}m x ${contentDepth.toFixed(1)}m, using: ${useContentBounds ? 'content' : 'raw'}, grid size: ${sceneSize.toFixed(1)}m`)
@@ -1265,6 +1270,10 @@ export default function Layout3DPreview({ layoutVersionId, importId, lidarInstan
     
     lidarInstances.forEach((inst, idx) => {
       const model = lidarModels.find(m => m.id === inst.model_id)
+      const pairing = lidarPairings.find(p => p.placementId === inst.id)
+      const pairedOnline = pairing?.reachable === true
+      const pairedOffline = !!pairing && pairing.reachable === false
+      const lidarColor = pairedOnline ? 0x22c55e : pairedOffline ? 0xef4444 : 0x3b82f6
       const range = inst.range_m || model?.range_m || 10
       const mountHeight = inst.mount_y_m ?? inst.y_m ?? 3
       const isDome = model?.dome_mode || (model?.hfov_deg ?? 360) >= 360
@@ -1291,7 +1300,7 @@ export default function Layout3DPreview({ layoutVersionId, importId, lidarInstan
       
       // LiDAR device sphere at mount height
       const deviceMaterial = new THREE.MeshStandardMaterial({
-        color: inst.source === 'auto' ? 0x22c55e : 0x3b82f6,
+        color: lidarColor,
         roughness: 0.3,
         metalness: 0.7
       })
@@ -1299,6 +1308,19 @@ export default function Layout3DPreview({ layoutVersionId, importId, lidarInstan
       device.position.set(x, mountHeight, z)
       device.castShadow = true
       group.add(device)
+      fixturePositionsRef.current.push({
+        pos: new THREE.Vector3(x, mountHeight, z),
+        info: {
+          kind: 'lidar',
+          type: 'LiDAR',
+          ip: pairing?.lidarIp || 'Unpaired',
+          model: model?.name || inst.model_id || 'Unknown',
+          status: pairedOnline ? 'Online' : pairedOffline ? 'Offline' : pairing ? 'Unknown' : 'Unpaired',
+          placementId: inst.id,
+          posX: +x.toFixed(2),
+          posZ: +z.toFixed(2),
+        }
+      })
       
       // Mount pole
       const poleGeometry = new THREE.CylinderGeometry(0.05, 0.05, mountHeight, 8)
@@ -1311,7 +1333,7 @@ export default function Layout3DPreview({ layoutVersionId, importId, lidarInstan
       if (isDome) {
         // Full dome coverage
         const coverageMaterial = new THREE.MeshBasicMaterial({
-          color: inst.source === 'auto' ? 0x22c55e : 0x3b82f6,
+          color: lidarColor,
           transparent: true,
           opacity: 0.08,
           side: THREE.DoubleSide,
@@ -1326,7 +1348,7 @@ export default function Layout3DPreview({ layoutVersionId, importId, lidarInstan
         // Coverage circle on floor
         const circleGeometry = new THREE.RingGeometry(range - 0.1, range, 64)
         const circleMaterial = new THREE.MeshBasicMaterial({
-          color: inst.source === 'auto' ? 0x22c55e : 0x3b82f6,
+          color: lidarColor,
           transparent: true,
           opacity: 0.3,
           side: THREE.DoubleSide
@@ -1347,7 +1369,7 @@ export default function Layout3DPreview({ layoutVersionId, importId, lidarInstan
         const coneRadius = Math.tan(coneAngle) * coneHeight
         const coneGeometry = new THREE.ConeGeometry(coneRadius, coneHeight, 32, 1, true)
         const coneMaterial = new THREE.MeshBasicMaterial({
-          color: inst.source === 'auto' ? 0x22c55e : 0x3b82f6,
+          color: lidarColor,
           transparent: true,
           opacity: 0.12,
           side: THREE.DoubleSide,
@@ -1362,7 +1384,7 @@ export default function Layout3DPreview({ layoutVersionId, importId, lidarInstan
         // FOV arc on floor
         const arcGeometry = new THREE.RingGeometry(range * 0.9, range, 32, 1, -coneAngle + yaw + Math.PI / 2, hfov * Math.PI / 180)
         const arcMaterial = new THREE.MeshBasicMaterial({
-          color: inst.source === 'auto' ? 0x22c55e : 0x3b82f6,
+          color: lidarColor,
           transparent: true,
           opacity: 0.25,
           side: THREE.DoubleSide
@@ -1424,7 +1446,7 @@ export default function Layout3DPreview({ layoutVersionId, importId, lidarInstan
       console.log('Repositioned camera for LiDAR view, content size:', maxSize.toFixed(1), 'm')
     }
     
-  }, [lidarInstances, lidarModels, layoutData, scaleCorrection, simulationResult])
+  }, [lidarInstances, lidarModels, layoutData, scaleCorrection, simulationResult, lidarPairings])
 
   // Toggle LiDAR layer visibility
   useEffect(() => {
@@ -1509,7 +1531,8 @@ export default function Layout3DPreview({ layoutVersionId, importId, lidarInstan
           const mesh = new THREE.Mesh(geometry, material)
           mesh.name = 'FloorplanOverlay'
           mesh.position.set(sceneX, 0.01, sceneZ)
-          mesh.rotation.x = -Math.PI / 2
+          // Rotate so image +Y maps to world +Z, matching the 2-D preview.
+          mesh.rotation.x = Math.PI / 2
           if (transform.rotation) {
             mesh.rotation.z = -transform.rotation * Math.PI / 180
           }
@@ -1813,28 +1836,46 @@ export default function Layout3DPreview({ layoutVersionId, importId, lidarInstan
             className="absolute z-20 pointer-events-none bg-gray-900/95 border border-gray-600 rounded-lg shadow-xl px-3 py-2 text-xs font-mono"
             style={{ left: tooltip.x + 12, top: tooltip.y - 10, maxWidth: 320 }}
           >
-            <div className="flex items-center gap-2 mb-1">
-              <span className="font-bold text-white text-sm">{tooltip.data.type}</span>
-              <span className="text-gray-400">({tooltip.data.kind}{tooltip.data.nPts > 0 ? `, ${tooltip.data.nPts}pts` : ''})</span>
-            </div>
-            <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 text-gray-300">
-              <span className="text-gray-500">Size:</span>
-              <span>{tooltip.data.w}m × {tooltip.data.d}m × {tooltip.data.h}m</span>
-              <span className="text-gray-500">Volume:</span>
-              <span className={tooltip.data.vol > 100 ? 'text-red-400 font-bold' : ''}>{tooltip.data.vol} m³</span>
-              <span className="text-gray-500">Position:</span>
-              <span>({tooltip.data.posX}, {tooltip.data.posZ})</span>
-              <span className="text-gray-500">Rotation:</span>
-              <span>{tooltip.data.rotDeg}°</span>
-              <span className="text-gray-500">Group:</span>
-              <span className="text-blue-400">{tooltip.data.groupId}</span>
-              <span className="text-gray-500">Asset:</span>
-              <span>{tooltip.data.catalogAsset}</span>
-              <span className="text-gray-500">ID:</span>
-              <span className="text-gray-400 truncate">{tooltip.data.id}</span>
-            </div>
-            {tooltip.data.vol > 100 && (
-              <div className="mt-1 text-red-400 text-[10px]">⚠ Oversized — likely noise/annotation</div>
+            {tooltip.data.kind === 'lidar' ? (
+              <>
+                <div className="font-bold text-white text-sm mb-1">LiDAR {tooltip.data.ip}</div>
+                <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 text-gray-300">
+                  <span className="text-gray-500">Status:</span>
+                  <span className={tooltip.data.status === 'Online' ? 'text-green-400' : tooltip.data.status === 'Offline' ? 'text-red-400' : 'text-blue-300'}>{tooltip.data.status}</span>
+                  <span className="text-gray-500">Type:</span>
+                  <span>{tooltip.data.model}</span>
+                  <span className="text-gray-500">Position:</span>
+                  <span>({tooltip.data.posX}, {tooltip.data.posZ})</span>
+                  <span className="text-gray-500">Placement:</span>
+                  <span className="text-gray-400 truncate">{tooltip.data.placementId?.slice(0, 8)}</span>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="flex items-center gap-2 mb-1">
+                  <span className="font-bold text-white text-sm">{tooltip.data.type}</span>
+                  <span className="text-gray-400">({tooltip.data.kind}{tooltip.data.nPts > 0 ? `, ${tooltip.data.nPts}pts` : ''})</span>
+                </div>
+                <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 text-gray-300">
+                  <span className="text-gray-500">Size:</span>
+                  <span>{tooltip.data.w}m × {tooltip.data.d}m × {tooltip.data.h}m</span>
+                  <span className="text-gray-500">Volume:</span>
+                  <span className={tooltip.data.vol > 100 ? 'text-red-400 font-bold' : ''}>{tooltip.data.vol} m³</span>
+                  <span className="text-gray-500">Position:</span>
+                  <span>({tooltip.data.posX}, {tooltip.data.posZ})</span>
+                  <span className="text-gray-500">Rotation:</span>
+                  <span>{tooltip.data.rotDeg}°</span>
+                  <span className="text-gray-500">Group:</span>
+                  <span className="text-blue-400">{tooltip.data.groupId}</span>
+                  <span className="text-gray-500">Asset:</span>
+                  <span>{tooltip.data.catalogAsset}</span>
+                  <span className="text-gray-500">ID:</span>
+                  <span className="text-gray-400 truncate">{tooltip.data.id}</span>
+                </div>
+                {tooltip.data.vol > 100 && (
+                  <div className="mt-1 text-red-400 text-[10px]">⚠ Oversized — likely noise/annotation</div>
+                )}
+              </>
             )}
           </div>
         )}

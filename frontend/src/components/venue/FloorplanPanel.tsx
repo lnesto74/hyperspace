@@ -516,7 +516,7 @@ export default function FloorplanPanel({ onOpenDwgImporter, launchPadOpen, onTog
                 <input
                   type="range"
                   min="1"
-                  max="2"
+                  max="10"
                   step="0.05"
                   value={venue.gridExtentMultiplier ?? 1.2}
                   onChange={e => updateVenue({ gridExtentMultiplier: parseFloat(e.target.value) })}
