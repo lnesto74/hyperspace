@@ -2909,35 +2909,45 @@ export default function PreviewPanel({
             )
           })}
 
-          {/* LiDAR Instances - visible in DWG and Overlay when layer enabled */}
-          {viewMode !== 'floorplan' && layerVisibility.lidarDevices && lidarInstances.map((inst) => {
+          {/* LiDAR range circles - render below all markers so they never block marker selection */}
+          {viewMode !== 'floorplan' && layerVisibility.lidarDevices && layerVisibility.coverageCircles && lidarInstances.map((inst) => {
             const model = lidarModels.find(m => m.id === inst.model_id)
-            const pairing = lidarPairings.find(p => p.placementId === inst.id)
             const range = inst.range_m || model?.range_m || 10
+            const effectiveScale = importData.unit_scale_to_m * scaleCorrection
+            const isBeingDragged = draggingLidarId === inst.id
+            const displayX = isBeingDragged && lidarDragCurrent ? lidarDragCurrent.x_m : inst.x_m
+            const displayZ = isBeingDragged && lidarDragCurrent ? lidarDragCurrent.z_m : inst.z_m
+            const pos = toScreen(displayX / effectiveScale, displayZ / effectiveScale)
+            const rangeRadius = Math.abs(range * viewTransform.scale / scaleCorrection)
+            return (
+              <circle
+                key={`lidar-range-${inst.id}`}
+                cx={pos.x}
+                cy={pos.y}
+                r={rangeRadius}
+                fill={inst.source === 'auto' ? 'rgba(34, 197, 94, 0.1)' : 'rgba(59, 130, 246, 0.1)'}
+                stroke={inst.source === 'auto' ? 'rgba(34, 197, 94, 0.5)' : 'rgba(59, 130, 246, 0.5)'}
+                strokeWidth="1"
+                strokeDasharray="4 2"
+                pointerEvents="none"
+              />
+            )
+          })}
+
+          {/* LiDAR markers - top layer for reliable selection even with overlapping range circles */}
+          {viewMode !== 'floorplan' && layerVisibility.lidarDevices && lidarInstances.map((inst) => {
+            const pairing = lidarPairings.find(p => p.placementId === inst.id)
             const effectiveScale = importData.unit_scale_to_m * scaleCorrection
             // Use dragged position if this LiDAR is being dragged
             const isBeingDragged = draggingLidarId === inst.id
             const displayX = isBeingDragged && lidarDragCurrent ? lidarDragCurrent.x_m : inst.x_m
             const displayZ = isBeingDragged && lidarDragCurrent ? lidarDragCurrent.z_m : inst.z_m
             const pos = toScreen(displayX / effectiveScale, displayZ / effectiveScale)
-            const rangeRadius = Math.abs(range * viewTransform.scale / scaleCorrection)
             const isSelected = selectedLidarInstanceId === inst.id
             const isDragging = isBeingDragged
             
             return (
-              <g key={inst.id}>
-                {/* Range circle - controlled by coverageCircles layer */}
-                {layerVisibility.coverageCircles && (
-                  <circle
-                    cx={pos.x}
-                    cy={pos.y}
-                    r={rangeRadius}
-                    fill={inst.source === 'auto' ? 'rgba(34, 197, 94, 0.1)' : 'rgba(59, 130, 246, 0.1)'}
-                    stroke={inst.source === 'auto' ? 'rgba(34, 197, 94, 0.5)' : 'rgba(59, 130, 246, 0.5)'}
-                    strokeWidth="1"
-                    strokeDasharray="4 2"
-                  />
-                )}
+              <g key={`lidar-marker-${inst.id}`}>
                 {/* Device marker — clickable hit area (larger than visible) */}
                 <circle
                   cx={pos.x}
