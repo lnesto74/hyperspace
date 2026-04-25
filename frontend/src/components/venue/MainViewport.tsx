@@ -4321,7 +4321,8 @@ export default function MainViewport({
           )
           mesh.name = 'VenueFloorplanOverlay'
           mesh.position.set(worldCenter.x, 0.015, worldCenter.z)
-          mesh.rotation.x = Math.PI / 2
+          // Match DWG Importer 3D Preview texture orientation.
+          mesh.rotation.x = -Math.PI / 2
           if (transform.rotation) mesh.rotation.z = -transform.rotation * Math.PI / 180
           mesh.renderOrder = 1
           sceneRef.current.add(mesh)
