@@ -101,6 +101,7 @@ export interface CatalogAsset {
   type: string
   hasCustomModel: boolean
   modelPath?: string
+  isUserAsset?: boolean
 }
 
 export interface RetailCategory {
@@ -357,6 +358,25 @@ export default function DwgImporterPage({ onClose, onLayoutGenerated }: DwgImpor
     })
     return category as RetailCategory
   }, [venue?.id])
+
+  const createCatalogAsset = useCallback(async (name: string) => {
+    const res = await fetch(`${API_BASE}/api/dwg/catalog`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      throw new Error(err.error || 'Failed to create 3D asset')
+    }
+
+    const asset = await res.json()
+    setCatalog(prev => {
+      const withoutDuplicate = prev.filter(a => a.type !== asset.type)
+      return [...withoutDuplicate, asset].sort((a, b) => a.name.localeCompare(b.name))
+    })
+    return asset as CatalogAsset
+  }, [])
 
   // Fetch LiDAR models + instances when layout is available (models are GLOBAL — no venue needed)
   const lidarDataLoadedKey = useRef<string | null>(null)
@@ -1392,6 +1412,7 @@ export default function DwgImporterPage({ onClose, onLayoutGenerated }: DwgImpor
                 group={importData.groups.find(g => g.group_id === selectedGroupId) || null}
                 mapping={selectedGroupId ? mappings[selectedGroupId] : undefined}
                 catalog={catalog}
+                onCreateCatalogAsset={createCatalogAsset}
                 retailCategories={retailCategories}
                 onCreateRetailCategory={venue?.company_id ? createRetailCategory : undefined}
                 onUpdateMapping={(mapping: GroupMapping | null) => selectedGroupId && updateMapping(selectedGroupId, mapping)}

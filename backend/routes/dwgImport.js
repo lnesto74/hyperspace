@@ -2058,6 +2058,11 @@ export default function createDwgImportRoutes(db) {
     try {
       // Get custom models from existing system
       const customModels = db.prepare('SELECT * FROM custom_models').all();
+      const userAssets = db.prepare(`
+        SELECT id, name, type, created_at, updated_at
+        FROM dwg_catalog_assets
+        ORDER BY name ASC
+      `).all();
       
       // Build catalog from existing object types + custom models
       const catalog = [
@@ -2071,20 +2076,86 @@ export default function createDwgImportRoutes(db) {
         { id: 'radio', name: 'Radio', type: 'radio', hasCustomModel: false },
         { id: 'custom', name: 'Custom', type: 'custom', hasCustomModel: false }
       ];
+
+      for (const asset of userAssets) {
+        if (!catalog.some(c => c.type === asset.type)) {
+          catalog.push({
+            id: asset.type,
+            name: asset.name,
+            type: asset.type,
+            hasCustomModel: false,
+            isUserAsset: true,
+          });
+        }
+      }
       
-      // Mark which have custom models
+      // Mark which have custom models and include model-only custom types.
       for (const model of customModels) {
         const item = catalog.find(c => c.type === model.object_type);
         if (item) {
           item.hasCustomModel = true;
           item.modelPath = model.file_path;
+        } else {
+          catalog.push({
+            id: model.object_type,
+            name: model.object_type.replace(/[_-]+/g, ' ').replace(/\b\w/g, c => c.toUpperCase()),
+            type: model.object_type,
+            hasCustomModel: true,
+            modelPath: model.file_path,
+            isUserAsset: true,
+          });
         }
       }
-      
-      res.json(catalog);
+
+      res.json(catalog.sort((a, b) => a.name.localeCompare(b.name)));
       
     } catch (err) {
       console.error('Get catalog error:', err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  /**
+   * POST /api/dwg/catalog - Create a globally available 3D asset type
+   */
+  router.post('/catalog', (req, res) => {
+    try {
+      const { name, type } = req.body || {};
+      const cleanName = String(name || '').trim();
+      const cleanType = String(type || cleanName)
+        .trim()
+        .toLowerCase()
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .replace(/[^a-z0-9]+/g, '_')
+        .replace(/^_+|_+$/g, '');
+
+      if (!cleanName || !cleanType) {
+        return res.status(400).json({ error: 'Asset name is required' });
+      }
+
+      const builtInTypes = new Set(['shelf', 'fridge', 'wall', 'checkout', 'entrance', 'pillar', 'digital_display', 'radio', 'custom']);
+      if (!builtInTypes.has(cleanType)) {
+        db.prepare(`
+          INSERT INTO dwg_catalog_assets (id, name, type, created_at, updated_at)
+          VALUES (?, ?, ?, datetime('now'), datetime('now'))
+          ON CONFLICT(type) DO UPDATE SET
+            name = excluded.name,
+            updated_at = datetime('now')
+        `).run(cleanType, cleanName, cleanType);
+      }
+
+      const customModel = db.prepare('SELECT * FROM custom_models WHERE object_type = ?').get(cleanType);
+      res.status(201).json({
+        id: cleanType,
+        name: cleanName,
+        type: cleanType,
+        hasCustomModel: !!customModel,
+        modelPath: customModel?.file_path,
+        isUserAsset: !builtInTypes.has(cleanType),
+      });
+    } catch (err) {
+      console.error('Create catalog asset error:', err);
       res.status(500).json({ error: err.message });
     }
   });

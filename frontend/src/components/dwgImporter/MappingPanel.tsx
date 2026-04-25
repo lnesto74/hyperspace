@@ -6,6 +6,7 @@ interface MappingPanelProps {
   group: DwgGroup | null
   mapping: GroupMapping | undefined
   catalog: CatalogAsset[]
+  onCreateCatalogAsset?: (name: string) => Promise<CatalogAsset | null>
   retailCategories: RetailCategory[]
   onCreateRetailCategory?: (name: string) => Promise<RetailCategory | null>
   onUpdateMapping: (mapping: GroupMapping | null) => void
@@ -36,12 +37,15 @@ export default function MappingPanel({
   group,
   mapping,
   catalog,
+  onCreateCatalogAsset,
   retailCategories,
   onCreateRetailCategory,
   onUpdateMapping,
   unitScaleToM = 1
 }: MappingPanelProps) {
   const [localMapping, setLocalMapping] = useState<GroupMapping>(DEFAULT_MAPPING)
+  const [newAssetName, setNewAssetName] = useState('')
+  const [isCreatingAsset, setIsCreatingAsset] = useState(false)
   const [newCategoryName, setNewCategoryName] = useState('')
   const [isCreatingCategory, setIsCreatingCategory] = useState(false)
 
@@ -92,6 +96,28 @@ export default function MappingPanel({
       onUpdateMapping(updated)
     } else {
       onUpdateMapping(null)
+    }
+  }
+
+  const handleCreateAsset = async () => {
+    const name = newAssetName.trim()
+    if (!name || !onCreateCatalogAsset) return
+
+    setIsCreatingAsset(true)
+    try {
+      const asset = await onCreateCatalogAsset(name)
+      if (asset) {
+        setNewAssetName('')
+        const updated = {
+          ...localMapping,
+          catalog_asset_id: asset.id,
+          type: asset.type || asset.id,
+        }
+        setLocalMapping(updated)
+        onUpdateMapping(updated)
+      }
+    } finally {
+      setIsCreatingAsset(false)
     }
   }
 
@@ -179,10 +205,38 @@ export default function MappingPanel({
             <option value="">Select an asset...</option>
             {catalog.map(asset => (
               <option key={asset.id} value={asset.id}>
-                {asset.name} {asset.hasCustomModel && '(Custom Model)'}
+                {asset.name} {asset.hasCustomModel ? '(Custom Model)' : asset.isUserAsset ? '(Custom Asset)' : ''}
               </option>
             ))}
           </select>
+
+          <div className="mt-2 flex gap-2">
+            <input
+              type="text"
+              value={newAssetName}
+              onChange={(e) => setNewAssetName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault()
+                  handleCreateAsset()
+                }
+              }}
+              disabled={!onCreateCatalogAsset || isCreatingAsset}
+              placeholder="Add asset e.g. bancone, gondola..."
+              className="min-w-0 flex-1 px-3 py-1.5 bg-gray-800 border border-border-dark rounded-lg text-xs text-white placeholder:text-gray-600 focus:border-highlight focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed"
+            />
+            <button
+              onClick={handleCreateAsset}
+              disabled={!newAssetName.trim() || !onCreateCatalogAsset || isCreatingAsset}
+              className="px-2 py-1.5 rounded-lg bg-gray-800 hover:bg-gray-700 text-gray-300 disabled:opacity-50 disabled:cursor-not-allowed"
+              title="Add global 3D asset type"
+            >
+              <Plus className="w-3.5 h-3.5" />
+            </button>
+          </div>
+          <p className="mt-1 text-[11px] text-gray-500">
+            New asset types are global. They use fallback geometry until a GLB/GLTF model is uploaded for the same type.
+          </p>
         </div>
 
         {/* Business Category Selection */}

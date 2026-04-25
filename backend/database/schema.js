@@ -157,6 +157,16 @@ export function initDatabase() {
       uploaded_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
+    -- Global DWG/scene asset catalog. These are selectable 3D asset types
+    -- even before a GLB/GLTF custom model is uploaded for the type.
+    CREATE TABLE IF NOT EXISTS dwg_catalog_assets (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      type TEXT NOT NULL UNIQUE,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
     -- Regions of Interest (ROI) table
     -- dwg_layout_id: NULL = manual/venue mode, non-NULL = DWG mode (points to dwg_layout_versions.id)
     CREATE TABLE IF NOT EXISTS regions_of_interest (
@@ -322,6 +332,7 @@ export function initDatabase() {
     CREATE INDEX IF NOT EXISTS idx_dwg_mappings_import_id ON dwg_mappings(import_id);
     CREATE INDEX IF NOT EXISTS idx_dwg_layout_versions_import_id ON dwg_layout_versions(import_id);
     CREATE INDEX IF NOT EXISTS idx_dwg_layout_versions_venue_id ON dwg_layout_versions(venue_id);
+    CREATE INDEX IF NOT EXISTS idx_dwg_catalog_assets_type ON dwg_catalog_assets(type);
 
     -- LiDAR Planner tables
     CREATE TABLE IF NOT EXISTS lidar_models (
