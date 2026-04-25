@@ -258,6 +258,7 @@ export default function MainViewport({
   const [hoveredObjectTooltip, setHoveredObjectTooltip] = useState<{
     name: string
     type: string
+    category?: string | null
     width: number
     height: number
     depth: number
@@ -1415,6 +1416,7 @@ export default function MainViewport({
               setHoveredObjectTooltip({
                 name: obj.name || '(unnamed)',
                 type: obj.type || 'custom',
+                category: obj.metadata?.business_category_label || obj.metadata?.business_category || null,
                 width: obj.scale?.x ?? 0,
                 height: obj.scale?.y ?? 0,
                 depth: obj.scale?.z ?? 0,
@@ -2349,12 +2351,11 @@ export default function MainViewport({
         const oMinZ = sortedZ[p10], oMaxZ = sortedZ[p90]
         const objW = oMaxX - oMinX
         const objD = oMaxZ - oMinZ
-        const size = Math.max(objW, objD, 5)
         return {
           centerX: (oMinX + oMaxX) / 2,
           centerZ: (oMinZ + oMaxZ) / 2,
-          floorW: size * 2,
-          floorD: size * 2,
+          floorW: Math.max(objW * 1.2, 5),
+          floorD: Math.max(objD * 1.2, 5),
           source: 'objects-p10-p90',
         }
       }
@@ -2377,12 +2378,11 @@ export default function MainViewport({
         const roiMaxZ = Math.max(...saneVertices.map(v => v.z))
         const roiW = roiMaxX - roiMinX
         const roiD = roiMaxZ - roiMinZ
-        const size = Math.max(roiW, roiD, 5)
         return {
           centerX: (roiMinX + roiMaxX) / 2,
           centerZ: (roiMinZ + roiMaxZ) / 2,
-          floorW: size * 2,
-          floorD: size * 2,
+          floorW: Math.max(roiW * 1.2, 5),
+          floorD: Math.max(roiD * 1.2, 5),
           source: 'roi-sane',
         }
       }
@@ -2421,16 +2421,18 @@ export default function MainViewport({
       console.log(`[MainViewport] DWG venue — ${dwgSceneBounds.source}: floor ${floorW.toFixed(1)}×${floorD.toFixed(1)}m, center (${centerX.toFixed(1)}, ${centerZ.toFixed(1)})`)
     }
 
-    // Create grid — same as Layout3DPreview
+    // Create grid. Use readable meter-based cells and make the grid/floor at
+    // least 20% larger than the DWG/ROI footprint.
     const gridSize = Math.max(floorW, floorD)
-    const divisions = Math.min(Math.ceil(gridSize), 200)
+    const cellSize = gridSize > 120 ? 5 : gridSize > 60 ? 2 : 1
+    const divisions = Math.max(1, Math.ceil(gridSize / cellSize))
     const grid = new THREE.GridHelper(gridSize, divisions, COLORS.gridCenter, COLORS.grid)
     grid.position.set(centerX, 0.01, centerZ)
     scene.add(grid)
     gridRef.current = grid
 
-    // Create floor — same as Layout3DPreview
-    const floorGeometry = new THREE.PlaneGeometry(floorW * 1.2, floorD * 1.2)
+    // Create floor matching the padded grid area.
+    const floorGeometry = new THREE.PlaneGeometry(floorW, floorD)
     const floorMaterial = new THREE.MeshStandardMaterial({ 
       color: COLORS.floor,
       roughness: 0.9,
@@ -5595,6 +5597,12 @@ export default function MainViewport({
                 pillar: '#a8a29e', digital_display: '#a78bfa', custom: '#94a3b8'
               }[hoveredObjectTooltip.type] || '#94a3b8' }}>{hoveredObjectTooltip.type}</span>
             </div>
+            {hoveredObjectTooltip.category && (
+              <div className="flex gap-3">
+                <span className="text-gray-400">Category:</span>
+                <span className="font-medium text-amber-300">{hoveredObjectTooltip.category}</span>
+              </div>
+            )}
             <div className="flex gap-3">
               <span className="text-gray-400">Size:</span>
               <span>{hoveredObjectTooltip.width.toFixed(1)} × {hoveredObjectTooltip.depth.toFixed(1)} × {hoveredObjectTooltip.height.toFixed(1)}m</span>
