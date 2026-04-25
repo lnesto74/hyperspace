@@ -67,6 +67,7 @@ interface VenueContextType {
   removeObject: (id: string) => void
   removeObjects: (ids: string[]) => void
   selectObject: (id: string | null) => void
+  selectObjects: (ids: string[]) => void
   hoverObject: (id: string | null) => void
   toggleObjectSelection: (id: string) => void
   addToSelection: (id: string) => void
@@ -475,6 +476,11 @@ export function VenueProvider({ children }: { children: ReactNode }) {
     setSelectedObjectIds(id ? new Set([id]) : new Set())
   }, [])
 
+  const selectObjects = useCallback((ids: string[]) => {
+    setSelectedObjectIds(new Set(ids))
+    setSelectedObjectId(ids[0] || null)
+  }, [])
+
   const hoverObject = useCallback((id: string | null) => {
     setHoveredObjectId(id)
   }, [])
@@ -563,6 +569,7 @@ export function VenueProvider({ children }: { children: ReactNode }) {
       removeObject,
       removeObjects,
       selectObject,
+      selectObjects,
       hoverObject,
       toggleObjectSelection,
       addToSelection,

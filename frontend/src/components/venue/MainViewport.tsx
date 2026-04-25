@@ -239,6 +239,9 @@ export default function MainViewport({
   const [showTracksLayer, setShowTracksLayer] = useState(true)
   const showTracksRef = useRef(true)
   showTracksRef.current = showTracksLayer
+  const [areaSelectMode, setAreaSelectMode] = useState(false)
+  const [areaSelectRect, setAreaSelectRect] = useState<{ x: number; y: number; w: number; h: number } | null>(null)
+  const areaSelectStartRef = useRef<{ x: number; y: number } | null>(null)
   const [showDoohLayer, setShowDoohLayer] = useState(true)
   const [showPlanogramLayer, setShowPlanogramLayer] = useState(false)
   const [show3DModels, setShow3DModels] = useState(false) // OFF by default for performance
@@ -669,7 +672,7 @@ export default function MainViewport({
     }
   }, [])
 
-  const { venue, objects, selectedObjectId, hoveredObjectId, selectObject, hoverObject, updateObject, removeObject, snapToGrid, copySelectedObjects, pasteObjects } = useVenue()
+  const { venue, objects, selectedObjectId, selectedObjectIds, hoveredObjectId, selectObject, selectObjects, hoverObject, updateObject, removeObject, removeObjects, snapToGrid, copySelectedObjects, pasteObjects } = useVenue()
   const { placements, selectedPlacementId, selectPlacement, updatePlacement, removePlacement, getDeviceById } = useLidar()
   const tracksRef = useTracksRef()
   
@@ -683,11 +686,13 @@ export default function MainViewport({
   const updateObjectRef = useRef(updateObject)
   const updatePlacementRef = useRef(updatePlacement)
   const removeObjectRef = useRef(removeObject)
+  const removeObjectsRef = useRef(removeObjects)
   const copySelectedObjectsRef = useRef(copySelectedObjects)
   const pasteObjectsRef = useRef(pasteObjects)
   const removePlacementRef = useRef(removePlacement)
   const snapToGridRef = useRef(snapToGrid)
   const selectObjectRef = useRef(selectObject)
+  const selectObjectsRef = useRef(selectObjects)
   const hoverObjectRef = useRef(hoverObject)
   const selectPlacementRef = useRef(selectPlacement)
   const selectRegionRef = useRef(selectRegion)
@@ -698,6 +703,7 @@ export default function MainViewport({
   const openKPIPopupRef = useRef(openKPIPopup)
   const setHoveredRoiIdRef = useRef(setHoveredRoiId)
   const selectedObjectIdRef = useRef(selectedObjectId)
+  const selectedObjectIdsRef = useRef(selectedObjectIds)
   const selectedPlacementIdRef = useRef(selectedPlacementId)
   const selectedRoiIdRef = useRef(selectedRoiId)
   const showPlanogramLayerRef = useRef(showPlanogramLayer)
@@ -718,11 +724,13 @@ export default function MainViewport({
     updateObjectRef.current = updateObject
     updatePlacementRef.current = updatePlacement
     removeObjectRef.current = removeObject
+    removeObjectsRef.current = removeObjects
     copySelectedObjectsRef.current = copySelectedObjects
     pasteObjectsRef.current = pasteObjects
     removePlacementRef.current = removePlacement
     snapToGridRef.current = snapToGrid
     selectObjectRef.current = selectObject
+    selectObjectsRef.current = selectObjects
     hoverObjectRef.current = hoverObject
     selectPlacementRef.current = selectPlacement
     selectRegionRef.current = selectRegion
@@ -733,6 +741,7 @@ export default function MainViewport({
     openKPIPopupRef.current = openKPIPopup
     setHoveredRoiIdRef.current = setHoveredRoiId
     selectedObjectIdRef.current = selectedObjectId
+    selectedObjectIdsRef.current = selectedObjectIds
     selectedPlacementIdRef.current = selectedPlacementId
     selectedRoiIdRef.current = selectedRoiId
     showPlanogramLayerRef.current = showPlanogramLayer
@@ -742,7 +751,7 @@ export default function MainViewport({
     setPlanogramHoveredSlotIndexRef.current = setPlanogramHoveredSlotIndex
     doohScreensRef.current = doohScreens
     fetchDoohScreensRef.current = fetchDoohScreens
-  }, [venue, objects, placements, regions, isDrawing, drawingVertices, updateObject, updatePlacement, removeObject, copySelectedObjects, pasteObjects, removePlacement, snapToGrid, selectObject, selectPlacement, selectRegion, addDrawingVertex, updateRegion, deleteRegion, updateVertexPosition, openKPIPopup, setHoveredRoiId, selectedObjectId, selectedPlacementId, selectedRoiId, showPlanogramLayer, setPlanogramSelectedShelfId, planogramSelectedShelfId, activeShelfPlanogram, setPlanogramHoveredSlotIndex, doohScreens, fetchDoohScreens])
+  }, [venue, objects, placements, regions, isDrawing, drawingVertices, updateObject, updatePlacement, removeObject, removeObjects, copySelectedObjects, pasteObjects, removePlacement, snapToGrid, selectObject, selectObjects, selectPlacement, selectRegion, addDrawingVertex, updateRegion, deleteRegion, updateVertexPosition, openKPIPopup, setHoveredRoiId, selectedObjectId, selectedObjectIds, selectedPlacementId, selectedRoiId, showPlanogramLayer, setPlanogramSelectedShelfId, planogramSelectedShelfId, activeShelfPlanogram, setPlanogramHoveredSlotIndex, doohScreens, fetchDoohScreens])
   
   // Load ROIs when venue changes
   useEffect(() => {
@@ -2014,7 +2023,10 @@ export default function MainViewport({
       if (event.key === 'Delete' || event.key === 'Backspace') {
         // Prevent browser back navigation on Backspace
         event.preventDefault()
-        if (selectedObjectIdRef.current) {
+        const selectedIds = Array.from(selectedObjectIdsRef.current)
+        if (selectedIds.length > 1) {
+          removeObjectsRef.current(selectedIds)
+        } else if (selectedObjectIdRef.current) {
           removeObjectRef.current(selectedObjectIdRef.current)
           selectObjectRef.current(null)
         } else if (selectedPlacementIdRef.current) {
@@ -4253,6 +4265,17 @@ export default function MainViewport({
         const layout = layoutData.layout
         if (!importId || !layout?.bounds) return
 
+        const scaleCorrection = (() => {
+          try {
+            const parsed = JSON.parse(venue.dwg_transform_json || '{}')
+            return parsed.scaleCorrection || 1
+          } catch { return 1 }
+        })()
+        const bootstrapRes = await fetch(`${API_BASE}/api/dwg/layout/${venue.dwg_layout_version_id}/as-venue-bootstrap?scaleCorrection=${scaleCorrection}`)
+        if (!bootstrapRes.ok) return
+        const bootstrap = await bootstrapRes.json()
+        const bootstrapTransform = bootstrap.transform || {}
+
         const metaRes = await fetch(`${API_BASE}/api/dwg/import/${importId}/floorplan`)
         if (!metaRes.ok) return
         const metaData = await metaRes.json()
@@ -4260,15 +4283,19 @@ export default function MainViewport({
 
         const fp = metaData.floorplan
         const transform = fp.transform || { x: 0, y: 0, scaleX: 1, scaleY: 1, rotation: 0, opacity: 0.5 }
-        const effectiveScale = (layout.unit_scale_to_m || 0.001) * (() => {
-          try {
-            const parsed = JSON.parse(venue.dwg_transform_json || '{}')
-            return parsed.scaleCorrection || 1
-          } catch { return 1 }
-        })()
-        const bounds = layout.bounds
-        const centerX = (bounds.minX + bounds.maxX) / 2 * effectiveScale
-        const centerZ = (bounds.minY + bounds.maxY) / 2 * effectiveScale
+        const effectiveScale = bootstrapTransform.effectiveScale || ((layout.unit_scale_to_m || 0.001) * scaleCorrection)
+        const centerX = bootstrapTransform.centerOffset?.x ?? ((layout.bounds.minX + layout.bounds.maxX) / 2 * effectiveScale)
+        const centerZ = bootstrapTransform.centerOffset?.z ?? ((layout.bounds.minY + layout.bounds.maxY) / 2 * effectiveScale)
+        const venueSize = bootstrapTransform.venueSize || { width: venue.width || 0, depth: venue.depth || 0 }
+        const shift = bootstrapTransform.shift || { x: 0, z: 0 }
+        const venueFloorCenterX = venueSize.width / 2
+        const venueFloorCenterZ = venueSize.depth / 2
+        const contentCenterX = venueFloorCenterX - shift.x
+        const contentCenterZ = venueFloorCenterZ - shift.z
+        const dxfToVenueWorld = (xDxf: number, yDxf: number) => ({
+          x: venueFloorCenterX + ((xDxf * effectiveScale - centerX) - contentCenterX),
+          z: venueFloorCenterZ - ((yDxf * effectiveScale - centerZ) - contentCenterZ),
+        })
 
         textureLoaderRef.current.load(`${API_BASE}/api/dwg/import/${importId}/floorplan/image`, texture => {
           if (cancelled || !sceneRef.current) return
@@ -4280,8 +4307,7 @@ export default function MainViewport({
           const planeD = dxfH * effectiveScale
           const imgCenterDxfX = transform.x + dxfW / 2
           const imgCenterDxfY = transform.y + dxfH / 2
-          const sceneX = imgCenterDxfX * effectiveScale - centerX
-          const sceneZ = imgCenterDxfY * effectiveScale - centerZ
+          const worldCenter = dxfToVenueWorld(imgCenterDxfX, imgCenterDxfY)
 
           const mesh = new THREE.Mesh(
             new THREE.PlaneGeometry(planeW, planeD),
@@ -4294,7 +4320,7 @@ export default function MainViewport({
             })
           )
           mesh.name = 'VenueFloorplanOverlay'
-          mesh.position.set(sceneX, 0.015, sceneZ)
+          mesh.position.set(worldCenter.x, 0.015, worldCenter.z)
           mesh.rotation.x = Math.PI / 2
           if (transform.rotation) mesh.rotation.z = -transform.rotation * Math.PI / 180
           mesh.renderOrder = 1
@@ -5085,6 +5111,47 @@ export default function MainViewport({
     }
   }, [hoveredSkuShelf])
 
+  const handleAreaSelectMouseDown = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
+    const rect = event.currentTarget.getBoundingClientRect()
+    const start = { x: event.clientX - rect.left, y: event.clientY - rect.top }
+    areaSelectStartRef.current = start
+    setAreaSelectRect({ x: start.x, y: start.y, w: 0, h: 0 })
+  }, [])
+
+  const handleAreaSelectMouseMove = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
+    if (!areaSelectStartRef.current) return
+    const rect = event.currentTarget.getBoundingClientRect()
+    const current = { x: event.clientX - rect.left, y: event.clientY - rect.top }
+    const start = areaSelectStartRef.current
+    setAreaSelectRect({
+      x: Math.min(start.x, current.x),
+      y: Math.min(start.y, current.y),
+      w: Math.abs(current.x - start.x),
+      h: Math.abs(current.y - start.y),
+    })
+  }, [])
+
+  const handleAreaSelectMouseUp = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
+    const selection = areaSelectRect
+    areaSelectStartRef.current = null
+    setAreaSelectRect(null)
+    if (!selection || selection.w < 8 || selection.h < 8 || !cameraRef.current || !containerRef.current) return
+
+    const rect = containerRef.current.getBoundingClientRect()
+    const selectedIds: string[] = []
+    const projected = new THREE.Vector3()
+    for (const obj of objectsRef.current) {
+      projected.set(obj.position.x, obj.position.y || 0, obj.position.z).project(cameraRef.current)
+      if (projected.z > 1) continue
+      const sx = (projected.x * 0.5 + 0.5) * rect.width
+      const sy = (-projected.y * 0.5 + 0.5) * rect.height
+      if (sx >= selection.x && sx <= selection.x + selection.w && sy >= selection.y && sy <= selection.y + selection.h) {
+        selectedIds.push(obj.id)
+      }
+    }
+    selectObjectsRef.current(selectedIds)
+  }, [areaSelectRect])
+
   // Auto slot highlights (multiple rectangles when autoShowSlotHighlight is enabled)
   useEffect(() => {
     if (!sceneRef.current) return
@@ -5503,6 +5570,26 @@ export default function MainViewport({
             <Move3D className="w-4 h-4" />
           </button>
         </div>
+
+        {/* Area selection */}
+        <div className="flex items-center gap-1 border-l border-gray-700 pl-2 ml-2">
+          <button
+            onClick={() => setAreaSelectMode(v => !v)}
+            className={`px-2 py-1 text-xs rounded transition-colors ${areaSelectMode ? 'bg-cyan-900/50 text-cyan-300' : 'text-gray-400 hover:text-white hover:bg-gray-700'}`}
+            title="Drag a rectangle on the viewport to select multiple objects"
+          >
+            Area Select
+          </button>
+          {selectedObjectIds.size > 1 && (
+            <button
+              onClick={() => removeObjects(Array.from(selectedObjectIds))}
+              className="px-2 py-1 text-xs rounded bg-red-900/60 text-red-200 hover:bg-red-800"
+              title="Delete selected objects"
+            >
+              Delete {selectedObjectIds.size}
+            </button>
+          )}
+        </div>
         
         {/* Transform Controls (when object selected) */}
         {selectedObjectId && (
@@ -5590,6 +5677,30 @@ export default function MainViewport({
       
       {/* 3D Canvas */}
       <div ref={containerRef} className="flex-1 relative">
+        {areaSelectMode && (
+          <div
+            className="absolute inset-0 z-30 cursor-crosshair"
+            onMouseDown={handleAreaSelectMouseDown}
+            onMouseMove={handleAreaSelectMouseMove}
+            onMouseUp={handleAreaSelectMouseUp}
+            onMouseLeave={() => {
+              areaSelectStartRef.current = null
+              setAreaSelectRect(null)
+            }}
+          >
+            {areaSelectRect && (
+              <div
+                className="absolute border border-cyan-300 bg-cyan-400/10"
+                style={{
+                  left: areaSelectRect.x,
+                  top: areaSelectRect.y,
+                  width: areaSelectRect.w,
+                  height: areaSelectRect.h,
+                }}
+              />
+            )}
+          </div>
+        )}
         {/* Planogram Layer Strip - Full Width at Top */}
         {showPlanogramLayer && planogramSelectedShelfId && planogramSelectedShelf && (
           <div className="absolute top-0 left-0 right-0 z-20 bg-gray-900/95 border-b border-gray-700 backdrop-blur">
