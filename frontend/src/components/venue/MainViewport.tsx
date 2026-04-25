@@ -4299,6 +4299,11 @@ export default function MainViewport({
 
         textureLoaderRef.current.load(`${API_BASE}/api/dwg/import/${importId}/floorplan/image`, texture => {
           if (cancelled || !sceneRef.current) return
+          texture.wrapS = THREE.ClampToEdgeWrapping
+          texture.wrapT = THREE.ClampToEdgeWrapping
+          texture.repeat.y = -1
+          texture.offset.y = 1
+          texture.needsUpdate = true
           const imgW = texture.image.width
           const imgH = texture.image.height
           const dxfW = imgW * transform.scaleX
@@ -4321,7 +4326,6 @@ export default function MainViewport({
           )
           mesh.name = 'VenueFloorplanOverlay'
           mesh.position.set(worldCenter.x, 0.015, worldCenter.z)
-          // Match DWG Importer 3D Preview texture orientation.
           mesh.rotation.x = -Math.PI / 2
           if (transform.rotation) mesh.rotation.z = -transform.rotation * Math.PI / 180
           mesh.renderOrder = 1
