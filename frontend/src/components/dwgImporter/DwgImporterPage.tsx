@@ -87,6 +87,9 @@ export interface DwgGroup {
 export interface GroupMapping {
   catalog_asset_id: string
   type: string
+  business_category_id?: string
+  business_category?: string
+  business_category_label?: string
   anchor: 'center' | 'minx_miny' | 'minx_maxy' | 'maxx_miny' | 'maxx_maxy' | 'back_center'
   offset_m: { x: number; y: number; z: number }
   rotation_offset_deg: number
@@ -98,6 +101,14 @@ export interface CatalogAsset {
   type: string
   hasCustomModel: boolean
   modelPath?: string
+}
+
+export interface RetailCategory {
+  id: string
+  name: string
+  slug: string
+  color?: string | null
+  is_default?: boolean
 }
 
 export interface ImportData {
@@ -116,6 +127,16 @@ export interface ImportData {
   layers: string[]
 }
 
+const DEFAULT_RETAIL_CATEGORIES: RetailCategory[] = [
+  'Carne', 'Pesce', 'Verdura', 'Frutta', 'Acqua', 'Surgelati', 'Pane',
+  'Latticini', 'Salumi', 'Dispensa', 'Bevande', 'Cura casa', 'Cura persona'
+].map(name => ({
+  id: `default-${name.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')}`,
+  name,
+  slug: name.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, ''),
+  is_default: true,
+}))
+
 interface DwgImporterPageProps {
   onClose: () => void
   onLayoutGenerated?: (layoutVersionId: string) => void
@@ -131,6 +152,7 @@ export default function DwgImporterPage({ onClose, onLayoutGenerated }: DwgImpor
   const [hoveredFixtureId, setHoveredFixtureId] = useState<string | null>(null)
   const [mappings, setMappings] = useState<Record<string, GroupMapping>>({})
   const [catalog, setCatalog] = useState<CatalogAsset[]>([])
+  const [retailCategories, setRetailCategories] = useState<RetailCategory[]>([])
   const [isGenerating, setIsGenerating] = useState(false)
   const [generatedLayoutId, setGeneratedLayoutId] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -291,6 +313,50 @@ export default function DwgImporterPage({ onClose, onLayoutGenerated }: DwgImpor
       fetchCatalog()
     }
   }, [featureEnabled])
+
+  // Fetch company/venue retail categories for semantic mapping (e.g. carne/pesce)
+  useEffect(() => {
+    const fetchRetailCategories = async () => {
+      if (!venue?.id) {
+        setRetailCategories(DEFAULT_RETAIL_CATEGORIES)
+        return
+      }
+
+      try {
+        const res = await fetch(`${API_BASE}/api/venues/${venue.id}/retail-categories`)
+        if (res.ok) {
+          const data = await res.json()
+          setRetailCategories(data.categories?.length ? data.categories : DEFAULT_RETAIL_CATEGORIES)
+        }
+      } catch (err) {
+        console.error('Failed to fetch retail categories:', err)
+        setRetailCategories(DEFAULT_RETAIL_CATEGORIES)
+      }
+    }
+
+    fetchRetailCategories()
+  }, [venue?.id])
+
+  const createRetailCategory = useCallback(async (name: string) => {
+    if (!venue?.id) return null
+
+    const res = await fetch(`${API_BASE}/api/venues/${venue.id}/retail-categories`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      throw new Error(err.error || 'Failed to create category')
+    }
+
+    const category = await res.json()
+    setRetailCategories(prev => {
+      if (prev.some(c => c.id === category.id || c.slug === category.slug)) return prev
+      return [...prev, category].sort((a, b) => a.name.localeCompare(b.name))
+    })
+    return category as RetailCategory
+  }, [venue?.id])
 
   // Fetch LiDAR models + instances when layout is available (models are GLOBAL — no venue needed)
   const lidarDataLoadedKey = useRef<string | null>(null)
@@ -975,6 +1041,7 @@ export default function DwgImporterPage({ onClose, onLayoutGenerated }: DwgImpor
                 depth: bootstrap.venueDefaults?.depth || 20,
                 height: bootstrap.venueDefaults?.height || 4,
                 tileSize: bootstrap.venueDefaults?.tileSize || 1,
+                company_id: venue?.company_id || null,
                 scene_source: 'dwg',
                 dwg_layout_version_id: result.layout_version_id,
                 dwg_transform_json: JSON.stringify({ scaleCorrection: bootstrap.transform?.scaleCorrection || sc }),
@@ -1325,6 +1392,8 @@ export default function DwgImporterPage({ onClose, onLayoutGenerated }: DwgImpor
                 group={importData.groups.find(g => g.group_id === selectedGroupId) || null}
                 mapping={selectedGroupId ? mappings[selectedGroupId] : undefined}
                 catalog={catalog}
+                retailCategories={retailCategories}
+                onCreateRetailCategory={venue?.company_id ? createRetailCategory : undefined}
                 onUpdateMapping={(mapping: GroupMapping | null) => selectedGroupId && updateMapping(selectedGroupId, mapping)}
                 unitScaleToM={importData.unit_scale_to_m * scaleCorrection}
               />

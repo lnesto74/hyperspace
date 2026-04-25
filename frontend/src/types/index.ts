@@ -11,6 +11,7 @@ export interface Venue {
   scene_source?: 'manual' | 'dwg';
   dwg_layout_version_id?: string;
   dwg_transform_json?: string;
+  company_id?: string | null;
 }
 
 export interface VenueObject {

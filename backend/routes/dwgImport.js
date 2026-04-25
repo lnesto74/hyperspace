@@ -2570,6 +2570,9 @@ export default function createDwgImportRoutes(db) {
             dwg_bootstrap_version: 4, // v4: fixed scaleCorrection from layout DB
             dwg_fixture_id: fixtureId,
             dwg_layout_version_id: layoutVersionId,
+            business_category_id: mapping?.business_category_id || null,
+            business_category: mapping?.business_category || null,
+            business_category_label: mapping?.business_category_label || null,
             // Store DWG polygon footprint for 3D rendering (extruded shapes + wireframes)
             dwg_footprint_points: points.length >= 3 ? points.map(pt => ({
               x: pt.x * effectiveScale - centerX + shiftX,

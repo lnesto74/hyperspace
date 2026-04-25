@@ -2,6 +2,37 @@ import { Router } from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import { venueQueries, objectQueries, placementQueries } from '../database/schema.js';
 
+const DEFAULT_GROCERY_CATEGORIES = [
+  'Carne', 'Pesce', 'Verdura', 'Frutta', 'Acqua', 'Surgelati', 'Pane',
+  'Latticini', 'Salumi', 'Dispensa', 'Bevande', 'Cura casa', 'Cura persona'
+];
+
+function slugify(value) {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-|-$/g, '');
+}
+
+function ensureDefaultCategories(db, companyId) {
+  const existing = db.prepare('SELECT COUNT(*) as count FROM company_categories WHERE company_id = ?').get(companyId);
+  if (existing?.count > 0) return;
+
+  const insert = db.prepare(`
+    INSERT OR IGNORE INTO company_categories (id, company_id, name, slug, sort_order, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+  `);
+  const tx = db.transaction(() => {
+    DEFAULT_GROCERY_CATEGORIES.forEach((name, index) => {
+      insert.run(uuidv4(), companyId, name, slugify(name), index);
+    });
+  });
+  tx();
+}
+
 export default function venuesRoutes(db) {
   const router = Router();
 
@@ -82,9 +113,18 @@ export default function venuesRoutes(db) {
                     if (!groupId) return obj;
                     
                     const liveMapping = groupMappings[groupId];
-                    if (liveMapping?.type && liveMapping.type !== obj.type) {
+                    if (liveMapping?.type || liveMapping?.business_category) {
                       overlayCount++;
-                      return { ...obj, type: liveMapping.type };
+                      return {
+                        ...obj,
+                        type: liveMapping.type || obj.type,
+                        metadata: {
+                          ...(obj.metadata || {}),
+                          business_category_id: liveMapping.business_category_id || null,
+                          business_category: liveMapping.business_category || null,
+                          business_category_label: liveMapping.business_category_label || null,
+                        },
+                      };
                     }
                     return obj;
                   });
@@ -112,6 +152,7 @@ export default function venuesRoutes(db) {
           maxCapacity: venue.max_capacity || 300,
           defaultDwellThresholdSec: venue.default_dwell_threshold_sec || 60,
           defaultEngagementThresholdSec: venue.default_engagement_threshold_sec || 120,
+          company_id: venue.company_id || null,
           createdAt: venue.created_at,
           updatedAt: venue.updated_at,
           scene_source: venue.scene_source,
@@ -293,6 +334,91 @@ export default function venuesRoutes(db) {
     } catch (error) {
       console.error('Update venue company error:', error);
       res.status(500).json({ error: 'Failed to update venue company' });
+    }
+  });
+
+  // Get company-level retail categories for the venue.
+  // The DWG importer uses this to assign semantic grocery categories
+  // independently from the 3D asset type.
+  router.get('/:id/retail-categories', (req, res) => {
+    try {
+      const venue = venueQueries.getById(db, req.params.id);
+      if (!venue) {
+        return res.status(404).json({ error: 'Venue not found' });
+      }
+
+      if (!venue.company_id) {
+        return res.json({
+          company_id: null,
+          categories: DEFAULT_GROCERY_CATEGORIES.map((name, index) => ({
+            id: `default-${slugify(name)}`,
+            company_id: null,
+            name,
+            slug: slugify(name),
+            color: null,
+            sort_order: index,
+            is_default: true,
+          })),
+        });
+      }
+
+      ensureDefaultCategories(db, venue.company_id);
+      const categories = db.prepare(`
+        SELECT id, company_id, name, slug, color, sort_order, created_at, updated_at
+        FROM company_categories
+        WHERE company_id = ?
+        ORDER BY sort_order ASC, name ASC
+      `).all(venue.company_id);
+
+      res.json({ company_id: venue.company_id, categories });
+    } catch (error) {
+      console.error('Get venue retail categories error:', error);
+      res.status(500).json({ error: 'Failed to get retail categories' });
+    }
+  });
+
+  // Add a retail category through a venue context. Requires the venue to be
+  // assigned to a company so categories remain company-specific.
+  router.post('/:id/retail-categories', (req, res) => {
+    try {
+      const venue = venueQueries.getById(db, req.params.id);
+      if (!venue) {
+        return res.status(404).json({ error: 'Venue not found' });
+      }
+      if (!venue.company_id) {
+        return res.status(400).json({ error: 'Venue must be assigned to a company before adding categories' });
+      }
+
+      const { name, color } = req.body;
+      if (!name || !String(name).trim()) {
+        return res.status(400).json({ error: 'Category name is required' });
+      }
+
+      const cleanName = String(name).trim();
+      const slug = slugify(cleanName);
+      const existing = db.prepare(`
+        SELECT * FROM company_categories WHERE company_id = ? AND slug = ?
+      `).get(venue.company_id, slug);
+      if (existing) {
+        return res.json(existing);
+      }
+
+      const nextOrder = db.prepare(`
+        SELECT COALESCE(MAX(sort_order), -1) + 1 as next_order
+        FROM company_categories WHERE company_id = ?
+      `).get(venue.company_id)?.next_order || 0;
+
+      const id = uuidv4();
+      db.prepare(`
+        INSERT INTO company_categories (id, company_id, name, slug, color, sort_order, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+      `).run(id, venue.company_id, cleanName, slug, color || null, nextOrder);
+
+      const category = db.prepare('SELECT * FROM company_categories WHERE id = ?').get(id);
+      res.status(201).json(category);
+    } catch (error) {
+      console.error('Create venue retail category error:', error);
+      res.status(500).json({ error: 'Failed to create retail category' });
     }
   });
 

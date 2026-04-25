@@ -1546,6 +1546,8 @@ app.post('/api/checkout/thresholds', (req, res) => {
 
 // In-memory LiDAR inventory (would be populated by real LAN scans in production)
 let lidarInventory = [];
+const lidarHealth = new Map(); // ip -> { lidar, lastSeen, missedScans }
+const OFFLINE_AFTER_MISSED_SCANS = 3;
 let appliedConfigHash = null;
 let appliedConfig = null;
 
@@ -1558,6 +1560,54 @@ const LIDAR_SIGNATURES = [
   { vendor: 'Velodyne', ports: [2368, 8308], httpCheck: false, udpDetect: false },
   { vendor: 'Hesai', ports: [2368, 9870], httpCheck: false, udpDetect: false },
 ];
+
+function mergeLidarHealth(scanResults) {
+  const now = Date.now();
+  const seenIps = new Set(scanResults.map(l => l.ip).filter(Boolean));
+
+  for (const lidar of scanResults) {
+    if (!lidar.ip) continue;
+    const existing = lidarHealth.get(lidar.ip);
+    lidarHealth.set(lidar.ip, {
+      lidar: {
+        ...(existing?.lidar || {}),
+        ...lidar,
+        reachable: true,
+        healthStatus: 'online',
+        missedScans: 0,
+        lastSeen: new Date(now).toISOString(),
+      },
+      lastSeen: now,
+      missedScans: 0,
+    });
+  }
+
+  for (const [ip, state] of lidarHealth.entries()) {
+    if (seenIps.has(ip)) continue;
+
+    const missedScans = state.missedScans + 1;
+    const reachable = missedScans < OFFLINE_AFTER_MISSED_SCANS;
+    lidarHealth.set(ip, {
+      ...state,
+      missedScans,
+      lidar: {
+        ...state.lidar,
+        reachable,
+        healthStatus: reachable ? 'stale' : 'offline',
+        missedScans,
+        lastSeen: new Date(state.lastSeen).toISOString(),
+      },
+    });
+  }
+
+  return Array.from(lidarHealth.values())
+    .map(state => state.lidar)
+    .sort((a, b) => {
+      const aNum = parseInt((a.ip || '0').split('.').pop() || '0', 10);
+      const bNum = parseInt((b.ip || '0').split('.').pop() || '0', 10);
+      return aNum - bNum;
+    });
+}
 
 // Detect LS Lidar by listening for UDP packets on ports 2340-2370
 // LS Lidar continuously broadcasts, so we just listen for any packets
@@ -1871,7 +1921,7 @@ app.post('/api/edge/lidar/scan', async (req, res) => {
   const scanDuration = Date.now() - startTime;
   console.log(`[Edge Commissioning] Scan complete: found ${foundLidars.length} LiDARs in ${scanDuration}ms`);
   
-  lidarInventory = foundLidars;
+  lidarInventory = mergeLidarHealth(foundLidars);
   lastScanTime = Date.now();
   lastReachabilityCheck = Date.now();
   
@@ -1902,10 +1952,7 @@ app.get('/api/edge/lidar/inventory', async (req, res) => {
       // Quick LS Lidar UDP scan (fast, ~2 seconds)
       const lsLidars = await detectLsLidarUdp(2000);
       
-      // Remove old LS Lidar entries and add fresh ones
-      const nonLsLidars = lidarInventory.filter(l => l.vendor !== 'LSLidar');
-      lidarInventory.length = 0;
-      lidarInventory.push(...nonLsLidars, ...lsLidars);
+      const refreshResults = [...lsLidars];
       
       // Helper to get MAC from ARP table after TCP connection
       const getMacFromArp = async (ip) => {
@@ -1925,15 +1972,15 @@ app.get('/api/edge/lidar/inventory', async (req, res) => {
       
       // ARP-based discovery + TCP classification (finds ALL LiDARs regardless of
       // whether their UDP destination matches this machine's IP)
-      const existingIps = new Set(lidarInventory.map(l => l.ip));
+      const existingIps = new Set(refreshResults.map(l => l.ip));
       try {
         const arpIps = await detectLidarsFromArp('192.168.1', 200, 250);
         const newIps = arpIps.filter(ip => !existingIps.has(ip));
         if (newIps.length > 0) {
           const classified = await Promise.all(newIps.map(ip => classifyLidar(ip, 1000)));
           for (const lidar of classified) {
-            if (lidar && !lidarInventory.some(l => l.ip === lidar.ip)) {
-              lidarInventory.push(lidar);
+            if (lidar && !refreshResults.some(l => l.ip === lidar.ip)) {
+              refreshResults.push(lidar);
             }
           }
         }
@@ -1945,7 +1992,7 @@ app.get('/api/edge/lidar/inventory', async (req, res) => {
       const roboIps = [];
       for (let i = 200; i <= 250; i++) {
         const ip = `192.168.1.${i}`;
-        if (!lidarInventory.some(l => l.ip === ip)) roboIps.push(ip);
+        if (!refreshResults.some(l => l.ip === ip)) roboIps.push(ip);
       }
       const roboChecks = await Promise.all(roboIps.map(async (ip) => {
         try {
@@ -1980,10 +2027,12 @@ app.get('/api/edge/lidar/inventory', async (req, res) => {
       }));
       
       for (const robo of roboChecks) {
-        if (robo && !lidarInventory.some(l => l.ip === robo.ip)) {
-          lidarInventory.push(robo);
+        if (robo && !refreshResults.some(l => l.ip === robo.ip)) {
+          refreshResults.push(robo);
         }
       }
+
+      lidarInventory = mergeLidarHealth(refreshResults);
       
       lastScanTime = Date.now();
       console.log(`[Edge Commissioning] Quick scan: ${lsLidars.length} LS LiDARs, ${roboChecks.filter(r => r).length} RoboSense`);
@@ -1993,11 +2042,11 @@ app.get('/api/edge/lidar/inventory', async (req, res) => {
   }
   
   try {
-    // Inventory is a stable snapshot from the last scan. Do not run live
-    // per-device pings here: LS LiDARs are UDP-only and ping/TCP probes are
-    // noisy under load, causing random online/offline flicker in the UI.
-    const stableInventory = lidarInventory.map(lidar => ({ ...lidar, reachable: true }));
-    const onlineCount = stableInventory.length;
+    // Inventory is a stable health snapshot from the last scans. We preserve
+    // reachability from mergeLidarHealth(), which requires consecutive misses
+    // before marking a device offline.
+    const stableInventory = lidarInventory;
+    const onlineCount = stableInventory.filter(l => l.reachable).length;
     console.log(`[Edge Commissioning] Inventory: stable snapshot ${onlineCount}/${stableInventory.length} LiDARs online`);
     
     res.json({

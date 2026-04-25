@@ -2,6 +2,37 @@ import { Router } from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import { requireAuth, requireSuperadmin } from '../middleware/auth.js';
 
+const DEFAULT_GROCERY_CATEGORIES = [
+  'Carne', 'Pesce', 'Verdura', 'Frutta', 'Acqua', 'Surgelati', 'Pane',
+  'Latticini', 'Salumi', 'Dispensa', 'Bevande', 'Cura casa', 'Cura persona'
+];
+
+function slugify(value) {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-|-$/g, '');
+}
+
+function ensureDefaultCategories(db, companyId) {
+  const existing = db.prepare('SELECT COUNT(*) as count FROM company_categories WHERE company_id = ?').get(companyId);
+  if (existing?.count > 0) return;
+
+  const insert = db.prepare(`
+    INSERT OR IGNORE INTO company_categories (id, company_id, name, slug, sort_order, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+  `);
+  const tx = db.transaction(() => {
+    DEFAULT_GROCERY_CATEGORIES.forEach((name, index) => {
+      insert.run(uuidv4(), companyId, name, slugify(name), index);
+    });
+  });
+  tx();
+}
+
 export default function companiesRoutes(db) {
   const router = Router();
 
@@ -111,6 +142,70 @@ export default function companiesRoutes(db) {
     } catch (error) {
       console.error('[Companies] Update error:', error);
       res.status(500).json({ error: 'Failed to update company' });
+    }
+  });
+
+  // GET /api/companies/:id/categories — grocery/business categories for mapping
+  router.get('/:id/categories', (req, res) => {
+    try {
+      const company = db.prepare('SELECT id FROM companies WHERE id = ?').get(req.params.id);
+      if (!company) {
+        return res.status(404).json({ error: 'Company not found' });
+      }
+
+      ensureDefaultCategories(db, req.params.id);
+      const categories = db.prepare(`
+        SELECT id, company_id, name, slug, color, sort_order, created_at, updated_at
+        FROM company_categories
+        WHERE company_id = ?
+        ORDER BY sort_order ASC, name ASC
+      `).all(req.params.id);
+
+      res.json({ categories });
+    } catch (error) {
+      console.error('[Companies] Get categories error:', error);
+      res.status(500).json({ error: 'Failed to get company categories' });
+    }
+  });
+
+  // POST /api/companies/:id/categories — add category for a company
+  router.post('/:id/categories', (req, res) => {
+    try {
+      const company = db.prepare('SELECT id FROM companies WHERE id = ?').get(req.params.id);
+      if (!company) {
+        return res.status(404).json({ error: 'Company not found' });
+      }
+
+      const { name, color } = req.body;
+      if (!name || !String(name).trim()) {
+        return res.status(400).json({ error: 'Category name is required' });
+      }
+
+      const cleanName = String(name).trim();
+      const slug = slugify(cleanName);
+      const existing = db.prepare(`
+        SELECT * FROM company_categories WHERE company_id = ? AND slug = ?
+      `).get(req.params.id, slug);
+      if (existing) {
+        return res.json(existing);
+      }
+
+      const nextOrder = db.prepare(`
+        SELECT COALESCE(MAX(sort_order), -1) + 1 as next_order
+        FROM company_categories WHERE company_id = ?
+      `).get(req.params.id)?.next_order || 0;
+
+      const id = uuidv4();
+      db.prepare(`
+        INSERT INTO company_categories (id, company_id, name, slug, color, sort_order, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+      `).run(id, req.params.id, cleanName, slug, color || null, nextOrder);
+
+      const category = db.prepare('SELECT * FROM company_categories WHERE id = ?').get(id);
+      res.status(201).json(category);
+    } catch (error) {
+      console.error('[Companies] Create category error:', error);
+      res.status(500).json({ error: 'Failed to create company category' });
     }
   });
 

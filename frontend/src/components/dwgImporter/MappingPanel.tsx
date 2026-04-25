@@ -1,11 +1,13 @@
 import { useState, useEffect } from 'react'
-import { Settings, Box, RotateCw, Move, Anchor } from 'lucide-react'
-import type { DwgGroup, GroupMapping, CatalogAsset } from './DwgImporterPage'
+import { Settings, Box, RotateCw, Move, Anchor, Tag, Plus } from 'lucide-react'
+import type { DwgGroup, GroupMapping, CatalogAsset, RetailCategory } from './DwgImporterPage'
 
 interface MappingPanelProps {
   group: DwgGroup | null
   mapping: GroupMapping | undefined
   catalog: CatalogAsset[]
+  retailCategories: RetailCategory[]
+  onCreateRetailCategory?: (name: string) => Promise<RetailCategory | null>
   onUpdateMapping: (mapping: GroupMapping | null) => void
   unitScaleToM?: number
 }
@@ -22,13 +24,26 @@ const ANCHOR_OPTIONS: { value: GroupMapping['anchor']; label: string }[] = [
 const DEFAULT_MAPPING: GroupMapping = {
   catalog_asset_id: '',
   type: '',
+  business_category_id: '',
+  business_category: '',
+  business_category_label: '',
   anchor: 'center',
   offset_m: { x: 0, y: 0, z: 0 },
   rotation_offset_deg: 0
 }
 
-export default function MappingPanel({ group, mapping, catalog, onUpdateMapping, unitScaleToM = 1 }: MappingPanelProps) {
+export default function MappingPanel({
+  group,
+  mapping,
+  catalog,
+  retailCategories,
+  onCreateRetailCategory,
+  onUpdateMapping,
+  unitScaleToM = 1
+}: MappingPanelProps) {
   const [localMapping, setLocalMapping] = useState<GroupMapping>(DEFAULT_MAPPING)
+  const [newCategoryName, setNewCategoryName] = useState('')
+  const [isCreatingCategory, setIsCreatingCategory] = useState(false)
 
   // Sync local state with prop (merge with defaults to handle incomplete mappings from LaunchPad)
   useEffect(() => {
@@ -77,6 +92,45 @@ export default function MappingPanel({ group, mapping, catalog, onUpdateMapping,
       onUpdateMapping(updated)
     } else {
       onUpdateMapping(null)
+    }
+  }
+
+  const handleCategoryChange = (categoryId: string) => {
+    const category = retailCategories.find(c => c.id === categoryId)
+    const updated = {
+      ...localMapping,
+      business_category_id: category?.id || '',
+      business_category: category?.slug || '',
+      business_category_label: category?.name || '',
+    }
+    setLocalMapping(updated)
+    if (updated.catalog_asset_id) {
+      onUpdateMapping(updated)
+    }
+  }
+
+  const handleCreateCategory = async () => {
+    const name = newCategoryName.trim()
+    if (!name || !onCreateRetailCategory) return
+
+    setIsCreatingCategory(true)
+    try {
+      const category = await onCreateRetailCategory(name)
+      if (category) {
+        setNewCategoryName('')
+        const updated = {
+          ...localMapping,
+          business_category_id: category.id,
+          business_category: category.slug,
+          business_category_label: category.name,
+        }
+        setLocalMapping(updated)
+        if (updated.catalog_asset_id) {
+          onUpdateMapping(updated)
+        }
+      }
+    } finally {
+      setIsCreatingCategory(false)
     }
   }
 
@@ -129,6 +183,55 @@ export default function MappingPanel({ group, mapping, catalog, onUpdateMapping,
               </option>
             ))}
           </select>
+        </div>
+
+        {/* Business Category Selection */}
+        <div>
+          <label className="text-xs font-medium text-gray-400 block mb-2 flex items-center gap-1">
+            <Tag className="w-3 h-3" />
+            Grocery Category
+          </label>
+          <select
+            value={localMapping.business_category_id || ''}
+            onChange={(e) => handleCategoryChange(e.target.value)}
+            disabled={!localMapping.catalog_asset_id}
+            className="w-full px-3 py-2 bg-gray-800 border border-border-dark rounded-lg text-sm text-white focus:border-highlight focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <option value="">No category...</option>
+            {retailCategories.map(category => (
+              <option key={category.id} value={category.id}>
+                {category.name}
+              </option>
+            ))}
+          </select>
+          <p className="mt-1 text-[11px] text-gray-500">
+            Keeps the same 3D asset but tags this mapped group as carne, pesce, verdura, etc.
+          </p>
+
+          <div className="mt-2 flex gap-2">
+            <input
+              type="text"
+              value={newCategoryName}
+              onChange={(e) => setNewCategoryName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault()
+                  handleCreateCategory()
+                }
+              }}
+              disabled={!localMapping.catalog_asset_id || !onCreateRetailCategory || isCreatingCategory}
+              placeholder="Add category..."
+              className="min-w-0 flex-1 px-3 py-1.5 bg-gray-800 border border-border-dark rounded-lg text-xs text-white placeholder:text-gray-600 focus:border-highlight focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed"
+            />
+            <button
+              onClick={handleCreateCategory}
+              disabled={!newCategoryName.trim() || !localMapping.catalog_asset_id || !onCreateRetailCategory || isCreatingCategory}
+              className="px-2 py-1.5 rounded-lg bg-gray-800 hover:bg-gray-700 text-gray-300 disabled:opacity-50 disabled:cursor-not-allowed"
+              title="Add category to this venue/company"
+            >
+              <Plus className="w-3.5 h-3.5" />
+            </button>
+          </div>
         </div>
 
         {/* Anchor Selection */}

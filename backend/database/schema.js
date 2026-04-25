@@ -75,6 +75,21 @@ export function initDatabase() {
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
+    -- Company-specific business categories used for DWG/fixture mapping.
+    -- Example for grocery chains: carne, pesce, verdura, acqua, surgelati.
+    CREATE TABLE IF NOT EXISTS company_categories (
+      id TEXT PRIMARY KEY,
+      company_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      slug TEXT NOT NULL,
+      color TEXT,
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE CASCADE,
+      UNIQUE(company_id, slug)
+    );
+
     -- Venues table
     CREATE TABLE IF NOT EXISTS venues (
       id TEXT PRIMARY KEY,
@@ -163,6 +178,7 @@ export function initDatabase() {
     CREATE INDEX IF NOT EXISTS idx_venue_objects_venue_id ON venue_objects(venue_id);
     CREATE INDEX IF NOT EXISTS idx_lidar_placements_venue_id ON lidar_placements(venue_id);
     CREATE INDEX IF NOT EXISTS idx_regions_of_interest_venue_id ON regions_of_interest(venue_id);
+    CREATE INDEX IF NOT EXISTS idx_company_categories_company_id ON company_categories(company_id);
 
     -- SKU Catalog tables (for Planogram Builder)
     CREATE TABLE IF NOT EXISTS sku_catalogs (
@@ -1081,8 +1097,8 @@ export const venueQueries = {
   
   create: (db, venue) => {
     const stmt = db.prepare(`
-      INSERT INTO venues (id, name, width, depth, height, tile_size, scene_source, dwg_layout_version_id, dwg_transform_json, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO venues (id, name, width, depth, height, tile_size, scene_source, dwg_layout_version_id, dwg_transform_json, company_id, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     return stmt.run(
       venue.id,
@@ -1094,6 +1110,7 @@ export const venueQueries = {
       venue.sceneSource || 'manual',
       venue.dwgLayoutVersionId || null,
       venue.dwgTransformJson ? JSON.stringify(venue.dwgTransformJson) : null,
+      venue.company_id || venue.companyId || null,
       venue.createdAt,
       venue.updatedAt
     );
@@ -1104,6 +1121,7 @@ export const venueQueries = {
       UPDATE venues SET name = ?, width = ?, depth = ?, height = ?, tile_size = ?,
         scene_source = COALESCE(?, scene_source),
         dwg_layout_version_id = COALESCE(?, dwg_layout_version_id),
+        company_id = COALESCE(?, company_id),
         updated_at = ?
       WHERE id = ?
     `);
@@ -1115,6 +1133,7 @@ export const venueQueries = {
       venue.tileSize,
       venue.scene_source || null,
       venue.dwg_layout_version_id || null,
+      venue.company_id || venue.companyId || null,
       new Date().toISOString(),
       id
     );

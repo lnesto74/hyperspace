@@ -1885,6 +1885,8 @@ export default function PreviewPanel({
                       width_m: parseFloat(wM.toFixed(3)),
                       depth_m: parseFloat(dM.toFixed(3))
                     },
+                    business_category: mapping?.business_category || null,
+                    business_category_label: mapping?.business_category_label || null,
                     layer: f.source?.layer || '',
                     block: f.source?.block || ''
                   }
