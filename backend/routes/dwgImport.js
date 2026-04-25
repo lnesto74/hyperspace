@@ -2557,9 +2557,17 @@ export default function createDwgImportRoutes(db) {
       console.log(`[DWG Bootstrap] Content center: (${contentCenterX.toFixed(2)}, ${contentCenterZ.toFixed(2)})`);
       console.log(`[DWG Bootstrap] Venue floor center: (${venueFloorCenterX.toFixed(2)}, ${venueFloorCenterZ.toFixed(2)})`);
       console.log(`[DWG Bootstrap] Shift offset: (${shiftX.toFixed(2)}, ${shiftZ.toFixed(2)})`);
+
+      // Convert DWG floor-plane coordinates to venue/world coordinates.
+      // X keeps the same sign. DWG Y must be flipped into Three.js Z so the
+      // 3D venue matches the 2-D preview orientation exactly.
+      const dxfToVenueWorld = (xDxf, yDxf) => ({
+        x: venueFloorCenterX + ((xDxf * effectiveScale - centerX) - contentCenterX),
+        z: venueFloorCenterZ - ((yDxf * effectiveScale - centerZ) - contentCenterZ),
+      });
       
       // Convert fixtures to VenueObjects
-      // MATCH EXACTLY Layout3DPreview.tsx: positions = DXF * effectiveScale - centerX
+      // Keep scale/dimensions unchanged; only floor-plane Y -> Z orientation is flipped.
       const objectsDraft = fixtures.map((fixture, idx) => {
         const { pose2d, footprint, mapping, source, id: fixtureId } = fixture;
         const points = footprint?.points || [];
@@ -2572,8 +2580,9 @@ export default function createDwgImportRoutes(db) {
           const sumY = points.reduce((sum, pt) => sum + pt.y, 0);
           const centroidX = sumX / points.length;
           const centroidY = sumY / points.length;
-          x = centroidX * effectiveScale - centerX;
-          z = centroidY * effectiveScale - centerZ;
+          const world = dxfToVenueWorld(centroidX, centroidY);
+          x = world.x - shiftX;
+          z = world.z - shiftZ;
           
           const p0 = points[0];
           const p1 = points[1];
@@ -2590,8 +2599,9 @@ export default function createDwgImportRoutes(db) {
           depth = (maxPtY - minPtY) * effectiveScale;
         } else {
           // Fallback to pose2d and footprint dimensions
-          x = (pose2d?.x || 0) * effectiveScale - centerX;
-          z = (pose2d?.y || 0) * effectiveScale - centerZ;
+          const world = dxfToVenueWorld(pose2d?.x || 0, pose2d?.y || 0);
+          x = world.x - shiftX;
+          z = world.z - shiftZ;
           rotationY = -((pose2d?.rot_deg || 0) * Math.PI / 180);
           width = (footprint?.w || 1000) * effectiveScale;
           depth = (footprint?.d || 1000) * effectiveScale;
@@ -2638,17 +2648,14 @@ export default function createDwgImportRoutes(db) {
           color: null, // Will use default color from VenueContext
           metadata: {
             source: 'dwg',
-            dwg_bootstrap_version: 4, // v4: fixed scaleCorrection from layout DB
+            dwg_bootstrap_version: 5, // v5: flip DWG Y into venue Z to match 2-D preview orientation
             dwg_fixture_id: fixtureId,
             dwg_layout_version_id: layoutVersionId,
             business_category_id: mapping?.business_category_id || null,
             business_category: mapping?.business_category || null,
             business_category_label: mapping?.business_category_label || null,
             // Store DWG polygon footprint for 3D rendering (extruded shapes + wireframes)
-            dwg_footprint_points: points.length >= 3 ? points.map(pt => ({
-              x: pt.x * effectiveScale - centerX + shiftX,
-              z: pt.y * effectiveScale - centerZ + shiftZ
-            })) : null,
+            dwg_footprint_points: points.length >= 3 ? points.map(pt => dxfToVenueWorld(pt.x, pt.y)) : null,
             dwg_center_x: finalX,
             dwg_center_z: finalZ,
           }
@@ -2659,9 +2666,10 @@ export default function createDwgImportRoutes(db) {
       const lidarDraft = lidarInstances.map(inst => {
         const model = modelMap.get(inst.model_id);
         
-        // LiDAR positions are in meters — apply center offset (same as Layout3DPreview) + shift
+        // LiDAR positions are already in meters in the same DWG floor-plane space.
+        // Flip Z consistently with fixtures so placements match the venue orientation.
         const x = inst.x_m - centerX + shiftX;
-        const z = inst.z_m - centerZ + shiftZ;
+        const z = venueFloorCenterZ - ((inst.z_m - centerZ) - contentCenterZ);
         const mountHeight = inst.mount_y_m || 3;
         
         return {
