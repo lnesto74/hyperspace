@@ -188,6 +188,10 @@ export default function MainViewport({
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null)
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null)
   const labelRendererRef = useRef<CSS2DRenderer | null>(null)
+  const axisContainerRef = useRef<HTMLDivElement | null>(null)
+  const axisRendererRef = useRef<THREE.WebGLRenderer | null>(null)
+  const axisSceneRef = useRef<THREE.Scene | null>(null)
+  const axisCameraRef = useRef<THREE.PerspectiveCamera | null>(null)
   const controlsRef = useRef<OrbitControls | null>(null)
   const objectMeshesRef = useRef<Map<string, THREE.Mesh | THREE.Group>>(new Map())
   const lidarMeshesRef = useRef<Map<string, THREE.Group>>(new Map())
@@ -810,6 +814,48 @@ export default function MainViewport({
     container.appendChild(labelRenderer.domElement)
     labelRendererRef.current = labelRenderer
 
+    // Top-left axis gizmo, matching DWG Importer 3D Preview.
+    const axisScene = new THREE.Scene()
+    axisSceneRef.current = axisScene
+    const axisCamera = new THREE.PerspectiveCamera(50, 1, 0.1, 100)
+    axisCamera.position.set(3, 3, 3)
+    axisCamera.lookAt(0, 0, 0)
+    axisCameraRef.current = axisCamera
+
+    const origin = new THREE.Vector3(0, 0, 0)
+    axisScene.add(new THREE.ArrowHelper(new THREE.Vector3(1, 0, 0), origin, 1, 0xff4444, 0.3, 0.15))
+    axisScene.add(new THREE.ArrowHelper(new THREE.Vector3(0, 0, 1), origin, 1, 0x44ff44, 0.3, 0.15))
+    axisScene.add(new THREE.ArrowHelper(new THREE.Vector3(0, 1, 0), origin, 1, 0x4444ff, 0.3, 0.15))
+
+    const createAxisLabel = (text: string, color: number, position: THREE.Vector3) => {
+      const canvas = document.createElement('canvas')
+      canvas.width = 64
+      canvas.height = 64
+      const ctx = canvas.getContext('2d')!
+      ctx.fillStyle = `#${color.toString(16).padStart(6, '0')}`
+      ctx.font = 'bold 48px Arial'
+      ctx.textAlign = 'center'
+      ctx.textBaseline = 'middle'
+      ctx.fillText(text, 32, 32)
+      const texture = new THREE.CanvasTexture(canvas)
+      const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: texture }))
+      sprite.position.copy(position)
+      sprite.scale.set(0.4, 0.4, 1)
+      return sprite
+    }
+    axisScene.add(createAxisLabel('X', 0xff4444, new THREE.Vector3(1.3, 0, 0)))
+    axisScene.add(createAxisLabel('Y', 0x44ff44, new THREE.Vector3(0, 0, 1.3)))
+    axisScene.add(createAxisLabel('Z', 0x4444ff, new THREE.Vector3(0, 1.3, 0)))
+
+    if (axisContainerRef.current) {
+      const axisRenderer = new THREE.WebGLRenderer({ antialias: true, alpha: true })
+      axisRenderer.setSize(124, 124)
+      axisRenderer.setClearColor(0x1a1a2e, 1)
+      axisContainerRef.current.innerHTML = ''
+      axisContainerRef.current.appendChild(axisRenderer.domElement)
+      axisRendererRef.current = axisRenderer
+    }
+
     // Controls
     const controls = new OrbitControls(camera, renderer.domElement)
     controls.enableDamping = true
@@ -960,6 +1006,15 @@ export default function MainViewport({
 
       renderer.render(scene, camera)
       labelRenderer.render(scene, camera)
+
+      if (axisSceneRef.current && axisCameraRef.current && axisRendererRef.current) {
+        const dir = new THREE.Vector3()
+        camera.getWorldDirection(dir)
+        axisCameraRef.current.position.copy(dir).negate().multiplyScalar(4)
+        axisCameraRef.current.lookAt(0, 0, 0)
+        axisCameraRef.current.up.copy(camera.up)
+        axisRendererRef.current.render(axisSceneRef.current, axisCameraRef.current)
+      }
     }
     
     // Visibility change handler - pause rendering when tab is hidden
@@ -2116,6 +2171,10 @@ export default function MainViewport({
       if (animationFrameId !== null) {
         cancelAnimationFrame(animationFrameId)
         animationFrameId = null
+      }
+      if (axisRendererRef.current) {
+        axisRendererRef.current.dispose()
+        axisRendererRef.current = null
       }
       
       // Remove event listeners
@@ -4301,9 +4360,6 @@ export default function MainViewport({
           if (cancelled || !sceneRef.current) return
           texture.wrapS = THREE.ClampToEdgeWrapping
           texture.wrapT = THREE.ClampToEdgeWrapping
-          texture.repeat.y = -1
-          texture.offset.y = 1
-          texture.needsUpdate = true
           const imgW = texture.image.width
           const imgH = texture.image.height
           const dxfW = imgW * transform.scaleX
@@ -4326,7 +4382,8 @@ export default function MainViewport({
           )
           mesh.name = 'VenueFloorplanOverlay'
           mesh.position.set(worldCenter.x, 0.015, worldCenter.z)
-          mesh.rotation.x = -Math.PI / 2
+          // Match Layout3DPreview: this is a 180-degree X-axis flip from the old venue overlay.
+          mesh.rotation.x = Math.PI / 2
           if (transform.rotation) mesh.rotation.z = -transform.rotation * Math.PI / 180
           mesh.renderOrder = 1
           sceneRef.current.add(mesh)
@@ -5682,6 +5739,12 @@ export default function MainViewport({
       
       {/* 3D Canvas */}
       <div ref={containerRef} className="flex-1 relative">
+        <div
+          ref={axisContainerRef}
+          className="absolute top-4 left-4 z-40 rounded-xl overflow-hidden border border-blue-400/40 shadow-2xl pointer-events-none"
+          style={{ width: 124, height: 124 }}
+          title="Axis gizmo: X red, Y green/depth, Z blue/up"
+        />
         {areaSelectMode && (
           <div
             className="absolute inset-0 z-30 cursor-crosshair"
