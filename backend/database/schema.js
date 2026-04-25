@@ -1110,6 +1110,11 @@ export function initDatabase() {
   return db;
 }
 
+function serializeDwgTransform(value) {
+  if (!value) return null;
+  return typeof value === 'string' ? value : JSON.stringify(value);
+}
+
 // Helper functions for venue operations
 export const venueQueries = {
   getAll: (db) => db.prepare('SELECT * FROM venues ORDER BY updated_at DESC').all(),
@@ -1130,7 +1135,7 @@ export const venueQueries = {
       venue.tileSize,
       venue.sceneSource || 'manual',
       venue.dwgLayoutVersionId || null,
-      venue.dwgTransformJson ? JSON.stringify(venue.dwgTransformJson) : null,
+      serializeDwgTransform(venue.dwgTransformJson ?? venue.dwg_transform_json),
       venue.company_id || venue.companyId || null,
       venue.gridExtentMultiplier ?? venue.grid_extent_multiplier ?? 1.2,
       venue.gridOpacity ?? venue.grid_opacity ?? 0.35,
@@ -1144,6 +1149,7 @@ export const venueQueries = {
       UPDATE venues SET name = ?, width = ?, depth = ?, height = ?, tile_size = ?,
         scene_source = COALESCE(?, scene_source),
         dwg_layout_version_id = COALESCE(?, dwg_layout_version_id),
+        dwg_transform_json = COALESCE(?, dwg_transform_json),
         company_id = COALESCE(?, company_id),
         grid_extent_multiplier = COALESCE(?, grid_extent_multiplier),
         grid_opacity = COALESCE(?, grid_opacity),
@@ -1158,6 +1164,7 @@ export const venueQueries = {
       venue.tileSize,
       venue.scene_source || null,
       venue.dwg_layout_version_id || null,
+      serializeDwgTransform(venue.dwgTransformJson ?? venue.dwg_transform_json),
       venue.company_id || venue.companyId || null,
       venue.gridExtentMultiplier ?? venue.grid_extent_multiplier ?? null,
       venue.gridOpacity ?? venue.grid_opacity ?? null,

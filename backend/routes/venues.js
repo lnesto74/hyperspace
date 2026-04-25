@@ -2,6 +2,16 @@ import { Router } from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import { venueQueries, objectQueries, placementQueries } from '../database/schema.js';
 
+function normalizeDwgTransformJson(value) {
+  if (!value) return null;
+  try {
+    const parsed = JSON.parse(value);
+    return typeof parsed === 'string' ? parsed : JSON.stringify(parsed);
+  } catch {
+    return value;
+  }
+}
+
 const DEFAULT_GROCERY_CATEGORIES = [
   'Carne', 'Pesce', 'Verdura', 'Frutta', 'Acqua', 'Surgelati', 'Pane',
   'Latticini', 'Salumi', 'Dispensa', 'Bevande', 'Cura casa', 'Cura persona'
@@ -161,6 +171,7 @@ export default function venuesRoutes(db) {
           updatedAt: venue.updated_at,
           scene_source: venue.scene_source,
           dwg_layout_version_id: venue.dwg_layout_version_id,
+          dwg_transform_json: normalizeDwgTransformJson(venue.dwg_transform_json),
         },
         objects,
         placements,

@@ -787,7 +787,10 @@ export default function Layout3DPreview({ layoutVersionId, importId, lidarInstan
     
     // Center offset - PRIORITY: ROI > fixtures > layout bounds
     // When ROI exists, center on it (user explicitly defined the area of interest)
-    const effectiveScale = unit_scale_to_m * scaleCorrection
+    // Keep preview geometry in real meters. The LiDAR/autoplace scale correction
+    // is only used to normalize LiDAR/simulation coordinates back into this space.
+    const effectiveScale = unit_scale_to_m
+    const lidarScaleCorrection = scaleCorrection || 1.0
     
     let centerX: number, centerZ: number, centerSource: string
     
@@ -848,8 +851,8 @@ export default function Layout3DPreview({ layoutVersionId, importId, lidarInstan
     
     // Also include LiDAR positions in content bounds
     lidarInstances.forEach(inst => {
-      const x = inst.x_m - centerX
-      const z = inst.z_m - centerZ
+      const x = inst.x_m / lidarScaleCorrection - centerX
+      const z = inst.z_m / lidarScaleCorrection - centerZ
       contentMinX = Math.min(contentMinX, x - 10)
       contentMaxX = Math.max(contentMaxX, x + 10)
       contentMinZ = Math.min(contentMinZ, z - 10)
@@ -1245,13 +1248,13 @@ export default function Layout3DPreview({ layoutVersionId, importId, lidarInstan
     let centerX = 0, centerZ = 0
     if (focusBounds) {
       // Use ROI center - same as fixtures
-      const effectiveScale = layoutData ? layoutData.unit_scale_to_m * scaleCorrection : 1
+      const effectiveScale = layoutData ? layoutData.unit_scale_to_m : 1
       centerX = (focusBounds.minX + focusBounds.maxX) / 2 * effectiveScale
       centerZ = (focusBounds.minY + focusBounds.maxY) / 2 * effectiveScale
       console.log('LiDAR using ROI center:', centerX.toFixed(2), centerZ.toFixed(2))
     } else if (layoutData) {
       const { bounds, unit_scale_to_m } = layoutData
-      const effectiveScale = unit_scale_to_m * scaleCorrection
+      const effectiveScale = unit_scale_to_m
       centerX = (bounds.minX + bounds.maxX) / 2 * effectiveScale
       centerZ = (bounds.minY + bounds.maxY) / 2 * effectiveScale
       console.log('LiDAR using bounds center:', centerX.toFixed(2), centerZ.toFixed(2))
@@ -1279,8 +1282,9 @@ export default function Layout3DPreview({ layoutVersionId, importId, lidarInstan
       const isDome = model?.dome_mode || (model?.hfov_deg ?? 360) >= 360
       
       // Position in world coordinates (inst.x_m and inst.z_m are already in meters)
-      const x = inst.x_m - centerX
-      const z = inst.z_m - centerZ
+      const lidarScaleCorrection = scaleCorrection || 1.0
+      const x = inst.x_m / lidarScaleCorrection - centerX
+      const z = inst.z_m / lidarScaleCorrection - centerZ
       
       console.log(`LiDAR ${idx}: mount_y_m=${inst.mount_y_m}, y_m=${inst.y_m}, mountHeight=${mountHeight}, position=(${x.toFixed(1)}, ${mountHeight}, ${z.toFixed(1)})`)
       
@@ -1403,8 +1407,9 @@ export default function Layout3DPreview({ layoutVersionId, importId, lidarInstan
       heatmapGroup.name = 'heatmap'
       
       simulationResult.heatmap.forEach((cell) => {
-        const cellX = cell.x - centerX
-        const cellZ = cell.z - centerZ
+        const lidarScaleCorrection = scaleCorrection || 1.0
+        const cellX = cell.x / lidarScaleCorrection - centerX
+        const cellZ = cell.z / lidarScaleCorrection - centerZ
         const intensity = Math.min(cell.count / 3, 1)
         
         // Coverage cell
@@ -1498,7 +1503,7 @@ export default function Layout3DPreview({ layoutVersionId, importId, lidarInstan
 
           // Calculate plane size in DXF units, then convert to scene meters
           const { bounds, unit_scale_to_m } = layoutData
-          const effectiveScale = unit_scale_to_m * scaleCorrection
+          const effectiveScale = unit_scale_to_m
           const centerX = (bounds.minX + bounds.maxX) / 2 * effectiveScale
           const centerZ = (bounds.minY + bounds.maxY) / 2 * effectiveScale
 
@@ -1555,7 +1560,7 @@ export default function Layout3DPreview({ layoutVersionId, importId, lidarInstan
     if (!cameraRef.current || !controlsRef.current || !layoutData) return
     
     const { fixtures, bounds, unit_scale_to_m } = layoutData
-    const effectiveScale = unit_scale_to_m * scaleCorrection
+    const effectiveScale = unit_scale_to_m
     const centerX = (bounds.minX + bounds.maxX) / 2 * effectiveScale
     const centerZ = (bounds.minY + bounds.maxY) / 2 * effectiveScale
     

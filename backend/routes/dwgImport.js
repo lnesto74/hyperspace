@@ -2378,9 +2378,11 @@ export default function createDwgImportRoutes(db) {
       const lidarModels = db.prepare('SELECT * FROM lidar_models').all();
       const modelMap = new Map(lidarModels.map(m => [m.id, m]));
       
-      // Calculate bounds and center offset (EXACT same math as Layout3DPreview.tsx)
-      console.log(`[DWG Bootstrap] unitScale=${unitScale}, scaleCorrection=${scaleCorrection}`);
-      const effectiveScale = unitScale * scaleCorrection;
+      // Venue geometry must stay in real meters. The LiDAR/autoplace scale correction
+      // is kept separate so it cannot make manual venue objects appear 10x too small.
+      console.log(`[DWG Bootstrap] unitScale=${unitScale}, scaleCorrection=${scaleCorrection} (geometry uses unitScale)`);
+      const effectiveScale = unitScale;
+      const lidarScaleCorrection = scaleCorrection || 1.0;
       
       // Use RAW DWG bounds for center offset (SAME as Layout3DPreview)
       const rawBounds = layoutData.bounds || { minX: 0, maxX: 20000, minY: 0, maxY: 15000 };
@@ -2509,8 +2511,18 @@ export default function createDwgImportRoutes(db) {
       const padding = 4; // 4m padding on each side
       let venueWidth, venueDepth;
       
-      if (roiVertices) {
-        // Use ROI bounds for venue dimensions (tighter than all-fixture bounds)
+      if (roiDxfVertices && roiDxfVertices.length >= 3) {
+        // Use DXF ROI bounds converted with geometry scale. lidar_roi_json may have
+        // been saved with LiDAR scale correction and can be 10x too large.
+        const roiXs = roiDxfVertices.map(v => v.x * effectiveScale);
+        const roiZs = roiDxfVertices.map(v => (v.z || v.y || 0) * effectiveScale);
+        const roiWidth = Math.max(...roiXs) - Math.min(...roiXs);
+        const roiDepth = Math.max(...roiZs) - Math.min(...roiZs);
+        venueWidth = Math.ceil(roiWidth + padding * 2);
+        venueDepth = Math.ceil(roiDepth + padding * 2);
+        console.log(`[DWG Bootstrap] Using DXF ROI bounds: ${roiWidth.toFixed(1)}m × ${roiDepth.toFixed(1)}m → venue ${venueWidth}m × ${venueDepth}m`);
+      } else if (roiVertices) {
+        // Fallback for older layouts that only have meter-space ROI vertices.
         const roiXs = roiVertices.map(v => v.x);
         const roiZs = roiVertices.map(v => v.z);
         const roiWidth = Math.max(...roiXs) - Math.min(...roiXs);
@@ -2650,7 +2662,7 @@ export default function createDwgImportRoutes(db) {
           color: null, // Will use default color from VenueContext
           metadata: {
             source: 'dwg',
-            dwg_bootstrap_version: 5, // v5: flip DWG Y into venue Z to match 2-D preview orientation
+            dwg_bootstrap_version: 6, // v6: keep venue geometry in real meters; LiDAR scale correction is separate
             dwg_fixture_id: fixtureId,
             dwg_layout_version_id: layoutVersionId,
             business_category_id: mapping?.business_category_id || null,
@@ -2668,10 +2680,14 @@ export default function createDwgImportRoutes(db) {
       const lidarDraft = lidarInstances.map(inst => {
         const model = modelMap.get(inst.model_id);
         
-        // LiDAR positions are already in meters in the same DWG floor-plane space.
+        // LiDAR positions may have been saved with the LiDAR/autoplace correction.
+        // Convert them back to geometry meters before placing in the venue scene.
+        const lidarX = inst.x_m / lidarScaleCorrection;
+        const lidarZ = inst.z_m / lidarScaleCorrection;
+        
         // Flip Z consistently with fixtures so placements match the venue orientation.
-        const x = inst.x_m - centerX + shiftX;
-        const z = venueFloorCenterZ - ((inst.z_m - centerZ) - contentCenterZ);
+        const x = lidarX - centerX + shiftX;
+        const z = venueFloorCenterZ - ((lidarZ - centerZ) - contentCenterZ);
         const mountHeight = inst.mount_y_m || 3;
         
         return {
@@ -2707,6 +2723,7 @@ export default function createDwgImportRoutes(db) {
         transform: {
           effectiveScale,
           scaleCorrection,
+          lidarScaleCorrection,
           centerOffset: { x: centerX, z: centerZ },
           shift: { x: shiftX, z: shiftZ },
           venueSize: { width: venueWidth, depth: venueDepth }

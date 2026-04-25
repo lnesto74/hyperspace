@@ -263,7 +263,7 @@ export function VenueProvider({ children }: { children: ReactNode }) {
       // ── AUTO-REBOOTSTRAP: Fix DWG venues ──
       // Re-bootstrap when bootstrap version is outdated or data is missing.
       // Bump CURRENT_BOOTSTRAP_VERSION when bootstrap logic changes.
-      const CURRENT_BOOTSTRAP_VERSION = 5  // v5: flip DWG Y into venue Z to match 2-D preview
+      const CURRENT_BOOTSTRAP_VERSION = 6  // v6: DWG venue geometry stays in real meters
       const isDwg = loadedVenue.scene_source === 'dwg' || !!loadedVenue.dwg_layout_version_id
       const isAbsurd = Math.max(loadedVenue.width || 0, loadedVenue.depth || 0) > 500
       const lacksPolygonData = loadedObjects.length > 0 && !loadedObjects.some(
