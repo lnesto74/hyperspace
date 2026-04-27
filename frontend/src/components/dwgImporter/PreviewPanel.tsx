@@ -16,6 +16,8 @@ interface PreviewPanelProps {
   selectedFixtureIds: Set<string>
   onSelectFixtures: (fixtureIds: string[], addToSelection?: boolean) => void
   onDeleteFixtures?: (fixtureIds: string[]) => void
+  deletedFixtureCount?: number
+  onRestoreLastDeletedFixture?: () => void
   onHoverFixture?: (fixtureId: string | null) => void
   hoveredFixtureId?: string | null
   /**
@@ -86,6 +88,8 @@ export default function PreviewPanel({
   selectedFixtureIds,
   onSelectFixtures,
   onDeleteFixtures,
+  deletedFixtureCount = 0,
+  onRestoreLastDeletedFixture,
   onHoverFixture,
   hoveredFixtureId,
   dropPreviewKeepIds = null,
@@ -647,6 +651,15 @@ export default function PreviewPanel({
   // Handle Delete key to remove selected fixtures
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null
+      const isEditingText =
+        !!target &&
+        (target.isContentEditable ||
+          target.tagName === 'INPUT' ||
+          target.tagName === 'TEXTAREA' ||
+          target.tagName === 'SELECT')
+      if (isEditingText) return
+
       if ((e.key === 'Delete' || e.key === 'Backspace') && selectedFixtureIds.size > 0 && onDeleteFixtures) {
         e.preventDefault()
         onDeleteFixtures(Array.from(selectedFixtureIds))
@@ -1373,6 +1386,15 @@ export default function PreviewPanel({
         <div className="w-px h-5 bg-gray-700 mx-2" />
         <button onClick={() => setShowGrid(!showGrid)} className={`p-1.5 rounded transition-colors ${showGrid ? 'bg-gray-700 text-white' : 'text-gray-500 hover:text-white'}`} title="Toggle Grid"><Grid className="w-4 h-4" /></button>
         <button onClick={() => setShowMainAreaBounds(!showMainAreaBounds)} className={`p-1.5 rounded transition-colors ${showMainAreaBounds ? 'bg-green-600 text-white' : 'text-gray-500 hover:text-white hover:bg-gray-700'}`} title="Toggle Main Area Filter (for spatial cleanup)"><Scissors className="w-4 h-4" /></button>
+        {deletedFixtureCount > 0 && onRestoreLastDeletedFixture && (
+          <button
+            onClick={onRestoreLastDeletedFixture}
+            className="ml-2 px-2 py-1 rounded text-xs text-amber-300 bg-amber-900/30 hover:bg-amber-800/60 transition-colors"
+            title="Restore the most recently deleted DWG fixture"
+          >
+            Restore Last Deleted
+          </button>
+        )}
         {/* Selection actions — only visible when there's an active selection. */}
         {selectedFixtureIds.size > 0 && (
           <>

@@ -1084,6 +1084,29 @@ export default function DwgImporterPage({ onClose, onLayoutGenerated }: DwgImpor
     setSelectedGroupId(null)
   }, [importData, deletedFixtureIds])
 
+  const handleRestoreLastDeletedFixture = useCallback(async () => {
+    if (!importData || deletedFixtureIds.size === 0) return
+
+    const deletedIds = Array.from(deletedFixtureIds)
+    const restoredId = deletedIds[deletedIds.length - 1]
+    const remainingDeletedIds = deletedIds.slice(0, -1)
+    const nextDeleted = new Set(remainingDeletedIds)
+
+    setDeletedFixtureIds(nextDeleted)
+
+    try {
+      await fetch(`${API_BASE}/api/dwg/import/${importData.import_id}/deleted-fixtures`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ deleted_fixture_ids: remainingDeletedIds })
+      })
+      await loadExistingImport(importData.import_id)
+      setSelectedFixtureIds(new Set([restoredId]))
+    } catch (e) {
+      console.error('Failed to restore deleted fixture:', e)
+    }
+  }, [importData, deletedFixtureIds, loadExistingImport])
+
   // Save mappings to backend
   const saveMappings = useCallback(async () => {
     if (!importData) return
@@ -1498,6 +1521,8 @@ export default function DwgImporterPage({ onClose, onLayoutGenerated }: DwgImpor
                     }
                   }}
                   onDeleteFixtures={handleDeleteFixtures}
+                  deletedFixtureCount={deletedFixtureIds.size}
+                  onRestoreLastDeletedFixture={handleRestoreLastDeletedFixture}
                   onHoverFixture={setHoveredFixtureId}
                   hoveredFixtureId={hoveredFixtureId}
                   dropPreviewKeepIds={keptPreviewSet}
