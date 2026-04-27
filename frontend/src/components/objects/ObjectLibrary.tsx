@@ -83,7 +83,7 @@ const getNameForType = (type: string) =>
   PRESET_BY_TYPE.get(type)?.name || type.replace(/[_-]+/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
 
 export default function ObjectLibrary() {
-  const { venue, objects, addObject, removeObject, selectObject, selectedObjectId, hoveredObjectId, hoverObject } = useVenue()
+  const { venue, objects, addObject, updateObject, removeObject, selectObject, selectedObjectId, hoveredObjectId, hoverObject } = useVenue()
   const listContainerRef = useRef<HTMLDivElement>(null)
   const cardRefsMap = useRef<Map<string, HTMLDivElement>>(new Map())
   const [catalogAssets, setCatalogAssets] = useState<CatalogAsset[]>([])
@@ -283,6 +283,9 @@ export default function ObjectLibrary() {
 
   const handleColorChange = async (preset: ObjectPreset, color: string) => {
     setCatalogAssets(prev => prev.map(asset => asset.type === preset.type ? { ...asset, color } : asset))
+    objects
+      .filter(obj => obj.type === preset.type)
+      .forEach(obj => updateObject(obj.id, { color }))
 
     try {
       const res = await fetch(`${API_BASE}/api/dwg/catalog/${preset.type}`, {
