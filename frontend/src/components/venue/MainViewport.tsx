@@ -42,6 +42,16 @@ const COLORS = {
   sezInfluenced: 0xff3333, // Red for people influenced by digital displays
 }
 
+const getObjectColorHex = (obj: { type: string; color?: string | null }, fallback = COLORS.custom) => {
+  if (obj.color && /^#[0-9a-fA-F]{6}$/.test(obj.color)) {
+    return parseInt(obj.color.slice(1), 16)
+  }
+  return (COLORS as Record<string, number>)[obj.type] || fallback
+}
+
+const formatAssetLabel = (type: string) =>
+  type.replace(/[_-]+/g, ' ').replace(/\b\w/g, char => char.toUpperCase())
+
 // Point-in-polygon test using ray casting algorithm
 const pointInPolygon = (point: { x: number; z: number }, polygon: { x: number; z: number }[]): boolean => {
   let inside = false
@@ -247,6 +257,7 @@ export default function MainViewport({
   const [areaSelectRect, setAreaSelectRect] = useState<{ x: number; y: number; w: number; h: number } | null>(null)
   const areaSelectStartRef = useRef<{ x: number; y: number } | null>(null)
   const [showDoohLayer, setShowDoohLayer] = useState(true)
+  const [showAssetCategoryLabels, setShowAssetCategoryLabels] = useState(false)
   const [showPlanogramLayer, setShowPlanogramLayer] = useState(false)
   const [show3DModels, setShow3DModels] = useState(false) // OFF by default for performance
   const [planogramSelectedShelfId, setPlanogramSelectedShelfId] = useState<string | null>(null)
@@ -322,6 +333,7 @@ export default function MainViewport({
   // Cluster highlight state (which object types should glow)
   const [highlightedTypes, setHighlightedTypes] = useState<string[]>([])
   const clusterHighlightMeshesRef = useRef<Map<string, THREE.LineSegments>>(new Map())
+  const assetCategoryLabelsRef = useRef<Map<string, CSS2DObject>>(new Map())
   
   // Listen for playlist updates from other components
   useEffect(() => {
@@ -3159,9 +3171,7 @@ export default function MainViewport({
 
       if (!obj3d) {
         // Color: for DWG venues use Layout3DPreview colors; for manual use existing COLORS
-        const targetColor = isDwg
-          ? (DWG_TYPE_COLORS[obj.type] || DWG_TYPE_COLORS.default)
-          : (obj.color ? parseInt(obj.color.replace('#', ''), 16) : COLORS[obj.type as keyof typeof COLORS] || COLORS.custom)
+        const targetColor = getObjectColorHex(obj, isDwg ? (DWG_TYPE_COLORS[obj.type] || DWG_TYPE_COLORS.default) : COLORS.custom)
 
         // ── DWG POLYGON EXTRUSION (matches Layout3DPreview exactly) ──
         if (isDwg && polyPts && polyPts.length >= 3) {
@@ -3328,9 +3338,10 @@ export default function MainViewport({
 
       // Update material color and selection state
       const isTranslucentType = isDwg || obj.type === 'wall' || obj.type === 'shelf'
-      const targetColor = isDwg
-        ? (DWG_TYPE_COLORS[obj.type] || DWG_TYPE_COLORS.default)
-        : (isTranslucentType ? 0x88aabb : (obj.color ? parseInt(obj.color.replace('#', ''), 16) : COLORS[obj.type as keyof typeof COLORS]))
+      const targetColor = getObjectColorHex(
+        obj,
+        isDwg ? (DWG_TYPE_COLORS[obj.type] || DWG_TYPE_COLORS.default) : (isTranslucentType ? 0x88aabb : COLORS.custom)
+      )
       obj3d.traverse(child => {
         if (child instanceof THREE.Mesh) {
           const mat = child.material as THREE.MeshStandardMaterial
@@ -4185,25 +4196,76 @@ export default function MainViewport({
       obj3d.visible = showObjectsLayer
     })
   }, [showObjectsLayer, objects])
+
+  // Toggleable category/asset signs for venue objects.
+  useEffect(() => {
+    const scene = sceneRef.current
+    if (!scene) return
+
+    const removeLabel = (objectId: string) => {
+      const existing = assetCategoryLabelsRef.current.get(objectId)
+      if (!existing) return
+      scene.remove(existing)
+      existing.element.remove()
+      assetCategoryLabelsRef.current.delete(objectId)
+    }
+
+    if (!showAssetCategoryLabels || !showObjectsLayer) {
+      Array.from(assetCategoryLabelsRef.current.keys()).forEach(removeLabel)
+      return
+    }
+
+    objects.forEach(obj => {
+      const labelText =
+        obj.metadata?.business_category_label ||
+        obj.metadata?.business_category ||
+        formatAssetLabel(obj.type)
+      if (!labelText) {
+        removeLabel(obj.id)
+        return
+      }
+
+      let label = assetCategoryLabelsRef.current.get(obj.id)
+      if (!label) {
+        const el = document.createElement('div')
+        el.className = 'asset-category-label'
+        el.style.cssText = `
+          color: rgba(255,255,255,0.96);
+          font-family: 'Arial Black', Impact, system-ui, sans-serif;
+          font-size: 14px;
+          font-weight: 900;
+          letter-spacing: 0.22em;
+          text-transform: uppercase;
+          white-space: nowrap;
+          pointer-events: none;
+          padding: 4px 8px;
+          text-shadow:
+            0 0 3px rgba(255,255,255,1),
+            0 0 8px rgba(255,255,255,0.85),
+            0 0 16px rgba(180,220,255,0.55);
+          filter: drop-shadow(0 0 7px rgba(255,255,255,0.65));
+        `
+        label = new CSS2DObject(el)
+        scene.add(label)
+        assetCategoryLabelsRef.current.set(obj.id, label)
+      }
+
+      label.element.textContent = labelText
+      label.position.set(obj.position.x, Math.max(obj.scale.y + 0.7, 2.2), obj.position.z)
+      label.visible = true
+    })
+
+    assetCategoryLabelsRef.current.forEach((_label, objectId) => {
+      if (!objects.some(obj => obj.id === objectId)) removeLabel(objectId)
+    })
+  }, [objects, showAssetCategoryLabels, showObjectsLayer])
   
   // Cluster highlight effect - apply translucent fill + wireframe to highlighted object types
   // Same style as the hovered object tooltip effect (25% opacity fill + cyan edges)
   useEffect(() => {
     if (!sceneRef.current) return
     const scene = sceneRef.current
-    
-    // Semantic highlight colors per type
-    const CLUSTER_HIGHLIGHT_COLORS: Record<string, number> = {
-      shelf: 0x00D4FF,          // Electric Blue
-      checkout: 0x00FF88,       // Neon Green
-      wall: 0x5EEAD4,           // Slate Cyan
-      entrance: 0xFBBF24,       // Amber
-      pillar: 0xA78BFA,         // Purple
-      digital_display: 0xF472B6, // Magenta
-      radio: 0x38BDF8,          // Sky Blue
-      custom: 0x94A3B8,         // Slate
-    }
-    
+
     // Remove existing highlight groups for types no longer highlighted
     clusterHighlightMeshesRef.current.forEach((group, objectId) => {
       const obj = objects.find(o => o.id === objectId)
@@ -4231,7 +4293,7 @@ export default function MainViewport({
       const objectMesh = objectMeshesRef.current.get(obj.id)
       if (!objectMesh) return
       
-      const highlightColor = CLUSTER_HIGHLIGHT_COLORS[obj.type] || 0x00FFFF
+      const highlightColor = getObjectColorHex(obj, 0x00FFFF)
       
       // Create a group to hold both fill and wireframe
       const highlightGroup = new THREE.Group()
@@ -6000,6 +6062,18 @@ export default function MainViewport({
                 <span className="text-sm text-gray-300 flex items-center gap-1.5">
                   {showDoohLayer ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5 text-gray-500" />}
                   DOOH Screens
+                </span>
+              </label>
+              <label className="flex items-center gap-2 py-1.5 px-2 rounded hover:bg-gray-700 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={showAssetCategoryLabels}
+                  onChange={(e) => setShowAssetCategoryLabels(e.target.checked)}
+                  className="rounded border-gray-600 bg-gray-700 text-white"
+                />
+                <span className="text-sm text-gray-300 flex items-center gap-1.5">
+                  {showAssetCategoryLabels ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5 text-gray-500" />}
+                  Category Signs
                 </span>
               </label>
               <label className="flex items-center gap-2 py-1.5 px-2 rounded hover:bg-gray-700 cursor-pointer">

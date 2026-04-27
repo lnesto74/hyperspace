@@ -5,8 +5,9 @@ import { ObjectType, Vector3 } from '../../types'
 import { API_BASE } from '../../config/api'
 
 // Semantic highlight colors for each object type (digital twin aesthetic)
-export const CLUSTER_HIGHLIGHT_COLORS: Record<ObjectType, number> = {
+export const CLUSTER_HIGHLIGHT_COLORS: Record<string, number> = {
   shelf: 0x00D4FF,          // Electric Blue
+  fridge: 0x22D3EE,         // Cyan
   checkout: 0x00FF88,       // Neon Green
   wall: 0x5EEAD4,           // Slate Cyan
   entrance: 0xFBBF24,       // Amber
@@ -22,6 +23,18 @@ interface ObjectPreset {
   name: string
   icon: typeof Package
   description: string
+  color: string
+  hasCustomModel?: boolean
+  isUserAsset?: boolean
+}
+
+interface CatalogAsset {
+  id: string
+  name: string
+  type: string
+  color?: string
+  hasCustomModel?: boolean
+  isUserAsset?: boolean
 }
 
 interface CustomModel {
@@ -38,18 +51,20 @@ interface ObjectDimensions {
 }
 
 const OBJECT_PRESETS: ObjectPreset[] = [
-  { type: 'shelf', name: 'Shelf', icon: Package, description: 'Standard retail shelf unit' },
-  { type: 'wall', name: 'Wall', icon: Square, description: 'Wall or partition' },
-  { type: 'checkout', name: 'Checkout', icon: ShoppingCart, description: 'Checkout counter' },
-  { type: 'entrance', name: 'Entrance', icon: DoorOpen, description: 'Door or entrance' },
-  { type: 'pillar', name: 'Pillar', icon: Circle, description: 'Structural column' },
-  { type: 'digital_display', name: 'Digital Display', icon: Monitor, description: 'Digital signage or screen' },
-  { type: 'radio', name: 'Radio', icon: Radio, description: 'Radio or audio device' },
-  { type: 'custom', name: 'Custom', icon: Shapes, description: 'Custom object' },
+  { type: 'shelf', name: 'Shelf', icon: Package, description: 'Standard retail shelf unit', color: '#6366f1' },
+  { type: 'fridge', name: 'Fridge', icon: Package, description: 'Refrigerated display or cooler', color: '#22d3ee' },
+  { type: 'wall', name: 'Wall', icon: Square, description: 'Wall or partition', color: '#64748b' },
+  { type: 'checkout', name: 'Checkout', icon: ShoppingCart, description: 'Checkout counter', color: '#22c55e' },
+  { type: 'entrance', name: 'Entrance', icon: DoorOpen, description: 'Door or entrance', color: '#f59e0b' },
+  { type: 'pillar', name: 'Pillar', icon: Circle, description: 'Structural column', color: '#78716c' },
+  { type: 'digital_display', name: 'Digital Display', icon: Monitor, description: 'Digital signage or screen', color: '#3b82f6' },
+  { type: 'radio', name: 'Radio', icon: Radio, description: 'Radio or audio device', color: '#ef4444' },
+  { type: 'custom', name: 'Custom', icon: Shapes, description: 'Custom object', color: '#8b5cf6' },
 ]
 
-const DEFAULT_DIMENSIONS: Record<ObjectType, ObjectDimensions> = {
+const DEFAULT_DIMENSIONS: Record<string, ObjectDimensions> = {
   shelf: { width: 2, height: 2, depth: 0.6 },
+  fridge: { width: 2, height: 2, depth: 0.8 },
   wall: { width: 4, height: 3, depth: 0.2 },
   checkout: { width: 1.5, height: 1, depth: 0.8 },
   entrance: { width: 2, height: 2.5, depth: 0.1 },
@@ -59,14 +74,23 @@ const DEFAULT_DIMENSIONS: Record<ObjectType, ObjectDimensions> = {
   custom: { width: 1, height: 1, depth: 1 },
 }
 
+const PRESET_BY_TYPE = new Map(OBJECT_PRESETS.map(preset => [preset.type, preset]))
+
+const getDefaultDimensions = (type: string): ObjectDimensions =>
+  DEFAULT_DIMENSIONS[type] || DEFAULT_DIMENSIONS.custom
+
+const getNameForType = (type: string) =>
+  PRESET_BY_TYPE.get(type)?.name || type.replace(/[_-]+/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
+
 export default function ObjectLibrary() {
   const { venue, objects, addObject, removeObject, selectObject, selectedObjectId, hoveredObjectId, hoverObject } = useVenue()
   const listContainerRef = useRef<HTMLDivElement>(null)
   const cardRefsMap = useRef<Map<string, HTMLDivElement>>(new Map())
+  const [catalogAssets, setCatalogAssets] = useState<CatalogAsset[]>([])
   const [customModels, setCustomModels] = useState<Map<string, CustomModel>>(new Map())
   const [uploading, setUploading] = useState<string | null>(null)
   const [expandedType, setExpandedType] = useState<ObjectType | null>(null)
-  const [dimensions, setDimensions] = useState<Record<ObjectType, ObjectDimensions>>(() => ({ ...DEFAULT_DIMENSIONS }))
+  const [dimensions, setDimensions] = useState<Record<string, ObjectDimensions>>(() => ({ ...DEFAULT_DIMENSIONS }))
   const [typeFilter, setTypeFilter] = useState<ObjectType | 'all'>('all')
   const [highlightedTypes, setHighlightedTypes] = useState<Set<ObjectType>>(new Set())
   const fileInputRefs = useRef<Map<string, HTMLInputElement>>(new Map())
@@ -102,6 +126,24 @@ export default function ObjectLibrary() {
   const filteredObjects = typeFilter === 'all' ? objects : objects.filter(o => o.type === typeFilter)
   const availableTypes = Object.keys(typeCounts).sort() as ObjectType[]
 
+  const objectPresets: ObjectPreset[] = (() => {
+    const merged = new Map<string, ObjectPreset>()
+    OBJECT_PRESETS.forEach(preset => merged.set(preset.type, preset))
+    catalogAssets.forEach(asset => {
+      const builtIn = merged.get(asset.type)
+      merged.set(asset.type, {
+        type: asset.type as ObjectType,
+        name: asset.name || builtIn?.name || getNameForType(asset.type),
+        icon: builtIn?.icon || Shapes,
+        description: builtIn?.description || (asset.hasCustomModel ? 'DWG catalog asset with uploaded model' : 'DWG catalog asset using fallback geometry'),
+        color: asset.color || builtIn?.color || '#8b5cf6',
+        hasCustomModel: asset.hasCustomModel,
+        isUserAsset: asset.isUserAsset,
+      })
+    })
+    return Array.from(merged.values()).sort((a, b) => a.name.localeCompare(b.name))
+  })()
+
   // Auto-scroll to hovered card when hover comes from 3D viewport
   useEffect(() => {
     if (!hoveredObjectId || hoverFromSidebarRef.current) return
@@ -111,10 +153,33 @@ export default function ObjectLibrary() {
     }
   }, [hoveredObjectId])
 
-  // Fetch custom models on mount
+  // Fetch custom models and DWG catalog assets on mount
   useEffect(() => {
+    fetchCatalogAssets()
     fetchCustomModels()
   }, [])
+
+  useEffect(() => {
+    setDimensions(prev => {
+      const next = { ...prev }
+      objectPresets.forEach(preset => {
+        if (!next[preset.type]) next[preset.type] = { ...getDefaultDimensions(preset.type) }
+      })
+      return next
+    })
+  }, [catalogAssets])
+
+  const fetchCatalogAssets = async () => {
+    try {
+      const res = await fetch(`${API_BASE}/api/dwg/catalog`)
+      if (res.ok) {
+        const assets: CatalogAsset[] = await res.json()
+        setCatalogAssets(assets)
+      }
+    } catch (err) {
+      console.error('Failed to fetch DWG catalog assets:', err)
+    }
+  }
 
   const fetchCustomModels = async () => {
     try {
@@ -143,6 +208,7 @@ export default function ObjectLibrary() {
       
       if (res.ok) {
         await fetchCustomModels()
+        await fetchCatalogAssets()
         window.dispatchEvent(new CustomEvent('customModelsUpdated'))
       } else {
         const err = await res.json()
@@ -176,6 +242,7 @@ export default function ObjectLibrary() {
       
       if (res.ok) {
         await fetchCustomModels()
+        await fetchCatalogAssets()
         window.dispatchEvent(new CustomEvent('customModelsUpdated'))
       } else {
         const err = await res.json()
@@ -196,6 +263,7 @@ export default function ObjectLibrary() {
       const res = await fetch(`${API_BASE}/api/models/${type}`, { method: 'DELETE' })
       if (res.ok) {
         await fetchCustomModels()
+        await fetchCatalogAssets()
         window.dispatchEvent(new CustomEvent('customModelsUpdated'))
       }
     } catch (err) {
@@ -213,9 +281,26 @@ export default function ObjectLibrary() {
     if (input) input.click()
   }
 
-  const handleAddObject = (type: ObjectType) => {
+  const handleColorChange = async (preset: ObjectPreset, color: string) => {
+    setCatalogAssets(prev => prev.map(asset => asset.type === preset.type ? { ...asset, color } : asset))
+
+    try {
+      const res = await fetch(`${API_BASE}/api/dwg/catalog/${preset.type}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: preset.name, color })
+      })
+      if (res.ok) {
+        await fetchCatalogAssets()
+      }
+    } catch (err) {
+      console.error('Failed to update asset color:', err)
+    }
+  }
+
+  const handleAddObject = (preset: ObjectPreset) => {
     if (!venue) return
-    const dim = dimensions[type]
+    const dim = dimensions[preset.type] || getDefaultDimensions(preset.type)
     
     // Find a clear spawn position away from existing fixtures
     // Calculate bounding box of all existing objects
@@ -263,21 +348,21 @@ export default function ObjectLibrary() {
       z: spawnZ,
     }
     const scale: Vector3 = { x: dim.width, y: dim.height, z: dim.depth }
-    addObject(type, position, scale)
+    addObject(preset.type, position, scale, { name: preset.name, color: preset.color })
     setExpandedType(null)
   }
 
   const updateDimension = (type: ObjectType, field: keyof ObjectDimensions, value: number) => {
     setDimensions(prev => ({
       ...prev,
-      [type]: { ...prev[type], [field]: value }
+      [type]: { ...(prev[type] || getDefaultDimensions(type)), [field]: value }
     }))
   }
 
   const resetDimensions = (type: ObjectType) => {
     setDimensions(prev => ({
       ...prev,
-      [type]: { ...DEFAULT_DIMENSIONS[type] }
+      [type]: { ...getDefaultDimensions(type) }
     }))
   }
 
@@ -287,10 +372,10 @@ export default function ObjectLibrary() {
       <div>
         <h3 className="text-xs font-medium text-gray-400 uppercase tracking-wide mb-3">Add Object</h3>
         <div className="space-y-2">
-          {OBJECT_PRESETS.map(preset => {
-            const hasCustomModel = customModels.has(preset.type)
+          {objectPresets.map(preset => {
+            const hasCustomModel = customModels.has(preset.type) || preset.hasCustomModel
             const isExpanded = expandedType === preset.type
-            const dim = dimensions[preset.type]
+            const dim = dimensions[preset.type] || getDefaultDimensions(preset.type)
             return (
               <div
                 key={preset.type}
@@ -309,7 +394,8 @@ export default function ObjectLibrary() {
                     <div>
                       <div className="flex items-center gap-2">
                         <span className="text-sm font-medium text-white">{preset.name}</span>
-                        {hasCustomModel && <span className="text-[8px] text-green-400 bg-green-500/20 px-1 rounded">OBJ</span>}
+                        {hasCustomModel && <span className="text-[8px] text-green-400 bg-green-500/20 px-1 rounded">3D</span>}
+                        {preset.isUserAsset && <span className="text-[8px] text-violet-300 bg-violet-500/20 px-1 rounded">DWG</span>}
                         {typeCounts[preset.type] > 0 && (
                           <span className="text-[9px] text-gray-500 bg-gray-700/50 px-1.5 rounded">{typeCounts[preset.type]}</span>
                         )}
@@ -388,6 +474,18 @@ export default function ObjectLibrary() {
                       />
                     </div>
                     {/* Action buttons */}
+                    <div>
+                      <div className="flex justify-between text-[10px] text-gray-400 mb-1">
+                        <span>Color</span>
+                        <span className="font-mono">{preset.color}</span>
+                      </div>
+                      <input
+                        type="color"
+                        value={preset.color}
+                        onChange={(e) => handleColorChange(preset, e.target.value)}
+                        className="w-full h-7 bg-gray-800 border border-border-dark rounded cursor-pointer"
+                      />
+                    </div>
                     <div className="flex gap-2 pt-1">
                       <button
                         onClick={() => resetDimensions(preset.type)}
@@ -396,7 +494,7 @@ export default function ObjectLibrary() {
                         Reset
                       </button>
                       <button
-                        onClick={() => handleAddObject(preset.type)}
+                        onClick={() => handleAddObject(preset)}
                         className="flex-1 py-1.5 text-xs bg-highlight text-white rounded hover:bg-highlight/80 transition-colors flex items-center justify-center gap-1"
                       >
                         <Plus className="w-3 h-3" />
@@ -415,7 +513,7 @@ export default function ObjectLibrary() {
       <div>
         <h3 className="text-xs font-medium text-gray-400 uppercase tracking-wide mb-3">Custom 3D Models</h3>
         <div className="space-y-2">
-          {OBJECT_PRESETS.map(preset => {
+          {objectPresets.map(preset => {
             const model = customModels.get(preset.type)
             const isUploading = uploading === preset.type
             return (
@@ -548,7 +646,7 @@ export default function ObjectLibrary() {
         ) : (
           <div ref={listContainerRef} className="space-y-1 max-h-[400px] overflow-y-auto">
             {filteredObjects.map(obj => {
-              const preset = OBJECT_PRESETS.find(p => p.type === obj.type)
+              const preset = objectPresets.find(p => p.type === obj.type)
               const Icon = preset?.icon || Shapes
               const isHovered = hoveredObjectId === obj.id
               const isSelected = selectedObjectId === obj.id

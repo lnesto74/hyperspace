@@ -61,7 +61,7 @@ interface VenueContextType {
   importVenue: (json: string) => void
   setObjects: (objects: VenueObject[]) => void
   
-  addObject: (type: VenueObject['type'], position: Vector3, scale?: Vector3) => VenueObject
+  addObject: (type: VenueObject['type'], position: Vector3, scale?: Vector3, options?: { name?: string; color?: string }) => VenueObject
   addObjects: (newObjects: VenueObject[]) => void
   updateObject: (id: string, updates: Partial<VenueObject>) => void
   removeObject: (id: string) => void
@@ -80,8 +80,9 @@ interface VenueContextType {
 
 const VenueContext = createContext<VenueContextType | null>(null)
 
-const DEFAULT_OBJECT_SCALES: Record<VenueObject['type'], Vector3> = {
+const DEFAULT_OBJECT_SCALES: Record<string, Vector3> = {
   shelf: { x: 2, y: 2, z: 0.6 },
+  fridge: { x: 2, y: 2, z: 0.8 },
   wall: { x: 4, y: 3, z: 0.2 },
   checkout: { x: 1.5, y: 1, z: 0.8 },
   entrance: { x: 2, y: 2.5, z: 0.1 },
@@ -91,8 +92,9 @@ const DEFAULT_OBJECT_SCALES: Record<VenueObject['type'], Vector3> = {
   custom: { x: 1, y: 1, z: 1 },
 }
 
-const DEFAULT_OBJECT_COLORS: Record<VenueObject['type'], string> = {
+const DEFAULT_OBJECT_COLORS: Record<string, string> = {
   shelf: '#6366f1',
+  fridge: '#22d3ee',
   wall: '#64748b',
   checkout: '#22c55e',
   entrance: '#f59e0b',
@@ -408,16 +410,17 @@ export function VenueProvider({ children }: { children: ReactNode }) {
     }
   }, [addToast])
 
-  const addObject = useCallback((type: VenueObject['type'], position: Vector3, scale?: Vector3): VenueObject => {
+  const addObject = useCallback((type: VenueObject['type'], position: Vector3, scale?: Vector3, options?: { name?: string; color?: string }): VenueObject => {
+    const label = options?.name || type.charAt(0).toUpperCase() + type.slice(1).replace(/[_-]+/g, ' ')
     const obj: VenueObject = {
       id: uuidv4(),
       venueId: venue?.id || '',
       type,
-      name: `${type.charAt(0).toUpperCase() + type.slice(1)} ${objects.length + 1}`,
+      name: `${label} ${objects.length + 1}`,
       position: snapToGrid(position),
       rotation: { x: 0, y: 0, z: 0 },
-      scale: scale ? { ...scale } : { ...DEFAULT_OBJECT_SCALES[type] },
-      color: DEFAULT_OBJECT_COLORS[type],
+      scale: scale ? { ...scale } : { ...(DEFAULT_OBJECT_SCALES[type] || DEFAULT_OBJECT_SCALES.custom) },
+      color: options?.color || DEFAULT_OBJECT_COLORS[type] || DEFAULT_OBJECT_COLORS.custom,
     }
     setObjects(prev => [...prev, obj])
     setSelectedObjectId(obj.id)

@@ -2061,30 +2061,34 @@ export default function createDwgImportRoutes(db) {
       // Get custom models from existing system
       const customModels = db.prepare('SELECT * FROM custom_models').all();
       const userAssets = db.prepare(`
-        SELECT id, name, type, created_at, updated_at
+        SELECT id, name, type, color, created_at, updated_at
         FROM dwg_catalog_assets
         ORDER BY name ASC
       `).all();
       
       // Build catalog from existing object types + custom models
       const catalog = [
-        { id: 'shelf', name: 'Shelf', type: 'shelf', hasCustomModel: false },
-        { id: 'fridge', name: 'Fridge', type: 'fridge', hasCustomModel: false },
-        { id: 'wall', name: 'Wall', type: 'wall', hasCustomModel: false },
-        { id: 'checkout', name: 'Checkout', type: 'checkout', hasCustomModel: false },
-        { id: 'entrance', name: 'Entrance', type: 'entrance', hasCustomModel: false },
-        { id: 'pillar', name: 'Pillar', type: 'pillar', hasCustomModel: false },
-        { id: 'digital_display', name: 'Digital Display', type: 'digital_display', hasCustomModel: false },
-        { id: 'radio', name: 'Radio', type: 'radio', hasCustomModel: false },
-        { id: 'custom', name: 'Custom', type: 'custom', hasCustomModel: false }
+        { id: 'shelf', name: 'Shelf', type: 'shelf', color: '#6366f1', hasCustomModel: false },
+        { id: 'fridge', name: 'Fridge', type: 'fridge', color: '#22d3ee', hasCustomModel: false },
+        { id: 'wall', name: 'Wall', type: 'wall', color: '#64748b', hasCustomModel: false },
+        { id: 'checkout', name: 'Checkout', type: 'checkout', color: '#22c55e', hasCustomModel: false },
+        { id: 'entrance', name: 'Entrance', type: 'entrance', color: '#f59e0b', hasCustomModel: false },
+        { id: 'pillar', name: 'Pillar', type: 'pillar', color: '#78716c', hasCustomModel: false },
+        { id: 'digital_display', name: 'Digital Display', type: 'digital_display', color: '#3b82f6', hasCustomModel: false },
+        { id: 'radio', name: 'Radio', type: 'radio', color: '#ef4444', hasCustomModel: false },
+        { id: 'custom', name: 'Custom', type: 'custom', color: '#8b5cf6', hasCustomModel: false }
       ];
 
       for (const asset of userAssets) {
-        if (!catalog.some(c => c.type === asset.type)) {
+        const existing = catalog.find(c => c.type === asset.type);
+        if (existing) {
+          if (asset.color) existing.color = asset.color;
+        } else {
           catalog.push({
             id: asset.type,
             name: asset.name,
             type: asset.type,
+            color: asset.color || '#8b5cf6',
             hasCustomModel: false,
             isUserAsset: true,
           });
@@ -2102,6 +2106,7 @@ export default function createDwgImportRoutes(db) {
             id: model.object_type,
             name: model.object_type.replace(/[_-]+/g, ' ').replace(/\b\w/g, c => c.toUpperCase()),
             type: model.object_type,
+            color: '#8b5cf6',
             hasCustomModel: true,
             modelPath: model.file_path,
             isUserAsset: true,
@@ -2122,7 +2127,7 @@ export default function createDwgImportRoutes(db) {
    */
   router.post('/catalog', (req, res) => {
     try {
-      const { name, type } = req.body || {};
+      const { name, type, color } = req.body || {};
       const cleanName = String(name || '').trim();
       const cleanType = String(type || cleanName)
         .trim()
@@ -2139,12 +2144,13 @@ export default function createDwgImportRoutes(db) {
       const builtInTypes = new Set(['shelf', 'fridge', 'wall', 'checkout', 'entrance', 'pillar', 'digital_display', 'radio', 'custom']);
       if (!builtInTypes.has(cleanType)) {
         db.prepare(`
-          INSERT INTO dwg_catalog_assets (id, name, type, created_at, updated_at)
-          VALUES (?, ?, ?, datetime('now'), datetime('now'))
+          INSERT INTO dwg_catalog_assets (id, name, type, color, created_at, updated_at)
+          VALUES (?, ?, ?, ?, datetime('now'), datetime('now'))
           ON CONFLICT(type) DO UPDATE SET
             name = excluded.name,
+            color = COALESCE(excluded.color, dwg_catalog_assets.color),
             updated_at = datetime('now')
-        `).run(cleanType, cleanName, cleanType);
+        `).run(cleanType, cleanName, cleanType, color || null);
       }
 
       const customModel = db.prepare('SELECT * FROM custom_models WHERE object_type = ?').get(cleanType);
@@ -2152,12 +2158,54 @@ export default function createDwgImportRoutes(db) {
         id: cleanType,
         name: cleanName,
         type: cleanType,
+        color: color || '#8b5cf6',
         hasCustomModel: !!customModel,
         modelPath: customModel?.file_path,
         isUserAsset: !builtInTypes.has(cleanType),
       });
     } catch (err) {
       console.error('Create catalog asset error:', err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  /**
+   * PATCH /api/dwg/catalog/:type - Update catalog asset display settings
+   */
+  router.patch('/catalog/:type', (req, res) => {
+    try {
+      const cleanType = String(req.params.type || '').trim().toLowerCase();
+      const { color, name } = req.body || {};
+      const cleanName = String(name || cleanType).trim();
+
+      if (!cleanType) {
+        return res.status(400).json({ error: 'Asset type is required' });
+      }
+      if (color !== undefined && !/^#[0-9a-fA-F]{6}$/.test(String(color))) {
+        return res.status(400).json({ error: 'Color must be a hex value like #22c55e' });
+      }
+
+      db.prepare(`
+        INSERT INTO dwg_catalog_assets (id, name, type, color, created_at, updated_at)
+        VALUES (?, ?, ?, ?, datetime('now'), datetime('now'))
+        ON CONFLICT(type) DO UPDATE SET
+          name = COALESCE(excluded.name, dwg_catalog_assets.name),
+          color = COALESCE(excluded.color, dwg_catalog_assets.color),
+          updated_at = datetime('now')
+      `).run(cleanType, cleanName, cleanType, color || null);
+
+      const customModel = db.prepare('SELECT * FROM custom_models WHERE object_type = ?').get(cleanType);
+      res.json({
+        id: cleanType,
+        name: cleanName,
+        type: cleanType,
+        color: color || null,
+        hasCustomModel: !!customModel,
+        modelPath: customModel?.file_path,
+        isUserAsset: true,
+      });
+    } catch (err) {
+      console.error('Update catalog asset error:', err);
       res.status(500).json({ error: err.message });
     }
   });
@@ -2377,6 +2425,20 @@ export default function createDwgImportRoutes(db) {
       const lidarInstances = db.prepare('SELECT * FROM lidar_instances WHERE layout_version_id = ?').all(layoutVersionId);
       const lidarModels = db.prepare('SELECT * FROM lidar_models').all();
       const modelMap = new Map(lidarModels.map(m => [m.id, m]));
+      const defaultTypeColors = {
+        shelf: '#6366f1',
+        fridge: '#22d3ee',
+        wall: '#64748b',
+        checkout: '#22c55e',
+        entrance: '#f59e0b',
+        pillar: '#78716c',
+        digital_display: '#3b82f6',
+        radio: '#ef4444',
+        custom: '#8b5cf6',
+      };
+      const catalogColorRows = db.prepare('SELECT type, color FROM dwg_catalog_assets WHERE color IS NOT NULL').all();
+      const catalogColors = new Map(Object.entries(defaultTypeColors));
+      catalogColorRows.forEach(row => catalogColors.set(row.type, row.color));
       
       // Venue geometry must stay in real meters. The LiDAR/autoplace scale correction
       // is kept separate so it cannot make manual venue objects appear 10x too small.
@@ -2659,7 +2721,7 @@ export default function createDwgImportRoutes(db) {
           position: { x: finalX, y: 0, z: finalZ },
           rotation: { x: 0, y: rotationY, z: 0 },
           scale: { x: width, y: height, z: depth },
-          color: null, // Will use default color from VenueContext
+          color: catalogColors.get(type) || defaultTypeColors.custom,
           metadata: {
             source: 'dwg',
             dwg_bootstrap_version: 6, // v6: keep venue geometry in real meters; LiDAR scale correction is separate

@@ -36,7 +36,8 @@ export interface VenueObject {
   } | null;
 }
 
-export type ObjectType = 'shelf' | 'wall' | 'checkout' | 'entrance' | 'pillar' | 'custom' | 'digital_display' | 'radio';
+export type BuiltInObjectType = 'shelf' | 'wall' | 'checkout' | 'entrance' | 'pillar' | 'custom' | 'digital_display' | 'radio' | 'fridge';
+export type ObjectType = BuiltInObjectType | (string & {});
 
 // LiDAR types
 export interface LidarDevice {

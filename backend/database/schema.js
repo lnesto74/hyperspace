@@ -165,6 +165,7 @@ export function initDatabase() {
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
       type TEXT NOT NULL UNIQUE,
+      color TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
@@ -1040,6 +1041,19 @@ export function initDatabase() {
     if (layoutVersionColumnNames.length > 0 && !layoutVersionColumnNames.includes('scale_correction')) {
       db.exec("ALTER TABLE dwg_layout_versions ADD COLUMN scale_correction REAL NOT NULL DEFAULT 1.0");
       console.log('📦 Migration: Added scale_correction column to dwg_layout_versions');
+    }
+  } catch (migrationErr) {
+    // Table may not exist yet, that's fine
+  }
+
+  // Migration: Add color field to DWG catalog assets
+  try {
+    const catalogColumns = db.prepare("PRAGMA table_info(dwg_catalog_assets)").all();
+    const catalogColumnNames = catalogColumns.map(c => c.name);
+
+    if (catalogColumnNames.length > 0 && !catalogColumnNames.includes('color')) {
+      db.exec("ALTER TABLE dwg_catalog_assets ADD COLUMN color TEXT DEFAULT NULL");
+      console.log('📦 Migration: Added color column to dwg_catalog_assets');
     }
   } catch (migrationErr) {
     // Table may not exist yet, that's fine
