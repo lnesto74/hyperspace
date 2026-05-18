@@ -102,7 +102,7 @@ export default function MatchingTunerPanel({ venueId, onClose }: MatchingTunerPa
   }, [tracksVisible, setTrackVisibility])
 
   return (
-    <div className="absolute top-4 right-4 z-30 w-80 bg-gray-900/95 backdrop-blur border border-cyan-700/60 rounded-xl shadow-2xl text-gray-200 text-xs">
+    <div className="absolute top-4 left-16 z-30 w-80 bg-gray-900/95 backdrop-blur border border-cyan-700/60 rounded-xl shadow-2xl text-gray-200 text-xs">
       {/* Header */}
       <div className="flex items-center gap-2 px-3 py-2 border-b border-gray-700/80">
         <Compass className="w-4 h-4 text-cyan-400" />
@@ -241,16 +241,14 @@ interface SliderRowProps {
 function SliderRow({ label, value, min, max, step, onChange }: SliderRowProps) {
   return (
     <div>
-      <div className="flex items-center justify-between mb-1">
-        <span className="text-gray-400">{label}</span>
-        <input
-          type="number"
-          step={step}
-          value={value}
-          onChange={e => onChange(Number(e.target.value))}
-          className="w-20 bg-gray-800 border border-gray-700 rounded px-1.5 py-0.5 text-white font-mono text-right"
-        />
-      </div>
+      <div className="text-gray-400 mb-1">{label}</div>
+      <input
+        type="number"
+        step={step}
+        value={value}
+        onChange={e => onChange(Number(e.target.value))}
+        className="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-white font-mono mb-1.5"
+      />
       <input
         type="range"
         min={min}
