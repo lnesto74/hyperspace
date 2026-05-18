@@ -108,8 +108,15 @@ const saveConfig = () => {
 };
 
 // Edge operating mode: 'off' | 'simulate' | 'live'
-let edgeMode = 'off';
+// Restored from config on startup so reboots resume the last mode automatically.
+let edgeMode = config.edgeMode || 'off';
 const perceptionAdapter = new PerceptionAdapter();
+
+const persistEdgeMode = (mode) => {
+  config.edgeMode = mode;
+  edgeMode = mode;
+  saveConfig();
+};
 
 // Simulation state
 let isRunning = false;
@@ -2811,7 +2818,7 @@ app.post('/api/edge-mode', async (req, res) => {
 
   if (mode === 'simulate') {
     const result = await startSimulation();
-    if (result.success) edgeMode = 'simulate';
+    if (result.success) persistEdgeMode('simulate');
     return res.json({ ...result, mode: edgeMode });
   }
 
@@ -2825,7 +2832,7 @@ app.post('/api/edge-mode', async (req, res) => {
         config.deviceId,
         config.venueId
       );
-      if (result.success) edgeMode = 'live';
+      if (result.success) persistEdgeMode('live');
       return res.json({ ...result, mode: edgeMode });
     } catch (err) {
       return res.json({ success: false, error: err.message, mode: edgeMode });
@@ -2833,6 +2840,7 @@ app.post('/api/edge-mode', async (req, res) => {
   }
 
   // mode === 'off'
+  persistEdgeMode('off');
   res.json({ success: true, mode: 'off' });
 });
 
@@ -2840,7 +2848,7 @@ app.post('/api/edge-mode', async (req, res) => {
 app.post('/api/start', async (req, res) => {
   stopCurrentMode();
   const result = await startSimulation();
-  if (result.success) edgeMode = 'simulate';
+  if (result.success) persistEdgeMode('simulate');
   res.json(result);
 });
 
@@ -2938,4 +2946,39 @@ server.listen(PORT, '0.0.0.0', () => {
 ║                                                      ║
 ╚══════════════════════════════════════════════════════╝
   `);
+
+  // Auto-restore saved edge mode after startup (wait for Mosquitto to be ready).
+  const savedMode = config.edgeMode;
+  if (savedMode && savedMode !== 'off') {
+    const STARTUP_DELAY_MS = 5000;
+    console.log(`[EdgeMode] Will auto-restore mode "${savedMode}" in ${STARTUP_DELAY_MS / 1000}s...`);
+    setTimeout(async () => {
+      try {
+        if (savedMode === 'live') {
+          const brokerUrl = config.mqttBroker;
+          const result = await perceptionAdapter.start(
+            brokerUrl,
+            config.perceptionInputTopic,
+            config.perceptionOutputTopic,
+            config.deviceId,
+            config.venueId
+          );
+          if (result.success) {
+            edgeMode = 'live';
+            console.log('[EdgeMode] Auto-restored: live (perception adapter connected)');
+          } else {
+            console.error('[EdgeMode] Auto-restore live failed:', result.error);
+          }
+        } else if (savedMode === 'simulate') {
+          const result = await startSimulation();
+          if (result.success) {
+            edgeMode = 'simulate';
+            console.log('[EdgeMode] Auto-restored: simulate');
+          }
+        }
+      } catch (err) {
+        console.error('[EdgeMode] Auto-restore failed:', err.message);
+      }
+    }, STARTUP_DELAY_MS);
+  }
 });
