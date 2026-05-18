@@ -6,6 +6,7 @@ import {
   applyTransformToPoint,
   applyTransformToVelocity,
 } from './PerceptionTransform.js'
+import { TrajectoryReconciler, normalizeReconcilerConfig, DEFAULT_CONFIG as RECONCILER_DEFAULT } from './TrajectoryReconciler.js'
 
 // Color palette for different tracks
 const TRACK_COLORS = [
@@ -31,6 +32,20 @@ class MqttTrajectoryService {
     // Per-venue perception → venue coordinate transforms.
     // Default = identity (no behavior change for venues without a saved transform).
     this.venueTransforms = new Map() // venueId -> normalized perceptionTransform
+
+    // Per-venue reconciler configs (ghost filter + re-ID).
+    this.venueReconcilerConfigs = new Map() // venueId -> reconciler config
+    this.reconciler = new TrajectoryReconciler((vid) => this.venueReconcilerConfigs.get(vid) || RECONCILER_DEFAULT)
+    // Periodic housekeeping (active → lost → expire)
+    this.reconcilerSweepInterval = setInterval(() => {
+      const expired = this.reconciler.sweep()
+      for (const { venueId, stableId } of expired) {
+        if (this.trackAggregator) {
+          // The aggregator's TTL will catch this; nothing more needed.
+        }
+        this.io?.of('/tracking').to(`venue:${venueId}`).emit('track_removed', { trackKey: `edge:${stableId}` })
+      }
+    }, 250)
 
     // Stats tracking for validation
     this.stats = {
@@ -68,6 +83,34 @@ class MqttTrajectoryService {
 
   getVenueTransform(venueId) {
     return this.venueTransforms.get(venueId) || IDENTITY_TRANSFORM
+  }
+
+  /** Replace the reconciler config for a venue. Falsy value clears (defaults). */
+  setVenueReconcilerConfig(venueId, config) {
+    if (!venueId) return
+    if (!config) {
+      this.venueReconcilerConfigs.delete(venueId)
+    } else {
+      this.venueReconcilerConfigs.set(venueId, normalizeReconcilerConfig(config))
+    }
+    this.reconciler.setVenueConfig(venueId, this.venueReconcilerConfigs.get(venueId) || RECONCILER_DEFAULT)
+    console.log(`[Reconciler] Updated config for venue ${venueId}:`, this.venueReconcilerConfigs.get(venueId) || 'defaults')
+  }
+
+  loadVenueReconcilerConfigs(entries) {
+    if (!Array.isArray(entries)) return
+    for (const { venueId, config } of entries) {
+      if (venueId && config) this.venueReconcilerConfigs.set(venueId, normalizeReconcilerConfig(config))
+    }
+    console.log(`[Reconciler] Loaded ${this.venueReconcilerConfigs.size} venue reconciler configs`)
+  }
+
+  getReconcilerStats(venueId = null) {
+    return this.reconciler.getStats(venueId)
+  }
+
+  getVenueReconcilerConfig(venueId) {
+    return this.venueReconcilerConfigs.get(venueId) || RECONCILER_DEFAULT
   }
 
   getColorForTrack(trackKey) {
@@ -175,10 +218,11 @@ class MqttTrajectoryService {
           ? applyTransformToVelocity(transform, floorVel)
           : floorVel
 
-        const processedTrack = {
+        const incomingTrack = {
           id: data.id || uuidv4(),
           trackKey,
           deviceId: data.deviceId || deviceId,
+          venueId,
           timestamp: data.timestamp || Date.now(),
           position: floorPos,
           venuePosition,
@@ -189,8 +233,23 @@ class MqttTrajectoryService {
           color
         }
 
-        this.tracks.set(trackKey, processedTrack)
-        
+        // Run through reconciler: ghost filter + re-ID + smoothing. Null = ghost / probation.
+        const reconciled = this.reconciler.process(incomingTrack)
+        if (!reconciled) {
+          // Still update raw stats so users can see ingestion volume vs filtered ratio
+          this.stats.messagesReceived++
+          this.stats.lastMessageTs = Date.now()
+          return
+        }
+
+        // Use the stable trackKey for downstream consumers
+        const processedTrack = {
+          ...reconciled,
+          color: reconciled.color || color,
+        }
+
+        this.tracks.set(processedTrack.trackKey, processedTrack)
+
         // Update stats
         this.stats.messagesReceived++
         this.stats.tracksReceived++
@@ -236,10 +295,11 @@ class MqttTrajectoryService {
           ? rawVelocity
           : (transform ? applyTransformToVelocity(transform, rawVelocity) : rawVelocity)
 
-        const processedTrack = {
+        const incomingTrack = {
           id: track.id || uuidv4(),
           trackKey,
           deviceId,
+          venueId,
           timestamp: track.timestamp || Date.now(),
           position: rawPosition,
           venuePosition,
@@ -253,8 +313,10 @@ class MqttTrajectoryService {
           },
           color
         }
-
-        this.tracks.set(trackKey, processedTrack)
+        const reconciled = this.reconciler.process(incomingTrack)
+        if (!reconciled) continue
+        const processedTrack = { ...reconciled, color: reconciled.color || color }
+        this.tracks.set(processedTrack.trackKey, processedTrack)
         processedTracks.push(processedTrack)
       }
 
@@ -350,6 +412,10 @@ class MqttTrajectoryService {
     if (this.cleanupInterval) {
       clearInterval(this.cleanupInterval)
       this.cleanupInterval = null
+    }
+    if (this.reconcilerSweepInterval) {
+      clearInterval(this.reconcilerSweepInterval)
+      this.reconcilerSweepInterval = null
     }
     if (this.client) {
       this.client.end()

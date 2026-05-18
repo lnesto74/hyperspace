@@ -152,18 +152,17 @@ if (MQTT_ENABLED) {
     const rows = db.prepare(
       "SELECT id, dwg_transform_json FROM venues WHERE dwg_transform_json IS NOT NULL"
     ).all();
-    const entries = rows
-      .map(r => {
-        try {
-          const parsed = JSON.parse(r.dwg_transform_json || '{}');
-          if (parsed?.perceptionTransform) {
-            return { venueId: r.id, transform: parsed.perceptionTransform };
-          }
-        } catch { /* ignore malformed json */ }
-        return null;
-      })
-      .filter(Boolean);
+    const entries = [];
+    const reconcilerEntries = [];
+    for (const r of rows) {
+      try {
+        const parsed = JSON.parse(r.dwg_transform_json || '{}');
+        if (parsed?.perceptionTransform) entries.push({ venueId: r.id, transform: parsed.perceptionTransform });
+        if (parsed?.reconciler) reconcilerEntries.push({ venueId: r.id, config: parsed.reconciler });
+      } catch { /* ignore malformed json */ }
+    }
     if (entries.length) mqttService.loadVenueTransforms(entries);
+    if (reconcilerEntries.length) mqttService.loadVenueReconcilerConfigs(reconcilerEntries);
   } catch (err) {
     console.warn('[MQTT] Failed to preload venue perception transforms:', err.message);
   }

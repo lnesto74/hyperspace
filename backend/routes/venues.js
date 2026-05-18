@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import { venueQueries, objectQueries, placementQueries } from '../database/schema.js';
 import { normalizePerceptionTransform } from '../services/PerceptionTransform.js';
+import { normalizeReconcilerConfig, DEFAULT_CONFIG as RECONCILER_DEFAULT } from '../services/TrajectoryReconciler.js';
 
 function normalizeDwgTransformJson(value) {
   if (!value) return null;
@@ -527,6 +528,69 @@ export default function venuesRoutes(db, { mqttService, io } = {}) {
     } catch (error) {
       console.error('Update perception transform error:', error);
       res.status(500).json({ error: 'Failed to update perception transform' });
+    }
+  });
+
+  // ============================================
+  // Trajectory Reconciler (ghost filter + re-ID)
+  // ============================================
+  router.get('/:id/reconciler-config', (req, res) => {
+    try {
+      const venue = venueQueries.getById(db, req.params.id);
+      if (!venue) return res.status(404).json({ error: 'Venue not found' });
+      const transformJson = parseDwgTransform(venue.dwg_transform_json);
+      const saved = transformJson.reconciler || null;
+      res.json({
+        venueId: venue.id,
+        reconciler: saved ? normalizeReconcilerConfig(saved) : { ...RECONCILER_DEFAULT, _defaults: true },
+      });
+    } catch (error) {
+      console.error('Get reconciler config error:', error);
+      res.status(500).json({ error: 'Failed to read reconciler config' });
+    }
+  });
+
+  router.patch('/:id/reconciler-config', (req, res) => {
+    try {
+      const venueId = req.params.id;
+      const venue = venueQueries.getById(db, venueId);
+      if (!venue) return res.status(404).json({ error: 'Venue not found' });
+
+      const incoming = req.body?.reconciler;
+      const cleared = incoming === null;
+      const normalized = cleared ? null : normalizeReconcilerConfig(incoming);
+
+      const existing = parseDwgTransform(venue.dwg_transform_json);
+      const nextJson = {
+        ...existing,
+        reconciler: normalized ? { ...normalized, updated_at: new Date().toISOString() } : null,
+      };
+      if (!normalized) delete nextJson.reconciler;
+
+      db.prepare(`
+        UPDATE venues SET dwg_transform_json = ?, updated_at = datetime('now')
+        WHERE id = ?
+      `).run(JSON.stringify(nextJson), venueId);
+
+      if (mqttService) mqttService.setVenueReconcilerConfig(venueId, normalized);
+      if (io) io.of('/tracking').to(`venue:${venueId}`).emit('venue:reconciler-updated', { venueId, reconciler: normalized });
+
+      res.json({ success: true, venueId, reconciler: normalized });
+    } catch (error) {
+      console.error('Update reconciler config error:', error);
+      res.status(500).json({ error: 'Failed to update reconciler config' });
+    }
+  });
+
+  router.get('/:id/reconciler-stats', (req, res) => {
+    try {
+      const venue = venueQueries.getById(db, req.params.id);
+      if (!venue) return res.status(404).json({ error: 'Venue not found' });
+      const stats = mqttService ? mqttService.getReconcilerStats(req.params.id) : null;
+      res.json({ venueId: venue.id, stats: stats || null });
+    } catch (error) {
+      console.error('Get reconciler stats error:', error);
+      res.status(500).json({ error: 'Failed to read reconciler stats' });
     }
   });
 
