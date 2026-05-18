@@ -3849,15 +3849,21 @@ export default function MainViewport({
             (group.children[2] as THREE.Mesh).visible = false
           }
 
-          // ID label floating above the cylinder (CSS2D so the text always faces the camera).
-          // Tooltip-style — shows stable ID + perception ID for forensic matching against the MQTT feed.
-          const labelDiv = document.createElement('div')
-          labelDiv.className = 'track-id-label'
-          labelDiv.style.cssText = 'background: rgba(15,15,20,0.85); color: #e5e7eb; font-family: ui-monospace,monospace; font-size: 10px; padding: 1px 5px; border-radius: 3px; border: 1px solid rgba(255,255,255,0.15); white-space: nowrap; transform: translate(-50%, -100%); pointer-events: none;'
-          const labelObj = new CSS2DObject(labelDiv)
-          labelObj.position.set(0, cylinderHeight / 2 + 0.4, 0)
-          labelObj.userData.isTrackIdLabel = true
-          group.add(labelObj)
+          // ID label sprite — always faces camera, moves with the cylinder in 3D.
+          const labelCanvas = document.createElement('canvas')
+          labelCanvas.width = 128
+          labelCanvas.height = 32
+          const labelTexture = new THREE.CanvasTexture(labelCanvas)
+          labelTexture.minFilter = THREE.LinearFilter
+          const labelMat = new THREE.SpriteMaterial({ map: labelTexture, transparent: true, depthTest: false })
+          const labelSprite = new THREE.Sprite(labelMat)
+          labelSprite.scale.set(1.6, 0.4, 1)
+          labelSprite.position.set(0, cylinderHeight / 2 + 0.5, 0)
+          labelSprite.userData.isTrackIdLabel = true
+          labelSprite.userData.labelCanvas = labelCanvas
+          labelSprite.userData.labelTexture = labelTexture
+          labelSprite.userData.lastText = ''
+          group.add(labelSprite)
 
           group.visible = showTracksRef.current
           scene.add(group)
@@ -3866,12 +3872,27 @@ export default function MainViewport({
 
         group.position.set(track.venuePosition.x, cylinderHeight / 2, track.venuePosition.z)
 
-        const idLabel = group.children.find((c): c is CSS2DObject => (c as CSS2DObject).userData?.isTrackIdLabel === true) as CSS2DObject | undefined
+        const idLabel = group.children.find((c) => c.userData?.isTrackIdLabel === true) as THREE.Sprite | undefined
         if (idLabel) {
           const perceptionId = (track as unknown as { originalPerceptionId?: string }).originalPerceptionId || track.id || ''
           const digits = String(perceptionId).replace(/\D/g, '')
-          idLabel.element.textContent = digits.slice(-4) || '?'
+          const text = digits.slice(-4) || '?'
           idLabel.visible = showTrackIdsRef.current && showTracksRef.current
+          if (idLabel.userData.lastText !== text) {
+            idLabel.userData.lastText = text
+            const canvas = idLabel.userData.labelCanvas as HTMLCanvasElement
+            const ctx = canvas.getContext('2d')!
+            ctx.clearRect(0, 0, canvas.width, canvas.height)
+            ctx.fillStyle = 'rgba(15,15,20,0.85)'
+            ctx.roundRect(0, 0, canvas.width, canvas.height, 4)
+            ctx.fill()
+            ctx.fillStyle = '#ffffff'
+            ctx.font = 'bold 18px monospace'
+            ctx.textAlign = 'center'
+            ctx.textBaseline = 'middle'
+            ctx.fillText(text, canvas.width / 2, canvas.height / 2)
+            ;(idLabel.userData.labelTexture as THREE.CanvasTexture).needsUpdate = true
+          }
         }
 
         const cylinder = group.children[0] as THREE.Mesh
