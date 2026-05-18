@@ -3774,9 +3774,10 @@ export default function MainViewport({
           )
         )
 
-        const bbox = track.boundingBox || { width: 0.5, height: 1.7, depth: 0.5 }
-        const cylinderRadius = Math.max(bbox.width, bbox.depth) / 2
-        const cylinderHeight = bbox.height
+        // Fixed dimensions for all person cylinders — ignore perception bounding box
+        // so every track looks identical regardless of LiDAR detection size.
+        const cylinderRadius = 0.25
+        const cylinderHeight = 1.7
 
         if (!group) {
           group = new THREE.Group()
@@ -3795,22 +3796,25 @@ export default function MainViewport({
           cylinder.userData.isCylinder = true
           group.add(cylinder)
 
-          const topCapGeometry = new THREE.SphereGeometry(cylinderRadius, 8, 4, 0, Math.PI * 2, 0, Math.PI / 2)
+          // Flat top cap (no sphere) — just a thin disc
+          const topCapGeometry = new THREE.CircleGeometry(cylinderRadius, 8)
           const topCapMaterial = new THREE.MeshStandardMaterial({
             color, emissive: color, emissiveIntensity: 0.5,
             transparent: true, opacity: currentTracking.cylinderOpacity,
           })
           const topCap = new THREE.Mesh(topCapGeometry, topCapMaterial)
+          topCap.rotation.x = -Math.PI / 2
           topCap.position.y = cylinderHeight / 2
           group.add(topCap)
 
-          const bottomCapGeometry = new THREE.SphereGeometry(cylinderRadius, 8, 4, 0, Math.PI * 2, 0, Math.PI / 2)
+          // Flat bottom cap
+          const bottomCapGeometry = new THREE.CircleGeometry(cylinderRadius, 8)
           const bottomCapMaterial = new THREE.MeshStandardMaterial({
             color, emissive: color, emissiveIntensity: 0.5,
             transparent: true, opacity: currentTracking.cylinderOpacity,
           })
           const bottomCap = new THREE.Mesh(bottomCapGeometry, bottomCapMaterial)
-          bottomCap.rotation.x = Math.PI
+          bottomCap.rotation.x = Math.PI / 2
           bottomCap.position.y = -cylinderHeight / 2
           group.add(bottomCap)
 
