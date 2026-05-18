@@ -41,6 +41,7 @@ export const DEFAULT_CONFIG = Object.freeze({
   // Re-identification
   reid_max_gap_s: 10,                      // perception ID gap eligible for re-ID
   reid_max_distance_m: 3.0,                // hard gate on predicted-vs-new distance
+  reid_max_implied_speed_m_s: 2.5,         // hard gate on distance/dt: prevents teleports
   reid_velocity_cosine_min: -0.2,          // reject if walking backwards (cos < this)
   reid_weight_distance: 1.0,
   reid_weight_velocity: 0.5,
@@ -71,6 +72,7 @@ export function normalizeReconcilerConfig(raw) {
   merged.ghost_static_displacement_m = num(raw.ghost_static_displacement_m, DEFAULT_CONFIG.ghost_static_displacement_m);
   merged.reid_max_gap_s = num(raw.reid_max_gap_s, DEFAULT_CONFIG.reid_max_gap_s);
   merged.reid_max_distance_m = num(raw.reid_max_distance_m, DEFAULT_CONFIG.reid_max_distance_m);
+  merged.reid_max_implied_speed_m_s = num(raw.reid_max_implied_speed_m_s, DEFAULT_CONFIG.reid_max_implied_speed_m_s);
   merged.reid_velocity_cosine_min = num(raw.reid_velocity_cosine_min, DEFAULT_CONFIG.reid_velocity_cosine_min);
   merged.reid_weight_distance = num(raw.reid_weight_distance, DEFAULT_CONFIG.reid_weight_distance);
   merged.reid_weight_velocity = num(raw.reid_weight_velocity, DEFAULT_CONFIG.reid_weight_velocity);
@@ -390,12 +392,21 @@ export class TrajectoryReconciler {
     for (const t of state.lostTracks.values()) {
       const dt = (now - t.lastTs) / 1000;
       if (dt > cfg.reid_max_gap_s) continue;
+      // Predicted position using last known velocity
       const px = t.position.x + (t.smoothedVel.x || 0) * dt;
       const pz = t.position.z + (t.smoothedVel.z || 0) * dt;
       const dx = pos.x - px;
       const dz = pos.z - pz;
       const dist = Math.hypot(dx, dz);
       if (dist > cfg.reid_max_distance_m) continue;
+      // Implied-speed gate: how fast would a person have to move between
+      // the lost track's last known position and the new candidate position?
+      // A teleport across the store implies impossibly high speed.
+      const lastDx = pos.x - t.position.x;
+      const lastDz = pos.z - t.position.z;
+      const rawDist = Math.hypot(lastDx, lastDz);
+      const impliedSpeed = dt > 0.05 ? rawDist / dt : 0;
+      if (impliedSpeed > cfg.reid_max_implied_speed_m_s) continue;
       const cos = _cosine(vel, t.smoothedVel);
       if (cos < cfg.reid_velocity_cosine_min) continue;
       const cost =

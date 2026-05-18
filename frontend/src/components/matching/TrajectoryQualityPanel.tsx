@@ -16,6 +16,7 @@ interface ReconcilerConfig {
   ghost_static_displacement_m: number
   reid_max_gap_s: number
   reid_max_distance_m: number
+  reid_max_implied_speed_m_s: number
   reid_velocity_cosine_min: number
   reid_weight_distance: number
   reid_weight_velocity: number
@@ -48,6 +49,7 @@ const DEFAULT_CONFIG: ReconcilerConfig = {
   ghost_static_displacement_m: 0.2,
   reid_max_gap_s: 10,
   reid_max_distance_m: 3.0,
+  reid_max_implied_speed_m_s: 2.5,
   reid_velocity_cosine_min: -0.2,
   reid_weight_distance: 1.0,
   reid_weight_velocity: 0.5,
@@ -244,6 +246,13 @@ export default function TrajectoryQualityPanel({ venueId, onClose }: TrajectoryQ
                   min={0.5} max={20} step={0.1}
                   onChange={v => update('reid_max_distance_m', v)}
                   hint="A new ID must appear within this radius of the predicted lost position"
+                />
+                <SliderRow
+                  label="Max implied speed (m/s)"
+                  value={config.reid_max_implied_speed_m_s}
+                  min={0.5} max={6} step={0.1}
+                  onChange={v => update('reid_max_implied_speed_m_s', v)}
+                  hint="Prevents teleports — distance/dt must be a plausible walking speed"
                 />
                 <SliderRow
                   label="Velocity cosine gate"
