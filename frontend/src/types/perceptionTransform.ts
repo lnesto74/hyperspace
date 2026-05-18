@@ -47,7 +47,10 @@ export function readPerceptionTransform(dwgTransformJson?: string | null): Perce
   }
 }
 
-/** Map a perception-frame point (already Y↔Z swapped) to venue meters in the browser. */
+/**
+ * Map a perception-frame point (already Y↔Z swapped) to venue meters in the browser.
+ * Order: remap → scale → rotation → mirror (in venue frame, after rotation) → translate.
+ */
 export function applyTransformToPoint(
   transform: PerceptionTransform | null | undefined,
   point: { x: number; y?: number; z: number }
@@ -55,15 +58,17 @@ export function applyTransformToPoint(
   const t = transform || IDENTITY_PERCEPTION_TRANSFORM;
   const ax = t.axis_map.px === 'z' ? point.z : point.x;
   const az = t.axis_map.py === 'x' ? point.x : point.z;
-  const sx = t.axis_sign.x * ax * t.scale;
-  const sz = t.axis_sign.z * az * t.scale;
+  const sx = ax * t.scale;
+  const sz = az * t.scale;
   const rad = (t.rotation_deg * Math.PI) / 180;
   const c = Math.cos(rad);
   const s = Math.sin(rad);
+  const rx = (sx * c - sz * s) * t.axis_sign.x;
+  const rz = (sx * s + sz * c) * t.axis_sign.z;
   return {
-    x: sx * c - sz * s + t.origin_m.x,
+    x: rx + t.origin_m.x,
     y: point.y ?? 0,
-    z: sx * s + sz * c + t.origin_m.z,
+    z: rz + t.origin_m.z,
   };
 }
 

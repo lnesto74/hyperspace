@@ -55,6 +55,10 @@ export function normalizePerceptionTransform(raw) {
 /**
  * Apply transform to a {x, y, z} point (already in Three.js coords after Y↔Z swap).
  * Returns venue-frame position.
+ *
+ * Order: axis remap → uniform scale → rotation around vertical → mirror (in venue
+ * frame, AFTER rotation, so "Flip ↕" intuitively swaps top↔bottom regardless of
+ * the current rotation) → translation.
  */
 export function applyTransformToPoint(transform, point) {
   if (!point) return point;
@@ -67,18 +71,23 @@ export function applyTransformToPoint(transform, point) {
   const ax = t.axis_map.px === 'z' ? pz : px;
   const az = t.axis_map.py === 'x' ? px : pz;
 
-  // 2. axis sign + uniform scale
-  const sx = t.axis_sign.x * ax * t.scale;
-  const sz = t.axis_sign.z * az * t.scale;
+  // 2. uniform scale
+  const sx = ax * t.scale;
+  const sz = az * t.scale;
 
-  // 3. rotation around Y axis
+  // 3. rotation around vertical axis
   const rad = (t.rotation_deg * Math.PI) / 180;
   const c = Math.cos(rad);
   const s = Math.sin(rad);
-  const rx = sx * c - sz * s;
-  const rz = sx * s + sz * c;
+  let rx = sx * c - sz * s;
+  let rz = sx * s + sz * c;
 
-  // 4. translation
+  // 4. mirror in venue frame (after rotation) — UX-friendly: a Flip ↕ always
+  // flips visible top↔bottom even when rotation is at an arbitrary angle.
+  rx *= t.axis_sign.x;
+  rz *= t.axis_sign.z;
+
+  // 5. translation
   return {
     x: rx + t.origin_m.x,
     y: py,
@@ -86,7 +95,7 @@ export function applyTransformToPoint(transform, point) {
   };
 }
 
-/** Apply transform to a velocity vector (rotation + scale only — no translation). */
+/** Apply transform to a velocity vector (rotation + scale + mirror only — no translation). */
 export function applyTransformToVelocity(transform, velocity) {
   if (!velocity) return velocity;
   const t = transform || IDENTITY_TRANSFORM;
@@ -96,17 +105,15 @@ export function applyTransformToVelocity(transform, velocity) {
 
   const ax = t.axis_map.px === 'z' ? vz : vx;
   const az = t.axis_map.py === 'x' ? vx : vz;
-  const sx = t.axis_sign.x * ax * t.scale;
-  const sz = t.axis_sign.z * az * t.scale;
+  const sx = ax * t.scale;
+  const sz = az * t.scale;
 
   const rad = (t.rotation_deg * Math.PI) / 180;
   const c = Math.cos(rad);
   const s = Math.sin(rad);
-  return {
-    x: sx * c - sz * s,
-    y: vy,
-    z: sx * s + sz * c,
-  };
+  const rx = (sx * c - sz * s) * t.axis_sign.x;
+  const rz = (sx * s + sz * c) * t.axis_sign.z;
+  return { x: rx, y: vy, z: rz };
 }
 
 /**
