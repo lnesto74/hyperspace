@@ -283,37 +283,43 @@ export class TrajectoryReconciler {
 
   /**
    * Housekeeping pass — call periodically (e.g. every 250 ms) to:
-   *  - Move stale active tracks to lost pool
-   *  - Drop lost tracks beyond REID_MAX_GAP_S
-   *  - Drop static "fixture" tracks
-   *  - Returns an array of expired stableIds so the caller can notify downstream.
+   *  - Move stale active tracks to lost pool (newly_lost): caller should hide them
+   *    immediately so they don't inflate live occupancy counts. They'll come back
+   *    if perception re-IDs them within REID_MAX_GAP_S.
+   *  - Drop lost tracks beyond REID_MAX_GAP_S (expired): permanent removal.
+   *  - Drop static "fixture" tracks (static_fixture): permanent removal.
+   *
+   * Returns: Array<{ venueId, stableId, trackKey, reason: 'newly_lost'|'expired'|'static_fixture' }>
    */
   sweep(now = Date.now()) {
-    const expired = []; // [{ venueId, stableId }, ...]
+    const events = [];
     for (const state of this.venues.values()) {
       const cfg = state.config;
-      // active -> lost
+      // active -> lost (or static fixture removal)
       for (const [stableId, t] of state.activeTracks) {
-        if (now - t.lastTs > cfg.active_to_lost_timeout_ms) {
-          state.activeTracks.delete(stableId);
-          state.lostTracks.set(stableId, t);
-        } else if (cfg.ghost_static_timeout_s > 0
-                   && now - t.firstSeen > cfg.ghost_static_timeout_s * 1000
-                   && t.totalDisplacement < cfg.ghost_static_displacement_m) {
+        if (cfg.ghost_static_timeout_s > 0
+            && now - t.firstSeen > cfg.ghost_static_timeout_s * 1000
+            && t.totalDisplacement < cfg.ghost_static_displacement_m) {
           // Static "fixture" — drop and free the stable ID.
           state.activeTracks.delete(stableId);
           for (const pid of t.perceptionIds) state.perceptionToStable.delete(pid);
-          expired.push({ venueId: state.venueId, stableId });
+          events.push({ venueId: state.venueId, stableId, trackKey: t.lastTrackKey, reason: 'static_fixture' });
           state.stats.ghost_dropped++;
           state.stats.ghost_drop_reasons.static_fixture = (state.stats.ghost_drop_reasons.static_fixture || 0) + 1;
+        } else if (now - t.lastTs > cfg.active_to_lost_timeout_ms) {
+          state.activeTracks.delete(stableId);
+          state.lostTracks.set(stableId, t);
+          // Tell the caller to hide this track immediately. It may come back via re-ID,
+          // in which case the regular `tracks` emission will re-introduce it.
+          events.push({ venueId: state.venueId, stableId, trackKey: t.lastTrackKey, reason: 'newly_lost' });
         }
       }
-      // lost expiry
+      // lost expiry — permanent removal after REID_MAX_GAP_S
       for (const [stableId, t] of state.lostTracks) {
         if (now - t.lastTs > cfg.reid_max_gap_s * 1000) {
           state.lostTracks.delete(stableId);
           for (const pid of t.perceptionIds) state.perceptionToStable.delete(pid);
-          expired.push({ venueId: state.venueId, stableId });
+          events.push({ venueId: state.venueId, stableId, trackKey: t.lastTrackKey, reason: 'expired' });
         }
       }
       // candidate expiry — perception IDs that never made it past probation
@@ -324,7 +330,7 @@ export class TrajectoryReconciler {
       }
       state.lastHousekeeping = now;
     }
-    return expired;
+    return events;
   }
 
   getStats(venueId = null) {
@@ -422,12 +428,16 @@ export class TrajectoryReconciler {
   }
 
   _emit(originalTrack, stableState, perceptionId) {
+    const trackKey = `${originalTrack.deviceId || 'edge'}:${stableState.stableId}`;
+    // Remember the trackKey used in the last emission so the housekeeping sweep
+    // can issue a matching `track_removed` event when the track is removed.
+    stableState.lastTrackKey = trackKey;
     return {
       ...originalTrack,
       id: stableState.stableId,
       stableId: stableState.stableId,
       originalPerceptionId: perceptionId,
-      trackKey: `${originalTrack.deviceId || 'edge'}:${stableState.stableId}`,
+      trackKey,
       venuePosition: { ...stableState.smoothedPos },
       velocity: { ...stableState.smoothedVel },
       // Keep the raw values too for forensics

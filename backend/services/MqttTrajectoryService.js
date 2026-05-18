@@ -38,12 +38,17 @@ class MqttTrajectoryService {
     this.reconciler = new TrajectoryReconciler((vid) => this.venueReconcilerConfigs.get(vid) || RECONCILER_DEFAULT)
     // Periodic housekeeping (active → lost → expire)
     this.reconcilerSweepInterval = setInterval(() => {
-      const expired = this.reconciler.sweep()
-      for (const { venueId, stableId } of expired) {
-        if (this.trackAggregator) {
-          // The aggregator's TTL will catch this; nothing more needed.
+      const events = this.reconciler.sweep()
+      for (const { venueId, trackKey } of events) {
+        if (!trackKey) continue
+        // Remove from TrackAggregator immediately so its 100ms re-emit cycle
+        // doesn't keep re-broadcasting the stale track until the 6s TTL fires.
+        if (this.trackAggregator && this.trackAggregator.tracks) {
+          this.trackAggregator.tracks.delete(trackKey)
         }
-        this.io?.of('/tracking').to(`venue:${venueId}`).emit('track_removed', { trackKey: `edge:${stableId}` })
+        // Also drop from our own per-service cache
+        this.tracks.delete(trackKey)
+        this.io?.of('/tracking').to(`venue:${venueId}`).emit('track_removed', { trackKey })
       }
     }, 250)
 
