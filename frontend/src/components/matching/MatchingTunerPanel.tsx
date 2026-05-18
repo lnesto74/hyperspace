@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Compass, Eye, EyeOff, RefreshCw, X, ChevronDown, ChevronUp, Loader2, Check } from 'lucide-react'
+import { Compass, Eye, EyeOff, RefreshCw, X, ChevronDown, ChevronUp, Loader2, Check, FlipHorizontal2, FlipVertical2, RotateCcw } from 'lucide-react'
 import { API_BASE } from '../../config/api'
 import { useTrackingActions } from '../../context/TrackingContext'
 import { PerceptionTransform, IDENTITY_PERCEPTION_TRANSFORM } from '../../types/perceptionTransform'
@@ -143,6 +143,49 @@ export default function MatchingTunerPanel({ venueId, onClose }: MatchingTunerPa
 
       {!collapsed && (
         <div className="p-3 space-y-4">
+          {/* Quick flips toolbar — single-click 180° transforms. Use these to align
+              orientation before fine-tuning origin/rotation with the sliders. */}
+          <div className="space-y-1">
+            <div className="text-[10px] uppercase text-gray-500 tracking-wide">Quick flips</div>
+            <div className="grid grid-cols-3 gap-1.5">
+              <button
+                onClick={() => update({ axis_sign: { ...transform.axis_sign, x: (transform.axis_sign.x === -1 ? 1 : -1) as 1 | -1 } })}
+                className={`px-2 py-2 rounded text-xs font-medium flex flex-col items-center gap-1 transition-colors ${
+                  transform.axis_sign.x === -1 ? 'bg-cyan-600 text-white' : 'bg-gray-800 hover:bg-gray-700 text-gray-200'
+                }`}
+                title="Flip horizontally (mirror left ↔ right)"
+              >
+                <FlipHorizontal2 className="w-4 h-4" />
+                <span>Flip ↔</span>
+              </button>
+              <button
+                onClick={() => update({ axis_sign: { ...transform.axis_sign, z: (transform.axis_sign.z === -1 ? 1 : -1) as 1 | -1 } })}
+                className={`px-2 py-2 rounded text-xs font-medium flex flex-col items-center gap-1 transition-colors ${
+                  transform.axis_sign.z === -1 ? 'bg-cyan-600 text-white' : 'bg-gray-800 hover:bg-gray-700 text-gray-200'
+                }`}
+                title="Flip vertically (mirror top ↔ bottom)"
+              >
+                <FlipVertical2 className="w-4 h-4" />
+                <span>Flip ↕</span>
+              </button>
+              <button
+                onClick={() => {
+                  let next = transform.rotation_deg + 180
+                  if (next > 180) next -= 360
+                  update({ rotation_deg: next })
+                }}
+                className="px-2 py-2 rounded text-xs font-medium flex flex-col items-center gap-1 bg-gray-800 hover:bg-gray-700 text-gray-200 transition-colors"
+                title="Rotate 180° around the vertical (Z) axis"
+              >
+                <RotateCcw className="w-4 h-4" />
+                <span>Rotate 180°</span>
+              </button>
+            </div>
+            <div className="text-[10px] text-gray-500">
+              Current: rotation {transform.rotation_deg.toFixed(0)}° · mirror X {transform.axis_sign.x === -1 ? 'on' : 'off'} · mirror Y {transform.axis_sign.z === -1 ? 'on' : 'off'}
+            </div>
+          </div>
+
           {/* Origin X */}
           <SliderRow
             label="Origin X (m)"
