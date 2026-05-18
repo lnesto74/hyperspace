@@ -5736,9 +5736,7 @@ export default function MainViewport({
       <div ref={containerRef} className="flex-1 relative">
         <div
           ref={axisContainerRef}
-          className="absolute top-4 right-4 z-40 rounded-xl overflow-hidden border border-blue-400/40 shadow-2xl pointer-events-none"
-          style={{ width: 124, height: 124 }}
-          title="Axis gizmo: X red, Y green/depth, Z blue/up"
+          className="hidden"
         />
         {areaSelectMode && (
           <div
