@@ -61,11 +61,18 @@ export class TrackAggregator extends EventEmitter {
 
   addTrack(rawTrack) {
     const trackKey = `${rawTrack.deviceId}:${rawTrack.id}`;
-    
-    // Transform coordinates based on placement
-    const placement = this.placements.get(rawTrack.deviceId);
-    const venuePosition = this.transformToVenueCoords(rawTrack.position, placement);
-    
+
+    // If the caller already supplied a venuePosition (e.g. MqttTrajectoryService applied
+    // the per-venue perceptionTransform), trust it. Otherwise fall back to the legacy
+    // per-device placement transform.
+    let venuePosition;
+    if (rawTrack.venuePosition) {
+      venuePosition = rawTrack.venuePosition;
+    } else {
+      const placement = this.placements.get(rawTrack.deviceId);
+      venuePosition = this.transformToVenueCoords(rawTrack.position, placement);
+    }
+
     const track = {
       ...rawTrack,
       trackKey,
