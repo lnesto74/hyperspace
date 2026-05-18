@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { Play, Square, Settings, Wifi, WifiOff, Radio, Clock, Users, Move, Save, Check, ShoppingCart, Shuffle, Layers, UserCheck, Coffee, AlertTriangle, Server, Cloud, Eye, Power, Activity } from 'lucide-react'
+import { Play, Settings, Wifi, WifiOff, Radio, Clock, Users, Move, Save, Check, ShoppingCart, Shuffle, Layers, UserCheck, Coffee, AlertTriangle, Server, Cloud, Eye, Power, Activity } from 'lucide-react'
 
 interface BridgeConfig {
   target: 'production' | 'development' | 'unknown'

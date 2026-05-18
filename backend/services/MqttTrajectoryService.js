@@ -1,5 +1,11 @@
 import mqtt from 'mqtt'
 import { v4 as uuidv4 } from 'uuid'
+import {
+  IDENTITY_TRANSFORM,
+  normalizePerceptionTransform,
+  applyTransformToPoint,
+  applyTransformToVelocity,
+} from './PerceptionTransform.js'
 
 // Color palette for different tracks
 const TRACK_COLORS = [
@@ -21,7 +27,11 @@ class MqttTrajectoryService {
     this.cleanupInterval = null
     this.CLEANUP_INTERVAL_MS = 10000 // Clean stale tracks every 10 seconds
     this.TRACK_TTL_MS = 30000 // Tracks older than 30 seconds are stale
-    
+
+    // Per-venue perception → venue coordinate transforms.
+    // Default = identity (no behavior change for venues without a saved transform).
+    this.venueTransforms = new Map() // venueId -> normalized perceptionTransform
+
     // Stats tracking for validation
     this.stats = {
       messagesReceived: 0,
@@ -30,6 +40,34 @@ class MqttTrajectoryService {
       connectedAt: null,
       venueStats: new Map() // venueId -> { tracksReceived, lastTrackTs }
     }
+  }
+
+  /** Replace the transform used for a venue. Falsy value clears it. */
+  setVenueTransform(venueId, transform) {
+    if (!venueId) return
+    if (!transform) {
+      this.venueTransforms.delete(venueId)
+      console.log(`[MQTT] Cleared perception transform for venue ${venueId}`)
+      return
+    }
+    const normalized = normalizePerceptionTransform(transform)
+    this.venueTransforms.set(venueId, normalized)
+    console.log(`[MQTT] Updated perception transform for venue ${venueId}:`, normalized)
+  }
+
+  /** Bulk-load transforms at startup. Accepts an array of { venueId, transform }. */
+  loadVenueTransforms(entries) {
+    if (!Array.isArray(entries)) return
+    for (const { venueId, transform } of entries) {
+      if (venueId && transform) {
+        this.venueTransforms.set(venueId, normalizePerceptionTransform(transform))
+      }
+    }
+    console.log(`[MQTT] Loaded ${this.venueTransforms.size} venue perception transforms`)
+  }
+
+  getVenueTransform(venueId) {
+    return this.venueTransforms.get(venueId) || IDENTITY_TRANSFORM
   }
 
   getColorForTrack(trackKey) {
@@ -117,15 +155,28 @@ class MqttTrajectoryService {
         const trackKey = `${data.deviceId || deviceId}:${data.id}`
         const color = data.color || this.getColorForTrack(trackKey)
         const venueId = data.venueId || 'default'
-        
+
+        // Apply per-venue perception → venue coordinate transform.
+        // `position` keeps the raw perception value (used by the Matching UI for live preview),
+        // `venuePosition` is what every downstream consumer (Socket.IO, KPIs, DB) renders.
+        const transform = this.venueTransforms.get(venueId)
+        const rawVelocity = data.velocity || { x: 0, y: 0, z: 0 }
+        const venuePosition = transform
+          ? applyTransformToPoint(transform, data.position)
+          : data.position
+        const venueVelocity = transform
+          ? applyTransformToVelocity(transform, rawVelocity)
+          : rawVelocity
+
         const processedTrack = {
           id: data.id || uuidv4(),
           trackKey,
           deviceId: data.deviceId || deviceId,
           timestamp: data.timestamp || Date.now(),
           position: data.position,
-          venuePosition: data.position,
-          velocity: data.velocity || { x: 0, y: 0, z: 0 },
+          venuePosition,
+          velocity: venueVelocity,
+          rawVelocity,
           objectType: data.objectType || 'person',
           boundingBox: data.boundingBox || { width: 0.5, height: 1.7, depth: 0.5 },
           color
@@ -159,20 +210,31 @@ class MqttTrajectoryService {
       }
 
       const venueId = data.venueId || 'default'
+      const transform = this.venueTransforms.get(venueId)
       const processedTracks = []
 
       for (const track of data.tracks) {
         const trackKey = track.trackKey || `${deviceId}:${track.id}`
         const color = this.getColorForTrack(trackKey)
-        
+
+        const rawPosition = track.position || { x: 0, y: 0, z: 0 }
+        const rawVelocity = track.velocity || { x: 0, y: 0, z: 0 }
+        // Honor venuePosition if the publisher already supplied it; otherwise transform raw.
+        const venuePosition = track.venuePosition
+          || (transform ? applyTransformToPoint(transform, rawPosition) : rawPosition)
+        const venueVelocity = track.venuePosition
+          ? rawVelocity
+          : (transform ? applyTransformToVelocity(transform, rawVelocity) : rawVelocity)
+
         const processedTrack = {
           id: track.id || uuidv4(),
           trackKey,
           deviceId,
           timestamp: track.timestamp || Date.now(),
-          position: track.position || { x: 0, y: 0, z: 0 },
-          venuePosition: track.venuePosition || track.position || { x: 0, y: 0, z: 0 },
-          velocity: track.velocity || { x: 0, y: 0, z: 0 },
+          position: rawPosition,
+          venuePosition,
+          velocity: venueVelocity,
+          rawVelocity,
           objectType: track.objectType || 'person',
           boundingBox: track.boundingBox || {
             width: 0.5,  // 50cm diameter

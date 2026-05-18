@@ -51,11 +51,13 @@ interface PreviewPanelProps {
   lidarPairingMode?: boolean
   onToggleLidarPairingMode?: () => void
   lidarPairings?: Array<{ placementId: string; lidarIp?: string; lidarId: string; reachable?: boolean }>
+  /** Notify parent when the user switches view-mode tab (used to show the Matching side panel). */
+  onViewModeChange?: (mode: 'dwg' | 'floorplan' | 'overlay' | 'matching') => void
 }
 
 type Tool = 'pan' | 'select' | 'rectangle' | 'place_lidar' | 'draw_roi' | 'move_floorplan' | 'calibrate_floorplan' | 'crop_floorplan'
 
-type ViewMode = 'dwg' | 'floorplan' | 'overlay'
+type ViewMode = 'dwg' | 'floorplan' | 'overlay' | 'matching'
 
 interface FloorplanOverlay {
   id: string
@@ -117,7 +119,8 @@ export default function PreviewPanel({
   layoutVersionId,
   lidarPairingMode = false,
   onToggleLidarPairingMode,
-  lidarPairings = []
+  lidarPairings = [],
+  onViewModeChange,
 }: PreviewPanelProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const [dimensions, setDimensions] = useState({ width: 800, height: 600 })
@@ -154,7 +157,7 @@ export default function PreviewPanel({
   const [activeTool, setActiveTool] = useState<Tool>('select')
   const [viewMode, setViewMode] = useState<ViewMode>(() => {
     const s = savedViewRef.current
-    if (s?.viewMode && ['dwg', 'floorplan', 'overlay'].includes(s.viewMode)) return s.viewMode
+    if (s?.viewMode && ['dwg', 'floorplan', 'overlay', 'matching'].includes(s.viewMode)) return s.viewMode
     return 'dwg'
   })
   // Per-mode view state: store zoom+pan for each mode so switching doesn't lose position
@@ -165,11 +168,12 @@ export default function PreviewPanel({
       return {
         dwg: s.perModeViews.dwg || { ...defaults },
         floorplan: s.perModeViews.floorplan || { ...defaults },
-        overlay: s.perModeViews.overlay || { ...defaults }
+        overlay: s.perModeViews.overlay || { ...defaults },
+        matching: s.perModeViews.matching || { ...defaults },
       }
     }
     const fallback = { zoom: s?.zoom ?? 1, panOffset: s?.panOffset ?? { x: 0, y: 0 } }
-    return { dwg: { ...fallback }, floorplan: { ...fallback }, overlay: { ...fallback } }
+    return { dwg: { ...fallback }, floorplan: { ...fallback }, overlay: { ...fallback }, matching: { ...fallback } }
   })())
   
   // Track if we've already loaded from this storage key to avoid re-loading on every render
@@ -187,7 +191,7 @@ export default function PreviewPanel({
         console.log(`[2D View] Loading saved view for ${storageKey}:`, saved)
         
         // Restore viewMode first
-        if (saved.viewMode && ['dwg', 'floorplan', 'overlay'].includes(saved.viewMode)) {
+        if (saved.viewMode && ['dwg', 'floorplan', 'overlay', 'matching'].includes(saved.viewMode)) {
           setViewMode(saved.viewMode)
         }
         
@@ -196,7 +200,8 @@ export default function PreviewPanel({
           perModeView.current = {
             dwg: saved.perModeViews.dwg || { zoom: 1, panOffset: { x: 0, y: 0 } },
             floorplan: saved.perModeViews.floorplan || { zoom: 1, panOffset: { x: 0, y: 0 } },
-            overlay: saved.perModeViews.overlay || { zoom: 1, panOffset: { x: 0, y: 0 } }
+            overlay: saved.perModeViews.overlay || { zoom: 1, panOffset: { x: 0, y: 0 } },
+            matching: saved.perModeViews.matching || { zoom: 1, panOffset: { x: 0, y: 0 } },
           }
         }
         
@@ -557,7 +562,8 @@ export default function PreviewPanel({
         perModeViews: {
           dwg: perModeView.current.dwg,
           floorplan: perModeView.current.floorplan,
-          overlay: perModeView.current.overlay
+          overlay: perModeView.current.overlay,
+          matching: perModeView.current.matching,
         }
       }
       localStorage.setItem(storageKey, JSON.stringify(viewData))
@@ -603,7 +609,8 @@ export default function PreviewPanel({
       perModeViews: {
         dwg: perModeView.current.dwg,
         floorplan: perModeView.current.floorplan,
-        overlay: perModeView.current.overlay
+        overlay: perModeView.current.overlay,
+        matching: perModeView.current.matching,
       },
       // Store visible world bounds for resolution-independent loading
       visibleBounds: {
@@ -1339,7 +1346,7 @@ export default function PreviewPanel({
       {/* View Mode Tabs */}
       <div className="h-8 border-b border-gray-700 flex items-center px-3 gap-0.5 bg-gray-800/80">
         <input ref={floorplanInputRef} type="file" accept="image/png,image/jpeg,image/gif,image/bmp,image/webp,image/svg+xml" className="hidden" onChange={(e) => { const file = e.target.files?.[0]; if (file) handleFloorplanUpload(file); e.target.value = '' }} />
-        {(['dwg', 'floorplan', 'overlay'] as ViewMode[]).map(mode => (
+        {(['dwg', 'floorplan', 'overlay', 'matching'] as ViewMode[]).map(mode => (
           <button
             key={mode}
             onClick={() => {
@@ -1351,12 +1358,14 @@ export default function PreviewPanel({
               setPanOffset({ ...saved.panOffset })
               setViewMode(mode)
               setActiveTool('select')
+              onViewModeChange?.(mode)
             }}
             className={`px-3 py-1 text-xs font-medium rounded-t transition-colors flex items-center gap-1 ${viewMode === mode ? 'bg-gray-900 text-white border-t border-x border-gray-600' : 'text-gray-400 hover:text-white hover:bg-gray-700/50'}`}
           >
-            {mode === 'dwg' ? 'DWG' : mode === 'floorplan' ? 'Floor Plan' : 'Overlay'}
+            {mode === 'dwg' ? 'DWG' : mode === 'floorplan' ? 'Floor Plan' : mode === 'overlay' ? 'Overlay' : 'Matching'}
             {mode === 'floorplan' && floorplan && <span className="w-1.5 h-1.5 rounded-full bg-orange-400" />}
             {mode === 'floorplan' && floorplan?.cropRect && <span className="w-1.5 h-1.5 rounded-full bg-purple-400" />}
+            {mode === 'matching' && <span className="w-1.5 h-1.5 rounded-full bg-cyan-400" />}
           </button>
         ))}
         <div className="flex-1" />
@@ -2544,7 +2553,7 @@ export default function PreviewPanel({
           )}
 
           {/* EDITABLE: Main shopping area bounds with drag handles */}
-          {showMainAreaBounds && activeMainArea && (viewMode === 'dwg' || viewMode === 'overlay') && (() => {
+          {showMainAreaBounds && activeMainArea && (viewMode === 'dwg' || viewMode === 'overlay' || viewMode === 'matching') && (() => {
             const topLeft = toScreen(activeMainArea.minX, activeMainArea.maxY)
             const bottomRight = toScreen(activeMainArea.maxX, activeMainArea.minY)
             const width = Math.abs(bottomRight.x - topLeft.x)
@@ -2659,7 +2668,7 @@ export default function PreviewPanel({
 
           {/* Fixtures - sorted by area (largest first = behind, smallest last = on top) */}
           <g opacity={viewMode === 'overlay' ? 0.4 : 1}>
-          {(viewMode === 'dwg' || viewMode === 'overlay') && layerVisibility.base && [...importData.fixtures]
+          {(viewMode === 'dwg' || viewMode === 'overlay' || viewMode === 'matching') && layerVisibility.base && [...importData.fixtures]
             .sort((a, b) => (b.footprint.w * b.footprint.d) - (a.footprint.w * a.footprint.d))
             .map(fixture => {
             const isSelected = selectedFixtureIds.has(fixture.id)
@@ -2802,7 +2811,7 @@ export default function PreviewPanel({
           </g>
 
           {/* Floor Plan Image - in overlay or DWG mode when layer enabled */}
-          {(viewMode === 'overlay' || viewMode === 'dwg') && layerVisibility.floorplan && floorplan && (() => {
+          {(viewMode === 'overlay' || viewMode === 'dwg' || viewMode === 'matching') && layerVisibility.floorplan && floorplan && (() => {
             const t = floorplan.transform
             const topLeft = toScreen(t.x, t.y + floorplan.naturalHeight * t.scaleY)
             const bottomRight = toScreen(t.x + floorplan.naturalWidth * t.scaleX, t.y)

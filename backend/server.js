@@ -145,6 +145,29 @@ let mqttService = null;
 if (MQTT_ENABLED) {
   mqttService = new MqttTrajectoryService(io);
   mqttService.setTrackAggregator(trackAggregator);
+
+  // Load saved perceptionTransforms from venues.dwg_transform_json so live tracks are
+  // remapped from the very first MQTT message (no UI interaction required).
+  try {
+    const rows = db.prepare(
+      "SELECT id, dwg_transform_json FROM venues WHERE dwg_transform_json IS NOT NULL"
+    ).all();
+    const entries = rows
+      .map(r => {
+        try {
+          const parsed = JSON.parse(r.dwg_transform_json || '{}');
+          if (parsed?.perceptionTransform) {
+            return { venueId: r.id, transform: parsed.perceptionTransform };
+          }
+        } catch { /* ignore malformed json */ }
+        return null;
+      })
+      .filter(Boolean);
+    if (entries.length) mqttService.loadVenueTransforms(entries);
+  } catch (err) {
+    console.warn('[MQTT] Failed to preload venue perception transforms:', err.message);
+  }
+
   mqttService.connect();
   console.log('📡 MQTT trajectory service enabled');
 }
@@ -314,7 +337,7 @@ app.use('/api/models-static', (req, res, next) => {
 app.use('/api/auth', authRoutes(db));
 app.use('/api/companies', companiesRoutes(db));
 app.use('/api/discovery', discoveryRoutes(tailscaleService, mockGenerator));
-app.use('/api/venues', venuesRoutes(db));
+app.use('/api/venues', venuesRoutes(db, { mqttService, io }));
 app.use('/api/lidars', lidarsRoutes(lidarConnectionManager, tailscaleService, mockGenerator));
 app.use('/api/models', modelsRoutes(db));
 app.use('/api', createRoiRoutes(db));

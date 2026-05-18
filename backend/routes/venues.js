@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import { venueQueries, objectQueries, placementQueries } from '../database/schema.js';
+import { normalizePerceptionTransform } from '../services/PerceptionTransform.js';
 
 function normalizeDwgTransformJson(value) {
   if (!value) return null;
@@ -10,6 +11,13 @@ function normalizeDwgTransformJson(value) {
   } catch {
     return value;
   }
+}
+
+/** Parse a stringified dwg_transform_json (or already-parsed object) into a plain object. */
+function parseDwgTransform(value) {
+  if (!value) return {};
+  if (typeof value === 'object') return value;
+  try { return JSON.parse(value); } catch { return {}; }
 }
 
 const DEFAULT_GROCERY_CATEGORIES = [
@@ -43,7 +51,7 @@ function ensureDefaultCategories(db, companyId) {
   tx();
 }
 
-export default function venuesRoutes(db) {
+export default function venuesRoutes(db, { mqttService, io } = {}) {
   const router = Router();
 
   // Get all venues
@@ -434,6 +442,91 @@ export default function venuesRoutes(db) {
     } catch (error) {
       console.error('Create venue retail category error:', error);
       res.status(500).json({ error: 'Failed to create retail category' });
+    }
+  });
+
+  // ============================================
+  // Perception Coordinate Matching
+  // ============================================
+  // Read the perceptionTransform (perception sensor frame → venue meters) used by the
+  // MQTT trajectory pipeline to remap incoming tracks. Stored inside dwg_transform_json.
+  router.get('/:id/perception-transform', (req, res) => {
+    try {
+      const venue = venueQueries.getById(db, req.params.id);
+      if (!venue) return res.status(404).json({ error: 'Venue not found' });
+      const transformJson = parseDwgTransform(venue.dwg_transform_json);
+      const perceptionTransform = transformJson.perceptionTransform || null;
+      res.json({
+        venueId: venue.id,
+        perceptionTransform: perceptionTransform ? normalizePerceptionTransform(perceptionTransform) : null,
+      });
+    } catch (error) {
+      console.error('Get perception transform error:', error);
+      res.status(500).json({ error: 'Failed to read perception transform' });
+    }
+  });
+
+  // Apply / update / clear the perceptionTransform for a venue.
+  //   Body: { perceptionTransform: <object|null> }
+  // Send null to clear (revert to identity = pass-through).
+  router.patch('/:id/perception-transform', (req, res) => {
+    try {
+      const venueId = req.params.id;
+      const venue = venueQueries.getById(db, venueId);
+      if (!venue) return res.status(404).json({ error: 'Venue not found' });
+
+      const incoming = req.body?.perceptionTransform;
+      const cleared = incoming === null;
+      const normalized = cleared ? null : normalizePerceptionTransform(incoming);
+
+      // Merge into existing dwg_transform_json (preserves scaleCorrection, etc.)
+      const existing = parseDwgTransform(venue.dwg_transform_json);
+      const history = Array.isArray(existing.perceptionTransformHistory)
+        ? existing.perceptionTransformHistory
+        : [];
+      if (existing.perceptionTransform) {
+        history.unshift({
+          ...existing.perceptionTransform,
+          replaced_at: new Date().toISOString(),
+        });
+        history.length = Math.min(history.length, 5); // keep last 5
+      }
+      const nextJson = {
+        ...existing,
+        perceptionTransform: normalized
+          ? { ...normalized, updated_at: new Date().toISOString() }
+          : null,
+        perceptionTransformHistory: history,
+      };
+      if (!normalized) delete nextJson.perceptionTransform;
+
+      db.prepare(`
+        UPDATE venues SET dwg_transform_json = ?, updated_at = datetime('now')
+        WHERE id = ?
+      `).run(JSON.stringify(nextJson), venueId);
+
+      // Hot-apply to the live MQTT service so the very next track lands correctly.
+      if (mqttService) {
+        mqttService.setVenueTransform(venueId, normalized);
+      }
+
+      // Notify frontends watching this venue so the Matching UI / live overlays refresh.
+      if (io) {
+        io.of('/tracking').to(`venue:${venueId}`).emit('venue:transform-updated', {
+          venueId,
+          perceptionTransform: normalized,
+        });
+      }
+
+      res.json({
+        success: true,
+        venueId,
+        perceptionTransform: normalized,
+        cleared,
+      });
+    } catch (error) {
+      console.error('Update perception transform error:', error);
+      res.status(500).json({ error: 'Failed to update perception transform' });
     }
   });
 

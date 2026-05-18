@@ -8,6 +8,7 @@ import PreviewPanel from './PreviewPanel'
 import Layout3DPreview from './Layout3DPreview'
 import DwgImportsList from './DwgImportsList'
 import PrefilterStudio, { PrefilterDryRunResult, PrefilterSettings } from './PrefilterStudio'
+import MatchingPanel from './MatchingPanel'
 import { API_BASE } from '../../config/api'
 
 
@@ -201,6 +202,14 @@ export default function DwgImporterPage({ onClose, onLayoutGenerated }: DwgImpor
   // overlay the would-be-dropped fixtures on the 2-D canvas.
   const [showPrefilterStudio, setShowPrefilterStudio] = useState(false)
   const [prefilterPreview, setPrefilterPreview] = useState<PrefilterDryRunResult | null>(null)
+  // Perception ↔ venue coordinate matching — driven by the "Matching" tab in PreviewPanel.
+  // The interactive canvas picks (origin pin, two-point calibration) will be wired in the next iteration;
+  // for now the wizard exposes manual fields + the save endpoint.
+  const [matchingActive, setMatchingActive] = useState(false)
+  const [matchingPendingPick, setMatchingPendingPick] = useState<null | 'origin' | 'A' | 'B'>(null)
+  const [matchingOriginPick, setMatchingOriginPick] = useState<{ x: number; z: number } | null>(null)
+  const [matchingVenuePickA, setMatchingVenuePickA] = useState<{ x: number; z: number } | null>(null)
+  const [matchingVenuePickB, setMatchingVenuePickB] = useState<{ x: number; z: number } | null>(null)
   const keptPreviewSet = useMemo(() => {
     if (!prefilterPreview?.kept_fixture_ids) return null
     return new Set(prefilterPreview.kept_fixture_ids)
@@ -1554,6 +1563,15 @@ export default function DwgImporterPage({ onClose, onLayoutGenerated }: DwgImpor
                     setShowPrefilterStudio(false)
                   }}
                   lidarPairings={edgePairingsWithStatus}
+                  onViewModeChange={(mode) => {
+                    setMatchingActive(mode === 'matching')
+                    if (mode === 'matching') {
+                      setShowPrefilterStudio(false)
+                      setShowLidarPairing(false)
+                    } else {
+                      setMatchingPendingPick(null)
+                    }
+                  }}
                 />
               )}
             </div>
@@ -1575,6 +1593,29 @@ export default function DwgImporterPage({ onClose, onLayoutGenerated }: DwgImpor
                 onClose={() => {
                   setShowPrefilterStudio(false)
                   setPrefilterPreview(null)
+                }}
+              />
+            </div>
+          ) : matchingActive ? (
+            <div className="w-96 border-l border-border-dark overflow-hidden flex flex-col bg-panel-bg">
+              <MatchingPanel
+                venueId={generatedVenueId || venue?.id || null}
+                pendingPick={matchingPendingPick}
+                originPickResult={matchingOriginPick}
+                venuePickA={matchingVenuePickA}
+                venuePickB={matchingVenuePickB}
+                onRequestPickOrigin={() => setMatchingPendingPick(p => (p === 'origin' ? null : 'origin'))}
+                onRequestPickVenuePoint={(which) => setMatchingPendingPick(p => (p === which ? null : which))}
+                onCapturePerceptionPoint={async (which) => {
+                  // Placeholder: real capture will average ~10 samples of incoming live tracks via Socket.IO.
+                  // For now prompt the user so they can paste/enter the perception position manually.
+                  const raw = window.prompt(`Enter perception ${which} position as "x,z" (meters):`, '')
+                  if (!raw) return null
+                  const [xs, zs] = raw.split(',').map(s => s.trim())
+                  const x = Number(xs)
+                  const z = Number(zs)
+                  if (!Number.isFinite(x) || !Number.isFinite(z)) return null
+                  return { x, z }
                 }}
               />
             </div>
