@@ -53,6 +53,12 @@ interface PreviewPanelProps {
   lidarPairings?: Array<{ placementId: string; lidarIp?: string; lidarId: string; reachable?: boolean }>
   /** Notify parent when the user switches view-mode tab (used to show the Matching side panel). */
   onViewModeChange?: (mode: 'dwg' | 'floorplan' | 'overlay' | 'matching') => void
+  /** Perception matching origin (venue meters) shown as a crosshair on the canvas. */
+  matchingOrigin?: { x: number; z: number } | null
+  /** Perception matching rotation (degrees) shown as an arrow from the origin. */
+  matchingRotationDeg?: number
+  /** Canvas click handler for matching picks; if set, clicks in matching mode call this. */
+  onMatchingCanvasClick?: (venueMeters: { x: number; z: number }) => void
 }
 
 type Tool = 'pan' | 'select' | 'rectangle' | 'place_lidar' | 'draw_roi' | 'move_floorplan' | 'calibrate_floorplan' | 'crop_floorplan'
@@ -121,6 +127,9 @@ export default function PreviewPanel({
   onToggleLidarPairingMode,
   lidarPairings = [],
   onViewModeChange,
+  matchingOrigin,
+  matchingRotationDeg = 0,
+  onMatchingCanvasClick,
 }: PreviewPanelProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const [dimensions, setDimensions] = useState({ width: 800, height: 600 })
@@ -924,6 +933,17 @@ export default function PreviewPanel({
     if (e.button !== 0) return
     
     const pos = getMousePos(e)
+
+    // Matching mode: convert click to venue meters and dispatch to parent
+    if (viewMode === 'matching' && onMatchingCanvasClick) {
+      const worldPos = fromScreen(pos.x, pos.y)
+      const effScale = importData.unit_scale_to_m * scaleCorrection
+      if (effScale > 0) {
+        onMatchingCanvasClick({ x: worldPos.x * effScale, z: worldPos.y * effScale })
+      }
+      return
+    }
+
     setDragStart(pos)
     setDragStartOffset({ ...panOffset })
     setIsDragging(true)
@@ -3063,6 +3083,62 @@ export default function PreviewPanel({
               </g>
             )
           })}
+
+          {/* Matching mode: perception origin crosshair + rotation arrow */}
+          {viewMode === 'matching' && matchingOrigin && (() => {
+            const effScale = importData.unit_scale_to_m * scaleCorrection
+            if (effScale <= 0) return null
+            const dxfX = matchingOrigin.x / effScale
+            const dxfZ = matchingOrigin.z / effScale
+            const pos = toScreen(dxfX, dxfZ)
+            const armLen = 40
+            const rad = (matchingRotationDeg * Math.PI) / 180
+            const arrowLen = 60
+            const axEndX = pos.x + Math.cos(-rad) * arrowLen
+            const axEndY = pos.y + Math.sin(-rad) * arrowLen
+            const azRad = rad + Math.PI / 2
+            const azEndX = pos.x + Math.cos(-azRad) * arrowLen * 0.6
+            const azEndY = pos.y + Math.sin(-azRad) * arrowLen * 0.6
+            return (
+              <g pointerEvents="none">
+                {/* Crosshair arms */}
+                <line x1={pos.x - armLen} y1={pos.y} x2={pos.x + armLen} y2={pos.y} stroke="#06b6d4" strokeWidth="1.5" strokeDasharray="6 3" opacity={0.7} />
+                <line x1={pos.x} y1={pos.y - armLen} x2={pos.x} y2={pos.y + armLen} stroke="#06b6d4" strokeWidth="1.5" strokeDasharray="6 3" opacity={0.7} />
+                {/* Center dot */}
+                <circle cx={pos.x} cy={pos.y} r={6} fill="#06b6d4" opacity={0.9} />
+                <circle cx={pos.x} cy={pos.y} r={3} fill="white" />
+                {/* Pulse ring */}
+                <circle cx={pos.x} cy={pos.y} r={14} fill="none" stroke="#06b6d4" strokeWidth="1.5" opacity={0.5}>
+                  <animate attributeName="r" from="14" to="28" dur="2s" repeatCount="indefinite" />
+                  <animate attributeName="opacity" from="0.5" to="0" dur="2s" repeatCount="indefinite" />
+                </circle>
+                {/* +X arrow (perception axis after rotation) — red */}
+                <line x1={pos.x} y1={pos.y} x2={axEndX} y2={axEndY} stroke="#ef4444" strokeWidth="2.5" opacity={0.85} />
+                <polygon
+                  points={(() => {
+                    const tipLen = 10
+                    const tipW = 5
+                    const dx = axEndX - pos.x
+                    const dy = axEndY - pos.y
+                    const len = Math.hypot(dx, dy) || 1
+                    const ux = dx / len
+                    const uy = dy / len
+                    return `${axEndX},${axEndY} ${axEndX - ux * tipLen + uy * tipW},${axEndY - uy * tipLen - ux * tipW} ${axEndX - ux * tipLen - uy * tipW},${axEndY - uy * tipLen + ux * tipW}`
+                  })()}
+                  fill="#ef4444"
+                  opacity={0.85}
+                />
+                <text x={axEndX + 6} y={axEndY - 4} fill="#ef4444" fontSize="11" fontWeight="700">+X</text>
+                {/* +Z arrow — green */}
+                <line x1={pos.x} y1={pos.y} x2={azEndX} y2={azEndY} stroke="#22c55e" strokeWidth="2" opacity={0.7} />
+                <text x={azEndX + 6} y={azEndY - 4} fill="#22c55e" fontSize="11" fontWeight="700">+Z</text>
+                {/* Label */}
+                <text x={pos.x + 18} y={pos.y - 18} fill="#06b6d4" fontSize="11" fontWeight="600">
+                  Origin ({matchingOrigin.x.toFixed(1)}, {matchingOrigin.z.toFixed(1)})m · {matchingRotationDeg.toFixed(0)}°
+                </text>
+              </g>
+            )
+          })()}
 
           {/* Arrow marker definition */}
           <defs>

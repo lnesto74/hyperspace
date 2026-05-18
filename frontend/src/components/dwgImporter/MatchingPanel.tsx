@@ -17,6 +17,8 @@ interface MatchingPanelProps {
   venuePickA?: { x: number; z: number } | null
   venuePickB?: { x: number; z: number } | null
   originPickResult?: { x: number; z: number } | null
+  /** Called whenever the local transform changes so the parent can update the canvas overlay. */
+  onTransformChange?: (origin: { x: number; z: number }, rotationDeg: number) => void
 }
 
 type SaveState = 'idle' | 'saving' | 'saved' | 'error'
@@ -30,6 +32,7 @@ export default function MatchingPanel({
   venuePickA,
   venuePickB,
   originPickResult,
+  onTransformChange,
 }: MatchingPanelProps) {
   const [transform, setTransform] = useState<PerceptionTransform>(IDENTITY_PERCEPTION_TRANSFORM)
   const [loading, setLoading] = useState(false)
@@ -67,6 +70,11 @@ export default function MatchingPanel({
     if (!originPickResult) return
     setTransform(t => ({ ...t, origin_m: { x: originPickResult.x, z: originPickResult.z } }))
   }, [originPickResult])
+
+  // Push live origin/rotation to parent so the canvas crosshair updates immediately
+  useEffect(() => {
+    onTransformChange?.(transform.origin_m, transform.rotation_deg)
+  }, [transform.origin_m, transform.rotation_deg, onTransformChange])
 
   const updateField = useCallback(<K extends keyof PerceptionTransform>(key: K, value: PerceptionTransform[K]) => {
     setTransform(t => ({ ...t, [key]: value }))

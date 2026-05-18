@@ -210,6 +210,9 @@ export default function DwgImporterPage({ onClose, onLayoutGenerated }: DwgImpor
   const [matchingOriginPick, setMatchingOriginPick] = useState<{ x: number; z: number } | null>(null)
   const [matchingVenuePickA, setMatchingVenuePickA] = useState<{ x: number; z: number } | null>(null)
   const [matchingVenuePickB, setMatchingVenuePickB] = useState<{ x: number; z: number } | null>(null)
+  // Live matching values: MatchingPanel pushes these so the canvas crosshair stays in sync.
+  const [matchingOriginLive, setMatchingOriginLive] = useState<{ x: number; z: number } | null>(null)
+  const [matchingRotationLive, setMatchingRotationLive] = useState<number>(0)
   const keptPreviewSet = useMemo(() => {
     if (!prefilterPreview?.kept_fixture_ids) return null
     return new Set(prefilterPreview.kept_fixture_ids)
@@ -1563,6 +1566,21 @@ export default function DwgImporterPage({ onClose, onLayoutGenerated }: DwgImpor
                     setShowPrefilterStudio(false)
                   }}
                   lidarPairings={edgePairingsWithStatus}
+                  matchingOrigin={matchingActive ? matchingOriginLive : null}
+                  matchingRotationDeg={matchingRotationLive}
+                  onMatchingCanvasClick={matchingActive ? (pt) => {
+                    if (matchingPendingPick === 'origin') {
+                      setMatchingOriginPick(pt)
+                      setMatchingOriginLive(pt)
+                      setMatchingPendingPick(null)
+                    } else if (matchingPendingPick === 'A') {
+                      setMatchingVenuePickA(pt)
+                      setMatchingPendingPick(null)
+                    } else if (matchingPendingPick === 'B') {
+                      setMatchingVenuePickB(pt)
+                      setMatchingPendingPick(null)
+                    }
+                  } : undefined}
                   onViewModeChange={(mode) => {
                     setMatchingActive(mode === 'matching')
                     if (mode === 'matching') {
@@ -1607,8 +1625,6 @@ export default function DwgImporterPage({ onClose, onLayoutGenerated }: DwgImpor
                 onRequestPickOrigin={() => setMatchingPendingPick(p => (p === 'origin' ? null : 'origin'))}
                 onRequestPickVenuePoint={(which) => setMatchingPendingPick(p => (p === which ? null : which))}
                 onCapturePerceptionPoint={async (which) => {
-                  // Placeholder: real capture will average ~10 samples of incoming live tracks via Socket.IO.
-                  // For now prompt the user so they can paste/enter the perception position manually.
                   const raw = window.prompt(`Enter perception ${which} position as "x,z" (meters):`, '')
                   if (!raw) return null
                   const [xs, zs] = raw.split(',').map(s => s.trim())
@@ -1616,6 +1632,10 @@ export default function DwgImporterPage({ onClose, onLayoutGenerated }: DwgImpor
                   const z = Number(zs)
                   if (!Number.isFinite(x) || !Number.isFinite(z)) return null
                   return { x, z }
+                }}
+                onTransformChange={(origin, rotDeg) => {
+                  setMatchingOriginLive(origin)
+                  setMatchingRotationLive(rotDeg)
                 }}
               />
             </div>
