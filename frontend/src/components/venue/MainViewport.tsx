@@ -3861,7 +3861,7 @@ export default function MainViewport({
           pointCloud.visible = currentTracking.trackDisplayMode === 'pointcloud'
           group.add(pointCloud)
 
-          const wfBoxGeo = new THREE.BoxGeometry(bbox.width, bbox.height, bbox.depth)
+          const wfBoxGeo = new THREE.BoxGeometry(cylinderRadius * 2, cylinderHeight, cylinderRadius * 2)
           const wfEdgesGeo = new THREE.EdgesGeometry(wfBoxGeo)
           wfBoxGeo.dispose()
           const wfMaterial = new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.7 })
