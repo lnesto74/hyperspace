@@ -250,6 +250,9 @@ export default function MainViewport({
   const [showTracksLayer, setShowTracksLayer] = useState(true)
   const showTracksRef = useRef(true)
   showTracksRef.current = showTracksLayer
+  const [showTrackIdsLayer, setShowTrackIdsLayer] = useState(false)
+  const showTrackIdsRef = useRef(false)
+  showTrackIdsRef.current = showTrackIdsLayer
   const [areaSelectMode, setAreaSelectMode] = useState(false)
   const [areaSelectRect, setAreaSelectRect] = useState<{ x: number; y: number; w: number; h: number } | null>(null)
   const areaSelectStartRef = useRef<{ x: number; y: number } | null>(null)
@@ -3846,12 +3849,31 @@ export default function MainViewport({
             (group.children[2] as THREE.Mesh).visible = false
           }
 
+          // ID label floating above the cylinder (CSS2D so the text always faces the camera).
+          // Tooltip-style — shows stable ID + perception ID for forensic matching against the MQTT feed.
+          const labelDiv = document.createElement('div')
+          labelDiv.className = 'track-id-label'
+          labelDiv.style.cssText = 'background: rgba(15,15,20,0.85); color: #e5e7eb; font-family: ui-monospace,monospace; font-size: 10px; padding: 1px 5px; border-radius: 3px; border: 1px solid rgba(255,255,255,0.15); white-space: nowrap; transform: translate(-50%, -100%); pointer-events: none;'
+          const labelObj = new CSS2DObject(labelDiv)
+          labelObj.position.set(0, cylinderHeight / 2 + 0.4, 0)
+          labelObj.userData.isTrackIdLabel = true
+          group.add(labelObj)
+
           group.visible = showTracksRef.current
           scene.add(group)
           trackMeshesRef.current.set(key, group)
         }
 
         group.position.set(track.venuePosition.x, cylinderHeight / 2, track.venuePosition.z)
+
+        // Refresh the ID label every frame so re-IDs / perception changes are visible
+        const idLabel = group.children.find((c): c is CSS2DObject => (c as CSS2DObject).userData?.isTrackIdLabel === true) as CSS2DObject | undefined
+        if (idLabel) {
+          const stableShort = (track.stableId || track.id || '').toString().slice(0, 8)
+          const perceptionId = (track as unknown as { originalPerceptionId?: string }).originalPerceptionId
+          idLabel.element.textContent = perceptionId ? `${stableShort} · p:${perceptionId}` : stableShort
+          idLabel.visible = showTrackIdsRef.current && showTracksRef.current
+        }
 
         const cylinder = group.children[0] as THREE.Mesh
         const topCap = group.children[1] as THREE.Mesh
@@ -5980,6 +6002,19 @@ export default function MainViewport({
                 <span className="text-sm text-gray-300 flex items-center gap-1.5">
                   {showTracksLayer ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5 text-gray-500" />}
                   Tracks
+                </span>
+              </label>
+              <label className="flex items-center gap-2 py-1.5 px-2 rounded hover:bg-gray-700 cursor-pointer pl-6">
+                <input
+                  type="checkbox"
+                  checked={showTrackIdsLayer}
+                  onChange={(e) => setShowTrackIdsLayer(e.target.checked)}
+                  disabled={!showTracksLayer}
+                  className="rounded border-gray-600 bg-gray-700 text-purple-500"
+                />
+                <span className="text-xs text-gray-400 flex items-center gap-1.5">
+                  {showTrackIdsLayer && showTracksLayer ? <Eye className="w-3 h-3" /> : <EyeOff className="w-3 h-3 text-gray-500" />}
+                  Track IDs (stable · perception)
                 </span>
               </label>
               <label className="flex items-center gap-2 py-1.5 px-2 rounded hover:bg-gray-700 cursor-pointer">
