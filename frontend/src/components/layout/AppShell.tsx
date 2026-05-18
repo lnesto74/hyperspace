@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Eye, Grid3X3, Box, ArrowUp, Sun, X, Radio, History, Crosshair, LayoutGrid, ChevronLeft, ChevronRight } from 'lucide-react'
+import { Eye, Grid3X3, Box, ArrowUp, Sun, X, Radio, History, Crosshair, LayoutGrid, ChevronLeft, ChevronRight, Compass } from 'lucide-react'
 import Sidebar from './Sidebar'
 import RightPanel from './RightPanel'
 import ModeBar from './ModeBar'
@@ -8,6 +8,7 @@ import type { CaptureScreenshotFn } from '../venue/MainViewport'
 import TimelineReplay from '../timeline/TimelineReplay'
 import LandingExperience from '../landing/LandingExperience'
 import { NeuralDashboard } from '../neuralDashboard'
+import MatchingTunerPanel from '../matching/MatchingTunerPanel'
 import { useVenue } from '../../context/VenueContext'
 import { useLidar } from '../../context/LidarContext'
 import { useDwg } from '../../context/DwgContext'
@@ -67,6 +68,7 @@ export default function AppShell({ onOpenDwgImporter, onOpenEdgeCommissioning, s
   const [cameraView, setCameraView] = useState<CameraView>('perspective')
   const [showLightingPopup, setShowLightingPopup] = useState(false)
   const [showTrackingPopup, setShowTrackingPopup] = useState(false)
+  const [showMatchingTuner, setShowMatchingTuner] = useState(false)
   const [lighting, setLighting] = useState<LightingSettings>(defaultLighting)
   const [tracking, setTracking] = useState<TrackingSettings>(defaultTracking)
   const { venue, selectedObjectId, objects } = useVenue()
@@ -157,6 +159,11 @@ export default function AppShell({ onOpenDwgImporter, onOpenEdgeCommissioning, s
 
         {/* Intent Field Overlay (Profit Radar) - only show in default mode */}
         {!neuralDashboardEnabled && <IntentFieldOverlay />}
+
+        {/* Perception Matching live tuner — floating panel on top of 3D venue. */}
+        {showMatchingTuner && venue?.id && (
+          <MatchingTunerPanel venueId={venue.id} onClose={() => setShowMatchingTuner(false)} />
+        )}
 
 
         {/* Landing Experience - renders inside viewport area, on top of 3D */}
@@ -437,6 +444,17 @@ export default function AppShell({ onOpenDwgImporter, onOpenEdgeCommissioning, s
               title="Tracking Settings"
             >
               <Radio className="w-3.5 h-3.5" />
+            </button>
+            <button
+              onClick={() => setShowMatchingTuner(v => !v)}
+              className={`p-1.5 rounded transition-colors ${
+                showMatchingTuner
+                  ? 'bg-cyan-600 text-white'
+                  : 'text-gray-400 hover:text-white hover:bg-gray-700'
+              }`}
+              title="Perception ↔ Venue live tuner"
+            >
+              <Compass className="w-3.5 h-3.5" />
             </button>
             <button
               onClick={() => setIntentFieldEnabled(!intentFieldEnabled)}
