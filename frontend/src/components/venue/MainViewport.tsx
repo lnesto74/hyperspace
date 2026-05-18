@@ -253,6 +253,9 @@ export default function MainViewport({
   const [showTrackIdsLayer, setShowTrackIdsLayer] = useState(false)
   const showTrackIdsRef = useRef(false)
   showTrackIdsRef.current = showTrackIdsLayer
+  // Screen-space track ID labels: projected from 3D every frame in the render loop
+  const trackIdLabelsRef = useRef<Map<string, { x: number; y: number; text: string }>>(new Map())
+  const [trackIdLabelsVersion, setTrackIdLabelsVersion] = useState(0)
   const [areaSelectMode, setAreaSelectMode] = useState(false)
   const [areaSelectRect, setAreaSelectRect] = useState<{ x: number; y: number; w: number; h: number } | null>(null)
   const areaSelectStartRef = useRef<{ x: number; y: number } | null>(null)
@@ -1016,6 +1019,26 @@ export default function MainViewport({
 
       renderer.render(scene, camera)
       labelRenderer.render(scene, camera)
+
+      // Project track positions to screen coords for the HTML overlay (every 3rd frame to save CPU)
+      if (showTrackIdsRef.current && now % 3 === 0) {
+        const w2 = renderer.domElement.clientWidth / 2
+        const h2 = renderer.domElement.clientHeight / 2
+        const next = new Map<string, { x: number; y: number; text: string }>()
+        const _v = new THREE.Vector3()
+        trackMeshesRef.current.forEach((group, key) => {
+          if (!group.visible) return
+          const text = group.userData.trackPerceptionId
+          if (!text) return
+          _v.setFromMatrixPosition(group.matrixWorld)
+          _v.y += 1.2 // above the cylinder
+          _v.project(camera)
+          if (_v.z > 1) return // behind camera
+          next.set(key, { x: (_v.x * w2) + w2, y: -(_v.y * h2) + h2, text })
+        })
+        trackIdLabelsRef.current = next
+        setTrackIdLabelsVersion(v => v + 1)
+      }
 
       if (axisSceneRef.current && axisCameraRef.current && axisRendererRef.current) {
         const dir = new THREE.Vector3()
@@ -3849,21 +3872,8 @@ export default function MainViewport({
             (group.children[2] as THREE.Mesh).visible = false
           }
 
-          // ID label sprite — always faces camera, moves with the cylinder in 3D.
-          const labelCanvas = document.createElement('canvas')
-          labelCanvas.width = 128
-          labelCanvas.height = 32
-          const labelTexture = new THREE.CanvasTexture(labelCanvas)
-          labelTexture.minFilter = THREE.LinearFilter
-          const labelMat = new THREE.SpriteMaterial({ map: labelTexture, transparent: true, depthTest: false })
-          const labelSprite = new THREE.Sprite(labelMat)
-          labelSprite.scale.set(1.6, 0.4, 1)
-          labelSprite.position.set(0, cylinderHeight / 2 + 0.5, 0)
-          labelSprite.userData.isTrackIdLabel = true
-          labelSprite.userData.labelCanvas = labelCanvas
-          labelSprite.userData.labelTexture = labelTexture
-          labelSprite.userData.lastText = ''
-          group.add(labelSprite)
+          // Track ID stored on userData for the screen-space overlay to read
+          group.userData.trackPerceptionId = ''
 
           group.visible = showTracksRef.current
           scene.add(group)
@@ -3872,28 +3882,10 @@ export default function MainViewport({
 
         group.position.set(track.venuePosition.x, cylinderHeight / 2, track.venuePosition.z)
 
-        const idLabel = group.children.find((c) => c.userData?.isTrackIdLabel === true) as THREE.Sprite | undefined
-        if (idLabel) {
-          const perceptionId = (track as unknown as { originalPerceptionId?: string }).originalPerceptionId || track.id || ''
-          const digits = String(perceptionId).replace(/\D/g, '')
-          const text = digits.slice(-4) || '?'
-          idLabel.visible = showTrackIdsRef.current && showTracksRef.current
-          if (idLabel.userData.lastText !== text) {
-            idLabel.userData.lastText = text
-            const canvas = idLabel.userData.labelCanvas as HTMLCanvasElement
-            const ctx = canvas.getContext('2d')!
-            ctx.clearRect(0, 0, canvas.width, canvas.height)
-            ctx.fillStyle = 'rgba(15,15,20,0.85)'
-            ctx.roundRect(0, 0, canvas.width, canvas.height, 4)
-            ctx.fill()
-            ctx.fillStyle = '#ffffff'
-            ctx.font = 'bold 18px monospace'
-            ctx.textAlign = 'center'
-            ctx.textBaseline = 'middle'
-            ctx.fillText(text, canvas.width / 2, canvas.height / 2)
-            ;(idLabel.userData.labelTexture as THREE.CanvasTexture).needsUpdate = true
-          }
-        }
+        // Store perception ID on the group for the screen-space overlay
+        const perceptionId = (track as unknown as { originalPerceptionId?: string }).originalPerceptionId || track.id || ''
+        const digits = String(perceptionId).replace(/\D/g, '')
+        group.userData.trackPerceptionId = digits.slice(-4) || '?'
 
         const cylinder = group.children[0] as THREE.Mesh
         const topCap = group.children[1] as THREE.Mesh
@@ -5927,6 +5919,34 @@ export default function MainViewport({
               <span>({hoveredObjectTooltip.posX.toFixed(1)}, {hoveredObjectTooltip.posZ.toFixed(1)})</span>
             </div>
             <div className="text-gray-500 text-[10px] mt-1 truncate">ID: {hoveredObjectTooltip.id.slice(0, 8)}</div>
+          </div>
+        )}
+
+        {/* Screen-space track ID labels — projected from 3D every frame */}
+        {showTrackIdsLayer && showTracksLayer && (
+          <div className="absolute inset-0 pointer-events-none overflow-hidden" style={{ zIndex: 5 }}>
+            {Array.from(trackIdLabelsRef.current.values()).map((label, i) => (
+              <div
+                key={i}
+                className="absolute"
+                style={{
+                  left: label.x,
+                  top: label.y,
+                  transform: 'translate(-50%, -100%)',
+                  background: 'rgba(0,0,0,0.8)',
+                  color: '#fff',
+                  fontFamily: 'ui-monospace, monospace',
+                  fontSize: '11px',
+                  fontWeight: 700,
+                  padding: '1px 4px',
+                  borderRadius: '3px',
+                  border: '1px solid rgba(255,255,255,0.2)',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {label.text}
+              </div>
+            ))}
           </div>
         )}
 
