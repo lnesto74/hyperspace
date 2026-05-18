@@ -3866,21 +3866,11 @@ export default function MainViewport({
 
         group.position.set(track.venuePosition.x, cylinderHeight / 2, track.venuePosition.z)
 
-        // Refresh the ID label every frame so re-IDs / perception changes are visible.
-        // Show the FULL perception ID (so it can be cross-referenced against MQTT verbatim)
-        // and a short stable hash so the reconciler's re-IDs are observable.
         const idLabel = group.children.find((c): c is CSS2DObject => (c as CSS2DObject).userData?.isTrackIdLabel === true) as CSS2DObject | undefined
         if (idLabel) {
-          const perceptionId = (track as unknown as { originalPerceptionId?: string }).originalPerceptionId
-          const stableId = (track as unknown as { stableId?: string }).stableId || track.id
-          const stableShort = stableId ? String(stableId).slice(0, 6) : ''
-          if (perceptionId) {
-            // Reconciler is active — show perception ID prominently and stable hash for tracking continuity
-            idLabel.element.textContent = `${perceptionId}  ⟶  ${stableShort}`
-          } else {
-            // Bypass mode or no perception ID — just the raw ID
-            idLabel.element.textContent = String(track.id || stableId || '?')
-          }
+          const perceptionId = (track as unknown as { originalPerceptionId?: string }).originalPerceptionId || track.id || ''
+          const digits = String(perceptionId).replace(/\D/g, '')
+          idLabel.element.textContent = digits.slice(-4) || '?'
           idLabel.visible = showTrackIdsRef.current && showTracksRef.current
         }
 
