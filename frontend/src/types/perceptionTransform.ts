@@ -1,20 +1,26 @@
 /**
- * Shape stored under venues.dwg_transform_json.perceptionTransform.
- * Maps perception sensor frame → venue meters (Hyperspace world).
+ * Perception → venue coordinate transform.
  *
- *   [xv]   [ cosθ  -sinθ ] [ sx · sign_x · (axis_map.px === 'z' ? p.z : p.x) ]   [ origin.x ]
- *   [zv] = [ sinθ   cosθ ] [ sz · sign_z · (axis_map.pz === 'x' ? p.x : p.z) ] + [ origin.z ]
+ * Coordinate conventions:
+ *   Perception software: X,Y = floor plane, Z = height (up).
+ *   Hyperspace (Three.js): X,Z = floor plane, Y = height (up).
  *
- * Identity transform = behavior unchanged (perception X → venue X, perception Z → venue Z).
+ * The Y↔Z swap is handled in MqttTrajectoryService before this transform
+ * runs. The `origin_m` stores venue floor-plane coords (Three.js X,Z), but
+ * the Matching UI labels them X,Y to match the perception developer's frame.
+ *
+ * The `axis_map` uses perception language: `px` = perception +X axis,
+ * `py` = perception +Y axis. Values ('x' or 'z') indicate which Three.js
+ * floor axis each maps to.
  */
 export interface PerceptionTransform {
-  /** Where perception (0,0) sits in venue meters. */
+  /** Where perception (0,0) sits in venue meters (Three.js X,Z floor plane). */
   origin_m: { x: number; z: number };
-  /** Rotation about Y axis (degrees, perception +X → venue +X). */
+  /** Rotation about vertical axis (degrees, perception +X → venue +X). */
   rotation_deg: number;
-  /** Axis remap (handles X↔Z swap). */
-  axis_map: { px: 'x' | 'z'; pz: 'x' | 'z' };
-  /** Axis sign (handles mirrored / Y-up vs Z-up). */
+  /** Axis remap: px = where perception X lands, py = where perception Y lands. */
+  axis_map: { px: 'x' | 'z'; py: 'x' | 'z' };
+  /** Axis sign (handles mirrored axes). */
   axis_sign: { x: 1 | -1; z: 1 | -1 };
   /** Uniform scale; usually 1.0 since perception already publishes meters. */
   scale: number;
@@ -25,7 +31,7 @@ export interface PerceptionTransform {
 export const IDENTITY_PERCEPTION_TRANSFORM: PerceptionTransform = {
   origin_m: { x: 0, z: 0 },
   rotation_deg: 0,
-  axis_map: { px: 'x', pz: 'z' },
+  axis_map: { px: 'x', py: 'z' },
   axis_sign: { x: 1, z: 1 },
   scale: 1.0,
 };
@@ -41,14 +47,14 @@ export function readPerceptionTransform(dwgTransformJson?: string | null): Perce
   }
 }
 
-/** Map a perception-frame point to venue meters in the browser (for live overlays). */
+/** Map a perception-frame point (already Y↔Z swapped) to venue meters in the browser. */
 export function applyTransformToPoint(
   transform: PerceptionTransform | null | undefined,
   point: { x: number; y?: number; z: number }
 ): { x: number; y: number; z: number } {
   const t = transform || IDENTITY_PERCEPTION_TRANSFORM;
   const ax = t.axis_map.px === 'z' ? point.z : point.x;
-  const az = t.axis_map.pz === 'x' ? point.x : point.z;
+  const az = t.axis_map.py === 'x' ? point.x : point.z;
   const sx = t.axis_sign.x * ax * t.scale;
   const sz = t.axis_sign.z * az * t.scale;
   const rad = (t.rotation_deg * Math.PI) / 180;

@@ -3129,12 +3129,12 @@ export default function PreviewPanel({
                   opacity={0.85}
                 />
                 <text x={axEndX + 6} y={axEndY - 4} fill="#ef4444" fontSize="11" fontWeight="700">+X</text>
-                {/* +Z arrow — green */}
+                {/* +Y arrow — green (perception Y = floor axis) */}
                 <line x1={pos.x} y1={pos.y} x2={azEndX} y2={azEndY} stroke="#22c55e" strokeWidth="2" opacity={0.7} />
-                <text x={azEndX + 6} y={azEndY - 4} fill="#22c55e" fontSize="11" fontWeight="700">+Z</text>
+                <text x={azEndX + 6} y={azEndY - 4} fill="#22c55e" fontSize="11" fontWeight="700">+Y</text>
                 {/* Label */}
                 <text x={pos.x + 18} y={pos.y - 18} fill="#06b6d4" fontSize="11" fontWeight="600">
-                  Origin ({matchingOrigin.x.toFixed(1)}, {matchingOrigin.z.toFixed(1)})m · {matchingRotationDeg.toFixed(0)}°
+                  Origin X={matchingOrigin.x.toFixed(1)} Y={matchingOrigin.z.toFixed(1)}m · {matchingRotationDeg.toFixed(0)}°
                 </text>
               </g>
             )

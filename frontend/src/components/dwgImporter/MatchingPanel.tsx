@@ -202,7 +202,7 @@ export default function MatchingPanel({
                 />
               </label>
               <label className="flex-1">
-                <span className="block text-[10px] text-gray-500 uppercase">Z</span>
+                <span className="block text-[10px] text-gray-500 uppercase">Y</span>
                 <input
                   type="number"
                   step={0.01}
@@ -227,7 +227,7 @@ export default function MatchingPanel({
           <section className="space-y-2">
             <div className="text-xs font-semibold text-white flex items-center gap-2">
               <RotateCw className="w-3.5 h-3.5 text-cyan-400" />
-              Step 2 · Rotation (degrees, perception +X → venue +X)
+              Step 2 · Rotation (degrees, perception +X → venue direction)
             </div>
             <input
               type="number"
@@ -265,17 +265,17 @@ export default function MatchingPanel({
                   className="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-white"
                 >
                   <option value="x">Venue X</option>
-                  <option value="z">Venue Z</option>
+                  <option value="z">Venue Y</option>
                 </select>
               </label>
               <label className="text-[11px]">
-                <span className="block text-gray-500 mb-0.5">Perception Z →</span>
+                <span className="block text-gray-500 mb-0.5">Perception Y →</span>
                 <select
-                  value={transform.axis_map.pz}
-                  onChange={e => updateField('axis_map', { ...transform.axis_map, pz: e.target.value as 'x' | 'z' })}
+                  value={transform.axis_map.py}
+                  onChange={e => updateField('axis_map', { ...transform.axis_map, py: e.target.value as 'x' | 'z' })}
                   className="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-white"
                 >
-                  <option value="z">Venue Z</option>
+                  <option value="z">Venue Y</option>
                   <option value="x">Venue X</option>
                 </select>
               </label>
@@ -295,7 +295,7 @@ export default function MatchingPanel({
                   checked={transform.axis_sign.z === -1}
                   onChange={e => updateField('axis_sign', { ...transform.axis_sign, z: e.target.checked ? -1 : 1 })}
                 />
-                Mirror Z
+                Mirror Y
               </label>
             </div>
             <label className="block text-[11px] mt-1">

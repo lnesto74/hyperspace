@@ -156,27 +156,34 @@ class MqttTrajectoryService {
         const color = data.color || this.getColorForTrack(trackKey)
         const venueId = data.venueId || 'default'
 
+        // Perception convention: X,Y = floor plane, Z = height (up).
+        // Three.js convention:   X,Z = floor plane, Y = height (up).
+        // Swap Y↔Z so the rest of the pipeline operates in Three.js coords.
+        const percPos = data.position || { x: 0, y: 0, z: 0 }
+        const percVel = data.velocity || { x: 0, y: 0, z: 0 }
+        const floorPos = { x: percPos.x, y: percPos.z, z: percPos.y }
+        const floorVel = { x: percVel.x, y: percVel.z, z: percVel.y }
+
         // Apply per-venue perception → venue coordinate transform.
         // `position` keeps the raw perception value (used by the Matching UI for live preview),
         // `venuePosition` is what every downstream consumer (Socket.IO, KPIs, DB) renders.
         const transform = this.venueTransforms.get(venueId)
-        const rawVelocity = data.velocity || { x: 0, y: 0, z: 0 }
         const venuePosition = transform
-          ? applyTransformToPoint(transform, data.position)
-          : data.position
+          ? applyTransformToPoint(transform, floorPos)
+          : floorPos
         const venueVelocity = transform
-          ? applyTransformToVelocity(transform, rawVelocity)
-          : rawVelocity
+          ? applyTransformToVelocity(transform, floorVel)
+          : floorVel
 
         const processedTrack = {
           id: data.id || uuidv4(),
           trackKey,
           deviceId: data.deviceId || deviceId,
           timestamp: data.timestamp || Date.now(),
-          position: data.position,
+          position: floorPos,
           venuePosition,
           velocity: venueVelocity,
-          rawVelocity,
+          rawVelocity: floorVel,
           objectType: data.objectType || 'person',
           boundingBox: data.boundingBox || { width: 0.5, height: 1.7, depth: 0.5 },
           color
@@ -217,8 +224,11 @@ class MqttTrajectoryService {
         const trackKey = track.trackKey || `${deviceId}:${track.id}`
         const color = this.getColorForTrack(trackKey)
 
-        const rawPosition = track.position || { x: 0, y: 0, z: 0 }
-        const rawVelocity = track.velocity || { x: 0, y: 0, z: 0 }
+        // Perception Y↔Z swap (see single-track path comment above)
+        const rp = track.position || { x: 0, y: 0, z: 0 }
+        const rv = track.velocity || { x: 0, y: 0, z: 0 }
+        const rawPosition = { x: rp.x, y: rp.z, z: rp.y }
+        const rawVelocity = { x: rv.x, y: rv.z, z: rv.y }
         // Honor venuePosition if the publisher already supplied it; otherwise transform raw.
         const venuePosition = track.venuePosition
           || (transform ? applyTransformToPoint(transform, rawPosition) : rawPosition)
