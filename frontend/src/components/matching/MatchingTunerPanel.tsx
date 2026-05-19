@@ -31,7 +31,7 @@ export default function MatchingTunerPanel({ venueId, onClose }: MatchingTunerPa
   const [ghostFile, setGhostFile] = useState<string>('')
   const [ghostEnabled, setGhostEnabled] = useState(false)
   const [ghostOpacity, setGhostOpacity] = useState(0.65)
-  const [ghostBust, setGhostBust] = useState(0) // bumps to force texture refetch
+  const ghostUpdateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // Load current transform once when venueId changes
   useEffect(() => {
@@ -87,24 +87,30 @@ export default function MatchingTunerPanel({ venueId, onClose }: MatchingTunerPa
       .catch(() => { /* ignore — backend may not be reachable */ })
   }, [ghostFile])
 
-  // Broadcast ghost-overlay settings to MainViewport via a window event
+  // Broadcast ghost-overlay settings to MainViewport via a window event.
+  // The current (un-saved) transform is sent as a `t` JSON param so the server
+  // renders against the LIVE slider state — no save round-trip needed.
+  // A short throttle (150ms) avoids spamming the server during slider drags
+  // but still feels instant when you release the slider.
+  const transformVersion = `${transform.origin_m.x}|${transform.origin_m.z}|${transform.rotation_deg}|${transform.axis_sign.x}|${transform.axis_sign.z}|${transform.scale}|${transform.input_frame}|${transform.axis_map.px}|${transform.axis_map.py}`
   useEffect(() => {
-    const url = ghostEnabled && ghostFile && venueId
-      ? `${API_BASE}/api/replay/preview-image?file=${encodeURIComponent(ghostFile)}&venueId=${venueId}&bust=${ghostBust}`
-      : null
-    window.dispatchEvent(new CustomEvent('ghost-overlay-changed', {
-      detail: { url, opacity: ghostOpacity },
-    }))
-  }, [ghostEnabled, ghostFile, venueId, ghostBust, ghostOpacity])
-
-  // Auto-refresh ghost a few hundred ms after the transform changes so the
-  // overlay reflects the latest origin/rotation.
-  const transformVersion = `${transform.origin_m.x}|${transform.origin_m.z}|${transform.rotation_deg}|${transform.axis_sign.x}|${transform.axis_sign.z}|${transform.scale}|${transform.input_frame}`
-  useEffect(() => {
-    if (!ghostEnabled) return
-    const id = setTimeout(() => setGhostBust(v => v + 1), 600)
-    return () => clearTimeout(id)
-  }, [transformVersion, ghostEnabled])
+    if (ghostUpdateTimerRef.current) clearTimeout(ghostUpdateTimerRef.current)
+    ghostUpdateTimerRef.current = setTimeout(() => {
+      if (!ghostEnabled || !ghostFile || !venueId) {
+        window.dispatchEvent(new CustomEvent('ghost-overlay-changed', { detail: { url: null, opacity: ghostOpacity } }))
+        return
+      }
+      const params = new URLSearchParams({
+        file: ghostFile,
+        venueId,
+        px: '10',
+        t: JSON.stringify(transform),
+      })
+      const url = `${API_BASE}/api/replay/preview-image?${params.toString()}`
+      window.dispatchEvent(new CustomEvent('ghost-overlay-changed', { detail: { url, opacity: ghostOpacity } }))
+    }, 150)
+    return () => { if (ghostUpdateTimerRef.current) clearTimeout(ghostUpdateTimerRef.current) }
+  }, [ghostEnabled, ghostFile, venueId, ghostOpacity, transformVersion, transform])
 
   const update = useCallback((patch: Partial<PerceptionTransform>) => {
     setTransform(prev => {
@@ -346,7 +352,19 @@ export default function MatchingTunerPanel({ venueId, onClose }: MatchingTunerPa
               />
               <span className="text-[10px] text-gray-500 w-8 text-right">{Math.round(ghostOpacity * 100)}%</span>
               <button
-                onClick={() => setGhostBust(v => v + 1)}
+                onClick={() => {
+                  // Force a re-fetch by appending a cache-buster
+                  if (!ghostEnabled || !ghostFile || !venueId) return
+                  const params = new URLSearchParams({
+                    file: ghostFile,
+                    venueId,
+                    px: '10',
+                    t: JSON.stringify(transform),
+                    bust: String(Date.now()),
+                  })
+                  const url = `${API_BASE}/api/replay/preview-image?${params.toString()}`
+                  window.dispatchEvent(new CustomEvent('ghost-overlay-changed', { detail: { url, opacity: ghostOpacity } }))
+                }}
                 disabled={!ghostEnabled}
                 className="p-1 rounded hover:bg-gray-700/60 disabled:opacity-50"
                 title="Re-render heatmap with current transform"

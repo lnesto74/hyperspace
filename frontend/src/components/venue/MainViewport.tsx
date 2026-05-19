@@ -695,31 +695,64 @@ export default function MainViewport({
   const tracksRef = useTracksRef()
 
   // Ghost overlay — listens for events from MatchingTunerPanel and renders a
-  // textured plane on the venue floor showing where a recorded JSONL projects
-  // through the current perceptionTransform. Lets the operator align by eye
-  // against the floor plan without waiting on live replay.
+  // textured plane on the venue floor. Stale loads (when slider drags fire
+  // multiple requests) are discarded by tracking the latest URL.
+  const latestGhostUrlRef = useRef<string | null>(null)
   useEffect(() => {
     const handler = (e: Event) => {
       const ce = e as CustomEvent<{ url: string | null; opacity: number }>
       const { url, opacity } = ce.detail || { url: null, opacity: 0.65 }
       const scene = sceneRef.current
       if (!scene || !venue) return
-      // Remove existing
-      if (ghostOverlayRef.current) {
-        scene.remove(ghostOverlayRef.current)
-        const m = ghostOverlayRef.current.material as THREE.MeshBasicMaterial
-        m.map?.dispose()
-        m.dispose()
-        ghostOverlayRef.current.geometry.dispose()
-        ghostOverlayRef.current = null
+
+      latestGhostUrlRef.current = url
+
+      // Update opacity in place if the URL is unchanged (or we already have one)
+      if (!url) {
+        if (ghostOverlayRef.current) {
+          scene.remove(ghostOverlayRef.current)
+          const m = ghostOverlayRef.current.material as THREE.MeshBasicMaterial
+          m.map?.dispose()
+          m.dispose()
+          ghostOverlayRef.current.geometry.dispose()
+          ghostOverlayRef.current = null
+        }
+        return
       }
-      if (!url) return
+
       const loader = new THREE.TextureLoader()
       loader.load(url, (texture) => {
+        // Out-of-order resolution check: discard if a newer URL has been requested
+        if (latestGhostUrlRef.current !== url) {
+          texture.dispose()
+          return
+        }
         texture.minFilter = THREE.LinearFilter
         texture.magFilter = THREE.LinearFilter
         const w = venue.width || 80
         const d = venue.depth || 80
+
+        // Reuse the existing mesh if dimensions match — only swap the texture.
+        // Avoids creating a new PlaneGeometry every slider tick.
+        if (ghostOverlayRef.current
+            && ghostOverlayRef.current.userData.width === w
+            && ghostOverlayRef.current.userData.depth === d) {
+          const mat = ghostOverlayRef.current.material as THREE.MeshBasicMaterial
+          mat.map?.dispose()
+          mat.map = texture
+          mat.opacity = opacity
+          mat.needsUpdate = true
+          return
+        }
+
+        if (ghostOverlayRef.current) {
+          scene.remove(ghostOverlayRef.current)
+          const m = ghostOverlayRef.current.material as THREE.MeshBasicMaterial
+          m.map?.dispose()
+          m.dispose()
+          ghostOverlayRef.current.geometry.dispose()
+        }
+
         const geo = new THREE.PlaneGeometry(w, d)
         const mat = new THREE.MeshBasicMaterial({
           map: texture, transparent: true, opacity,
@@ -728,7 +761,7 @@ export default function MainViewport({
         const mesh = new THREE.Mesh(geo, mat)
         mesh.rotation.x = -Math.PI / 2
         mesh.position.set(w / 2, 0.05, d / 2)
-        mesh.userData.isGhostOverlay = true
+        mesh.userData = { isGhostOverlay: true, width: w, depth: d }
         mesh.renderOrder = 1
         scene.add(mesh)
         ghostOverlayRef.current = mesh

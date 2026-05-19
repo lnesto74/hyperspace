@@ -48,7 +48,7 @@ export default function replayRoutes({ replayService, db }) {
    */
   router.get('/preview-image', async (req, res) => {
     try {
-      const { file, venueId } = req.query;
+      const { file, venueId, t } = req.query;
       const pixelsPerMeter = Math.max(2, Math.min(40, Number(req.query.px) || 12));
       if (!file) return res.status(400).json({ error: 'file query param required' });
       let venueWidth = 80, venueDepth = 80, transform = null;
@@ -61,6 +61,11 @@ export default function replayRoutes({ replayService, db }) {
           const parsed = JSON.parse(venue.dwg_transform_json || '{}');
           transform = parsed.perceptionTransform || null;
         } catch { /* ignore */ }
+      }
+      // Live transform override: client can send the current slider state via
+      // the `t` JSON param so the preview reflects un-saved values instantly.
+      if (typeof t === 'string' && t.length) {
+        try { transform = JSON.parse(t); } catch { /* ignore */ }
       }
       const { png, stats } = await replayService.renderPreviewImage({
         file: String(file),
