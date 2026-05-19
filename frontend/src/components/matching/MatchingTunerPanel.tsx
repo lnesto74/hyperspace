@@ -146,7 +146,7 @@ export default function MatchingTunerPanel({ venueId, onClose }: MatchingTunerPa
   }, [tracksVisible, setTrackVisibility])
 
   return (
-    <div className="absolute top-4 left-16 z-30 w-80 bg-gray-900/95 backdrop-blur border border-cyan-700/60 rounded-xl shadow-2xl text-gray-200 text-xs">
+    <div className="absolute top-4 left-16 z-30 w-80 bg-gray-900/95 backdrop-blur border border-cyan-700/60 rounded-xl shadow-2xl text-gray-200 text-xs flex flex-col max-h-[calc(100vh-2rem)]">
       {/* Header */}
       <div className="flex items-center gap-2 px-3 py-2 border-b border-gray-700/80">
         <Compass className="w-4 h-4 text-cyan-400" />
@@ -186,7 +186,7 @@ export default function MatchingTunerPanel({ venueId, onClose }: MatchingTunerPa
       </div>
 
       {!collapsed && (
-        <div className="p-3 space-y-4">
+        <div className="p-3 space-y-4 overflow-y-auto flex-1 min-h-0">
           {/* Input-frame selector — declares the upstream perception convention.
               The backend uses this to pick the right Y↔Z swap before any rotation
               or mirror is applied. ros_rep103 already handles the Y-handedness flip. */}
@@ -376,17 +376,22 @@ export default function MatchingTunerPanel({ venueId, onClose }: MatchingTunerPa
               Renders a heatmap PNG over the venue floor at the saved transform — drag sliders, overlay redraws automatically.
             </div>
           </div>
+        </div>
+      )}
 
-          {/* Status bar */}
-          <div className="flex items-center gap-2 text-[11px] pt-1 border-t border-gray-800">
-            {saving && <span className="text-blue-400 flex items-center gap-1"><Loader2 className="w-3 h-3 animate-spin" /> Saving…</span>}
-            {!saving && savedAt && Date.now() - savedAt < 2000 && (
-              <span className="text-green-400 flex items-center gap-1"><Check className="w-3 h-3" /> Applied live</span>
-            )}
-            {error && <span className="text-red-400 truncate">{error}</span>}
-            <div className="flex-1" />
-            <button onClick={reset} className="text-gray-500 hover:text-red-300 transition-colors">Reset</button>
-          </div>
+      {/* Sticky status footer — always visible regardless of body scroll */}
+      {!collapsed && (
+        <div className="flex items-center gap-2 text-[11px] px-3 py-2 border-t border-gray-700/80 bg-gray-900/95">
+          {saving && <span className="text-blue-400 flex items-center gap-1"><Loader2 className="w-3 h-3 animate-spin" /> Saving…</span>}
+          {!saving && savedAt && Date.now() - savedAt < 2000 && (
+            <span className="text-green-400 flex items-center gap-1"><Check className="w-3 h-3" /> Applied live</span>
+          )}
+          {!saving && !(savedAt && Date.now() - savedAt < 2000) && !error && (
+            <span className="text-gray-500">Auto-saves on every change</span>
+          )}
+          {error && <span className="text-red-400 truncate">{error}</span>}
+          <div className="flex-1" />
+          <button onClick={reset} className="text-gray-500 hover:text-red-300 transition-colors">Reset</button>
         </div>
       )}
     </div>
