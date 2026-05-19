@@ -42,6 +42,45 @@ export default class ReplayService {
       delivery: this.mqttService ? 'direct' : 'mqtt',
     };
     this._abort = null;
+    // In-memory cache of parsed point sets — keyed by absolute file path.
+    // Eliminates the multi-second re-parse on every preview render.
+    this._pointCache = new Map();
+  }
+
+  /**
+   * Lazily parse a JSONL into typed arrays of raw perception coordinates and
+   * cache them. Subsequent calls return the cached arrays as long as the
+   * file's mtime hasn't changed.
+   */
+  async _loadPoints(fullPath) {
+    const stat = fs.statSync(fullPath);
+    const cached = this._pointCache.get(fullPath);
+    if (cached && cached.mtimeMs === stat.mtimeMs) return cached;
+
+    const t0 = Date.now();
+    const rl = readline.createInterface({ input: fs.createReadStream(fullPath), crlfDelay: Infinity });
+    const xs = [], ys = [], zs = [];
+    for await (const line of rl) {
+      const idx = line.indexOf(' ');
+      if (idx < 0) continue;
+      let msg;
+      try { msg = JSON.parse(line.slice(idx + 1)); } catch { continue; }
+      const p = msg.position;
+      if (!p) continue;
+      xs.push(Number(p.x) || 0);
+      ys.push(Number(p.y) || 0);
+      zs.push(Number(p.z) || 0);
+    }
+    const entry = {
+      x: new Float32Array(xs),
+      y: new Float32Array(ys),
+      z: new Float32Array(zs),
+      n: xs.length,
+      mtimeMs: stat.mtimeMs,
+    };
+    this._pointCache.set(fullPath, entry);
+    console.log(`[Replay] Cached ${entry.n.toLocaleString()} points from ${path.basename(fullPath)} in ${Date.now() - t0}ms`);
+    return entry;
   }
 
   ensureDir() {
@@ -202,7 +241,7 @@ export default class ReplayService {
    * Cell intensity is log10(count + 1) → mapped to a warm gradient with
    * alpha so the building underneath stays visible.
    */
-  async renderPreviewImage({ file, transform, venueWidth = 80, venueDepth = 80, pixelsPerMeter = 12 } = {}) {
+  async renderPreviewImage({ file, transform, venueWidth = 80, venueDepth = 80, pixelsPerMeter = 10, maxSamples = 200000 } = {}) {
     if (!file) throw new Error('file is required');
     const fullPath = path.isAbsolute(file) ? file : path.join(this.replayDir, file);
     if (!fs.existsSync(fullPath)) throw new Error(`File not found: ${fullPath}`);
@@ -212,36 +251,69 @@ export default class ReplayService {
     const H = Math.max(64, Math.min(4096, Math.round(venueDepth * pixelsPerMeter)));
     const counts = new Uint32Array(W * H);
     let maxCount = 0;
-    let processed = 0;
 
-    const rl = readline.createInterface({ input: fs.createReadStream(fullPath), crlfDelay: Infinity });
-    for await (const line of rl) {
-      const idx = line.indexOf(' ');
-      if (idx < 0) continue;
-      let msg;
-      try { msg = JSON.parse(line.slice(idx + 1)); } catch { continue; }
-      const pos = msg.position;
-      if (!pos) continue;
-      const floor = perceptionToFloor(t.input_frame, pos);
-      const v = applyTransformToPoint(t, floor);
-      const xPix = Math.round(v.x * pixelsPerMeter);
-      const zPix = Math.round(v.z * pixelsPerMeter);
+    const tStart = Date.now();
+    const cache = await this._loadPoints(fullPath);
+    const tParse = Date.now() - tStart;
+
+    // Stride to limit point count for sub-second renders even on huge captures
+    const stride = Math.max(1, Math.floor(cache.n / maxSamples));
+
+    // Inline transform math for speed (avoid function call overhead per point)
+    const rad = (t.rotation_deg * Math.PI) / 180;
+    const cosR = Math.cos(rad), sinR = Math.sin(rad);
+    const signX = t.axis_sign.x;
+    const signZ = t.axis_sign.z;
+    const scale = t.scale;
+    const ox = t.origin_m.x;
+    const oz = t.origin_m.z;
+    const swapX = t.axis_map.px === 'z';
+    const swapZ = t.axis_map.py === 'x';
+    const ySign = t.input_frame === 'ros_rep103' ? -1 : 1;
+
+    const xArr = cache.x, yArr = cache.y, zArr = cache.z;
+    const tProj0 = Date.now();
+    let processed = 0;
+    for (let i = 0; i < cache.n; i += stride) {
+      const px = xArr[i];
+      const pyPerc = yArr[i]; // perception Y (floor)
+      // Note: perception Z (height) is discarded for the heatmap
+
+      // Y/Z swap with optional sign flip for ros_rep103
+      const fx = px;
+      const fz = ySign * pyPerc;
+
+      // axis_map remap (rare, but supported)
+      const ax = swapX ? fz : fx;
+      const az = swapZ ? fx : fz;
+
+      const sx = ax * scale;
+      const sz = az * scale;
+      // rotation + mirror in venue frame (matches applyTransformToPoint)
+      let rx = sx * cosR - sz * sinR;
+      let rzv = sx * sinR + sz * cosR;
+      rx *= signX;
+      rzv *= signZ;
+      const vx = rx + ox;
+      const vz = rzv + oz;
+
+      const xPix = (vx * pixelsPerMeter) | 0;
+      const zPix = (vz * pixelsPerMeter) | 0;
       if (xPix < 0 || xPix >= W || zPix < 0 || zPix >= H) continue;
       const cell = zPix * W + xPix;
-      counts[cell] += 1;
+      counts[cell]++;
       if (counts[cell] > maxCount) maxCount = counts[cell];
       processed++;
     }
+    const tProj = Date.now() - tProj0;
     if (maxCount === 0) maxCount = 1;
     const logMax = Math.log10(maxCount + 1);
 
-    // 4-channel RGBA buffer
     const rgba = Buffer.alloc(W * H * 4, 0);
-    // Warm gradient (yellow→orange→red), alpha=0 in empty cells
     for (let i = 0; i < counts.length; i++) {
       const c = counts[i];
       if (c === 0) continue;
-      const intensity = Math.log10(c + 1) / logMax; // 0..1
+      const intensity = Math.log10(c + 1) / logMax;
       const r = Math.min(255, Math.round(80 + intensity * 175));
       const g = Math.min(255, Math.round(200 * (1 - intensity * 0.6)));
       const b = Math.min(255, Math.round(40 * (1 - intensity)));
@@ -250,22 +322,24 @@ export default class ReplayService {
       rgba[p] = r; rgba[p + 1] = g; rgba[p + 2] = b; rgba[p + 3] = a;
     }
 
-    // sharp wants origin top-left, and y grows down — Three.js Z grows "forward".
-    // We flip vertically so that venue (0,0) is bottom-left of the PNG, matching
-    // how the frontend overlays it on the floor.
+    const tEnc0 = Date.now();
     const png = await sharp(rgba, { raw: { width: W, height: H, channels: 4 } })
       .flip()
-      .png({ compressionLevel: 6 })
+      .png({ compressionLevel: 3 }) // lower compression = faster encode
       .toBuffer();
+    const tEnc = Date.now() - tEnc0;
 
     return {
       png,
       stats: {
         file: path.basename(fullPath),
         processed,
+        sampled_from: cache.n,
+        stride,
         maxCount,
         venueWidth, venueDepth, pixelsPerMeter,
         widthPx: W, heightPx: H,
+        ms: { parse: tParse, project: tProj, encode: tEnc, total: Date.now() - tStart },
       },
     };
   }

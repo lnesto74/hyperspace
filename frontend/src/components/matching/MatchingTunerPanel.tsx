@@ -103,12 +103,12 @@ export default function MatchingTunerPanel({ venueId, onClose }: MatchingTunerPa
       const params = new URLSearchParams({
         file: ghostFile,
         venueId,
-        px: '10',
+        px: '8',
         t: JSON.stringify(transform),
       })
       const url = `${API_BASE}/api/replay/preview-image?${params.toString()}`
       window.dispatchEvent(new CustomEvent('ghost-overlay-changed', { detail: { url, opacity: ghostOpacity } }))
-    }, 150)
+    }, 80)
     return () => { if (ghostUpdateTimerRef.current) clearTimeout(ghostUpdateTimerRef.current) }
   }, [ghostEnabled, ghostFile, venueId, ghostOpacity, transformVersion, transform])
 
