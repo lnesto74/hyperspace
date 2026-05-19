@@ -93,11 +93,14 @@ services:
       - UPLOADS_DIR=/data/uploads
       - MODELS_DIR=/data/models
       - REPLAY_DB_PATH=/data/db/replay_insight.db
+      - REPLAY_DIR=/data/replay
     volumes:
       # Persistent data volumes (survive container rebuilds)
       - hyperspace_db:/data/db
       - hyperspace_uploads:/data/uploads
       - hyperspace_models:/data/models
+      # MQTT trajectory replay files (drop .jsonl into /opt/hyperspace/replay on the host)
+      - /opt/hyperspace/replay:/data/replay
       # Mount host's Tailscale socket so backend can run `tailscale status`
       - /var/run/tailscale:/var/run/tailscale:ro
     # Access host's Tailscale for device discovery (tailscale status --json)

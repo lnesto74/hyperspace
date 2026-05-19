@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Eye, Grid3X3, Box, ArrowUp, Sun, X, Radio, History, Crosshair, LayoutGrid, ChevronLeft, ChevronRight, Compass, Sparkles } from 'lucide-react'
+import { Eye, Grid3X3, Box, ArrowUp, Sun, X, Radio, History, Crosshair, LayoutGrid, ChevronLeft, ChevronRight, Compass, Sparkles, FileVideo } from 'lucide-react'
 import Sidebar from './Sidebar'
 import RightPanel from './RightPanel'
 import ModeBar from './ModeBar'
@@ -10,6 +10,7 @@ import LandingExperience from '../landing/LandingExperience'
 import { NeuralDashboard } from '../neuralDashboard'
 import MatchingTunerPanel from '../matching/MatchingTunerPanel'
 import TrajectoryQualityPanel from '../matching/TrajectoryQualityPanel'
+import ReplayPanel from '../replay/ReplayPanel'
 import { useVenue } from '../../context/VenueContext'
 import { useLidar } from '../../context/LidarContext'
 import { useDwg } from '../../context/DwgContext'
@@ -71,6 +72,7 @@ export default function AppShell({ onOpenDwgImporter, onOpenEdgeCommissioning, s
   const [showTrackingPopup, setShowTrackingPopup] = useState(false)
   const [showMatchingTuner, setShowMatchingTuner] = useState(false)
   const [showTrajectoryQuality, setShowTrajectoryQuality] = useState(false)
+  const [showReplayPanel, setShowReplayPanel] = useState(false)
   const [lighting, setLighting] = useState<LightingSettings>(defaultLighting)
   const [tracking, setTracking] = useState<TrackingSettings>(defaultTracking)
   const { venue, selectedObjectId, objects } = useVenue()
@@ -170,6 +172,11 @@ export default function AppShell({ onOpenDwgImporter, onOpenEdgeCommissioning, s
         {/* Trajectory Quality panel — reconciler config + live stats. */}
         {showTrajectoryQuality && venue?.id && (
           <TrajectoryQualityPanel venueId={venue.id} onClose={() => setShowTrajectoryQuality(false)} />
+        )}
+
+        {/* MQTT capture replay panel */}
+        {showReplayPanel && (
+          <ReplayPanel onClose={() => setShowReplayPanel(false)} />
         )}
 
 
@@ -473,6 +480,17 @@ export default function AppShell({ onOpenDwgImporter, onOpenEdgeCommissioning, s
               title="Trajectory Quality (reconciler & ghost filter)"
             >
               <Sparkles className="w-3.5 h-3.5" />
+            </button>
+            <button
+              onClick={() => setShowReplayPanel(v => !v)}
+              className={`p-1.5 rounded transition-colors ${
+                showReplayPanel
+                  ? 'bg-amber-600 text-white'
+                  : 'text-gray-400 hover:text-white hover:bg-gray-700'
+              }`}
+              title="Replay a recorded MQTT capture"
+            >
+              <FileVideo className="w-3.5 h-3.5" />
             </button>
             <button
               onClick={() => setIntentFieldEnabled(!intentFieldEnabled)}

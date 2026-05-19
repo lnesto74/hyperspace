@@ -17,6 +17,8 @@ import { TrajectoryStorageService } from './services/TrajectoryStorageService.js
 import { KPICalculator } from './services/KPICalculator.js';
 
 import discoveryRoutes from './routes/discovery.js';
+import replayRoutes from './routes/replay.js';
+import ReplayService from './services/ReplayService.js';
 import venuesRoutes from './routes/venues.js';
 import lidarsRoutes from './routes/lidars.js';
 import modelsRoutes from './routes/models.js';
@@ -337,6 +339,8 @@ app.use('/api/auth', authRoutes(db));
 app.use('/api/companies', companiesRoutes(db));
 app.use('/api/discovery', discoveryRoutes(tailscaleService, mockGenerator));
 app.use('/api/venues', venuesRoutes(db, { mqttService, io }));
+const replayService = new ReplayService();
+app.use('/api/replay', replayRoutes({ replayService }));
 app.use('/api/lidars', lidarsRoutes(lidarConnectionManager, tailscaleService, mockGenerator));
 app.use('/api/models', modelsRoutes(db));
 app.use('/api', createRoiRoutes(db));
