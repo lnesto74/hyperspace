@@ -5,12 +5,14 @@
  * the live perception pipeline at a configurable speed. Each replayed message
  * has its deviceId prefixed with `replay-` so its trackKey can never collide
  * with a live perception track — the frontend can therefore keep showing live
- * tracks while replay is running, and the operator can also filter to show
- * only one or the other.
+ * tracks while replay is running.
  *
- * The service injects messages by publishing to the local MQTT broker just
- * like the real edge does. The standard ingestion path (MqttTrajectoryService
- * → reconciler → TrackAggregator → Socket.IO) handles them identically.
+ * Two delivery modes:
+ *   - direct injection (preferred): hand the parsed message straight to
+ *     MqttTrajectoryService.handleMessage(). Bypasses the MQTT loopback +
+ *     TCP framing entirely — keeps up at 10x speed without lag.
+ *   - mqtt fallback: publish through the local broker. Useful when the service
+ *     is not in-process (e.g. running the replay from a different host).
  */
 
 import fs from 'fs';
@@ -19,9 +21,11 @@ import path from 'path';
 import mqtt from 'mqtt';
 
 export default class ReplayService {
-  constructor({ replayDir, mqttBrokerUrl } = {}) {
+  constructor({ replayDir, mqttBrokerUrl, mqttService } = {}) {
     this.replayDir = replayDir || process.env.REPLAY_DIR || '/data/replay';
     this.brokerUrl = mqttBrokerUrl || process.env.MQTT_BROKER_URL || 'mqtt://mosquitto:1883';
+    // When set, replay injects messages directly (no MQTT round-trip)
+    this.mqttService = mqttService || null;
     this.client = null;
     this.state = {
       running: false,
@@ -33,6 +37,7 @@ export default class ReplayService {
       progress: 0,
       currentTs: 0,
       lastError: null,
+      delivery: this.mqttService ? 'direct' : 'mqtt',
     };
     this._abort = null;
   }
@@ -89,9 +94,12 @@ export default class ReplayService {
     const fullPath = path.isAbsolute(file) ? file : path.join(this.replayDir, file);
     if (!fs.existsSync(fullPath)) throw new Error(`File not found: ${fullPath}`);
 
-    await this._ensureClient();
+    // Only establish MQTT if we have no direct service handle.
+    if (!this.mqttService) await this._ensureClient();
+
     const abort = { aborted: false };
     this._abort = abort;
+    const deliveryMode = this.mqttService ? 'direct' : 'mqtt';
     this.state = {
       running: true,
       file: path.basename(fullPath),
@@ -104,6 +112,7 @@ export default class ReplayService {
       lastError: null,
       totalBytes: fs.statSync(fullPath).size,
       bytesRead: 0,
+      delivery: deliveryMode,
     };
 
     const sleep = (ms) => new Promise(r => setTimeout(r, ms));
@@ -111,12 +120,29 @@ export default class ReplayService {
 
     let firstRecordedTs = null;
     let replayStartTs = Date.now();
+    // Avoid awaiting setTimeout for every message — coalesce sleeps below this slack.
+    const SLEEP_SLACK_MS = 5;
+    let pending = 0;
+
+    const inject = (topic, msg) => {
+      if (this.mqttService) {
+        // Direct call — bypass MQTT broker entirely.
+        this.mqttService.handleMessage(topic, Buffer.from(JSON.stringify(msg)));
+      } else {
+        this.client.publish(topic, JSON.stringify(msg));
+      }
+    };
 
     try {
       for await (const line of rl) {
         if (abort.aborted) break;
         this.state.bytesRead += Buffer.byteLength(line) + 1;
-        this.state.progress = this.state.totalBytes > 0 ? this.state.bytesRead / this.state.totalBytes : 0;
+        // Update progress at low frequency to avoid burning CPU on division
+        pending++;
+        if (pending >= 200) {
+          this.state.progress = this.state.totalBytes > 0 ? this.state.bytesRead / this.state.totalBytes : 0;
+          pending = 0;
+        }
 
         const idx = line.indexOf(' ');
         if (idx < 0) continue;
@@ -130,30 +156,26 @@ export default class ReplayService {
           replayStartTs = Date.now();
         }
 
-        // Compute when to publish in wall-clock time
+        // Pace against wall clock; coalesce sub-slack waits so we don't yield
+        // to setTimeout every 25-100ms.
         const recordedDelta = msg.timestamp - firstRecordedTs;
         const targetWallTime = replayStartTs + recordedDelta / this.state.speed;
         const waitMs = targetWallTime - Date.now();
-        if (waitMs > 1) await sleep(waitMs);
+        if (waitMs > SLEEP_SLACK_MS) await sleep(waitMs);
         if (abort.aborted) break;
 
-        // Tag replay messages so they cannot collide with live perception
         if (devicePrefix && typeof msg.deviceId === 'string' && !msg.deviceId.startsWith(devicePrefix)) {
           msg.deviceId = devicePrefix + msg.deviceId;
         }
-        // The MQTT topic carries deviceId — match the new one so MqttTrajectoryService routes correctly.
         const parts = topic.split('/');
         parts[parts.length - 1] = msg.deviceId;
         topic = parts.join('/');
 
-        // Mark replay so the frontend can filter/style differently if it wants
         msg.replay = true;
-
-        // Rewrite the timestamp to "now" so freshness/TTL logic treats it as live
         if (this.state.rewriteTimestamps) msg.timestamp = Date.now();
-
         this.state.currentTs = msg.timestamp;
-        this.client.publish(topic, JSON.stringify(msg));
+
+        inject(topic, msg);
         this.state.messagesPublished++;
       }
     } catch (err) {
