@@ -219,6 +219,7 @@ export default function MainViewport({
   const gridRef = useRef<THREE.GridHelper | null>(null)
   const floorRef = useRef<THREE.Mesh | null>(null)
   const floorplanOverlayRef = useRef<THREE.Mesh | null>(null)
+  const ghostOverlayRef = useRef<THREE.Mesh | null>(null)
   const logoBillboardRef = useRef<THREE.Mesh | null>(null)
   const textureLoaderRef = useRef(new THREE.TextureLoader())
   const ambientLightRef = useRef<THREE.AmbientLight | null>(null)
@@ -373,6 +374,55 @@ export default function MainViewport({
     window.addEventListener('cluster-highlight-change', handleHighlightChange as EventListener)
     return () => window.removeEventListener('cluster-highlight-change', handleHighlightChange as EventListener)
   }, [])
+
+  // Ghost overlay — listens for events from MatchingTunerPanel and renders a
+  // textured plane on the venue floor showing where a recorded JSONL projects
+  // through the current perceptionTransform. Lets the operator align by eye
+  // against the floor plan without waiting on live replay.
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const ce = e as CustomEvent<{ url: string | null; opacity: number }>
+      const { url, opacity } = ce.detail || { url: null, opacity: 0.65 }
+      const scene = sceneRef.current
+      if (!scene || !venue) return
+
+      // Remove existing
+      if (ghostOverlayRef.current) {
+        scene.remove(ghostOverlayRef.current)
+        ;(ghostOverlayRef.current.material as THREE.MeshBasicMaterial).map?.dispose()
+        ;(ghostOverlayRef.current.material as THREE.MeshBasicMaterial).dispose()
+        ghostOverlayRef.current.geometry.dispose()
+        ghostOverlayRef.current = null
+      }
+      if (!url) return
+
+      // Load PNG into a texture, lay it down as a plane at floor +0.05m
+      const loader = new THREE.TextureLoader()
+      loader.load(url, (texture) => {
+        texture.minFilter = THREE.LinearFilter
+        texture.magFilter = THREE.LinearFilter
+        const w = venue.width || 80
+        const d = venue.depth || 80
+        const geo = new THREE.PlaneGeometry(w, d)
+        const mat = new THREE.MeshBasicMaterial({
+          map: texture,
+          transparent: true,
+          opacity,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+        })
+        const mesh = new THREE.Mesh(geo, mat)
+        mesh.rotation.x = -Math.PI / 2
+        mesh.position.set(w / 2, 0.05, d / 2)
+        mesh.userData.isGhostOverlay = true
+        mesh.renderOrder = 1
+        scene.add(mesh)
+        ghostOverlayRef.current = mesh
+      })
+    }
+    window.addEventListener('ghost-overlay-changed', handler as EventListener)
+    return () => window.removeEventListener('ghost-overlay-changed', handler as EventListener)
+  }, [venue])
   
   // Track when each person entered an SEZ zone (for 1-minute label visibility)
   const sezEntryTimesRef = useRef<Map<string, number>>(new Map())

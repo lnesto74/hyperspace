@@ -19,6 +19,8 @@ import fs from 'fs';
 import readline from 'readline';
 import path from 'path';
 import mqtt from 'mqtt';
+import sharp from 'sharp';
+import { perceptionToFloor, applyTransformToPoint, normalizePerceptionTransform } from './PerceptionTransform.js';
 
 export default class ReplayService {
   constructor({ replayDir, mqttBrokerUrl, mqttService } = {}) {
@@ -186,5 +188,85 @@ export default class ReplayService {
       this._abort = null;
       try { rl.close(); } catch {}
     }
+  }
+
+  /**
+   * Render a static heatmap PNG of every detection in a JSONL capture,
+   * projected through the supplied perceptionTransform (or identity).
+   *
+   * The PNG covers the venue floor exactly: width × height pixels mapped to
+   * a venue (venueWidth × venueDepth) m bounding box anchored at (0,0).
+   * The frontend overlays this image at the matching world coords so the
+   * user can visually align it with the building outline.
+   *
+   * Cell intensity is log10(count + 1) → mapped to a warm gradient with
+   * alpha so the building underneath stays visible.
+   */
+  async renderPreviewImage({ file, transform, venueWidth = 80, venueDepth = 80, pixelsPerMeter = 12 } = {}) {
+    if (!file) throw new Error('file is required');
+    const fullPath = path.isAbsolute(file) ? file : path.join(this.replayDir, file);
+    if (!fs.existsSync(fullPath)) throw new Error(`File not found: ${fullPath}`);
+
+    const t = normalizePerceptionTransform(transform || {});
+    const W = Math.max(64, Math.min(4096, Math.round(venueWidth * pixelsPerMeter)));
+    const H = Math.max(64, Math.min(4096, Math.round(venueDepth * pixelsPerMeter)));
+    const counts = new Uint32Array(W * H);
+    let maxCount = 0;
+    let processed = 0;
+
+    const rl = readline.createInterface({ input: fs.createReadStream(fullPath), crlfDelay: Infinity });
+    for await (const line of rl) {
+      const idx = line.indexOf(' ');
+      if (idx < 0) continue;
+      let msg;
+      try { msg = JSON.parse(line.slice(idx + 1)); } catch { continue; }
+      const pos = msg.position;
+      if (!pos) continue;
+      const floor = perceptionToFloor(t.input_frame, pos);
+      const v = applyTransformToPoint(t, floor);
+      const xPix = Math.round(v.x * pixelsPerMeter);
+      const zPix = Math.round(v.z * pixelsPerMeter);
+      if (xPix < 0 || xPix >= W || zPix < 0 || zPix >= H) continue;
+      const cell = zPix * W + xPix;
+      counts[cell] += 1;
+      if (counts[cell] > maxCount) maxCount = counts[cell];
+      processed++;
+    }
+    if (maxCount === 0) maxCount = 1;
+    const logMax = Math.log10(maxCount + 1);
+
+    // 4-channel RGBA buffer
+    const rgba = Buffer.alloc(W * H * 4, 0);
+    // Warm gradient (yellow→orange→red), alpha=0 in empty cells
+    for (let i = 0; i < counts.length; i++) {
+      const c = counts[i];
+      if (c === 0) continue;
+      const intensity = Math.log10(c + 1) / logMax; // 0..1
+      const r = Math.min(255, Math.round(80 + intensity * 175));
+      const g = Math.min(255, Math.round(200 * (1 - intensity * 0.6)));
+      const b = Math.min(255, Math.round(40 * (1 - intensity)));
+      const a = Math.min(255, Math.round(60 + intensity * 195));
+      const p = i * 4;
+      rgba[p] = r; rgba[p + 1] = g; rgba[p + 2] = b; rgba[p + 3] = a;
+    }
+
+    // sharp wants origin top-left, and y grows down — Three.js Z grows "forward".
+    // We flip vertically so that venue (0,0) is bottom-left of the PNG, matching
+    // how the frontend overlays it on the floor.
+    const png = await sharp(rgba, { raw: { width: W, height: H, channels: 4 } })
+      .flip()
+      .png({ compressionLevel: 6 })
+      .toBuffer();
+
+    return {
+      png,
+      stats: {
+        file: path.basename(fullPath),
+        processed,
+        maxCount,
+        venueWidth, venueDepth, pixelsPerMeter,
+        widthPx: W, heightPx: H,
+      },
+    };
   }
 }

@@ -340,7 +340,7 @@ app.use('/api/companies', companiesRoutes(db));
 app.use('/api/discovery', discoveryRoutes(tailscaleService, mockGenerator));
 app.use('/api/venues', venuesRoutes(db, { mqttService, io }));
 const replayService = new ReplayService({ mqttService });
-app.use('/api/replay', replayRoutes({ replayService }));
+app.use('/api/replay', replayRoutes({ replayService, db }));
 app.use('/api/lidars', lidarsRoutes(lidarConnectionManager, tailscaleService, mockGenerator));
 app.use('/api/models', modelsRoutes(db));
 app.use('/api', createRoiRoutes(db));

@@ -26,6 +26,13 @@ export default function MatchingTunerPanel({ venueId, onClose }: MatchingTunerPa
   const [error, setError] = useState<string | null>(null)
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
+  // Ghost overlay (static heatmap of a recorded JSONL projected through the transform)
+  const [ghostFiles, setGhostFiles] = useState<{ name: string }[]>([])
+  const [ghostFile, setGhostFile] = useState<string>('')
+  const [ghostEnabled, setGhostEnabled] = useState(false)
+  const [ghostOpacity, setGhostOpacity] = useState(0.65)
+  const [ghostBust, setGhostBust] = useState(0) // bumps to force texture refetch
+
   // Load current transform once when venueId changes
   useEffect(() => {
     if (!venueId) return
@@ -67,6 +74,37 @@ export default function MatchingTunerPanel({ venueId, onClose }: MatchingTunerPa
 
   // Cleanup pending save on unmount
   useEffect(() => () => { if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current) }, [])
+
+  // List available replay JSONL files (for ghost overlay)
+  useEffect(() => {
+    fetch(`${API_BASE}/api/replay/files`)
+      .then(r => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
+      .then(d => {
+        const files = d.files || []
+        setGhostFiles(files)
+        if (!ghostFile && files.length) setGhostFile(files[0].name)
+      })
+      .catch(() => { /* ignore — backend may not be reachable */ })
+  }, [ghostFile])
+
+  // Broadcast ghost-overlay settings to MainViewport via a window event
+  useEffect(() => {
+    const url = ghostEnabled && ghostFile && venueId
+      ? `${API_BASE}/api/replay/preview-image?file=${encodeURIComponent(ghostFile)}&venueId=${venueId}&bust=${ghostBust}`
+      : null
+    window.dispatchEvent(new CustomEvent('ghost-overlay-changed', {
+      detail: { url, opacity: ghostOpacity },
+    }))
+  }, [ghostEnabled, ghostFile, venueId, ghostBust, ghostOpacity])
+
+  // Auto-refresh ghost a few hundred ms after the transform changes so the
+  // overlay reflects the latest origin/rotation.
+  const transformVersion = `${transform.origin_m.x}|${transform.origin_m.z}|${transform.rotation_deg}|${transform.axis_sign.x}|${transform.axis_sign.z}|${transform.scale}|${transform.input_frame}`
+  useEffect(() => {
+    if (!ghostEnabled) return
+    const id = setTimeout(() => setGhostBust(v => v + 1), 600)
+    return () => clearTimeout(id)
+  }, [transformVersion, ghostEnabled])
 
   const update = useCallback((patch: Partial<PerceptionTransform>) => {
     setTransform(prev => {
@@ -274,6 +312,51 @@ export default function MatchingTunerPanel({ venueId, onClose }: MatchingTunerPa
                 className="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-white font-mono"
               />
             </label>
+          </div>
+
+          {/* Ghost overlay — static heatmap of a recorded JSONL projected through the
+              current transform. Far less laggy than waiting for live replay. */}
+          <div className="space-y-1 pt-2 border-t border-gray-800">
+            <div className="text-[10px] uppercase text-gray-500 tracking-wide">Trajectory ghost overlay</div>
+            <div className="grid grid-cols-[1fr_auto] gap-1.5">
+              <select
+                value={ghostFile}
+                onChange={e => setGhostFile(e.target.value)}
+                className="bg-gray-800 border border-gray-700 rounded px-2 py-1 text-white text-xs"
+              >
+                {ghostFiles.length === 0 && <option value="">(no .jsonl in /data/replay)</option>}
+                {ghostFiles.map(f => <option key={f.name} value={f.name}>{f.name}</option>)}
+              </select>
+              <button
+                onClick={() => setGhostEnabled(v => !v)}
+                disabled={!ghostFile}
+                className={`px-2 py-1 rounded text-xs font-medium transition-colors disabled:opacity-50 ${ghostEnabled ? 'bg-cyan-600 text-white' : 'bg-gray-800 hover:bg-gray-700 text-gray-200'}`}
+              >
+                {ghostEnabled ? 'On' : 'Off'}
+              </button>
+            </div>
+            <div className="flex items-center gap-2">
+              <label className="text-[11px] text-gray-400 w-16">Opacity</label>
+              <input
+                type="range"
+                min={0.1} max={1} step={0.05}
+                value={ghostOpacity}
+                onChange={e => setGhostOpacity(Number(e.target.value))}
+                className="flex-1 accent-cyan-500"
+              />
+              <span className="text-[10px] text-gray-500 w-8 text-right">{Math.round(ghostOpacity * 100)}%</span>
+              <button
+                onClick={() => setGhostBust(v => v + 1)}
+                disabled={!ghostEnabled}
+                className="p-1 rounded hover:bg-gray-700/60 disabled:opacity-50"
+                title="Re-render heatmap with current transform"
+              >
+                <RefreshCw className="w-3.5 h-3.5" />
+              </button>
+            </div>
+            <div className="text-[10px] text-gray-600">
+              Renders a heatmap PNG over the venue floor at the saved transform — drag sliders, overlay redraws automatically.
+            </div>
           </div>
 
           {/* Status bar */}
