@@ -23,7 +23,23 @@
  * Default transform = identity (no rotation, no translation).
  */
 
+/**
+ * Input frame conventions for the perception MQTT feed.
+ *
+ *   legacy:     X,Y on floor / Z up, but the Y axis can be left- or right-handed
+ *               (the matching tuner's Mirror X/Y was historically used to fix it).
+ *               Floor swap:  floor.x = perc.x;  floor.z = perc.y
+ *
+ *   ros_rep103: Strict ROS REP-103 frame — X forward, Y LEFT, Z UP, right-handed.
+ *               To map into Three.js (X right, Y up, Z forward, right-handed) the
+ *               Y axis sign must be flipped:
+ *               Floor swap:  floor.x = perc.x;  floor.z = -perc.y
+ *               Use this for any edge running ROS or ROS-derived perception.
+ */
+export const INPUT_FRAMES = Object.freeze(['legacy', 'ros_rep103']);
+
 export const IDENTITY_TRANSFORM = Object.freeze({
+  input_frame: 'legacy',
   origin_m: { x: 0, z: 0 },
   rotation_deg: 0,
   axis_map: { px: 'x', py: 'z' }, // perception X → venue X, perception Y → venue Z
@@ -31,10 +47,27 @@ export const IDENTITY_TRANSFORM = Object.freeze({
   scale: 1.0,
 });
 
+/**
+ * Convert a perception-frame point to Three.js floor coords, applying the
+ * Y↔Z swap (and Y-axis sign flip for ROS REP-103).
+ */
+export function perceptionToFloor(inputFrame, point) {
+  const x = Number(point?.x ?? 0);
+  const yPerc = Number(point?.y ?? 0); // perception Y (floor axis)
+  const zPerc = Number(point?.z ?? 0); // perception Z (height)
+  const ySign = inputFrame === 'ros_rep103' ? -1 : 1;
+  return {
+    x: x,
+    y: zPerc,            // perception Z (up) → Three.js Y (up)
+    z: ySign * yPerc,    // perception Y (floor) → Three.js Z (floor), signed for ROS
+  };
+}
+
 /** Sanitize an incoming transform object — fill defaults, clamp angles. */
 export function normalizePerceptionTransform(raw) {
   if (!raw || typeof raw !== 'object') return { ...IDENTITY_TRANSFORM };
   const t = { ...IDENTITY_TRANSFORM, ...raw };
+  t.input_frame = INPUT_FRAMES.includes(raw.input_frame) ? raw.input_frame : 'legacy';
   t.origin_m = {
     x: Number(raw.origin_m?.x ?? 0),
     z: Number(raw.origin_m?.z ?? 0),

@@ -13,7 +13,20 @@
  * `py` = perception +Y axis. Values ('x' or 'z') indicate which Three.js
  * floor axis each maps to.
  */
+/**
+ * Input frame of the perception MQTT feed.
+ *   - `legacy`:     Free-form X,Y floor / Z up. The Y axis sign can be either
+ *                   handedness; Mirror X/Y in the tuner is used to fix it.
+ *   - `ros_rep103`: Strict ROS REP-103. Floor: X forward, Y LEFT; Z up,
+ *                   right-handed. Backend negates perception-Y to land in
+ *                   Three.js Z-forward without an explicit mirror.
+ */
+export type InputFrame = 'legacy' | 'ros_rep103';
+export const INPUT_FRAMES: InputFrame[] = ['legacy', 'ros_rep103'];
+
 export interface PerceptionTransform {
+  /** Convention of the upstream perception software. Set once per venue. */
+  input_frame: InputFrame;
   /** Where perception (0,0) sits in venue meters (Three.js X,Z floor plane). */
   origin_m: { x: number; z: number };
   /** Rotation about vertical axis (degrees, perception +X → venue +X). */
@@ -29,6 +42,7 @@ export interface PerceptionTransform {
 }
 
 export const IDENTITY_PERCEPTION_TRANSFORM: PerceptionTransform = {
+  input_frame: 'legacy',
   origin_m: { x: 0, z: 0 },
   rotation_deg: 0,
   axis_map: { px: 'x', py: 'z' },

@@ -143,6 +143,26 @@ export default function MatchingTunerPanel({ venueId, onClose }: MatchingTunerPa
 
       {!collapsed && (
         <div className="p-3 space-y-4">
+          {/* Input-frame selector — declares the upstream perception convention.
+              The backend uses this to pick the right Y↔Z swap before any rotation
+              or mirror is applied. ros_rep103 already handles the Y-handedness flip. */}
+          <div className="space-y-1">
+            <div className="text-[10px] uppercase text-gray-500 tracking-wide">Perception input frame</div>
+            <select
+              value={transform.input_frame}
+              onChange={e => update({ input_frame: e.target.value as PerceptionTransform['input_frame'] })}
+              className="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-white text-xs"
+            >
+              <option value="legacy">Legacy (X,Y floor — manual mirror to align)</option>
+              <option value="ros_rep103">ROS REP-103 (X-fwd, Y-left, Z-up — auto-handedness)</option>
+            </select>
+            <div className="text-[10px] text-gray-500">
+              {transform.input_frame === 'ros_rep103'
+                ? 'Perception Y is auto-flipped — you typically only need origin + small rotation.'
+                : 'Use Mirror X/Y below to fix handedness manually.'}
+            </div>
+          </div>
+
           {/* Quick flips toolbar — single-click 180° transforms. Use these to align
               orientation before fine-tuning origin/rotation with the sliders. */}
           <div className="space-y-1">

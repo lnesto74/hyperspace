@@ -5,6 +5,7 @@ import {
   normalizePerceptionTransform,
   applyTransformToPoint,
   applyTransformToVelocity,
+  perceptionToFloor,
 } from './PerceptionTransform.js'
 import { TrajectoryReconciler, normalizeReconcilerConfig, DEFAULT_CONFIG as RECONCILER_DEFAULT } from './TrajectoryReconciler.js'
 
@@ -204,18 +205,20 @@ class MqttTrajectoryService {
         const color = data.color || this.getColorForTrack(trackKey)
         const venueId = data.venueId || 'default'
 
-        // Perception convention: X,Y = floor plane, Z = height (up).
-        // Three.js convention:   X,Z = floor plane, Y = height (up).
-        // Swap Y↔Z so the rest of the pipeline operates in Three.js coords.
+        // Perception → Three.js floor coords. The swap depends on the perception frame:
+        //   legacy:     floor.z =  perc.y
+        //   ros_rep103: floor.z = -perc.y  (ROS uses Y-left, Three.js uses Z-forward)
+        // The frame is stored on the per-venue perceptionTransform.
+        const transform = this.venueTransforms.get(venueId)
+        const inputFrame = transform?.input_frame || 'legacy'
         const percPos = data.position || { x: 0, y: 0, z: 0 }
         const percVel = data.velocity || { x: 0, y: 0, z: 0 }
-        const floorPos = { x: percPos.x, y: percPos.z, z: percPos.y }
-        const floorVel = { x: percVel.x, y: percVel.z, z: percVel.y }
+        const floorPos = perceptionToFloor(inputFrame, percPos)
+        const floorVel = perceptionToFloor(inputFrame, percVel)
 
         // Apply per-venue perception → venue coordinate transform.
         // `position` keeps the raw perception value (used by the Matching UI for live preview),
         // `venuePosition` is what every downstream consumer (Socket.IO, KPIs, DB) renders.
-        const transform = this.venueTransforms.get(venueId)
         const venuePosition = transform
           ? applyTransformToPoint(transform, floorPos)
           : floorPos
@@ -288,11 +291,12 @@ class MqttTrajectoryService {
         const trackKey = track.trackKey || `${deviceId}:${track.id}`
         const color = this.getColorForTrack(trackKey)
 
-        // Perception Y↔Z swap (see single-track path comment above)
+        // Perception → Three.js floor coords; frame-aware swap (see single-track path).
+        const inputFrame = transform?.input_frame || 'legacy'
         const rp = track.position || { x: 0, y: 0, z: 0 }
         const rv = track.velocity || { x: 0, y: 0, z: 0 }
-        const rawPosition = { x: rp.x, y: rp.z, z: rp.y }
-        const rawVelocity = { x: rv.x, y: rv.z, z: rv.y }
+        const rawPosition = perceptionToFloor(inputFrame, rp)
+        const rawVelocity = perceptionToFloor(inputFrame, rv)
         // Honor venuePosition if the publisher already supplied it; otherwise transform raw.
         const venuePosition = track.venuePosition
           || (transform ? applyTransformToPoint(transform, rawPosition) : rawPosition)
