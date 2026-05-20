@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Sparkles, RefreshCw, X, ChevronDown, ChevronUp, Loader2, Check, Activity, Filter, Layers } from 'lucide-react'
+import { Sparkles, RefreshCw, X, ChevronDown, ChevronUp, Loader2, Check, Activity, Filter, Layers, Wand2 } from 'lucide-react'
 import { API_BASE } from '../../config/api'
 
 interface TrajectoryQualityPanelProps {
@@ -57,6 +57,123 @@ const DEFAULT_CONFIG: ReconcilerConfig = {
   smoothing_alpha: 0.6,
   active_to_lost_timeout_ms: 1000,
   trail_max_length: 32,
+}
+
+// Presets derived from the 884K-sample backtest (analysis/out/FINAL_REPORT.md).
+// One-click application; the panel below stays available for fine tuning.
+interface ReconcilerPreset {
+  id: string
+  label: string
+  description: string
+  metrics: {
+    stable: number
+    fragX: number
+    lifetime_s: number
+    displacement_m: number
+    teleports_per_1k: number
+  }
+  config: ReconcilerConfig
+}
+
+const PRESETS: ReconcilerPreset[] = [
+  {
+    id: 'default',
+    label: 'Default',
+    description: 'Production defaults — conservative ghost filter, modest re-ID gates.',
+    metrics: { stable: 1796, fragX: 2.4, lifetime_s: 56.5, displacement_m: 10.2, teleports_per_1k: 1.11 },
+    config: { ...DEFAULT_CONFIG },
+  },
+  {
+    id: 'grocery_balanced',
+    label: 'Grocery — Balanced (recommended)',
+    description: 'Opens the re-ID gates to cover ~91% of fragmentation events with very few teleports. Best general-purpose grocery setting.',
+    metrics: { stable: 1451, fragX: 3.0, lifetime_s: 81.7, displacement_m: 16.9, teleports_per_1k: 1.94 },
+    config: {
+      enabled: true,
+      ghost_max_speed_m_s: 3.5,
+      ghost_min_promotion_lifetime_ms: 200,
+      ghost_min_promotion_displacement_m: 0.05,
+      ghost_static_timeout_s: 90,
+      ghost_static_displacement_m: 0.3,
+      reid_max_gap_s: 15,
+      reid_max_distance_m: 8.0,
+      reid_max_implied_speed_m_s: 2.5,
+      reid_velocity_cosine_min: -0.3,
+      reid_weight_distance: 1.0,
+      reid_weight_velocity: 0.5,
+      reid_weight_time: 0.1,
+      smoothing_alpha: 0.7,
+      active_to_lost_timeout_ms: 1500,
+      trail_max_length: 32,
+    },
+  },
+  {
+    id: 'grocery_aggressive',
+    label: 'Grocery — Aggressive',
+    description: 'Pushes merging close to the estimated true shopper count. Best continuity; small risk of cross-person merges in dense areas (queues).',
+    metrics: { stable: 1066, fragX: 4.1, lifetime_s: 115.6, displacement_m: 25.0, teleports_per_1k: 2.37 },
+    config: {
+      enabled: true,
+      ghost_max_speed_m_s: 3.5,
+      ghost_min_promotion_lifetime_ms: 150,
+      ghost_min_promotion_displacement_m: 0.05,
+      ghost_static_timeout_s: 120,
+      ghost_static_displacement_m: 0.3,
+      reid_max_gap_s: 20,
+      reid_max_distance_m: 10.0,
+      reid_max_implied_speed_m_s: 2.5,
+      reid_velocity_cosine_min: -0.5,
+      reid_weight_distance: 0.8,
+      reid_weight_velocity: 0.6,
+      reid_weight_time: 0.1,
+      smoothing_alpha: 0.7,
+      active_to_lost_timeout_ms: 2000,
+      trail_max_length: 48,
+    },
+  },
+  {
+    id: 'grocery_conservative',
+    label: 'Grocery — Conservative',
+    description: 'Tighter gates than the default. Use when false-merges are unacceptable and a shorter mean trajectory is OK.',
+    metrics: { stable: 1900, fragX: 2.3, lifetime_s: 57.5, displacement_m: 11.3, teleports_per_1k: 1.23 },
+    config: {
+      enabled: true,
+      ghost_max_speed_m_s: 3.5,
+      ghost_min_promotion_lifetime_ms: 300,
+      ghost_min_promotion_displacement_m: 0.1,
+      ghost_static_timeout_s: 90,
+      ghost_static_displacement_m: 0.3,
+      reid_max_gap_s: 10,
+      reid_max_distance_m: 5.0,
+      reid_max_implied_speed_m_s: 2.0,
+      reid_velocity_cosine_min: 0.0,
+      reid_weight_distance: 1.0,
+      reid_weight_velocity: 0.5,
+      reid_weight_time: 0.1,
+      smoothing_alpha: 0.7,
+      active_to_lost_timeout_ms: 1200,
+      trail_max_length: 32,
+    },
+  },
+]
+
+/** Match a saved config against a preset; returns 'custom' when nothing fits. */
+function detectActivePresetId(cfg: ReconcilerConfig): string {
+  if (!cfg.enabled) return 'bypass'
+  const close = (a: number, b: number, tol = 0.001) => Math.abs(a - b) <= tol
+  for (const p of PRESETS) {
+    const c = p.config
+    if (close(cfg.ghost_max_speed_m_s, c.ghost_max_speed_m_s)
+        && close(cfg.ghost_min_promotion_lifetime_ms, c.ghost_min_promotion_lifetime_ms)
+        && close(cfg.ghost_min_promotion_displacement_m, c.ghost_min_promotion_displacement_m)
+        && close(cfg.reid_max_gap_s, c.reid_max_gap_s)
+        && close(cfg.reid_max_distance_m, c.reid_max_distance_m)
+        && close(cfg.reid_max_implied_speed_m_s, c.reid_max_implied_speed_m_s)
+        && close(cfg.smoothing_alpha, c.smoothing_alpha)) {
+      return p.id
+    }
+  }
+  return 'custom'
 }
 
 /**
@@ -141,6 +258,13 @@ export default function TrajectoryQualityPanel({ venueId, onClose }: TrajectoryQ
     scheduleSave(DEFAULT_CONFIG)
   }, [scheduleSave])
 
+  const applyPreset = useCallback((preset: ReconcilerPreset) => {
+    setConfig(preset.config)
+    scheduleSave(preset.config)
+  }, [scheduleSave])
+
+  const activePresetId = detectActivePresetId(config)
+
   return (
     <div className="absolute top-4 left-16 z-30 w-[26rem] bg-gray-900/95 backdrop-blur border border-emerald-700/60 rounded-xl shadow-2xl text-gray-200 text-xs">
       {/* Header */}
@@ -166,6 +290,51 @@ export default function TrajectoryQualityPanel({ venueId, onClose }: TrajectoryQ
 
       {!collapsed && (
         <>
+          {/* Preset picker — one-click backtest-derived configurations.
+              Selecting a preset writes its full ReconcilerConfig to the panel
+              state and persists via the existing debounced save. The user can
+              then fine-tune individual sliders below. */}
+          <div className="px-3 py-2 border-b border-gray-800 space-y-1.5">
+            <div className="flex items-center gap-1.5">
+              <Wand2 className="w-3 h-3 text-emerald-400" />
+              <span className="text-[10px] uppercase text-gray-500 tracking-wide">Preset</span>
+              <div className="flex-1" />
+              {activePresetId === 'custom' && (
+                <span className="text-[10px] text-amber-400">custom (modified)</span>
+              )}
+              {activePresetId === 'bypass' && (
+                <span className="text-[10px] text-gray-400">bypass — no reconciliation</span>
+              )}
+            </div>
+            <select
+              value={activePresetId === 'custom' || activePresetId === 'bypass' ? '' : activePresetId}
+              onChange={e => {
+                const p = PRESETS.find(p => p.id === e.target.value)
+                if (p) applyPreset(p)
+              }}
+              className="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-white text-xs"
+            >
+              <option value="" disabled>{activePresetId === 'custom' ? '— custom —' : 'Choose a preset…'}</option>
+              {PRESETS.map(p => (
+                <option key={p.id} value={p.id}>{p.label}</option>
+              ))}
+            </select>
+            {(() => {
+              const active = PRESETS.find(p => p.id === activePresetId)
+              if (!active) return null
+              const m = active.metrics
+              return (
+                <div className="grid grid-cols-5 gap-1 pt-1">
+                  <Stat label="Stable" value={m.stable.toString()} />
+                  <Stat label="Frag×" value={m.fragX.toFixed(1)} />
+                  <Stat label="Lifetime" value={`${m.lifetime_s.toFixed(0)}s`} />
+                  <Stat label="Disp" value={`${m.displacement_m.toFixed(1)}m`} />
+                  <Stat label="TP/1k" value={m.teleports_per_1k.toFixed(2)} />
+                </div>
+              )
+            })()}
+          </div>
+
           {/* Section tabs */}
           <div className="flex border-b border-gray-800">
             {[
