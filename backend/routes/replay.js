@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { venueQueries } from '../database/schema.js';
 
-export default function replayRoutes({ replayService, db }) {
+export default function replayRoutes({ replayService, mqttRecordService, mqttService, db }) {
   const router = Router();
 
   router.get('/files', (_req, res) => {
@@ -19,10 +19,8 @@ export default function replayRoutes({ replayService, db }) {
   router.post('/start', async (req, res) => {
     const { file, speed, rewriteTimestamps, devicePrefix } = req.body || {};
     try {
-      // Kick off in the background — start() resolves only when playback ends
       replayService.start({ file, speed, rewriteTimestamps, devicePrefix })
         .catch((err) => { console.error('[Replay] start failed:', err.message); });
-      // Give the service a moment to set state
       await new Promise(r => setTimeout(r, 100));
       res.json({ success: true, status: replayService.status() });
     } catch (err) {
@@ -39,13 +37,42 @@ export default function replayRoutes({ replayService, db }) {
     }
   });
 
-  /**
-   * Static heatmap preview — render every detection in a JSONL through the
-   * given venue's perceptionTransform, return a PNG sized to the venue floor
-   * for overlay alignment.
-   *
-   *   GET /api/replay/preview-image?file=raw_tracks.jsonl&venueId=<uuid>&px=12
-   */
+  // ---- Record MQTT on main server (edge already bridges here) ----
+
+  router.get('/record/status', (_req, res) => {
+    try {
+      if (!mqttRecordService) return res.status(503).json({ error: 'Recording not available' });
+      res.json({ success: true, status: mqttRecordService.getStatus(mqttService) });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  router.post('/record/start', (req, res) => {
+    try {
+      if (!mqttRecordService) return res.status(503).json({ error: 'Recording not available' });
+      const { label } = req.body || {};
+      const status = mqttRecordService.start({ label: label || 'capture' });
+      res.json({ success: true, status: mqttRecordService.getStatus(mqttService) });
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  router.post('/record/stop', (_req, res) => {
+    try {
+      if (!mqttRecordService) return res.status(503).json({ error: 'Recording not available' });
+      const stopped = mqttRecordService.stop();
+      res.json({
+        success: true,
+        stopped,
+        file: stopped.file ? { name: stopped.file, size: stopped.bytesWritten } : null,
+      });
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
   router.get('/preview-image', async (req, res) => {
     try {
       const { file, venueId, t } = req.query;
@@ -62,8 +89,6 @@ export default function replayRoutes({ replayService, db }) {
           transform = parsed.perceptionTransform || null;
         } catch { /* ignore */ }
       }
-      // Live transform override: client can send the current slider state via
-      // the `t` JSON param so the preview reflects un-saved values instantly.
       if (typeof t === 'string' && t.length) {
         try { transform = JSON.parse(t); } catch { /* ignore */ }
       }

@@ -61,6 +61,13 @@ class MqttTrajectoryService {
       connectedAt: null,
       venueStats: new Map() // venueId -> { tracksReceived, lastTrackTs }
     }
+
+    /** Optional raw MQTT recorder (main-server JSONL capture). */
+    this.mqttRecorder = null
+  }
+
+  setMqttRecorder(recorder) {
+    this.mqttRecorder = recorder
   }
 
   /** Replace the transform used for a venue. Falsy value clears it. */
@@ -179,7 +186,12 @@ class MqttTrajectoryService {
 
   handleMessage(topic, message) {
     try {
-      const data = JSON.parse(message.toString())
+      const raw = message.toString()
+      if (this.mqttRecorder?.isRecording()) {
+        this.mqttRecorder.recordMessage(topic, raw)
+      }
+
+      const data = JSON.parse(raw)
       
       // Logging gated by env: DEBUG_MQTT=verbose logs every msg, DEBUG_MQTT=true samples every 10s
       if (process.env.DEBUG_MQTT === 'verbose') {
