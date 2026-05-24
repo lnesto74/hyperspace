@@ -14,6 +14,7 @@ Outputs:
 """
 import json
 import os
+import sys
 from pathlib import Path
 from collections import Counter, defaultdict
 
@@ -28,26 +29,25 @@ from scipy import ndimage
 OUT = Path(os.environ.get("ANALYSIS_OUT_DIR", Path(__file__).resolve().parent / "out"))
 OUT.mkdir(parents=True, exist_ok=True)
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from lib.parquet_stream import scan_xyz_bounds, build_histogram2d, build_timeline_buckets
+
 # Venue geometry (approximate — user-supplied)
 VENUE_W = 74.0   # x
 VENUE_D = 74.0   # z (after Y/Z swap)
 GRID_RES = 0.5   # 0.5m per cell → 148x148 grid
 
-# Load
-df = pd.read_parquet(OUT / "messages.parquet")
+messages_path = OUT / "messages.parquet"
 stats = pd.read_parquet(OUT / "per_id_stats.parquet")
 
-print(f"Loaded {len(df):,} messages, {len(stats):,} unique perception IDs")
-print(f"Bounds X: {df['x'].min():.1f}..{df['x'].max():.1f} (span {df['x'].max() - df['x'].min():.1f}m)")
-print(f"Bounds Z: {df['z'].min():.1f}..{df['z'].max():.1f} (span {df['z'].max() - df['z'].min():.1f}m)")
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Venue frame fitting: shift detections so bbox aligns with [0, VENUE_W] x [0, VENUE_D]
-# (the perception coordinate origin is somewhere arbitrary; the user has the
-#  matching transform live — here we just measure spatial structure)
-# ─────────────────────────────────────────────────────────────────────────────
-x_min, x_max = df['x'].min(), df['x'].max()
-z_min, z_max = df['z'].min(), df['z'].max()
+print("Scanning messages (streaming) ...", flush=True)
+bounds = scan_xyz_bounds(messages_path)
+n_messages = bounds["n"]
+x_min, x_max = bounds["x_min"], bounds["x_max"]
+z_min, z_max = bounds["z_min"], bounds["z_max"]
+print(f"Loaded {n_messages:,} messages, {len(stats):,} unique perception IDs")
+print(f"Bounds X: {x_min:.1f}..{x_max:.1f} (span {x_max - x_min:.1f}m)")
+print(f"Bounds Z: {z_min:.1f}..{z_max:.1f} (span {z_max - z_min:.1f}m)")
 # Pad bbox by 5m for context
 PAD = 5.0
 bx0, bx1 = x_min - PAD, x_max + PAD
@@ -58,10 +58,10 @@ print(f"Frame {W:.1f}m x {D:.1f}m (with {PAD}m padding)")
 
 nx = int(np.ceil(W / GRID_RES))
 nz = int(np.ceil(D / GRID_RES))
-H, _, _ = np.histogram2d(
-    df['x'].to_numpy(), df['z'].to_numpy(),
-    bins=[np.linspace(bx0, bx1, nx + 1), np.linspace(bz0, bz1, nz + 1)],
-)
+bins_x = np.linspace(bx0, bx1, nx + 1)
+bins_z = np.linspace(bz0, bz1, nz + 1)
+print("Building detection grid (streaming) ...", flush=True)
+H, _ = build_histogram2d(messages_path, bins_x, bins_z, max_rows=3_000_000)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 1. Walkable area detection
@@ -98,13 +98,12 @@ print(f"Detections in 2m edge band: {edge_detections_pct:.1f}%")
 # ─────────────────────────────────────────────────────────────────────────────
 # 2. Per-ID birth & death positions, lifetime distribution
 # ─────────────────────────────────────────────────────────────────────────────
-ends = df.groupby("id", sort=False).agg(
-    t_birth=("ts", "min"), t_death=("ts", "max"),
-    x_birth=("x", "first"), z_birth=("z", "first"),
-    x_death=("x", "last"), z_death=("z", "last"),
-    samples=("ts", "count"),
-).reset_index()
-ends["lifetime_s"] = (ends["t_death"] - ends["t_birth"]) / 1000.0
+if "x_birth" in stats.columns:
+    ends = stats.copy()
+    if "lifetime_s" not in ends.columns:
+        ends["lifetime_s"] = (ends["t_death"] - ends["t_birth"]) / 1000.0
+else:
+    raise SystemExit("per_id_stats missing x_birth — re-run 01_explore.py")
 ends = ends.sort_values("t_birth").reset_index(drop=True)
 print(f"Birth/death table: {len(ends):,} IDs")
 
@@ -196,17 +195,8 @@ walkable_diameter = (walkable_area_m2 * 2) ** 0.5
 expected_min_path = max(walkable_diameter * 0.5, 30.0)  # at least 30m
 print(f"Walkable diameter ≈ {walkable_diameter:.1f} m → expected real-shopper path ≥ {expected_min_path:.1f} m")
 
-# Per-ID total path length
-def per_id_path(group):
-    if len(group) < 2:
-        return 0.0
-    xs = group["x"].to_numpy()
-    zs = group["z"].to_numpy()
-    return float(np.hypot(np.diff(xs), np.diff(zs)).sum())
-
-print("Computing per-ID total path ...")
-total_paths = df.groupby("id", sort=False).apply(per_id_path)
-ends["total_path_m"] = ends["id"].map(total_paths.to_dict())
+print("Using per-ID path from stats ...")
+ends["total_path_m"] = ends["total_disp"].astype(float)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 4b. Interactive coverage map export (for benchmark UI)
@@ -261,18 +251,10 @@ for comp_id, area in enumerate(component_sizes, 1):
         area_m2=float(area * GRID_RES ** 2),
     ))
 
-BUCKET_MS = 60_000
-t_min = int(df["ts"].min())
-t_max = int(df["ts"].max())
-timeline = []
-for t0 in range(t_min, t_max + 1, BUCKET_MS):
-    t1 = t0 + BUCKET_MS
-    chunk = df[(df["ts"] >= t0) & (df["ts"] < t1)]
-    if chunk.empty:
-        continue
-    stride = max(1, len(chunk) // 400)
-    pts = [dict(x=float(r.x), z=float(r.z)) for r in chunk.iloc[::stride].itertuples()]
-    timeline.append(dict(t0=t0, t1=t1, points=pts))
+t_min = int(bounds["ts_min"])
+t_max = int(bounds["ts_max"])
+print("Building timeline buckets (streaming) ...", flush=True)
+timeline = build_timeline_buckets(messages_path, bucket_ms=60_000, max_pts_per_bucket=400)
 
 coverage_spatial = dict(
     bbox=dict(x0=float(bx0), x1=float(bx1), z0=float(bz0), z1=float(bz1)),
@@ -334,7 +316,7 @@ cmap_dens = "magma"
 im0 = axes[0, 0].imshow(
     np.log10(H.T + 1), origin="lower", extent=extent, cmap=cmap_dens, aspect="equal"
 )
-axes[0, 0].set_title(f"Detection density (log10)\nframe {W:.0f}×{D:.0f} m  ·  {len(df):,} samples")
+axes[0, 0].set_title(f"Detection density (log10)\nframe {W:.0f}×{D:.0f} m  ·  {n_messages:,} samples")
 axes[0, 0].set_xlabel("X (m)"); axes[0, 0].set_ylabel("Z (m)")
 fig.colorbar(im0, ax=axes[0, 0], fraction=0.046)
 
@@ -449,7 +431,7 @@ report.append("Generated from 35 minutes of raw perception MQTT (884,256 message
 report.append("")
 report.append("## 1. Dataset summary")
 report.append("")
-report.append(f"- **Messages**: {len(df):,}")
+report.append(f"- **Messages**: {n_messages:,}")
 report.append(f"- **Unique perception IDs**: {len(ends):,}")
 report.append(f"- **Time span**: ~35 minutes")
 report.append(f"- **Publish rate**: 10 Hz (median Δt = 100 ms)")

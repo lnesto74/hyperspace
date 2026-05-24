@@ -30,6 +30,7 @@ function parseArgs(argv) {
     runsDir: path.join(__dirname, 'runs'),
     skipSpatial: false,
     skipVerify: false,
+    skipExplore: false,
     after: null,
     before: null,
   };
@@ -43,6 +44,7 @@ function parseArgs(argv) {
     else if (a === '--before') out.before = argv[++i];
     else if (a === '--skip-spatial') out.skipSpatial = true;
     else if (a === '--skip-verify') out.skipVerify = true;
+    else if (a === '--skip-explore') out.skipExplore = true;
     else if (a === '--help' || a === '-h') {
       console.log(`Usage: node analysis/run_benchmark.mjs --file CAPTURE.jsonl --capture-id ID [--meta meta.json]`);
       process.exit(0);
@@ -63,7 +65,9 @@ function run(cmd, cmdArgs, env = {}) {
     env: { ...process.env, ...env },
   });
   if (r.status !== 0) {
-    throw new Error(`Command failed (${r.status}): ${cmd} ${cmdArgs.join(' ')}`);
+    const killed = r.status == null ? ' (process killed — likely OOM or signal)' : '';
+    const err = r.error ? ` ${r.error.message}` : '';
+    throw new Error(`Command failed (${r.status})${killed}${err}: ${cmd} ${cmdArgs.join(' ')}`);
   }
 }
 
@@ -132,7 +136,19 @@ async function main() {
   if (args.after) exploreArgs.push('--after', args.after);
   if (args.before) exploreArgs.push('--before', args.before);
 
-  run(py, exploreArgs);
+  const parquetPath = path.join(artifactsDir, 'messages.parquet');
+  const statsPath = path.join(artifactsDir, 'per_id_stats.parquet');
+  const hasExploreArtifacts = fs.existsSync(parquetPath) && fs.existsSync(statsPath);
+
+  if (args.skipExplore) {
+    if (!hasExploreArtifacts) {
+      console.error(`--skip-explore but missing ${parquetPath} or ${statsPath}`);
+      process.exit(1);
+    }
+    console.log('\n⏭ Skipping 01_explore (using existing parquet artifacts)');
+  } else {
+    run(py, exploreArgs);
+  }
 
   if (!args.skipSpatial) {
     run(py, [path.join(__dirname, '02_spatial_motion.py')], { ANALYSIS_OUT_DIR: artifactsDir });
