@@ -179,7 +179,9 @@ async function main() {
     if (venueId) verifyArgs.push('--venue-id', venueId);
     if (args.after) verifyArgs.push('--after', args.after);
     if (args.before) verifyArgs.push('--before', args.before);
-    run(process.execPath, verifyArgs);
+    run(process.execPath, verifyArgs, {
+      NODE_OPTIONS: [process.env.NODE_OPTIONS, '--max-old-space-size=3072'].filter(Boolean).join(' '),
+    });
     verifyRows = JSON.parse(fs.readFileSync(path.join(artifactsDir, '06_verify.json'), 'utf8'));
   }
 

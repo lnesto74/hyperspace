@@ -47,14 +47,17 @@ fs.mkdirSync(outDir, { recursive: true });
 
 const main = async () => {
   const filePath = path.resolve(args.file);
-  console.log(`Detecting primary venue in ${filePath} ...`);
-  const venueId = args.venueId || await detectPrimaryVenue(filePath, { afterMs, beforeMs });
+  const venueId = args.venueId || await (async () => {
+    console.log(`Detecting primary venue in ${filePath} ...`);
+    return detectPrimaryVenue(filePath, { afterMs, beforeMs });
+  })();
   if (!venueId) {
     console.error('No messages found');
     process.exit(1);
   }
   console.log(`Venue: ${venueId}`);
 
+  const outPath = path.join(outDir, '06_verify.json');
   const results = [];
   for (const [name, cfg] of VERIFY_CONFIGS) {
     console.log(`Running ${name} (streaming) ...`);
@@ -69,12 +72,11 @@ const main = async () => {
     process.stdout.write('\n');
     const elapsed_s = (Date.now() - t0) / 1000;
     results.push({ name, ...r, elapsed_s });
+    fs.writeFileSync(outPath, JSON.stringify(results, null, 2));
     console.log(
       `  stable=${r.n_stable} frag=${r.fragmentation_factor.toFixed(2)} lt=${r.lt_mean.toFixed(1)}s tp/1k=${r.teleports_per_1k.toFixed(2)} ghost=${r.ghost_pct.toFixed(1)}% (${elapsed_s.toFixed(0)}s)`,
     );
   }
-
-  fs.writeFileSync(path.join(outDir, '06_verify.json'), JSON.stringify(results, null, 2));
 
   console.log('\nname                  stable   frag_x  lt_mean  disp_mean  shopper_qty  tp/1k   ghost%');
   console.log('───────────────────── ────── ──────── ──────── ────────── ──────────── ─────── ───────');
