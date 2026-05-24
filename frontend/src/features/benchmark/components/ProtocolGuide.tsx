@@ -29,7 +29,7 @@ export default function ProtocolGuide() {
             <Radar className="w-3.5 h-3.5" /> Layer 3 — Structural
           </div>
           <p className="text-gray-400 leading-relaxed">
-            Blindspots, birth/death maps, occlusion mix. LiDAR placement and floorplan — not fixable by sliders alone.
+            Blindspots, problem zones on floorplan, fragmentation causes. LiDAR placement — not fixable by sliders alone.
           </p>
         </div>
       </div>

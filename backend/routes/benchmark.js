@@ -88,6 +88,24 @@ export default function benchmarkRoutes({
     }
   });
 
+  router.get('/runs/:id/coverage/zones', (req, res) => {
+    try {
+      res.json(benchmarkCoverageService.getProblemZones(req.params.id));
+    } catch (err) {
+      const status = err.message.includes('not found') ? 404 : 400;
+      res.status(status).json({ error: err.message });
+    }
+  });
+
+  router.get('/runs/:id/coverage/floorplan', (req, res) => {
+    try {
+      res.json(benchmarkCoverageService.getFloorplanContext(req.params.id));
+    } catch (err) {
+      const status = err.message.includes('not found') ? 404 : 500;
+      res.status(status).json({ error: err.message });
+    }
+  });
+
   router.get('/runs/:id/coverage/heatmap', async (req, res) => {
     try {
       const live = req.query.live === '1' || req.query.live === 'true';

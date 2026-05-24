@@ -9,10 +9,10 @@ function readJson(p) {
   }
 }
 
-function pickRaw(summary) {
+function pickRaw(summary, continuity) {
   if (!summary) return null;
   const n = summary.unique_perception_ids || 0;
-  const est = summary.estimated_real_shoppers || 0;
+  const est = summary.estimated_real_shoppers || continuity?.estimated_unique_shoppers || 0;
   return {
     messages: summary.messages,
     unique_perception_ids: summary.unique_perception_ids,
@@ -82,7 +82,7 @@ export function buildScorecard({ meta, artifactsDir, verifyRows, startedAt, fini
     run_started_at: startedAt,
     run_finished_at: finishedAt,
     layers: {
-      perception: pickRaw(summary),
+      perception: pickRaw(summary, continuity),
       reconciler: pickReconciled(verifyRows),
       structural: pickSpatial(spatial, continuity, fragmentation),
     },

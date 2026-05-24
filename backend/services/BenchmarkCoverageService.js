@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import sharp from 'sharp';
-import { venueQueries } from '../database/schema.js';
+import { venueQueries, objectQueries } from '../database/schema.js';
 
 export default class BenchmarkCoverageService {
   constructor({ benchmarkRunService, replayService, db } = {}) {
@@ -53,6 +53,83 @@ export default class BenchmarkCoverageService {
     } catch {
       return null;
     }
+  }
+
+  getProblemZones(runId) {
+    const { runDir } = this.benchmarkRunService.resolveRunId(runId);
+    const zonesPath = path.join(runDir, 'artifacts', 'problem_zones.json');
+    if (!fs.existsSync(zonesPath)) {
+      return {
+        available: false,
+        reason: 'problem_zones.json not found — re-run stage 05_forensic on this capture',
+      };
+    }
+    const data = JSON.parse(fs.readFileSync(zonesPath, 'utf8'));
+    return { available: true, ...data };
+  }
+
+  getFloorplanContext(runId) {
+    if (!this.db) {
+      return { available: false, reason: 'Database unavailable' };
+    }
+    const run = this.benchmarkRunService.getRun(runId, { includeReport: false });
+    const venueId = run.meta?.venue_id || run.scorecard?.venue_id;
+    if (!venueId) {
+      return { available: false, reason: 'No venue_id on this benchmark run' };
+    }
+    const venue = venueQueries.getById(this.db, venueId);
+    if (!venue) {
+      return { available: false, reason: `Venue not found: ${venueId}` };
+    }
+
+    let perceptionTransform = null;
+    let scaleCorrection = 1;
+    try {
+      const parsed = JSON.parse(venue.dwg_transform_json || '{}');
+      perceptionTransform = parsed.perceptionTransform || null;
+      scaleCorrection = Number(parsed.scaleCorrection) || 1;
+    } catch { /* ignore */ }
+
+    const objects = objectQueries.getByVenueId(this.db, venueId).map((o) => ({
+      id: o.id,
+      type: o.type,
+      name: o.name,
+      x: o.position.x,
+      z: o.position.z,
+      w: Math.max(0.2, Math.abs(o.scale?.x ?? 1)),
+      d: Math.max(0.2, Math.abs(o.scale?.z ?? 1)),
+      rotation_y: o.rotation?.y ?? 0,
+      color: o.color || '#64748b',
+    }));
+
+    let floorplanImageUrl = null;
+    let floorplanImportId = null;
+    if (venue.dwg_layout_version_id) {
+      const layout = this.db.prepare(
+        'SELECT import_id FROM dwg_layout_versions WHERE id = ?',
+      ).get(venue.dwg_layout_version_id);
+      if (layout?.import_id) {
+        floorplanImportId = layout.import_id;
+        floorplanImageUrl = `/api/dwg/import/${layout.import_id}/floorplan/image`;
+      }
+    }
+
+    const width = Number(venue.width) || 80;
+    const depth = Number(venue.depth) || 80;
+    return {
+      available: true,
+      venue_id: venueId,
+      venue_name: venue.name,
+      venue_width: width,
+      venue_depth: depth,
+      perceptionTransform,
+      scaleCorrection,
+      objects,
+      floorplan_image_url: floorplanImageUrl,
+      floorplan_import_id: floorplanImportId,
+      bbox_venue: { x0: 0, z0: 0, x1: width, z1: depth },
+      has_transform: !!perceptionTransform,
+    };
   }
 
   async renderVenueHeatmap(runId, { pixelsPerMeter = 10 } = {}) {

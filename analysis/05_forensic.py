@@ -278,6 +278,86 @@ coverage_spatial = dict(
 (OUT / "coverage_spatial.json").write_text(json.dumps(coverage_spatial))
 print(f"  → coverage_spatial.json ({len(coverage_spatial['births']):,} births sampled)")
 
+# ─────────────────────────────────────────────────────────────────────────────
+# 4c. Problem zones — ranked grid cells where fragmentation / breaks cluster
+# ─────────────────────────────────────────────────────────────────────────────
+print("Building problem_zones.json ...", flush=True)
+ZONE_CELL = 2.0
+zone_bins_x = np.arange(bx0, bx1 + ZONE_CELL, ZONE_CELL)
+zone_bins_z = np.arange(bz0, bz1 + ZONE_CELL, ZONE_CELL)
+death_zone_H, _, _ = np.histogram2d(deaths_x, deaths_z, bins=[zone_bins_x, zone_bins_z])
+birth_zone_H, _, _ = np.histogram2d(births_x, births_z, bins=[zone_bins_x, zone_bins_z])
+ghost_x = np.array([r["x"] for r in ghost_rows], dtype=float) if ghost_rows else np.array([])
+ghost_z = np.array([r["z"] for r in ghost_rows], dtype=float) if ghost_rows else np.array([])
+ghost_zone_H = np.zeros_like(death_zone_H)
+if len(ghost_x):
+    ghost_zone_H, _, _ = np.histogram2d(ghost_x, ghost_z, bins=[zone_bins_x, zone_bins_z])
+
+cat_zone = {}
+for cat in ("shelf_occlusion_short", "blindspot_gap_long", "continuous_perception_loss", "true_new_person_or_exit"):
+    sub = frag_df[frag_df["category"] == cat] if len(frag_df) else pd.DataFrame()
+    if len(sub):
+        h, _, _ = np.histogram2d(sub["x_death"].to_numpy(), sub["z_death"].to_numpy(), bins=[zone_bins_x, zone_bins_z])
+        cat_zone[cat] = h
+    else:
+        cat_zone[cat] = np.zeros_like(death_zone_H)
+
+max_deaths = float(death_zone_H.max()) if death_zone_H.size else 1.0
+zone_rows = []
+for ix in range(len(zone_bins_x) - 1):
+    for iz in range(len(zone_bins_z) - 1):
+        deaths_n = int(death_zone_H[ix, iz])
+        if deaths_n < 8:
+            continue
+        births_n = int(birth_zone_H[ix, iz])
+        ghosts_n = int(ghost_zone_H[ix, iz])
+        shelf_n = int(cat_zone["shelf_occlusion_short"][ix, iz])
+        blind_n = int(cat_zone["blindspot_gap_long"][ix, iz])
+        cont_n = int(cat_zone["continuous_perception_loss"][ix, iz])
+        exit_n = int(cat_zone["true_new_person_or_exit"][ix, iz])
+        total_cat = max(shelf_n + blind_n + cont_n + exit_n, 1)
+        shelf_pct = shelf_n / total_cat * 100
+        blind_pct = blind_n / total_cat * 100
+        cx = (zone_bins_x[ix] + zone_bins_x[ix + 1]) / 2
+        cz = (zone_bins_z[iz] + zone_bins_z[iz + 1]) / 2
+        severity = (
+            0.45 * (deaths_n / max_deaths)
+            + 0.25 * (shelf_pct / 100)
+            + 0.20 * (blind_pct / 100)
+            + 0.10 * min(births_n / max(deaths_n, 1), 1.0)
+        )
+        zone_rows.append(dict(
+            cell_id=f"z{ix}_{iz}",
+            x0=float(zone_bins_x[ix]), x1=float(zone_bins_x[ix + 1]),
+            z0=float(zone_bins_z[iz]), z1=float(zone_bins_z[iz + 1]),
+            cx=float(cx), cz=float(cz),
+            severity=float(min(severity, 1.0)),
+            death_count=deaths_n,
+            birth_count=births_n,
+            ghost_count=ghosts_n,
+            shelf_occlusion_n=shelf_n,
+            blindspot_gap_n=blind_n,
+            continuous_loss_n=cont_n,
+            true_new_or_exit_n=exit_n,
+            shelf_occlusion_pct=float(shelf_pct),
+            blindspot_gap_pct=float(blind_pct),
+        ))
+
+zone_rows.sort(key=lambda z: z["severity"], reverse=True)
+for rank, z in enumerate(zone_rows, 1):
+    z["rank"] = rank
+top_zones = zone_rows[:50]
+
+problem_zones = dict(
+    cell_m=ZONE_CELL,
+    frame="perception",
+    bbox=dict(x0=float(bx0), x1=float(bx1), z0=float(bz0), z1=float(bz1)),
+    total_cells_scored=len(zone_rows),
+    zones=top_zones,
+)
+(OUT / "problem_zones.json").write_text(json.dumps(problem_zones, indent=2))
+print(f"  → problem_zones.json ({len(top_zones)} ranked zones / {len(zone_rows)} scored cells)")
+
 ids_meeting_expectation = (ends["total_path_m"] >= expected_min_path).sum()
 n_real_shoppers_lower_bound = int(ids_meeting_expectation)
 n_real_shoppers_estimate = int(round(n_real_shoppers_lower_bound + categories["true_new_person_or_exit"] * 0.4))

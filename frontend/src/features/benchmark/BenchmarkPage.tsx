@@ -13,13 +13,14 @@ import ReconcilerCompareTable from './components/ReconcilerCompareTable'
 import ArtifactPanel from './components/ArtifactPanel'
 import RunComparePanel from './components/RunComparePanel'
 import BenchmarkCoverageMap from './components/BenchmarkCoverageMap'
+import BenchmarkExecutiveTab from './components/BenchmarkExecutiveTab'
 import RunBenchmarkPanel from './components/RunBenchmarkPanel'
 
 interface BenchmarkPageProps {
   onClose: () => void
 }
 
-type Tab = 'overview' | 'reconciler' | 'coverage' | 'spatial' | 'artifacts'
+type Tab = 'executive' | 'overview' | 'reconciler' | 'coverage' | 'spatial' | 'artifacts'
 
 function fmt(n: number | undefined | null, d = 1) {
   if (n == null || Number.isNaN(n)) return '—'
@@ -54,7 +55,7 @@ export default function BenchmarkPage({ onClose }: BenchmarkPageProps) {
   const [loading, setLoading] = useState(true)
   const [detailLoading, setDetailLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [tab, setTab] = useState<Tab>('overview')
+  const [tab, setTab] = useState<Tab>('executive')
   const [selectedImage, setSelectedImage] = useState<string | null>(null)
   const [showCompare, setShowCompare] = useState(false)
 
@@ -116,8 +117,9 @@ export default function BenchmarkPage({ onClose }: BenchmarkPageProps) {
   const fc = s?.fragmentation_cause_pct
 
   const tabs: { id: Tab; label: string }[] = [
+    { id: 'executive', label: 'Executive' },
     { id: 'overview', label: 'Overview' },
-    { id: 'coverage', label: 'Coverage map' },
+    { id: 'coverage', label: 'Venue map' },
     { id: 'reconciler', label: 'Reconciler' },
     { id: 'spatial', label: 'Spatial stats' },
     { id: 'artifacts', label: 'Artifacts' },
@@ -292,6 +294,15 @@ export default function BenchmarkPage({ onClose }: BenchmarkPageProps) {
                 ))}
               </div>
 
+              {tab === 'executive' && detail && (
+                <BenchmarkExecutiveTab
+                  detail={detail}
+                  baseline={showCompare ? baselineRun : null}
+                  compareEnabled={showCompare && !!baselineRun && baselineRun.id !== selectedId}
+                  onOpenCoverage={() => setTab('coverage')}
+                />
+              )}
+
               {tab === 'overview' && (
                 <div className="space-y-4">
                   <div>
@@ -317,11 +328,13 @@ export default function BenchmarkPage({ onClose }: BenchmarkPageProps) {
               {tab === 'coverage' && selectedId && (
                 <div className="space-y-3">
                   <p className="text-xs text-gray-500">
-                    2D coverage map — detection dots (animated), ID births/deaths, ghosts, blindspots, and optional venue-transform heatmap (same engine as Trajectory ghost overlay). Toggle <strong className="text-gray-400">Compare</strong> to overlay baseline runs.
+                    Venue diagnostic map — ranked problem zones on the DWG floorplan (same transform as Live Tuner).
+                    Scroll to zoom, drag to pan, click a zone for details. Enable <strong className="text-gray-400">Compare</strong> for before/after zone outlines.
                   </p>
                   <BenchmarkCoverageMap
                     runId={selectedId}
                     compareRunId={showCompare && baselineId !== selectedId ? baselineId : null}
+                    compareLabel={baselineRun?.capture_id}
                   />
                 </div>
               )}

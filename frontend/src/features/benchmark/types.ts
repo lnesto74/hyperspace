@@ -115,3 +115,65 @@ export interface CoverageSpatial {
   blindspots?: Array<CoveragePoint & { area_m2: number }>
   timeline?: Array<{ t0: number; t1: number; points: CoveragePoint[] }>
 }
+
+export interface ProblemZone {
+  rank: number
+  cell_id: string
+  x0: number
+  x1: number
+  z0: number
+  z1: number
+  cx: number
+  cz: number
+  severity: number
+  death_count: number
+  birth_count: number
+  ghost_count: number
+  shelf_occlusion_pct: number
+  blindspot_gap_pct: number
+  shelf_occlusion_n?: number
+  blindspot_gap_n?: number
+}
+
+export interface ProblemZonesData {
+  available: boolean
+  reason?: string
+  cell_m?: number
+  frame?: string
+  bbox?: MapBbox
+  total_cells_scored?: number
+  zones?: ProblemZone[]
+}
+
+export interface MapBbox {
+  x0: number
+  x1: number
+  z0: number
+  z1: number
+}
+
+export interface FloorplanObject {
+  id: string
+  type: string
+  name: string
+  x: number
+  z: number
+  w: number
+  d: number
+  rotation_y: number
+  color: string
+}
+
+export interface FloorplanContext {
+  available: boolean
+  reason?: string
+  venue_id?: string
+  venue_name?: string
+  venue_width?: number
+  venue_depth?: number
+  perceptionTransform?: import('../../types/perceptionTransform').PerceptionTransform | null
+  objects?: FloorplanObject[]
+  floorplan_image_url?: string | null
+  bbox_venue?: MapBbox
+  has_transform?: boolean
+}
