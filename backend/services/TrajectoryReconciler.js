@@ -23,7 +23,7 @@
  *   }
  */
 
-import { v4 as uuidv4 } from 'uuid';
+import { randomUUID } from 'crypto';
 
 export const DEFAULT_CONFIG = Object.freeze({
   enabled: true,
@@ -352,7 +352,7 @@ export class TrajectoryReconciler {
 
   _createTrackState(pos, vel, now, cfg) {
     return {
-      stableId: uuidv4(),
+      stableId: randomUUID(),
       position: { x: pos.x, y: pos.y || 0, z: pos.z },
       velocity: { x: vel.x || 0, y: vel.y || 0, z: vel.z || 0 },
       smoothedPos: { x: pos.x, y: pos.y || 0, z: pos.z },

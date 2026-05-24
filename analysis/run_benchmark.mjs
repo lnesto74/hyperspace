@@ -22,6 +22,20 @@ import { writeReport } from './lib/report.mjs';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
 
+/** Backend deps live in the image at /app; host bind-mount hides backend/node_modules. */
+function benchmarkEnv(extra = {}) {
+  const paths = [
+    process.env.NODE_PATH,
+    '/app/node_modules',
+    path.join(ROOT, 'backend', 'node_modules'),
+  ].filter(Boolean);
+  return {
+    ...process.env,
+    NODE_PATH: paths.join(path.delimiter),
+    ...extra,
+  };
+}
+
 function parseArgs(argv) {
   const out = {
     file: null,
@@ -62,7 +76,7 @@ function run(cmd, cmdArgs, env = {}) {
   const r = spawnSync(cmd, cmdArgs, {
     cwd: ROOT,
     stdio: 'inherit',
-    env: { ...process.env, ...env },
+    env: benchmarkEnv(env),
   });
   if (r.status !== 0) {
     const killed = r.status == null ? ' (process killed — likely OOM or signal)' : '';

@@ -68,6 +68,7 @@ export default class BenchmarkJobService {
     before,
     skipSpatial = false,
     skipVerify = false,
+    skipExplore = false,
   } = {}) {
     if (this._proc) {
       throw new Error(`Benchmark already running (${this._job?.captureId})`);
@@ -99,6 +100,12 @@ export default class BenchmarkJobService {
     if (before) args.push('--before', before);
     if (skipSpatial) args.push('--skip-spatial');
     if (skipVerify) args.push('--skip-verify');
+    if (skipExplore) args.push('--skip-explore');
+
+    const backendNodeModules = path.join(this.hyperspaceRoot, 'backend', 'node_modules');
+    const nodePath = ['/app/node_modules', backendNodeModules, process.env.NODE_PATH]
+      .filter(Boolean)
+      .join(path.delimiter);
 
     this._job = {
       status: 'running',
@@ -120,6 +127,7 @@ export default class BenchmarkJobService {
         BENCHMARK_RUNS_DIR: this.runsDir,
         PYTHON: process.env.PYTHON || '/opt/pybench/bin/python3',
         PATH: `/opt/pybench/bin:${process.env.PATH || ''}`,
+        NODE_PATH: nodePath,
       },
       detached: false,
       stdio: ['ignore', logFd, logFd],

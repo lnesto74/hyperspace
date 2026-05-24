@@ -34,7 +34,7 @@ export default function benchmarkRoutes({
 
   router.post('/job/start', (req, res) => {
     try {
-      const { captureId, file, after, before, skipSpatial, skipVerify } = req.body || {};
+      const { captureId, file, after, before, skipSpatial, skipVerify, skipExplore } = req.body || {};
       const job = benchmarkJobService.start({
         captureId,
         file,
@@ -42,6 +42,7 @@ export default function benchmarkRoutes({
         before,
         skipSpatial: !!skipSpatial,
         skipVerify: !!skipVerify,
+        skipExplore: !!skipExplore,
       });
       res.json({ job });
     } catch (err) {
