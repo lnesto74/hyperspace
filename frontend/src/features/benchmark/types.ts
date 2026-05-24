@@ -6,6 +6,7 @@ export interface BenchmarkRunSummary {
   perception_version: string | null
   scope: string | null
   generated_at: string | null
+  run_status?: string
   has_scorecard: boolean
   has_report: boolean
   messages: number | null

@@ -1,8 +1,61 @@
 import { Router } from 'express';
 import path from 'path';
 
-export default function benchmarkRoutes(benchmarkRunService, benchmarkCoverageService) {
+export default function benchmarkRoutes({
+  benchmarkRunService,
+  benchmarkCoverageService,
+  benchmarkJobService,
+  replayService,
+}) {
   const router = Router();
+
+  router.get('/capture-files', (_req, res) => {
+    try {
+      const files = replayService
+        ? replayService.listFiles().filter((f) => f.name.endsWith('.jsonl'))
+        : [];
+      res.json({ files, replayDir: replayService?.replayDir ?? null });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  router.get('/job', (_req, res) => {
+    try {
+      const job = benchmarkJobService.getProgress();
+      const logTail = job.captureId
+        ? benchmarkJobService.getLogTail(job.captureId, 60)
+        : '';
+      res.json({ job, logTail });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  router.post('/job/start', (req, res) => {
+    try {
+      const { captureId, file, after, before, skipSpatial, skipVerify } = req.body || {};
+      const job = benchmarkJobService.start({
+        captureId,
+        file,
+        after,
+        before,
+        skipSpatial: !!skipSpatial,
+        skipVerify: !!skipVerify,
+      });
+      res.json({ job });
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  router.get('/runs/:id/log', (req, res) => {
+    try {
+      res.json({ log: benchmarkJobService.getLogTail(req.params.id, 120) });
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  });
 
   router.get('/runs', (_req, res) => {
     try {

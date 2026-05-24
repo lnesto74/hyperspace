@@ -13,6 +13,7 @@ import ReconcilerCompareTable from './components/ReconcilerCompareTable'
 import ArtifactPanel from './components/ArtifactPanel'
 import RunComparePanel from './components/RunComparePanel'
 import BenchmarkCoverageMap from './components/BenchmarkCoverageMap'
+import RunBenchmarkPanel from './components/RunBenchmarkPanel'
 
 interface BenchmarkPageProps {
   onClose: () => void
@@ -198,11 +199,17 @@ export default function BenchmarkPage({ onClose }: BenchmarkPageProps) {
                   {run.source_file || run.id}
                 </p>
                 <div className="flex items-center gap-2 mt-1.5 text-[10px]">
-                  {run.has_scorecard ? (
-                    <span className="text-emerald-500">scorecard</span>
-                  ) : (
-                    <span className="text-gray-600">pending</span>
-                  )}
+                  <span className={
+                    run.run_status === 'completed' || run.has_scorecard ? 'text-emerald-500'
+                      : run.run_status === 'running' ? 'text-amber-400'
+                        : run.run_status === 'failed' ? 'text-red-400'
+                          : 'text-gray-600'
+                  }>
+                    {run.run_status === 'running' ? 'running…'
+                      : run.has_scorecard ? 'scorecard'
+                        : run.run_status === 'failed' ? 'failed'
+                          : 'pending'}
+                  </span>
                   {run.generated_at && (
                     <span className="text-gray-600">
                       {new Date(run.generated_at).toLocaleDateString()}
@@ -237,6 +244,8 @@ export default function BenchmarkPage({ onClose }: BenchmarkPageProps) {
           )}
 
           <ProtocolGuide />
+
+          <RunBenchmarkPanel onStarted={fetchRuns} />
 
           {showCompare && baselineRun && currentRun && baselineRun.id !== currentRun.id && (
             <RunComparePanel baseline={baselineRun} current={currentRun} />

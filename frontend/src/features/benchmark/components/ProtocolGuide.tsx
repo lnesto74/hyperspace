@@ -34,7 +34,7 @@ export default function ProtocolGuide() {
         </div>
       </div>
       <p className="text-[11px] text-gray-500 mt-3">
-        Run on DO: <code className="text-gray-400">node analysis/run_benchmark.mjs --file … --capture-id …</code>
+        Run on server via the panel below, or: <code className="text-gray-400">node analysis/run_benchmark.mjs --file … --capture-id …</code>
       </p>
     </div>
   )

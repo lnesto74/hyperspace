@@ -37,6 +37,10 @@ export default class BenchmarkRunService {
   summarizeRun(runDir, id) {
     const scorecard = this.readJsonSafe(path.join(runDir, 'scorecard.json'));
     const meta = this.readJsonSafe(path.join(runDir, 'meta.json'));
+    const globalJob = this.readJsonSafe(path.join(this.runsDir, 'job_status.json'));
+    let runStatus = 'pending';
+    if (scorecard) runStatus = 'completed';
+    else if (globalJob?.captureId === id) runStatus = globalJob.status || 'pending';
     const st = fs.statSync(runDir);
     const p = scorecard?.layers?.perception;
     const gb = scorecard?.layers?.reconciler?.GROCERY_BALANCED;
@@ -48,6 +52,7 @@ export default class BenchmarkRunService {
       perception_version: scorecard?.perception_version ?? meta?.perception_version ?? null,
       scope: scorecard?.scope ?? meta?.scope ?? null,
       generated_at: scorecard?.generated_at ?? null,
+      run_status: runStatus,
       has_scorecard: !!scorecard,
       has_report: fs.existsSync(path.join(runDir, 'REPORT.md')),
       messages: p?.messages ?? null,

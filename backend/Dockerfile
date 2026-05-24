@@ -53,7 +53,10 @@ COPY --from=libredwg-builder /libredwg-install/usr/local /usr/local
 RUN apt-get update && apt-get install -y \
     libsqlite3-0 \
     curl \
+    python3 \
+    python3-pip \
     && curl -fsSL https://tailscale.com/install.sh | sh \
+    && pip3 install --no-cache-dir pandas pyarrow matplotlib scipy numpy \
     && rm -rf /var/lib/apt/lists/* \
     && ldconfig
 
