@@ -12,6 +12,9 @@ interface ReplayFile {
 interface ReplayStatus {
   running: boolean
   file: string | null
+  requestedFile?: string | null
+  fileSize?: number
+  fileMtimeMs?: number
   startedAt: number | null
   speed: number
   messagesPublished: number
@@ -20,6 +23,7 @@ interface ReplayStatus {
   lastError: string | null
   totalBytes?: number
   bytesRead?: number
+  replayDir?: string
 }
 
 interface RecordStatus {
@@ -74,6 +78,10 @@ export default function ReplayPanel({ onClose }: ReplayPanelProps) {
 
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const recordPollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const selectedRef = useRef<string>('')
+  selectedRef.current = selected
+
+  const selectedMeta = files.find(f => f.name === selected)
 
   const recording = !!recordStatus?.recording
 
@@ -168,32 +176,43 @@ export default function ReplayPanel({ onClose }: ReplayPanelProps) {
     }
   }, [refreshFiles])
 
+  const waitForReplayStopped = useCallback(async () => {
+    for (let i = 0; i < 40; i++) {
+      const res = await fetch(`${API_BASE}/api/replay/status`)
+      if (!res.ok) break
+      const st: ReplayStatus = await res.json()
+      if (!st.running) return st
+      await new Promise(r => setTimeout(r, 150))
+    }
+    return null
+  }, [])
+
   const start = useCallback(async () => {
-    if (!selected) return
+    const fileToPlay = selectedRef.current
+    if (!fileToPlay) return
     setError(null)
     try {
-      // Ensure any prior replay fully stops before starting a different file.
-      if (status?.running) {
-        await fetch(`${API_BASE}/api/replay/stop`, { method: 'POST' })
-        await new Promise(r => setTimeout(r, 300))
-      }
+      await fetch(`${API_BASE}/api/replay/stop`, { method: 'POST' })
+      await waitForReplayStopped()
+
       const res = await fetch(`${API_BASE}/api/replay/start`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ file: selected, speed, rewriteTimestamps: true }),
+        body: JSON.stringify({ file: fileToPlay, speed, rewriteTimestamps: true }),
       })
       const data = await res.json().catch(() => ({}))
       if (!res.ok) {
         throw new Error(data.error || `HTTP ${res.status}`)
       }
-      if (data.status?.file && data.status.file !== selected) {
-        throw new Error(`Server started "${data.status.file}" instead of "${selected}"`)
+      const playing = data.status?.file || data.requestedFile
+      if (playing && playing !== fileToPlay) {
+        throw new Error(`Server started "${playing}" instead of "${fileToPlay}"`)
       }
       await refreshStatus()
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : String(err))
     }
-  }, [selected, speed, refreshStatus, status?.running])
+  }, [speed, refreshStatus, waitForReplayStopped])
 
   const stop = useCallback(async () => {
     try {
@@ -338,7 +357,26 @@ export default function ReplayPanel({ onClose }: ReplayPanelProps) {
             {running && playingFile && (
               <div className="mt-1 text-[10px] text-amber-400">
                 Now playing: <span className="font-mono">{playingFile}</span>
+                {status?.fileMtimeMs ? ` · ${formatFileAge(status.fileMtimeMs)}` : ''}
+                {status?.fileSize ? ` · ${formatBytes(status.fileSize)}` : ''}
                 {selectionMismatch && ' — stop replay to switch files'}
+              </div>
+            )}
+            {!running && selectedMeta && (
+              <div className="mt-1 text-[10px] text-gray-500">
+                Selected: <span className="font-mono text-gray-300">{selectedMeta.name}</span>
+                {' · '}{formatBytes(selectedMeta.size)}
+                {selectedMeta.mtimeMs ? ` · ${formatFileAge(selectedMeta.mtimeMs)}` : ''}
+              </div>
+            )}
+            {files.length === 1 && (
+              <div className="mt-1 text-[10px] text-amber-300/90">
+                Only one capture in {replayDir || '/data/replay'}. New recordings appear as grocery_capture_*.jsonl after you press Start recording.
+              </div>
+            )}
+            {mqttActive && running && (
+              <div className="mt-1 text-[10px] text-sky-400">
+                Live edge tracks are also visible — replay tracks use the replay- prefix.
               </div>
             )}
           </div>

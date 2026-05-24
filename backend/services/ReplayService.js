@@ -44,6 +44,8 @@ export default class ReplayService {
     this._abort = null;
     /** Resolves when the active playback loop exits (used to serialize stop → start). */
     this._playbackDone = null;
+    /** Bumped on every stop/start so stale playback loops exit immediately. */
+    this._playbackToken = 0;
     // In-memory cache of parsed point sets — keyed by absolute file path.
     // Eliminates the multi-second re-parse on every preview render.
     this._pointCache = new Map();
@@ -112,7 +114,19 @@ export default class ReplayService {
   }
 
   status() {
-    return { ...this.state };
+    return { ...this.state, replayDir: this.replayDir };
+  }
+
+  /** Resolve a capture filename to an absolute path inside replayDir (basename only). */
+  resolveCaptureFile(file) {
+    if (!file) throw new Error('file is required');
+    const base = path.basename(String(file));
+    if (!base || base.includes('..')) throw new Error(`Invalid file name: ${file}`);
+    const fullPath = path.join(this.replayDir, base);
+    if (!fs.existsSync(fullPath)) {
+      throw new Error(`File not found: ${base} (in ${this.replayDir})`);
+    }
+    return { base, fullPath };
   }
 
   async _ensureClient() {
@@ -127,6 +141,7 @@ export default class ReplayService {
   }
 
   async stop() {
+    this._playbackToken++;
     if (this._abort) this._abort.aborted = true;
     this.state.running = false;
     if (this._playbackDone) {
@@ -141,12 +156,11 @@ export default class ReplayService {
    * returns immediately and polls `status()` afterwards.
    */
   async start({ file, speed = 1, rewriteTimestamps = true, devicePrefix = 'replay-' } = {}) {
-    if (this.state.running || this._playbackDone) {
-      await this.stop();
-    }
-    if (!file) throw new Error('file is required');
-    const fullPath = path.isAbsolute(file) ? file : path.join(this.replayDir, file);
-    if (!fs.existsSync(fullPath)) throw new Error(`File not found: ${fullPath}`);
+    await this.stop();
+
+    const { base, fullPath } = this.resolveCaptureFile(file);
+    const stat = fs.statSync(fullPath);
+    const token = this._playbackToken;
 
     // Only establish MQTT if we have no direct service handle.
     if (!this.mqttService) await this._ensureClient();
@@ -157,7 +171,10 @@ export default class ReplayService {
 
     this.state = {
       running: true,
-      file: path.basename(fullPath),
+      file: base,
+      requestedFile: base,
+      fileSize: stat.size,
+      fileMtimeMs: stat.mtimeMs,
       startedAt: Date.now(),
       speed: Math.max(0.1, Math.min(50, Number(speed) || 1)),
       rewriteTimestamps: !!rewriteTimestamps,
@@ -165,12 +182,13 @@ export default class ReplayService {
       progress: 0,
       currentTs: 0,
       lastError: null,
-      totalBytes: fs.statSync(fullPath).size,
+      totalBytes: stat.size,
       bytesRead: 0,
       delivery: deliveryMode,
+      playbackToken: token,
     };
 
-    console.log(`[Replay] Starting ${path.basename(fullPath)} (${this.state.totalBytes} bytes) at ${this.state.speed}×`);
+    console.log(`[Replay] Starting ${base} (${this.state.totalBytes} bytes, mtime=${new Date(stat.mtimeMs).toISOString()}) at ${this.state.speed}×`);
 
     let resolvePlayback;
     this._playbackDone = new Promise((resolve) => { resolvePlayback = resolve; });
@@ -195,7 +213,7 @@ export default class ReplayService {
 
     try {
       for await (const line of rl) {
-        if (abort.aborted) break;
+        if (abort.aborted || token !== this._playbackToken) break;
         this.state.bytesRead += Buffer.byteLength(line) + 1;
         // Update progress at low frequency to avoid burning CPU on division
         pending++;

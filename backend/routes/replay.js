@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import path from 'path';
 import { venueQueries } from '../database/schema.js';
 
 export default function replayRoutes({ replayService, mqttRecordService, mqttService, db }) {
@@ -20,15 +21,30 @@ export default function replayRoutes({ replayService, mqttRecordService, mqttSer
     const { file, speed, rewriteTimestamps, devicePrefix } = req.body || {};
     try {
       if (!file) return res.status(400).json({ error: 'file is required' });
-      // Fire-and-forget playback loop, but surface synchronous validation errors.
-      replayService.start({ file, speed, rewriteTimestamps, devicePrefix })
-        .catch((err) => { console.error('[Replay] playback failed:', err.message); });
-      await new Promise(r => setTimeout(r, 150));
-      const status = replayService.status();
-      if (!status.running) {
-        return res.status(400).json({ error: status.lastError || 'Replay failed to start' });
+      const requested = path.basename(String(file));
+      try {
+        replayService.resolveCaptureFile(requested);
+      } catch (err) {
+        return res.status(400).json({ error: err.message });
       }
-      res.json({ success: true, status });
+
+      await replayService.stop();
+
+      replayService.start({ file: requested, speed, rewriteTimestamps, devicePrefix })
+        .catch((err) => { console.error('[Replay] playback failed:', err.message); });
+
+      // Wait until the loop is actually reading the requested file.
+      let status = replayService.status();
+      for (let i = 0; i < 30 && (!status.running || status.file !== requested); i++) {
+        await new Promise(r => setTimeout(r, 100));
+        status = replayService.status();
+      }
+      if (!status.running || status.file !== requested) {
+        return res.status(400).json({
+          error: status.lastError || `Replay failed to start "${requested}" (got "${status.file || 'none'}")`,
+        });
+      }
+      res.json({ success: true, status, requestedFile: requested });
     } catch (err) {
       res.status(400).json({ error: err.message });
     }
