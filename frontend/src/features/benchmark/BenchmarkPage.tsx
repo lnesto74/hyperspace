@@ -12,12 +12,13 @@ import ProtocolGuide from './components/ProtocolGuide'
 import ReconcilerCompareTable from './components/ReconcilerCompareTable'
 import ArtifactPanel from './components/ArtifactPanel'
 import RunComparePanel from './components/RunComparePanel'
+import BenchmarkCoverageMap from './components/BenchmarkCoverageMap'
 
 interface BenchmarkPageProps {
   onClose: () => void
 }
 
-type Tab = 'overview' | 'reconciler' | 'spatial' | 'artifacts'
+type Tab = 'overview' | 'reconciler' | 'coverage' | 'spatial' | 'artifacts'
 
 function fmt(n: number | undefined | null, d = 1) {
   if (n == null || Number.isNaN(n)) return '—'
@@ -115,8 +116,9 @@ export default function BenchmarkPage({ onClose }: BenchmarkPageProps) {
 
   const tabs: { id: Tab; label: string }[] = [
     { id: 'overview', label: 'Overview' },
+    { id: 'coverage', label: 'Coverage map' },
     { id: 'reconciler', label: 'Reconciler' },
-    { id: 'spatial', label: 'Spatial' },
+    { id: 'spatial', label: 'Spatial stats' },
     { id: 'artifacts', label: 'Artifacts' },
   ]
 
@@ -300,6 +302,18 @@ export default function BenchmarkPage({ onClose }: BenchmarkPageProps) {
                       <ReconcilerCompareTable reconciler={detail.scorecard.layers.reconciler} />
                     </div>
                   )}
+                </div>
+              )}
+
+              {tab === 'coverage' && selectedId && (
+                <div className="space-y-3">
+                  <p className="text-xs text-gray-500">
+                    2D coverage map — detection dots (animated), ID births/deaths, ghosts, blindspots, and optional venue-transform heatmap (same engine as Trajectory ghost overlay). Toggle <strong className="text-gray-400">Compare</strong> to overlay baseline runs.
+                  </p>
+                  <BenchmarkCoverageMap
+                    runId={selectedId}
+                    compareRunId={showCompare && baselineId !== selectedId ? baselineId : null}
+                  />
                 </div>
               )}
 

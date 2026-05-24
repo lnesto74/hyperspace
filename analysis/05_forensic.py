@@ -165,8 +165,16 @@ for i in range(len(deaths_t)):
     else:
         cat = "true_new_person_or_exit"
     categories[cat] += 1
+    bi = int(sort_idx[lo + best])
     fragmentation_rows.append(dict(
-        i_death=int(i), best_dt_s=best_dt, best_dist_m=best_d, category=cat
+        i_death=int(i),
+        best_dt_s=best_dt,
+        best_dist_m=best_d,
+        category=cat,
+        x_death=float(xd),
+        z_death=float(zd),
+        x_birth=float(births_x[bi]),
+        z_birth=float(births_z[bi]),
     ))
 
 frag_df = pd.DataFrame(fragmentation_rows)
@@ -199,6 +207,94 @@ def per_id_path(group):
 print("Computing per-ID total path ...")
 total_paths = df.groupby("id", sort=False).apply(per_id_path)
 ends["total_path_m"] = ends["id"].map(total_paths.to_dict())
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 4b. Interactive coverage map export (for benchmark UI)
+# ─────────────────────────────────────────────────────────────────────────────
+print("Exporting coverage_spatial.json for benchmark map ...", flush=True)
+
+def _sample_rows(rows, max_n):
+    if len(rows) <= max_n:
+        return rows
+    idx = np.linspace(0, len(rows) - 1, max_n, dtype=int)
+    return [rows[i] for i in idx]
+
+birth_rows = [
+    dict(x=float(r.x_birth), z=float(r.z_birth), t=int(r.t_birth), id=str(r.id))
+    for _, r in ends.iterrows()
+]
+death_rows = [
+    dict(
+        x=float(r.x_death), z=float(r.z_death), t=int(r.t_death),
+        id=str(r.id), lifetime_s=float(r.lifetime_s),
+    )
+    for _, r in ends.iterrows()
+]
+ghost_rows = [
+    dict(x=float(r.x_birth), z=float(r.z_birth), id=str(r.id))
+    for _, r in ends.iterrows()
+    if r.lifetime_s < 2.0 and float(r.total_path_m) < 0.4
+]
+link_rows = [
+    dict(
+        x0=float(r.x_death), z0=float(r.z_death),
+        x1=float(r.x_birth), z1=float(r.z_birth),
+        category=str(r.category),
+    )
+    for r in frag_df.itertuples()
+    if r.category in ("shelf_occlusion_short", "blindspot_gap_long", "continuous_perception_loss")
+]
+
+blind_rows = []
+xs_grid_cov = np.linspace(bx0, bx1, nx + 1)[:-1] + GRID_RES / 2
+zs_grid_cov = np.linspace(bz0, bz1, nz + 1)[:-1] + GRID_RES / 2
+for comp_id, area in enumerate(component_sizes, 1):
+    if area * GRID_RES ** 2 < 1.0:
+        continue
+    coords = np.argwhere(blind_labels == comp_id)
+    if not len(coords):
+        continue
+    cy, cx = coords.mean(axis=0)
+    blind_rows.append(dict(
+        x=float(xs_grid_cov[int(cy)]),
+        z=float(zs_grid_cov[int(cx)]),
+        area_m2=float(area * GRID_RES ** 2),
+    ))
+
+BUCKET_MS = 60_000
+t_min = int(df["ts"].min())
+t_max = int(df["ts"].max())
+timeline = []
+for t0 in range(t_min, t_max + 1, BUCKET_MS):
+    t1 = t0 + BUCKET_MS
+    chunk = df[(df["ts"] >= t0) & (df["ts"] < t1)]
+    if chunk.empty:
+        continue
+    stride = max(1, len(chunk) // 400)
+    pts = [dict(x=float(r.x), z=float(r.z)) for r in chunk.iloc[::stride].itertuples()]
+    timeline.append(dict(t0=t0, t1=t1, points=pts))
+
+coverage_spatial = dict(
+    bbox=dict(x0=float(bx0), x1=float(bx1), z0=float(bz0), z1=float(bz1)),
+    grid_res=GRID_RES,
+    time_ms=dict(min=t_min, max=t_max),
+    counts=dict(
+        births=len(birth_rows),
+        deaths=len(death_rows),
+        ghosts=len(ghost_rows),
+        links=len(link_rows),
+        blindspots=len(blind_rows),
+        timeline_buckets=len(timeline),
+    ),
+    births=_sample_rows(birth_rows, 5000),
+    deaths=_sample_rows(death_rows, 5000),
+    ghosts=_sample_rows(ghost_rows, 3000),
+    links=_sample_rows(link_rows, 2000),
+    blindspots=blind_rows,
+    timeline=timeline,
+)
+(OUT / "coverage_spatial.json").write_text(json.dumps(coverage_spatial))
+print(f"  → coverage_spatial.json ({len(coverage_spatial['births']):,} births sampled)")
 
 ids_meeting_expectation = (ends["total_path_m"] >= expected_min_path).sum()
 n_real_shoppers_lower_bound = int(ids_meeting_expectation)

@@ -86,3 +86,31 @@ export interface BenchmarkRunsResponse {
   runs: BenchmarkRunSummary[]
   runsDir: string
 }
+
+export interface CoveragePoint {
+  x: number
+  z: number
+}
+
+export interface CoverageSpatial {
+  available: boolean
+  reason?: string
+  bbox?: { x0: number; x1: number; z0: number; z1: number }
+  time_ms?: { min: number; max: number }
+  counts?: {
+    births: number
+    deaths: number
+    ghosts: number
+    links: number
+    blindspots: number
+    timeline_buckets: number
+  }
+  births?: Array<CoveragePoint & { t: number; id: string }>
+  deaths?: Array<CoveragePoint & { t: number; id: string; lifetime_s: number }>
+  ghosts?: Array<CoveragePoint & { id: string }>
+  links?: Array<{
+    x0: number; z0: number; x1: number; z1: number; category: string
+  }>
+  blindspots?: Array<CoveragePoint & { area_m2: number }>
+  timeline?: Array<{ t0: number; t1: number; points: CoveragePoint[] }>
+}
