@@ -49,7 +49,8 @@ export default class ReplayService {
     /** Active read stream + readline — torn down immediately on stop(). */
     this._inputStream = null;
     this._rl = null;
-    // In-memory cache of parsed point sets — keyed by absolute file path.
+    /** Cached first/last recorded timestamps per capture file. */
+    this._metaCache = new Map();
     // Eliminates the multi-second re-parse on every preview render.
     this._pointCache = new Map();
   }
@@ -120,6 +121,122 @@ export default class ReplayService {
     return { ...this.state, replayDir: this.replayDir };
   }
 
+  /** Byte offset to start reading (skip partial line after seek). */
+  _byteOffsetForProgress(fullPath, progress) {
+    const stat = fs.statSync(fullPath);
+    const total = stat.size;
+    if (!total || progress <= 0) return 0;
+    if (progress >= 1) return total;
+    let offset = Math.min(total - 1, Math.floor(total * progress));
+    if (offset <= 0) return 0;
+    const fd = fs.openSync(fullPath, 'r');
+    try {
+      const chunk = Buffer.alloc(Math.min(16384, total - offset));
+      fs.readSync(fd, chunk, 0, chunk.length, offset);
+      const nl = chunk.indexOf(0x0a);
+      if (nl >= 0 && nl < chunk.length - 1) return offset + nl + 1;
+      // Fall back: scan backward for preceding newline
+      const back = Buffer.alloc(Math.min(16384, offset));
+      const backStart = Math.max(0, offset - back.length);
+      fs.readSync(fd, back, 0, back.length, backStart);
+      const lastNl = back.lastIndexOf(0x0a);
+      if (lastNl >= 0) return backStart + lastNl + 1;
+    } finally {
+      fs.closeSync(fd);
+    }
+    return offset;
+  }
+
+  /** First/last message timestamps in a capture (cached by mtime). */
+  async getFileMeta(file) {
+    const { base, fullPath } = this.resolveCaptureFile(file);
+    const stat = fs.statSync(fullPath);
+    const cacheKey = `${fullPath}:${stat.mtimeMs}:${stat.size}`;
+    if (this._metaCache.has(cacheKey)) return { file: base, ...this._metaCache.get(cacheKey) };
+
+    let firstTs = null;
+    let lastTs = null;
+    if (stat.size > 50 * 1024 * 1024) {
+      firstTs = await this._readFirstTimestamp(fullPath);
+      lastTs = await this._readLastTimestamp(fullPath);
+    } else {
+      const rl = readline.createInterface({ input: fs.createReadStream(fullPath), crlfDelay: Infinity });
+      for await (const line of rl) {
+        const ts = this._parseLineTs(line);
+        if (ts) {
+          if (firstTs === null) firstTs = ts;
+          lastTs = ts;
+        }
+      }
+    }
+
+    const meta = {
+      firstRecordedTs: firstTs,
+      lastRecordedTs: lastTs,
+      spanMs: firstTs && lastTs ? lastTs - firstTs : 0,
+      size: stat.size,
+      mtimeMs: stat.mtimeMs,
+    };
+    this._metaCache.set(cacheKey, meta);
+    return { file: base, ...meta };
+  }
+
+  _parseLineTs(line) {
+    const raw = line.trim();
+    if (!raw || raw.startsWith('nohup:') || !raw.includes(' ')) return null;
+    try {
+      const d = JSON.parse(raw.split(' ', 2)[1]);
+      const ts = Number(d.timestamp);
+      return Number.isFinite(ts) && ts > 0 ? ts : null;
+    } catch {
+      return null;
+    }
+  }
+
+  async _readFirstTimestamp(fullPath) {
+    const rl = readline.createInterface({
+      input: fs.createReadStream(fullPath, { end: 256 * 1024 }),
+      crlfDelay: Infinity,
+    });
+    for await (const line of rl) {
+      const ts = this._parseLineTs(line);
+      if (ts) return ts;
+    }
+    return null;
+  }
+
+  async _readLastTimestamp(fullPath) {
+    const stat = fs.statSync(fullPath);
+    const readLen = Math.min(stat.size, 256 * 1024);
+    const buf = Buffer.alloc(readLen);
+    const fd = fs.openSync(fullPath, 'r');
+    try {
+      fs.readSync(fd, buf, 0, readLen, stat.size - readLen);
+    } finally {
+      fs.closeSync(fd);
+    }
+    const lines = buf.toString('utf8').split('\n');
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const ts = this._parseLineTs(lines[i]);
+      if (ts) return ts;
+    }
+    return null;
+  }
+
+  async seek({ file, progress, speed, rewriteTimestamps = true, devicePrefix = 'replay-' } = {}) {
+    const targetFile = file || this.state.file;
+    if (!targetFile) throw new Error('No file specified');
+    const p = Math.max(0, Math.min(1, Number(progress) || 0));
+    await this.start({
+      file: targetFile,
+      speed: speed ?? this.state.speed ?? 1,
+      rewriteTimestamps,
+      devicePrefix,
+      startProgress: p,
+    });
+    return this.status();
+  }
+
   /** Resolve a capture filename to an absolute path inside replayDir (basename only). */
   resolveCaptureFile(file) {
     if (!file) throw new Error('file is required');
@@ -180,12 +297,17 @@ export default class ReplayService {
    * (EOF or explicit stop). Caller usually doesn't await — the HTTP endpoint
    * returns immediately and polls `status()` afterwards.
    */
-  async start({ file, speed = 1, rewriteTimestamps = true, devicePrefix = 'replay-' } = {}) {
+  async start({ file, speed = 1, rewriteTimestamps = true, devicePrefix = 'replay-', startProgress = 0 } = {}) {
     await this.stop();
 
     const { base, fullPath } = this.resolveCaptureFile(file);
     const stat = fs.statSync(fullPath);
     const token = this._playbackToken;
+    const progress = Math.max(0, Math.min(1, Number(startProgress) || 0));
+    const byteOffset = this._byteOffsetForProgress(fullPath, progress);
+
+    let meta = null;
+    try { meta = await this.getFileMeta(base); } catch { /* ignore */ }
 
     // Only establish MQTT if we have no direct service handle.
     if (!this.mqttService) await this._ensureClient();
@@ -200,31 +322,34 @@ export default class ReplayService {
       requestedFile: base,
       fileSize: stat.size,
       fileMtimeMs: stat.mtimeMs,
+      firstRecordedTs: meta?.firstRecordedTs ?? null,
+      lastRecordedTs: meta?.lastRecordedTs ?? null,
+      recordedCurrentTs: null,
+      startProgress: progress,
       startedAt: Date.now(),
       speed: Math.max(0.1, Math.min(50, Number(speed) || 1)),
       rewriteTimestamps: !!rewriteTimestamps,
       messagesPublished: 0,
-      progress: 0,
+      progress,
       currentTs: 0,
       lastError: null,
       totalBytes: stat.size,
-      bytesRead: 0,
+      bytesRead: byteOffset,
       delivery: deliveryMode,
       playbackToken: token,
     };
 
-    console.log(`[Replay] Starting ${base} (${this.state.totalBytes} bytes, mtime=${new Date(stat.mtimeMs).toISOString()}) at ${this.state.speed}×`);
+    console.log(`[Replay] Starting ${base} (${this.state.totalBytes} bytes) at ${this.state.speed}× from ${(progress * 100).toFixed(1)}% (byte ${byteOffset})`);
 
     let resolvePlayback;
     this._playbackDone = new Promise((resolve) => { resolvePlayback = resolve; });
 
-    this._inputStream = fs.createReadStream(fullPath);
+    this._inputStream = fs.createReadStream(fullPath, byteOffset > 0 ? { start: byteOffset } : undefined);
     const rl = readline.createInterface({ input: this._inputStream, crlfDelay: Infinity });
     this._rl = rl;
 
     let firstRecordedTs = null;
     let replayStartTs = Date.now();
-    // Avoid awaiting setTimeout for every message — coalesce sleeps below this slack.
     const SLEEP_SLACK_MS = 5;
     let pending = 0;
 
@@ -240,8 +365,8 @@ export default class ReplayService {
     try {
       for await (const line of rl) {
         if (abort.aborted || token !== this._playbackToken) break;
-        this.state.bytesRead += Buffer.byteLength(line) + 1;
-        // Update progress at low frequency to avoid burning CPU on division
+        const lineBytes = Buffer.byteLength(line) + 1;
+        this.state.bytesRead += lineBytes;
         pending++;
         if (pending >= 200) {
           this.state.progress = this.state.totalBytes > 0 ? this.state.bytesRead / this.state.totalBytes : 0;
@@ -255,14 +380,17 @@ export default class ReplayService {
         try { msg = JSON.parse(line.slice(idx + 1)); } catch { continue; }
         if (!msg.timestamp) continue;
 
+        const originalTs = msg.timestamp;
+        this.state.recordedCurrentTs = originalTs;
+
         if (firstRecordedTs === null) {
-          firstRecordedTs = msg.timestamp;
+          firstRecordedTs = originalTs;
           replayStartTs = Date.now();
         }
 
         // Pace against wall clock; coalesce sub-slack waits so we don't yield
         // to setTimeout every 25-100ms.
-        const recordedDelta = msg.timestamp - firstRecordedTs;
+        const recordedDelta = originalTs - firstRecordedTs;
         const targetWallTime = replayStartTs + recordedDelta / this.state.speed;
         const waitMs = targetWallTime - Date.now();
         if (waitMs > SLEEP_SLACK_MS) {

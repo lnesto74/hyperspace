@@ -17,8 +17,19 @@ export default function replayRoutes({ replayService, mqttRecordService, mqttSer
     res.json(replayService.status());
   });
 
+  router.get('/meta', async (req, res) => {
+    try {
+      const { file } = req.query;
+      if (!file) return res.status(400).json({ error: 'file query param required' });
+      const meta = await replayService.getFileMeta(String(file));
+      res.json(meta);
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
   router.post('/start', async (req, res) => {
-    const { file, speed, rewriteTimestamps, devicePrefix } = req.body || {};
+    const { file, speed, rewriteTimestamps, devicePrefix, startProgress } = req.body || {};
     try {
       if (!file) return res.status(400).json({ error: 'file is required' });
       const requested = path.basename(String(file));
@@ -30,7 +41,7 @@ export default function replayRoutes({ replayService, mqttRecordService, mqttSer
 
       await replayService.stop();
 
-      replayService.start({ file: requested, speed, rewriteTimestamps, devicePrefix })
+      replayService.start({ file: requested, speed, rewriteTimestamps, devicePrefix, startProgress })
         .catch((err) => { console.error('[Replay] playback failed:', err.message); });
 
       // Wait until the loop is actually reading the requested file.
@@ -56,6 +67,37 @@ export default function replayRoutes({ replayService, mqttRecordService, mqttSer
       res.json({ success: true, status: replayService.status() });
     } catch (err) {
       res.status(500).json({ error: err.message });
+    }
+  });
+
+  router.post('/seek', async (req, res) => {
+    const { file, progress, speed } = req.body || {};
+    try {
+      const p = Number(progress);
+      if (!Number.isFinite(p)) return res.status(400).json({ error: 'progress (0-1) is required' });
+      const current = replayService.status();
+      const requested = file ? path.basename(String(file)) : current.file;
+      if (!requested) return res.status(400).json({ error: 'file is required' });
+
+      await replayService.stop();
+      replayService.start({
+        file: requested,
+        speed: speed ?? current.speed ?? 1,
+        startProgress: p,
+        rewriteTimestamps: true,
+      }).catch((err) => { console.error('[Replay] seek failed:', err.message); });
+
+      let status = replayService.status();
+      for (let i = 0; i < 30 && !status.running; i++) {
+        await new Promise(r => setTimeout(r, 100));
+        status = replayService.status();
+      }
+      if (!status.running) {
+        return res.status(400).json({ error: status.lastError || 'Seek failed to start playback' });
+      }
+      res.json({ success: true, status });
+    } catch (err) {
+      res.status(400).json({ error: err.message });
     }
   });
 

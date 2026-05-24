@@ -15,6 +15,10 @@ interface ReplayStatus {
   requestedFile?: string | null
   fileSize?: number
   fileMtimeMs?: number
+  firstRecordedTs?: number | null
+  lastRecordedTs?: number | null
+  recordedCurrentTs?: number | null
+  startProgress?: number
   startedAt: number | null
   speed: number
   messagesPublished: number
@@ -24,6 +28,15 @@ interface ReplayStatus {
   totalBytes?: number
   bytesRead?: number
   replayDir?: string
+}
+
+interface FileMeta {
+  file: string
+  firstRecordedTs: number | null
+  lastRecordedTs: number | null
+  spanMs: number
+  size: number
+  mtimeMs: number
 }
 
 interface RecordStatus {
@@ -60,6 +73,18 @@ const formatFileAge = (mtimeMs?: number) => {
   return d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
 }
 
+const formatRecordedTs = (ts?: number | null) => {
+  if (!ts) return '—'
+  return new Date(ts).toLocaleString(undefined, {
+    month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit',
+  })
+}
+
+const tsAtProgress = (meta: FileMeta | null, progress: number) => {
+  if (!meta?.firstRecordedTs || !meta?.lastRecordedTs) return null
+  return meta.firstRecordedTs + (meta.lastRecordedTs - meta.firstRecordedTs) * progress
+}
+
 const RECORD_SOFT_CAP_BYTES = 500 * 1024 * 1024
 
 export default function ReplayPanel({ onClose }: ReplayPanelProps) {
@@ -75,12 +100,16 @@ export default function ReplayPanel({ onClose }: ReplayPanelProps) {
   const [recordLabel, setRecordLabel] = useState('grocery_capture')
   const [recordStatus, setRecordStatus] = useState<RecordStatus | null>(null)
   const [recordBusy, setRecordBusy] = useState(false)
+  const [scrubPct, setScrubPct] = useState(0)
+  const [fileMeta, setFileMeta] = useState<FileMeta | null>(null)
+  const [seeking, setSeeking] = useState(false)
 
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const recordPollRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const selectRef = useRef<HTMLSelectElement>(null)
   const selectedRef = useRef<string>('')
   const startingReplayRef = useRef(false)
+  const scrubbingRef = useRef(false)
   selectedRef.current = selected
 
   const readSelectedFile = () => {
@@ -151,6 +180,26 @@ export default function ReplayPanel({ onClose }: ReplayPanelProps) {
     }
   }, [refreshFiles, refreshStatus, refreshRecordStatus])
 
+  useEffect(() => {
+    if (!selected) {
+      setFileMeta(null)
+      return
+    }
+    let cancelled = false
+    fetch(`${API_BASE}/api/replay/meta?file=${encodeURIComponent(selected)}`)
+      .then(r => r.ok ? r.json() : null)
+      .then(data => { if (!cancelled && data) setFileMeta(data) })
+      .catch(() => { if (!cancelled) setFileMeta(null) })
+    return () => { cancelled = true }
+  }, [selected])
+
+  useEffect(() => {
+    if (scrubbingRef.current || seeking) return
+    if (status?.progress != null && Number.isFinite(status.progress)) {
+      setScrubPct(status.progress * 100)
+    }
+  }, [status?.progress, seeking])
+
   const startRecord = useCallback(async () => {
     setRecordBusy(true)
     setError(null)
@@ -198,9 +247,10 @@ export default function ReplayPanel({ onClose }: ReplayPanelProps) {
     return null
   }, [])
 
-  const start = useCallback(async () => {
+  const start = useCallback(async (startProgress?: number) => {
     const fileToPlay = readSelectedFile()
     if (!fileToPlay) return
+    const progress = startProgress ?? scrubPct / 100
     startingReplayRef.current = true
     setError(null)
     try {
@@ -210,7 +260,7 @@ export default function ReplayPanel({ onClose }: ReplayPanelProps) {
       const res = await fetch(`${API_BASE}/api/replay/start`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ file: fileToPlay, speed, rewriteTimestamps: true }),
+        body: JSON.stringify({ file: fileToPlay, speed, rewriteTimestamps: true, startProgress: progress }),
       })
       const data = await res.json().catch(() => ({}))
       if (!res.ok) {
@@ -228,7 +278,30 @@ export default function ReplayPanel({ onClose }: ReplayPanelProps) {
     } finally {
       startingReplayRef.current = false
     }
-  }, [speed, refreshStatus, waitForReplayStopped])
+  }, [speed, refreshStatus, waitForReplayStopped, scrubPct])
+
+  const seekTo = useCallback(async (pct: number) => {
+    const fileToPlay = readSelectedFile() || status?.file
+    if (!fileToPlay) return
+    setSeeking(true)
+    startingReplayRef.current = true
+    setError(null)
+    try {
+      const res = await fetch(`${API_BASE}/api/replay/seek`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ file: fileToPlay, progress: pct / 100, speed }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`)
+      await refreshStatus()
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setSeeking(false)
+      startingReplayRef.current = false
+    }
+  }, [speed, refreshStatus, status?.file])
 
   const stop = useCallback(async () => {
     try {
@@ -249,6 +322,19 @@ export default function ReplayPanel({ onClose }: ReplayPanelProps) {
   const recordProgress = recordStatus?.bytesWritten
     ? Math.min(100, (recordStatus.bytesWritten / RECORD_SOFT_CAP_BYTES) * 100)
     : 0
+
+  const scrubProgress = scrubPct / 100
+  const displayRecordedTs = running && status?.recordedCurrentTs
+    ? status.recordedCurrentTs
+    : tsAtProgress(fileMeta, scrubProgress)
+  const metaForLabels = fileMeta || (status?.firstRecordedTs && status?.lastRecordedTs ? {
+    file: status.file || '',
+    firstRecordedTs: status.firstRecordedTs,
+    lastRecordedTs: status.lastRecordedTs,
+    spanMs: status.lastRecordedTs - status.firstRecordedTs,
+    size: status.fileSize || 0,
+    mtimeMs: status.fileMtimeMs || 0,
+  } : null)
 
   return (
     <div className="absolute top-4 left-16 z-30 w-[26rem] bg-gray-900/95 backdrop-blur border border-amber-700/60 rounded-xl shadow-2xl text-gray-200 text-xs">
@@ -425,8 +511,8 @@ export default function ReplayPanel({ onClose }: ReplayPanelProps) {
 
           {!running ? (
             <button
-              onClick={start}
-              disabled={!selected || loading}
+              onClick={() => start()}
+              disabled={!selected || loading || seeking}
               className="w-full px-3 py-2 rounded bg-amber-600 hover:bg-amber-500 text-white font-medium disabled:bg-gray-700 disabled:text-gray-500 flex items-center justify-center gap-2"
             >
               <Play className="w-4 h-4" /> Start replay
@@ -440,12 +526,48 @@ export default function ReplayPanel({ onClose }: ReplayPanelProps) {
             </button>
           )}
 
+          {(selected || status?.file) && (
+            <div className="space-y-1.5 pt-2 border-t border-gray-800">
+              <div className="flex justify-between items-center text-[11px]">
+                <span className="text-gray-400">Scrub position</span>
+                <span className="font-mono text-amber-300">{scrubPct.toFixed(1)}%</span>
+              </div>
+              <input
+                type="range"
+                min={0}
+                max={100}
+                step={0.1}
+                value={scrubPct}
+                disabled={seeking || !selected}
+                className="w-full h-2 accent-amber-500 cursor-pointer disabled:opacity-40"
+                onPointerDown={() => { scrubbingRef.current = true }}
+                onChange={e => setScrubPct(Number(e.target.value))}
+                onPointerUp={() => {
+                  scrubbingRef.current = false
+                  void seekTo(scrubPct)
+                }}
+              />
+              <div className="flex justify-between text-[10px] text-gray-500">
+                <span>{formatRecordedTs(metaForLabels?.firstRecordedTs)}</span>
+                <span className="text-amber-300/90">{formatRecordedTs(displayRecordedTs)}</span>
+                <span>{formatRecordedTs(metaForLabels?.lastRecordedTs)}</span>
+              </div>
+              <p className="text-[10px] text-gray-500">
+                Drag the slider to jump inside the file — release to seek and play from that point.
+                {seeking && ' Seeking…'}
+              </p>
+            </div>
+          )}
+
           {status && (
             <div className="space-y-1 pt-2 border-t border-gray-800 text-[11px]">
               <div className="flex justify-between"><span className="text-gray-500">File:</span><span className="font-mono text-gray-300">{status.file || '—'}</span></div>
               <div className="flex justify-between"><span className="text-gray-500">Progress:</span><span>{(status.progress * 100).toFixed(1)}%</span></div>
-              <div className="h-1.5 bg-gray-800 rounded overflow-hidden">
-                <div className="h-full bg-amber-500 transition-all" style={{ width: `${(status.progress * 100).toFixed(2)}%` }} />
+              {status.recordedCurrentTs ? (
+                <div className="flex justify-between"><span className="text-gray-500">Capture time:</span><span className="font-mono text-gray-300">{formatRecordedTs(status.recordedCurrentTs)}</span></div>
+              ) : null}
+              <div className="h-1.5 bg-gray-800 rounded overflow-hidden pointer-events-none">
+                <div className="h-full bg-amber-500 transition-all" style={{ width: `${Math.min(100, status.progress * 100)}%` }} />
               </div>
             </div>
           )}
