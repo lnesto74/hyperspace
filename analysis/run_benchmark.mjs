@@ -170,19 +170,25 @@ async function main() {
   }
 
   let verifyRows = [];
+  const verifyPath = path.join(artifactsDir, '06_verify.json');
   if (!args.skipVerify) {
-    const verifyArgs = [
-      path.join(__dirname, '06_verify.mjs'),
-      '--file', filePath,
-      '--out-dir', artifactsDir,
-    ];
-    if (venueId) verifyArgs.push('--venue-id', venueId);
-    if (args.after) verifyArgs.push('--after', args.after);
-    if (args.before) verifyArgs.push('--before', args.before);
-    run(process.execPath, verifyArgs, {
-      NODE_OPTIONS: [process.env.NODE_OPTIONS, '--max-old-space-size=3072'].filter(Boolean).join(' '),
-    });
-    verifyRows = JSON.parse(fs.readFileSync(path.join(artifactsDir, '06_verify.json'), 'utf8'));
+    if (args.skipExplore && args.skipSpatial && fs.existsSync(verifyPath)) {
+      console.log('\n⏭ Using existing 06_verify.json (delete file to re-run verify)');
+      verifyRows = JSON.parse(fs.readFileSync(verifyPath, 'utf8'));
+    } else {
+      const verifyArgs = [
+        path.join(__dirname, '06_verify.mjs'),
+        '--file', filePath,
+        '--out-dir', artifactsDir,
+      ];
+      if (venueId) verifyArgs.push('--venue-id', venueId);
+      if (args.after) verifyArgs.push('--after', args.after);
+      if (args.before) verifyArgs.push('--before', args.before);
+      run(process.execPath, verifyArgs, {
+        NODE_OPTIONS: [process.env.NODE_OPTIONS, '--max-old-space-size=3072'].filter(Boolean).join(' '),
+      });
+      verifyRows = JSON.parse(fs.readFileSync(verifyPath, 'utf8'));
+    }
   }
 
   const finishedAt = new Date().toISOString();
