@@ -804,6 +804,8 @@ app.get('/api/tracking/venue/:venueId/status', (req, res) => {
       lastTrackTs: mqttStatus.venueLastTrackTs || mqttStatus.lastMessageTs,
       tracksLast10s: mqttStatus.venueTracksLast10s || 0,
       totalTracksReceived: mqttStatus.venueTracksReceived || 0,
+      aggregatorActiveTracks: trackAggregator.getActiveTrackCount(),
+      subscribedVenueId: trackAggregator.venueId || null,
     });
   } catch (err) {
     console.error('❌ Failed to get tracking status:', err.message);

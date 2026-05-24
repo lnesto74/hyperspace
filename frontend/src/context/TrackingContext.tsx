@@ -65,7 +65,12 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
   const [isReplayMode, setIsReplayMode] = useState(false)
   const socketRef = useRef<Socket | null>(null)
   const subscribedVenueRef = useRef<string | null>(null)
+  const venueIdRef = useRef<string | null>(null)
+  const isReplayModeRef = useRef(false)
+  const subscribeRef = useRef<(venueId: string) => void>(() => {})
   const trackLastSeenRef = useRef<Map<string, number>>(new Map())
+  venueIdRef.current = venue?.id ?? null
+  isReplayModeRef.current = isReplayMode
   
   // Interpolation state (only active when Neural Dashboard enables it)
   const interpEnabledRef = useRef(false)
@@ -84,6 +89,21 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
   const stableTracksRef = useRef(tracks)
   stableTracksRef.current = tracks
 
+  const subscribe = useCallback((venueId: string) => {
+    if (subscribedVenueRef.current === venueId && socketRef.current?.connected) {
+      return
+    }
+    if (subscribedVenueRef.current && subscribedVenueRef.current !== venueId) {
+      socketRef.current?.emit('unsubscribe', { venueId: subscribedVenueRef.current })
+    }
+    subscribedVenueRef.current = venueId
+    if (DIAG) console.log(`[DIAG] subscribe venue=${venueId}  connected=${!!socketRef.current?.connected}  t=${Date.now()}`)
+    socketRef.current?.emit('subscribe', { venueId })
+    setLiveTracks(new Map())
+  }, [])
+
+  subscribeRef.current = subscribe
+
   useEffect(() => {
     const socket = io(`${API_BASE}/tracking`, {
       transports: ['websocket', 'polling'],
@@ -93,8 +113,9 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
     socket.on('connect', () => {
       if (DIAG) console.log(`[DIAG] Socket CONNECTED  id=${socket.id}  t=${Date.now()}`)
       setIsConnected(true)
-      if (subscribedVenueRef.current) {
-        socket.emit('subscribe', { venueId: subscribedVenueRef.current })
+      const targetVenue = subscribedVenueRef.current || venueIdRef.current
+      if (targetVenue) {
+        subscribeRef.current(targetVenue)
       }
     })
 
@@ -161,7 +182,7 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
     
     socket.on('tracks', (data: { venueId: string, tracks: Track[] }) => {
       if (data.venueId !== subscribedVenueRef.current) return
-      if (isReplayMode) return
+      if (isReplayModeRef.current) return
 
       const now = Date.now()
 
@@ -266,22 +287,13 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
       clearInterval(cleanupInterval)
       trackLastSeenRef.current.clear()
     }
-  }, [isReplayMode])
+  }, [])
 
   useEffect(() => {
-    if (venue?.id && socketRef.current?.connected) {
+    if (venue?.id && isConnected) {
       subscribe(venue.id)
     }
-  }, [venue?.id])
-
-  const subscribe = useCallback((venueId: string) => {
-    if (subscribedVenueRef.current) {
-      socketRef.current?.emit('unsubscribe', { venueId: subscribedVenueRef.current })
-    }
-    subscribedVenueRef.current = venueId
-    socketRef.current?.emit('subscribe', { venueId })
-    setLiveTracks(new Map())
-  }, [])
+  }, [venue?.id, isConnected, subscribe])
 
   const unsubscribe = useCallback((venueId: string) => {
     if (subscribedVenueRef.current === venueId) {
