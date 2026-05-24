@@ -94,6 +94,7 @@ services:
       - MODELS_DIR=/data/models
       - REPLAY_DB_PATH=/data/db/replay_insight.db
       - REPLAY_DIR=/data/replay
+      - BENCHMARK_RUNS_DIR=/data/benchmark/runs
     volumes:
       # Persistent data volumes (survive container rebuilds)
       - hyperspace_db:/data/db
@@ -101,6 +102,8 @@ services:
       - hyperspace_models:/data/models
       # MQTT trajectory replay files (drop .jsonl into /opt/hyperspace/replay on the host)
       - /opt/hyperspace/replay:/data/replay
+      # Benchmark scorecards (output of analysis/run_benchmark.mjs)
+      - /opt/hyperspace/analysis/runs:/data/benchmark/runs
       # Mount host's Tailscale socket so backend can run `tailscale status`
       - /var/run/tailscale:/var/run/tailscale:ro
     # Access host's Tailscale for device discovery (tailscale status --json)

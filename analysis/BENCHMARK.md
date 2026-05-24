@@ -53,3 +53,17 @@ Copy `analysis/templates/capture.meta.json` for each new capture. Track percepti
 ## Compare runs
 
 Diff `scorecard.json` files under `analysis/runs/` after each experiment.
+
+## Frontend dashboard
+
+After deploy, open the main Hyperspace UI → floating toolbar (bottom-right) → **flask icon** (Trajectory Benchmark).
+
+The page reads `GET /api/benchmark/runs` and shows:
+- Three-layer protocol guide
+- Run list (sidebar) from `analysis/runs/`
+- Layer 1/2/3 metrics + reconciler comparison table
+- Spatial maps & artifact PNGs
+- Compare mode vs a baseline run
+
+Production requires the benchmark volume mount in `docker-compose.prod.yml`:
+`/opt/hyperspace/analysis/runs` → `/data/benchmark/runs`

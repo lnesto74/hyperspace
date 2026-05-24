@@ -1,0 +1,42 @@
+import { Router } from 'express';
+import path from 'path';
+
+export default function benchmarkRoutes(benchmarkRunService) {
+  const router = Router();
+
+  router.get('/runs', (_req, res) => {
+    try {
+      res.json({
+        runs: benchmarkRunService.listRuns(),
+        runsDir: benchmarkRunService.runsDir,
+      });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  router.get('/runs/:id', (req, res) => {
+    try {
+      const includeReport = req.query.includeReport !== '0';
+      res.json(benchmarkRunService.getRun(req.params.id, { includeReport }));
+    } catch (err) {
+      const status = err.message.includes('not found') ? 404 : 400;
+      res.status(status).json({ error: err.message });
+    }
+  });
+
+  router.get('/runs/:id/artifacts/:filename', (req, res) => {
+    try {
+      const filePath = benchmarkRunService.resolveArtifact(req.params.id, req.params.filename);
+      const ext = path.extname(filePath).toLowerCase();
+      if (ext === '.json') res.type('application/json');
+      else if (ext === '.png') res.type('image/png');
+      return res.sendFile(filePath);
+    } catch (err) {
+      const status = err.message.includes('not found') ? 404 : 400;
+      res.status(status).json({ error: err.message });
+    }
+  });
+
+  return router;
+}

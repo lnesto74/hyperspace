@@ -31,11 +31,12 @@ import { EdgeCommissioningProvider } from './context/EdgeCommissioningContext'
 import DoohAnalyticsPage from './components/dooh/DoohAnalyticsPage'
 import DoohEffectivenessPage from './components/dooh/DoohEffectivenessPage'
 import { BusinessReportingPage } from './features/businessReporting'
+import { BenchmarkPage } from './features/benchmark'
 import { ProfitRadarPage } from './features/profitRadar'
 import { ProfitRadarProvider } from './context/ProfitRadarContext'
 import { LaunchPadPanel, isLaunchPadEnabled, loadSession } from './launchpad'
 
-import { BarChart3, Bell, Thermometer, Zap, ShoppingCart, Monitor, Activity, PieChart, Clapperboard, Crosshair, Building2, LogOut, User, Rocket } from 'lucide-react'
+import { BarChart3, Bell, Thermometer, Zap, ShoppingCart, Monitor, Activity, PieChart, Clapperboard, Crosshair, Building2, LogOut, User, Rocket, FlaskConical } from 'lucide-react'
 import { useState, useEffect, useRef, createContext, useContext } from 'react'
 import { Routes, Route, useNavigate } from 'react-router-dom'
 import { useAuth } from './context/AuthContext'
@@ -45,7 +46,7 @@ import LoginPage from './components/auth/LoginPage'
 import CompaniesPage from './components/admin/CompaniesPage'
 
 // App view mode context
-type ViewMode = 'main' | 'planogram' | 'dwgImporter' | 'lidarPlanner' | 'edgeCommissioning' | 'doohAnalytics' | 'doohEffectiveness' | 'businessReporting' | 'profitRadar'
+type ViewMode = 'main' | 'planogram' | 'dwgImporter' | 'lidarPlanner' | 'edgeCommissioning' | 'doohAnalytics' | 'doohEffectiveness' | 'businessReporting' | 'profitRadar' | 'benchmark'
 const ViewModeContext = createContext<{
   mode: ViewMode
   setMode: (m: ViewMode) => void
@@ -306,6 +307,15 @@ function KPIOverlayToggle() {
           title="Profit Radar - Shopper Intent Insights"
         >
           <Crosshair className="w-4 h-4" />
+        </button>
+
+        {/* Trajectory Benchmark Button */}
+        <button
+          onClick={() => setMode('benchmark')}
+          className="flex items-center justify-center w-10 h-10 rounded-lg shadow-lg transition-all bg-gray-800 hover:bg-amber-600 text-gray-300 hover:text-white border border-gray-600 hover:border-amber-500"
+          title="Trajectory Benchmark — perception & reconciler scorecards"
+        >
+          <FlaskConical className="w-4 h-4" />
         </button>
         
         {/* Replay Insights Button */}
@@ -593,6 +603,9 @@ function MainApp() {
         {/* Profit Radar View */}
         {viewMode === 'profitRadar' && (
           <ProfitRadarPage onClose={() => setViewMode('main')} />
+        )}
+        {viewMode === 'benchmark' && (
+          <BenchmarkPage onClose={() => setViewMode('main')} />
         )}
         {/* Planogram View */}
         <div style={{ display: viewMode === 'planogram' ? 'block' : 'none' }}>

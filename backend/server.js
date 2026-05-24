@@ -20,6 +20,8 @@ import discoveryRoutes from './routes/discovery.js';
 import replayRoutes from './routes/replay.js';
 import ReplayService from './services/ReplayService.js';
 import MqttRecordService from './services/MqttRecordService.js';
+import BenchmarkRunService from './services/BenchmarkRunService.js';
+import benchmarkRoutes from './routes/benchmark.js';
 import venuesRoutes from './routes/venues.js';
 import lidarsRoutes from './routes/lidars.js';
 import modelsRoutes from './routes/models.js';
@@ -345,6 +347,8 @@ const replayService = new ReplayService({ mqttService, replayDir, trackAggregato
 const mqttRecordService = new MqttRecordService({ replayDir });
 if (mqttService) mqttService.setMqttRecorder(mqttRecordService);
 app.use('/api/replay', replayRoutes({ replayService, mqttRecordService, mqttService, db }));
+const benchmarkRunService = new BenchmarkRunService();
+app.use('/api/benchmark', benchmarkRoutes(benchmarkRunService));
 app.use('/api/lidars', lidarsRoutes(lidarConnectionManager, tailscaleService, mockGenerator));
 app.use('/api/models', modelsRoutes(db));
 app.use('/api', createRoiRoutes(db));
