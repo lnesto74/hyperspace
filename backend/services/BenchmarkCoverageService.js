@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import sharp from 'sharp';
 import { venueQueries } from '../database/schema.js';
 
 export default class BenchmarkCoverageService {
@@ -7,6 +8,30 @@ export default class BenchmarkCoverageService {
     this.benchmarkRunService = benchmarkRunService;
     this.replayService = replayService;
     this.db = db;
+  }
+
+  /** Pre-rendered perception-frame heatmap from stage 02 (fast, aligns with coverage_spatial). */
+  async getSpatialHeatmapPng(runId) {
+    const heatmapOnly = this.resolveUnderlayImage(runId, '02_heatmap.png');
+    if (heatmapOnly) return fs.readFileSync(heatmapOnly);
+
+    const composite = this.resolveUnderlayImage(runId, '02_spatial_motion.png');
+    if (!composite) return null;
+
+    // Legacy 2×2 figure: top-left panel is the detection density heatmap.
+    const meta = await sharp(composite).metadata();
+    const w = meta.width ?? 0;
+    const h = meta.height ?? 0;
+    if (!w || !h) return null;
+    return sharp(composite)
+      .extract({
+        left: 0,
+        top: Math.round(h * 0.06),
+        width: Math.round(w * 0.5),
+        height: Math.round(h * 0.5),
+      })
+      .png()
+      .toBuffer();
   }
 
   getSpatial(runId) {

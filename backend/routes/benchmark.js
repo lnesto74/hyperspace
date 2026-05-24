@@ -90,10 +90,20 @@ export default function benchmarkRoutes({
 
   router.get('/runs/:id/coverage/heatmap', async (req, res) => {
     try {
+      const live = req.query.live === '1' || req.query.live === 'true';
+      const artifactPng = !live ? await benchmarkCoverageService.getSpatialHeatmapPng(req.params.id) : null;
+      if (artifactPng) {
+        res.setHeader('Content-Type', 'image/png');
+        res.setHeader('Cache-Control', 'public, max-age=3600');
+        res.setHeader('X-Heatmap-Source', '02_spatial_motion.png');
+        return res.send(artifactPng);
+      }
+
       const px = Number(req.query.px) || 10;
       const { png, stats } = await benchmarkCoverageService.renderVenueHeatmap(req.params.id, { pixelsPerMeter: px });
       res.setHeader('Content-Type', 'image/png');
       res.setHeader('Cache-Control', 'no-store');
+      res.setHeader('X-Heatmap-Source', 'venue-transform-live');
       res.setHeader('X-Replay-Preview-Stats', JSON.stringify(stats));
       res.send(png);
     } catch (err) {

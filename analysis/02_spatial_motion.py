@@ -123,3 +123,17 @@ axes[1, 1].text(0.5, 0.5, "Direction cos skipped\n(large-file streaming mode)", 
 fig.tight_layout()
 fig.savefig(OUT / "02_spatial_motion.png", dpi=130)
 print(f"Wrote {OUT / '02_spatial_motion.png'}")
+
+fig_h, ax_h = plt.subplots(figsize=(8, 7))
+ax_h.imshow(
+    np.log10(H.T + 1), origin="lower",
+    extent=[bins_x[0], bins_x[-1], bins_z[0], bins_z[-1]],
+    cmap="magma", aspect="auto",
+)
+ax_h.set_title("Detection density (log10)")
+ax_h.set_xlabel("X (m)")
+ax_h.set_ylabel("Z (m)")
+fig_h.tight_layout()
+fig_h.savefig(OUT / "02_heatmap.png", dpi=130)
+plt.close(fig_h)
+print(f"Wrote {OUT / '02_heatmap.png'}")

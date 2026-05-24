@@ -40,9 +40,12 @@ function worldToCanvas(
 
 export default function BenchmarkCoverageMap({ runId, compareRunId }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
+  const heatmapImgRef = useRef<HTMLImageElement | null>(null)
   const [spatial, setSpatial] = useState<CoverageSpatial | null>(null)
   const [compareSpatial, setCompareSpatial] = useState<CoverageSpatial | null>(null)
   const [heatmapUrl, setHeatmapUrl] = useState<string | null>(null)
+  const [heatmapReady, setHeatmapReady] = useState(0)
+  const [heatmapLoading, setHeatmapLoading] = useState(false)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [frame, setFrame] = useState(0)
@@ -61,15 +64,16 @@ export default function BenchmarkCoverageMap({ runId, compareRunId }: Props) {
   const load = useCallback(async () => {
     setLoading(true)
     setError(null)
+    heatmapImgRef.current = null
+    setHeatmapReady(0)
     try {
-      const [spRes, hmUrl] = await Promise.all([
-        fetch(`${API_BASE}/api/benchmark/runs/${encodeURIComponent(runId)}/coverage/spatial`),
-        `${API_BASE}/api/benchmark/runs/${encodeURIComponent(runId)}/coverage/heatmap?px=8&bust=${Date.now()}`,
-      ])
+      const spRes = await fetch(`${API_BASE}/api/benchmark/runs/${encodeURIComponent(runId)}/coverage/spatial`)
       if (!spRes.ok) throw new Error(await spRes.text())
       const sp: CoverageSpatial = await spRes.json()
       setSpatial(sp)
-      setHeatmapUrl(hmUrl)
+      setHeatmapUrl(
+        `${API_BASE}/api/benchmark/runs/${encodeURIComponent(runId)}/coverage/heatmap?bust=${Date.now()}`,
+      )
       setFrame(0)
 
       if (compareRunId && compareRunId !== runId) {
@@ -88,6 +92,33 @@ export default function BenchmarkCoverageMap({ runId, compareRunId }: Props) {
 
   useEffect(() => { load() }, [load])
 
+  // Load heatmap in background — never block other layers on this.
+  useEffect(() => {
+    if (!layers.heatmap || !heatmapUrl) {
+      heatmapImgRef.current = null
+      setHeatmapLoading(false)
+      return
+    }
+    let cancelled = false
+    setHeatmapLoading(true)
+    const img = new Image()
+    img.crossOrigin = 'anonymous'
+    img.onload = () => {
+      if (cancelled) return
+      heatmapImgRef.current = img
+      setHeatmapLoading(false)
+      setHeatmapReady((n) => n + 1)
+    }
+    img.onerror = () => {
+      if (cancelled) return
+      heatmapImgRef.current = null
+      setHeatmapLoading(false)
+      setHeatmapReady((n) => n + 1)
+    }
+    img.src = heatmapUrl
+    return () => { cancelled = true }
+  }, [layers.heatmap, heatmapUrl])
+
   // Animation loop
   useEffect(() => {
     if (!playing || !spatial?.timeline?.length) return
@@ -98,7 +129,7 @@ export default function BenchmarkCoverageMap({ runId, compareRunId }: Props) {
     return () => window.clearInterval(id)
   }, [playing, spatial, speed])
 
-  // Draw canvas
+  // Draw canvas (sync — heatmap overlays when ready)
   useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas || !spatial?.available || !spatial.bbox) return
@@ -109,119 +140,111 @@ export default function BenchmarkCoverageMap({ runId, compareRunId }: Props) {
     const rect = canvas.getBoundingClientRect()
     canvas.width = rect.width * dpr
     canvas.height = rect.height * dpr
-    ctx.scale(dpr, dpr)
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
     const w = rect.width
     const h = rect.height
     const pad = 16
     const bbox = spatial.bbox
+    const timeline = spatial.timeline ?? []
+    const bucket = timeline[frame] ?? timeline[0]
+    const playbackMode = playing && layers.detections && timeline.length > 0
+    const staticAlpha = playbackMode ? 0.18 : 1
 
     ctx.fillStyle = '#0f1419'
     ctx.fillRect(0, 0, w, h)
 
-    const drawHeatmapImage = () => new Promise<void>((resolve) => {
-      if (!layers.heatmap || !heatmapUrl) { resolve(); return }
-      const img = new Image()
-      img.crossOrigin = 'anonymous'
-      img.onload = () => {
-        ctx.globalAlpha = 0.55
-        ctx.drawImage(img, pad, pad, w - pad * 2, h - pad * 2)
-        ctx.globalAlpha = 1
-        resolve()
-      }
-      img.onerror = () => resolve()
-      img.src = heatmapUrl
-    })
+    const plotX = pad
+    const plotY = pad
+    const plotW = w - pad * 2
+    const plotH = h - pad * 2
 
-    drawHeatmapImage().then(() => {
-      // Compare run births (baseline) — blue ghost dots
-      if (compareSpatial?.available && compareSpatial.births) {
-        ctx.fillStyle = 'rgba(59, 130, 246, 0.25)'
-        for (const b of compareSpatial.births) {
-          const { cx, cy } = worldToCanvas(b.x, b.z, bbox, w, h, pad)
-          ctx.beginPath()
-          ctx.arc(cx, cy, 1.2, 0, Math.PI * 2)
-          ctx.fill()
-        }
-      }
+    if (layers.heatmap && heatmapImgRef.current?.complete && heatmapImgRef.current.naturalWidth > 0) {
+      ctx.globalAlpha = 0.62
+      ctx.drawImage(heatmapImgRef.current, plotX, plotY, plotW, plotH)
+      ctx.globalAlpha = 1
+    }
 
-      // Blindspots
-      if (layers.blindspots && spatial.blindspots) {
-        for (const b of spatial.blindspots) {
-          const { cx, cy, scale } = worldToCanvas(b.x, b.z, bbox, w, h, pad)
-          const r = Math.max(4, Math.sqrt(b.area_m2) * scale * 0.4)
-          ctx.fillStyle = 'rgba(234, 179, 8, 0.15)'
-          ctx.strokeStyle = 'rgba(234, 179, 8, 0.6)'
-          ctx.lineWidth = 1
-          ctx.beginPath()
-          ctx.arc(cx, cy, r, 0, Math.PI * 2)
-          ctx.fill()
-          ctx.stroke()
-        }
+    if (compareSpatial?.available && compareSpatial.births) {
+      ctx.fillStyle = 'rgba(59, 130, 246, 0.25)'
+      for (const b of compareSpatial.births) {
+        const { cx, cy } = worldToCanvas(b.x, b.z, bbox, w, h, pad)
+        ctx.beginPath()
+        ctx.arc(cx, cy, 1.2, 0, Math.PI * 2)
+        ctx.fill()
       }
+    }
 
-      // Fragmentation links
-      if (layers.links && spatial.links) {
-        for (const ln of spatial.links) {
-          const a = worldToCanvas(ln.x0, ln.z0, bbox, w, h, pad)
-          const b = worldToCanvas(ln.x1, ln.z1, bbox, w, h, pad)
-          ctx.strokeStyle = LINK_COLORS[ln.category] || 'rgba(148, 163, 184, 0.2)'
-          ctx.lineWidth = 0.8
-          ctx.beginPath()
-          ctx.moveTo(a.cx, a.cy)
-          ctx.lineTo(b.cx, b.cy)
-          ctx.stroke()
-        }
+    if (layers.blindspots && spatial.blindspots) {
+      for (const b of spatial.blindspots) {
+        const { cx, cy, scale } = worldToCanvas(b.x, b.z, bbox, w, h, pad)
+        const r = Math.max(4, Math.sqrt(b.area_m2) * scale * 0.4)
+        ctx.fillStyle = `rgba(234, 179, 8, ${0.15 * staticAlpha})`
+        ctx.strokeStyle = `rgba(234, 179, 8, ${0.6 * staticAlpha})`
+        ctx.lineWidth = 1
+        ctx.beginPath()
+        ctx.arc(cx, cy, r, 0, Math.PI * 2)
+        ctx.fill()
+        ctx.stroke()
       }
+    }
 
-      // Animated detection dots (current time bucket)
-      if (layers.detections && spatial.timeline?.length) {
-        const bucket = spatial.timeline[frame] ?? spatial.timeline[0]
-        ctx.fillStyle = 'rgba(34, 211, 238, 0.65)'
-        for (const p of bucket.points) {
-          const { cx, cy } = worldToCanvas(p.x, p.z, bbox, w, h, pad)
-          ctx.beginPath()
-          ctx.arc(cx, cy, 1.1, 0, Math.PI * 2)
-          ctx.fill()
-        }
+    if (layers.links && spatial.links) {
+      for (const ln of spatial.links) {
+        const a = worldToCanvas(ln.x0, ln.z0, bbox, w, h, pad)
+        const b = worldToCanvas(ln.x1, ln.z1, bbox, w, h, pad)
+        ctx.strokeStyle = LINK_COLORS[ln.category] || 'rgba(148, 163, 184, 0.2)'
+        ctx.lineWidth = 0.8
+        ctx.beginPath()
+        ctx.moveTo(a.cx, a.cy)
+        ctx.lineTo(b.cx, b.cy)
+        ctx.stroke()
       }
+    }
 
-      // Ghosts (short-lived IDs)
-      if (layers.ghosts && spatial.ghosts) {
-        ctx.fillStyle = 'rgba(251, 146, 60, 0.85)'
-        for (const g of spatial.ghosts) {
-          const { cx, cy } = worldToCanvas(g.x, g.z, bbox, w, h, pad)
-          ctx.beginPath()
-          ctx.arc(cx, cy, 1.5, 0, Math.PI * 2)
-          ctx.fill()
-        }
+    if (layers.ghosts && spatial.ghosts) {
+      ctx.fillStyle = `rgba(251, 146, 60, ${0.85 * staticAlpha})`
+      for (const g of spatial.ghosts) {
+        const { cx, cy } = worldToCanvas(g.x, g.z, bbox, w, h, pad)
+        ctx.beginPath()
+        ctx.arc(cx, cy, 1.5, 0, Math.PI * 2)
+        ctx.fill()
       }
+    }
 
-      // Births / deaths
-      if (layers.births && spatial.births) {
-        ctx.fillStyle = 'rgba(74, 222, 128, 0.7)'
-        for (const b of spatial.births) {
-          const { cx, cy } = worldToCanvas(b.x, b.z, bbox, w, h, pad)
-          ctx.beginPath()
-          ctx.arc(cx, cy, 1.3, 0, Math.PI * 2)
-          ctx.fill()
-        }
+    if (layers.births && spatial.births) {
+      ctx.fillStyle = `rgba(74, 222, 128, ${0.7 * staticAlpha})`
+      for (const b of spatial.births) {
+        const { cx, cy } = worldToCanvas(b.x, b.z, bbox, w, h, pad)
+        ctx.beginPath()
+        ctx.arc(cx, cy, 1.3, 0, Math.PI * 2)
+        ctx.fill()
       }
-      if (layers.deaths && spatial.deaths) {
-        ctx.fillStyle = 'rgba(248, 113, 113, 0.75)'
-        for (const d of spatial.deaths) {
-          const { cx, cy } = worldToCanvas(d.x, d.z, bbox, w, h, pad)
-          ctx.beginPath()
-          ctx.arc(cx, cy, 1.3, 0, Math.PI * 2)
-          ctx.fill()
-        }
+    }
+    if (layers.deaths && spatial.deaths) {
+      ctx.fillStyle = `rgba(248, 113, 113, ${0.75 * staticAlpha})`
+      for (const d of spatial.deaths) {
+        const { cx, cy } = worldToCanvas(d.x, d.z, bbox, w, h, pad)
+        ctx.beginPath()
+        ctx.arc(cx, cy, 1.3, 0, Math.PI * 2)
+        ctx.fill()
       }
+    }
 
-      // Border
-      ctx.strokeStyle = 'rgba(75, 85, 99, 0.8)'
-      ctx.lineWidth = 1
-      ctx.strokeRect(pad, pad, w - pad * 2, h - pad * 2)
-    })
-  }, [spatial, compareSpatial, heatmapUrl, layers, frame])
+    // Detections on top so playback stays visible over static layers
+    if (layers.detections && bucket?.points?.length) {
+      ctx.fillStyle = 'rgba(34, 211, 238, 0.92)'
+      for (const p of bucket.points) {
+        const { cx, cy } = worldToCanvas(p.x, p.z, bbox, w, h, pad)
+        ctx.beginPath()
+        ctx.arc(cx, cy, playbackMode ? 2.4 : 1.8, 0, Math.PI * 2)
+        ctx.fill()
+      }
+    }
+
+    ctx.strokeStyle = 'rgba(75, 85, 99, 0.8)'
+    ctx.lineWidth = 1
+    ctx.strokeRect(plotX, plotY, plotW, plotH)
+  }, [spatial, compareSpatial, layers, frame, playing, heatmapReady])
 
   const toggle = (k: LayerKey) => setLayers((prev) => ({ ...prev, [k]: !prev[k] }))
 
@@ -260,6 +283,9 @@ export default function BenchmarkCoverageMap({ runId, compareRunId }: Props) {
             {k}
           </button>
         ))}
+        {layers.heatmap && heatmapLoading && (
+          <span className="text-[10px] text-gray-500">heatmap loading…</span>
+        )}
         <button type="button" onClick={load} className="ml-auto p-1.5 rounded hover:bg-gray-800 text-gray-400" title="Refresh">
           <RefreshCw className="w-4 h-4" />
         </button>
@@ -274,7 +300,6 @@ export default function BenchmarkCoverageMap({ runId, compareRunId }: Props) {
         )}
       </div>
 
-      {/* Timeline player */}
       {timeline.length > 0 && (
         <div className="rounded-xl border border-gray-700 bg-gray-800/50 p-3 space-y-2">
           <div className="flex items-center gap-3">
@@ -317,6 +342,9 @@ export default function BenchmarkCoverageMap({ runId, compareRunId }: Props) {
                 {spatial.counts.ghosts?.toLocaleString()} ghosts · {spatial.counts.blindspots} blindspots
               </span>
             )}
+            {playing && layers.detections && (
+              <span className="text-cyan-400/80">Playback: static layers dimmed</span>
+            )}
           </div>
         </div>
       )}
@@ -327,7 +355,7 @@ export default function BenchmarkCoverageMap({ runId, compareRunId }: Props) {
         <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-red-400" /> ID death</span>
         <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-orange-400" /> Ghost (&lt;2s)</span>
         <span className="flex items-center gap-1"><span className="w-3 h-3 rounded-full border border-yellow-500/60 bg-yellow-500/10" /> Blindspot</span>
-        <span className="flex items-center gap-1"><span className="w-3 h-3 bg-gradient-to-r from-orange-500/40 to-red-500/20" /> Heatmap (venue transform)</span>
+        <span className="flex items-center gap-1"><span className="w-3 h-3 bg-gradient-to-r from-orange-500/40 to-red-500/20" /> Heatmap (stage 02)</span>
       </div>
     </div>
   )
