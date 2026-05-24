@@ -78,8 +78,16 @@ export default function ReplayPanel({ onClose }: ReplayPanelProps) {
 
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const recordPollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const selectRef = useRef<HTMLSelectElement>(null)
   const selectedRef = useRef<string>('')
+  const startingReplayRef = useRef(false)
   selectedRef.current = selected
+
+  const readSelectedFile = () => {
+    const fromDom = selectRef.current?.value?.trim()
+    if (fromDom) return fromDom
+    return selectedRef.current
+  }
 
   const selectedMeta = files.find(f => f.name === selected)
 
@@ -108,13 +116,16 @@ export default function ReplayPanel({ onClose }: ReplayPanelProps) {
   }, [])
 
   const refreshStatus = useCallback(async () => {
+    if (startingReplayRef.current) return
     try {
       const res = await fetch(`${API_BASE}/api/replay/status`)
       if (!res.ok) return
       const next: ReplayStatus = await res.json()
       setStatus(next)
+      // Only mirror the active file into the dropdown while playback is running.
       if (next.running && next.file) {
         setSelected(next.file)
+        selectedRef.current = next.file
       }
     } catch { /* ignore */ }
   }, [])
@@ -188,8 +199,9 @@ export default function ReplayPanel({ onClose }: ReplayPanelProps) {
   }, [])
 
   const start = useCallback(async () => {
-    const fileToPlay = selectedRef.current
+    const fileToPlay = readSelectedFile()
     if (!fileToPlay) return
+    startingReplayRef.current = true
     setError(null)
     try {
       await fetch(`${API_BASE}/api/replay/stop`, { method: 'POST' })
@@ -208,9 +220,13 @@ export default function ReplayPanel({ onClose }: ReplayPanelProps) {
       if (playing && playing !== fileToPlay) {
         throw new Error(`Server started "${playing}" instead of "${fileToPlay}"`)
       }
+      setSelected(fileToPlay)
+      selectedRef.current = fileToPlay
       await refreshStatus()
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      startingReplayRef.current = false
     }
   }, [speed, refreshStatus, waitForReplayStopped])
 
@@ -342,8 +358,13 @@ export default function ReplayPanel({ onClose }: ReplayPanelProps) {
           <div>
             <div className="text-gray-400 mb-1">Recorded capture</div>
             <select
+              ref={selectRef}
               value={selected}
-              onChange={e => setSelected(e.target.value)}
+              onChange={e => {
+                const v = e.target.value
+                selectedRef.current = v
+                setSelected(v)
+              }}
               disabled={running}
               className="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-white"
             >
@@ -371,7 +392,12 @@ export default function ReplayPanel({ onClose }: ReplayPanelProps) {
             )}
             {files.length === 1 && (
               <div className="mt-1 text-[10px] text-amber-300/90">
-                Only one capture in {replayDir || '/data/replay'}. New recordings appear as grocery_capture_*.jsonl after you press Start recording.
+                Only one capture in {replayDir || '/data/replay'}.
+              </div>
+            )}
+            {files.length > 1 && !running && (
+              <div className="mt-1 text-[10px] text-gray-500">
+                {files.length} captures available — pick one, then Start replay.
               </div>
             )}
             {mqttActive && running && (
