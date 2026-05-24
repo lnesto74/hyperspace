@@ -46,6 +46,9 @@ export default class ReplayService {
     this._playbackDone = null;
     /** Bumped on every stop/start so stale playback loops exit immediately. */
     this._playbackToken = 0;
+    /** Active read stream + readline — torn down immediately on stop(). */
+    this._inputStream = null;
+    this._rl = null;
     // In-memory cache of parsed point sets — keyed by absolute file path.
     // Eliminates the multi-second re-parse on every preview render.
     this._pointCache = new Map();
@@ -140,10 +143,32 @@ export default class ReplayService {
     });
   }
 
+  async _abortableSleep(ms, abort, token) {
+    if (ms <= 0 || abort.aborted || token !== this._playbackToken) return;
+    const deadline = Date.now() + ms;
+    while (Date.now() < deadline) {
+      if (abort.aborted || token !== this._playbackToken) return;
+      const remaining = deadline - Date.now();
+      await new Promise(r => setTimeout(r, Math.min(50, remaining)));
+    }
+  }
+
+  _tearDownPlayback() {
+    if (this._rl) {
+      try { this._rl.close(); } catch { /* ignore */ }
+      this._rl = null;
+    }
+    if (this._inputStream) {
+      try { this._inputStream.destroy(); } catch { /* ignore */ }
+      this._inputStream = null;
+    }
+  }
+
   async stop() {
     this._playbackToken++;
     if (this._abort) this._abort.aborted = true;
     this.state.running = false;
+    this._tearDownPlayback();
     if (this._playbackDone) {
       await this._playbackDone;
       this._playbackDone = null;
@@ -193,8 +218,9 @@ export default class ReplayService {
     let resolvePlayback;
     this._playbackDone = new Promise((resolve) => { resolvePlayback = resolve; });
 
-    const sleep = (ms) => new Promise(r => setTimeout(r, ms));
-    const rl = readline.createInterface({ input: fs.createReadStream(fullPath), crlfDelay: Infinity });
+    this._inputStream = fs.createReadStream(fullPath);
+    const rl = readline.createInterface({ input: this._inputStream, crlfDelay: Infinity });
+    this._rl = rl;
 
     let firstRecordedTs = null;
     let replayStartTs = Date.now();
@@ -239,8 +265,10 @@ export default class ReplayService {
         const recordedDelta = msg.timestamp - firstRecordedTs;
         const targetWallTime = replayStartTs + recordedDelta / this.state.speed;
         const waitMs = targetWallTime - Date.now();
-        if (waitMs > SLEEP_SLACK_MS) await sleep(waitMs);
-        if (abort.aborted) break;
+        if (waitMs > SLEEP_SLACK_MS) {
+          await this._abortableSleep(waitMs, abort, token);
+        }
+        if (abort.aborted || token !== this._playbackToken) break;
 
         if (devicePrefix && typeof msg.deviceId === 'string' && !msg.deviceId.startsWith(devicePrefix)) {
           msg.deviceId = devicePrefix + msg.deviceId;
@@ -262,7 +290,7 @@ export default class ReplayService {
     } finally {
       this.state.running = false;
       this._abort = null;
-      try { rl.close(); } catch {}
+      this._tearDownPlayback();
       resolvePlayback?.();
       if (this._playbackDone) this._playbackDone = null;
     }
