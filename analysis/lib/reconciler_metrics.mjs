@@ -5,6 +5,8 @@ function createTrackRollup(t, x, z) {
   return {
     firstTs: t,
     lastTs: t,
+    firstX: x,
+    firstZ: z,
     totalDisp: 0,
     sampleCount: 1,
     teleports: 0,
@@ -80,12 +82,75 @@ export function scoreStableTracks(rollups, totalRaw, perceptionIdCount, ghostSta
   };
 }
 
+const BUCKET_MS = 60_000;
+
+function sampleRows(rows, maxN) {
+  if (rows.length <= maxN) return rows;
+  const idx = [];
+  const step = (rows.length - 1) / (maxN - 1);
+  for (let i = 0; i < maxN; i++) idx.push(Math.round(i * step));
+  return idx.map((i) => rows[i]);
+}
+
+/** Map-friendly export: one birth/death per stable track + playback timeline. */
+export function buildReconcilerSpatial(rollups, metrics, configName, firstTs, lastTs, timelineBuckets) {
+  const births = [];
+  const deaths = [];
+  for (const [sid, r] of rollups.entries()) {
+    const life = (r.lastTs - r.firstTs) / 1000;
+    births.push({
+      id: sid,
+      x: r.firstX,
+      z: r.firstZ,
+      t: r.firstTs,
+      lifetime_s: life,
+    });
+    deaths.push({
+      id: sid,
+      x: r.lastX,
+      z: r.lastZ,
+      t: r.lastTs,
+      lifetime_s: life,
+      total_path_m: r.totalDisp,
+    });
+  }
+
+  const timeline = [];
+  for (const t0 of [...timelineBuckets.keys()].sort((a, b) => a - b)) {
+    const ptsRaw = timelineBuckets.get(t0) || [];
+    const stride = Math.max(1, Math.floor(ptsRaw.length / 400));
+    const points = ptsRaw.filter((_, i) => i % stride === 0).map((p) => ({ x: p.x, z: p.z }));
+    timeline.push({ t0, t1: t0 + BUCKET_MS, points });
+  }
+
+  return {
+    available: true,
+    config: configName,
+    frame: 'perception',
+    time_ms: { min: firstTs, max: lastTs },
+    counts: {
+      stable_tracks: rollups.size,
+      perception_ids: metrics.perception_id_count,
+      fragmentation_factor: metrics.fragmentation_factor,
+      mean_lifetime_s: metrics.lt_mean,
+      mean_displacement_m: metrics.disp_mean,
+      births: births.length,
+      deaths: deaths.length,
+      timeline_buckets: timeline.length,
+    },
+    births: sampleRows(births, 5000),
+    deaths: sampleRows(deaths, 5000),
+    timeline,
+  };
+}
+
 /** Stream file once through reconciler — RAM-safe for multi-GB captures. */
 export async function runReconcilerStream(filePath, overrides, { venueId, afterMs, beforeMs, label, onProgress } = {}) {
   const cfg = normalizeReconcilerConfig({ ...DEFAULT_CONFIG, ...overrides });
   const reconciler = new TrajectoryReconciler(() => cfg);
   const rollups = new Map();
   const perceptionIds = new Set();
+  const timelineBuckets = new Map();
   let lastSweep = 0;
   let totalRaw = 0;
   let firstTs = null;
@@ -112,11 +177,26 @@ export async function runReconcilerStream(filePath, overrides, { venueId, afterM
     } else {
       updateTrackRollup(r, t, x, z);
     }
+    const t0 = Math.floor(t / BUCKET_MS) * BUCKET_MS;
+    let bucket = timelineBuckets.get(t0);
+    if (!bucket) {
+      bucket = [];
+      timelineBuckets.set(t0, bucket);
+    }
+    if (bucket.length < 2000) bucket.push({ x, z });
     if (onProgress && totalRaw % 500_000 === 0) onProgress(totalRaw, label);
   }
 
   if (lastTs != null) reconciler.sweep(lastTs + 60000);
   const gs = reconciler.getStats(venueId) || { ghost_dropped: 0 };
   const metrics = scoreStableTracks(rollups, totalRaw, perceptionIds.size, gs);
-  return { config: cfg, first_ts: firstTs, last_ts: lastTs, raw_messages: totalRaw, ...metrics };
+  const spatial = buildReconcilerSpatial(rollups, metrics, label, firstTs, lastTs, timelineBuckets);
+  return {
+    config: cfg,
+    first_ts: firstTs,
+    last_ts: lastTs,
+    raw_messages: totalRaw,
+    spatial,
+    ...metrics,
+  };
 }

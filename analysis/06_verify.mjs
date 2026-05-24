@@ -71,7 +71,13 @@ const main = async () => {
     });
     process.stdout.write('\n');
     const elapsed_s = (Date.now() - t0) / 1000;
-    results.push({ name, ...r, elapsed_s });
+    const { spatial, ...metricsOnly } = r;
+    if (spatial) {
+      const spatialPath = path.join(outDir, `reconciler_spatial_${name}.json`);
+      fs.writeFileSync(spatialPath, JSON.stringify(spatial, null, 2));
+      console.log(`  → ${path.basename(spatialPath)} (${spatial.counts?.stable_tracks?.toLocaleString()} stable tracks)`);
+    }
+    results.push({ name, ...metricsOnly, elapsed_s });
     fs.writeFileSync(outPath, JSON.stringify(results, null, 2));
     console.log(
       `  stable=${r.n_stable} frag=${r.fragmentation_factor.toFixed(2)} lt=${r.lt_mean.toFixed(1)}s tp/1k=${r.teleports_per_1k.toFixed(2)} ghost=${r.ghost_pct.toFixed(1)}% (${elapsed_s.toFixed(0)}s)`,

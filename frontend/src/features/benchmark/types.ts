@@ -164,6 +164,37 @@ export interface FloorplanObject {
   color: string
 }
 
+export interface ReconciledSpatial {
+  available: boolean
+  reason?: string
+  config?: string
+  frame?: string
+  bbox?: MapBbox
+  time_ms?: { min: number; max: number }
+  counts?: {
+    stable_tracks: number
+    perception_ids: number
+    fragmentation_factor: number
+    mean_lifetime_s: number
+    mean_displacement_m: number
+    births: number
+    deaths: number
+    timeline_buckets: number
+  }
+  births?: Array<CoveragePoint & { t: number; id: string; lifetime_s: number }>
+  deaths?: Array<CoveragePoint & { t: number; id: string; lifetime_s: number; total_path_m?: number }>
+  timeline?: Array<{ t0: number; t1: number; points: CoveragePoint[] }>
+}
+
+export type TrackViewMode =
+  | 'raw'
+  | 'GROCERY_BALANCED'
+  | 'GROCERY_AGGRESSIVE'
+  | 'GROCERY_CONSERVATIVE'
+  | 'overlay_GROCERY_BALANCED'
+  | 'overlay_GROCERY_AGGRESSIVE'
+  | 'overlay_GROCERY_CONSERVATIVE'
+
 export interface FloorplanContext {
   available: boolean
   reason?: string

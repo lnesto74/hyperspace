@@ -7,6 +7,8 @@ import type {
   MapBbox,
   ProblemZone,
   ProblemZonesData,
+  ReconciledSpatial,
+  TrackViewMode,
 } from '../types'
 import type { PerceptionTransform } from '../../../types/perceptionTransform'
 import {
@@ -36,7 +38,25 @@ const LINK_COLORS: Record<string, string> = {
   continuous_perception_loss: 'rgba(96, 165, 250, 0.25)',
 }
 
-interface Props {
+const TRACK_VIEW_OPTIONS: { id: TrackViewMode; label: string }[] = [
+  { id: 'raw', label: 'Before — raw perception' },
+  { id: 'overlay_GROCERY_BALANCED', label: 'Before + After (Grocery Balanced)' },
+  { id: 'GROCERY_BALANCED', label: 'After — Grocery Balanced only' },
+  { id: 'overlay_GROCERY_AGGRESSIVE', label: 'Before + After (Aggressive)' },
+  { id: 'GROCERY_AGGRESSIVE', label: 'After — Aggressive only' },
+  { id: 'overlay_GROCERY_CONSERVATIVE', label: 'Before + After (Conservative)' },
+  { id: 'GROCERY_CONSERVATIVE', label: 'After — Conservative only' },
+]
+
+function reconciledConfigFor(view: TrackViewMode): string | null {
+  if (view === 'raw') return null
+  if (view.startsWith('overlay_')) return view.replace('overlay_', '')
+  return view
+}
+
+function isOverlay(view: TrackViewMode) {
+  return view.startsWith('overlay_')
+}
   runId: string
   compareRunId?: string | null
   compareLabel?: string
@@ -72,13 +92,16 @@ export default function BenchmarkCoverageMap({ runId, compareRunId, compareLabel
   const [coordMode, setCoordMode] = useState<'venue' | 'sensor'>('venue')
   const [selectedZone, setSelectedZone] = useState<ProblemZone | null>(null)
 
+  const [trackView, setTrackView] = useState<TrackViewMode>('overlay_GROCERY_BALANCED')
+  const [reconciled, setReconciled] = useState<ReconciledSpatial | null>(null)
+
   const [layers, setLayers] = useState<Record<LayerKey, boolean>>({
     floorplan: true,
     problem_zones: true,
-    compare_zones: true,
+    compare_zones: false,
     detections: true,
-    births: false,
-    deaths: false,
+    births: true,
+    deaths: true,
     ghosts: false,
     links: false,
     blindspots: true,
@@ -118,6 +141,24 @@ export default function BenchmarkCoverageMap({ runId, compareRunId, compareLabel
   useEffect(() => { load() }, [load])
 
   useEffect(() => {
+    const cfg = reconciledConfigFor(trackView)
+    if (!cfg) {
+      setReconciled(null)
+      return
+    }
+    let cancelled = false
+    fetch(`${API_BASE}/api/benchmark/runs/${encodeURIComponent(runId)}/coverage/reconciled/${encodeURIComponent(cfg)}`)
+      .then((r) => (r.ok ? r.json() : { available: false }))
+      .then((data) => { if (!cancelled) setReconciled(data) })
+      .catch(() => { if (!cancelled) setReconciled({ available: false }) })
+    return () => { cancelled = true }
+  }, [trackView, runId])
+
+  useEffect(() => {
+    setFrame(0)
+  }, [trackView, reconciled?.config])
+
+  useEffect(() => {
     if (!layers.floorplan || !floorplan?.floorplan_image_url) {
       setFloorplanImg(null)
       return
@@ -130,13 +171,16 @@ export default function BenchmarkCoverageMap({ runId, compareRunId, compareLabel
   }, [layers.floorplan, floorplan?.floorplan_image_url])
 
   useEffect(() => {
-    if (!playing || !spatial?.timeline?.length) return
+    const activeTimeline = trackView === 'raw' || isOverlay(trackView)
+      ? spatial?.timeline
+      : reconciled?.timeline ?? spatial?.timeline
+    if (!playing || !activeTimeline?.length) return
     const ms = Math.max(120, 600 / speed)
     const id = window.setInterval(() => {
-      setFrame((f) => (f + 1) % spatial.timeline!.length)
+      setFrame((f) => (f + 1) % activeTimeline!.length)
     }, ms)
     return () => window.clearInterval(id)
-  }, [playing, spatial, speed])
+  }, [playing, spatial, reconciled, speed, trackView])
 
   const transform = floorplan?.perceptionTransform ?? null
   const useVenue = coordMode === 'venue' && floorplan?.available && floorplan.has_transform
@@ -161,13 +205,43 @@ export default function BenchmarkCoverageMap({ runId, compareRunId, compareLabel
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
     const pad = 20
     const bbox = displayBbox
-    const timeline = spatial.timeline ?? []
-    const bucket = timeline[frame] ?? timeline[0]
-    const playbackMode = playing && layers.detections && timeline.length > 0
+    const showRaw = trackView === 'raw' || isOverlay(trackView)
+    const showReconciled = trackView !== 'raw' && reconciled?.available
+    const activeTimeline = showReconciled && reconciled?.timeline?.length
+      ? reconciled.timeline
+      : (spatial.timeline ?? [])
+    const bucket = activeTimeline[frame] ?? activeTimeline[0]
+    const playbackMode = playing && layers.detections && activeTimeline.length > 0
     const staticAlpha = playbackMode ? 0.15 : 0.55
     const mode: 'venue' | 'sensor' = useVenue ? 'venue' : 'sensor'
 
     const proj = (x: number, z: number) => projectPoint(x, z, bbox, w, h, pad, view)
+
+    const drawTrackEndpoints = (
+      data: { births?: Array<{ x: number; z: number }>; deaths?: Array<{ x: number; z: number }> },
+      opts: { birthColor: string; deathColor: string; alpha: number; radius: number },
+    ) => {
+      if (layers.births && data.births) {
+        ctx.fillStyle = opts.birthColor.replace('ALPHA', String(opts.alpha))
+        for (const b of data.births) {
+          const p = mapPoint(b.x, b.z, mode, transform)
+          const { cx, cy } = proj(p.x, p.z)
+          ctx.beginPath()
+          ctx.arc(cx, cy, opts.radius, 0, Math.PI * 2)
+          ctx.fill()
+        }
+      }
+      if (layers.deaths && data.deaths) {
+        ctx.fillStyle = opts.deathColor.replace('ALPHA', String(opts.alpha))
+        for (const d of data.deaths) {
+          const p = mapPoint(d.x, d.z, mode, transform)
+          const { cx, cy } = proj(p.x, p.z)
+          ctx.beginPath()
+          ctx.arc(cx, cy, opts.radius, 0, Math.PI * 2)
+          ctx.fill()
+        }
+      }
+    }
 
     ctx.fillStyle = '#0f1419'
     ctx.fillRect(0, 0, w, h)
@@ -249,8 +323,8 @@ export default function BenchmarkCoverageMap({ runId, compareRunId, compareLabel
       }
     }
 
-    // Fragmentation links
-    if (layers.links && spatial.links) {
+    // Fragmentation links (raw only)
+    if (layers.links && showRaw && spatial.links) {
       for (const ln of spatial.links) {
         const a = mapPoint(ln.x0, ln.z0, mode, transform)
         const b = mapPoint(ln.x1, ln.z1, mode, transform)
@@ -265,7 +339,7 @@ export default function BenchmarkCoverageMap({ runId, compareRunId, compareLabel
       }
     }
 
-    if (layers.ghosts && spatial.ghosts) {
+    if (layers.ghosts && showRaw && spatial.ghosts) {
       ctx.fillStyle = `rgba(251, 146, 60, ${0.85 * staticAlpha})`
       for (const g of spatial.ghosts) {
         const p = mapPoint(g.x, g.z, mode, transform)
@@ -276,30 +350,30 @@ export default function BenchmarkCoverageMap({ runId, compareRunId, compareLabel
       }
     }
 
-    if (layers.births && spatial.births) {
-      ctx.fillStyle = `rgba(74, 222, 128, ${0.7 * staticAlpha})`
-      for (const b of spatial.births) {
-        const p = mapPoint(b.x, b.z, mode, transform)
-        const { cx, cy } = proj(p.x, p.z)
-        ctx.beginPath()
-        ctx.arc(cx, cy, 1.3, 0, Math.PI * 2)
-        ctx.fill()
-      }
-    }
-    if (layers.deaths && spatial.deaths) {
-      ctx.fillStyle = `rgba(248, 113, 113, ${0.75 * staticAlpha})`
-      for (const d of spatial.deaths) {
-        const p = mapPoint(d.x, d.z, mode, transform)
-        const { cx, cy } = proj(p.x, p.z)
-        ctx.beginPath()
-        ctx.arc(cx, cy, 1.3, 0, Math.PI * 2)
-        ctx.fill()
-      }
+    // Raw perception track starts/ends (before)
+    if (showRaw) {
+      drawTrackEndpoints(spatial, {
+        birthColor: 'rgba(74, 222, 128, ALPHA)',
+        deathColor: 'rgba(248, 113, 113, ALPHA)',
+        alpha: isOverlay(trackView) ? 0.12 : 0.65 * staticAlpha,
+        radius: isOverlay(trackView) ? 1.0 : 1.3,
+      })
     }
 
-    // Detections on top
+    // Reconciled stable track starts/ends (after)
+    if (showReconciled && reconciled) {
+      drawTrackEndpoints(reconciled, {
+        birthColor: 'rgba(167, 139, 250, ALPHA)',
+        deathColor: 'rgba(52, 211, 153, ALPHA)',
+        alpha: isOverlay(trackView) ? 0.92 : 0.75 * staticAlpha,
+        radius: isOverlay(trackView) ? 2.8 : 2.0,
+      })
+    }
+
+    // Detections / stable playback on top
     if (layers.detections && bucket?.points?.length) {
-      ctx.fillStyle = 'rgba(34, 211, 238, 0.92)'
+      const isReconciledPlayback = showReconciled && !isOverlay(trackView)
+      ctx.fillStyle = isReconciledPlayback ? 'rgba(167, 139, 250, 0.92)' : 'rgba(34, 211, 238, 0.92)'
       for (const pt of bucket.points) {
         const p = mapPoint(pt.x, pt.z, mode, transform)
         const { cx, cy } = proj(p.x, p.z)
@@ -316,7 +390,7 @@ export default function BenchmarkCoverageMap({ runId, compareRunId, compareLabel
     ctx.strokeRect(tl.cx, tl.cy, br.cx - tl.cx, br.cy - tl.cy)
   }, [
     spatial, zones, compareZones, floorplan, floorplanImg, layers, frame, playing,
-    view, useVenue, transform, displayBbox, selectedZone,
+    view, useVenue, transform, displayBbox, selectedZone, trackView, reconciled,
   ])
 
   useEffect(() => {
@@ -386,11 +460,43 @@ export default function BenchmarkCoverageMap({ runId, compareRunId, compareLabel
     )
   }
 
-  const timeline = spatial.timeline ?? []
+  const timeline = (trackView !== 'raw' && reconciled?.timeline?.length)
+    ? reconciled.timeline
+    : (spatial.timeline ?? [])
   const bucket = timeline[frame]
+
+  const rawIds = spatial.counts?.births ?? spatial.counts?.deaths
+  const reconCounts = reconciled?.counts
 
   return (
     <div className="space-y-3">
+      <div className="rounded-xl border border-purple-900/40 bg-purple-950/20 p-3 flex flex-wrap items-center gap-3">
+        <label className="text-[11px] text-gray-400 uppercase tracking-wide">Track view</label>
+        <select
+          value={trackView}
+          onChange={(e) => setTrackView(e.target.value as TrackViewMode)}
+          className="bg-gray-900 border border-gray-600 rounded-lg px-3 py-1.5 text-sm text-white min-w-[240px]"
+        >
+          {TRACK_VIEW_OPTIONS.map((o) => (
+            <option key={o.id} value={o.id}>{o.label}</option>
+          ))}
+        </select>
+        {trackView !== 'raw' && reconciled?.available && reconCounts && (
+          <p className="text-xs text-gray-300">
+            <span className="text-red-300/80">{rawIds?.toLocaleString()} raw IDs</span>
+            {' → '}
+            <span className="text-emerald-300 font-medium">{reconCounts.stable_tracks.toLocaleString()} stable tracks</span>
+            {' · '}
+            <span className="text-purple-300">{reconCounts.fragmentation_factor.toFixed(1)}× fragmentation</span>
+            {' · '}
+            mean life {reconCounts.mean_lifetime_s.toFixed(0)}s
+          </p>
+        )}
+        {trackView !== 'raw' && !reconciled?.available && (
+          <p className="text-xs text-amber-500">Re-run stage 06_verify to generate reconciler map layers</p>
+        )}
+      </div>
+
       <div className="flex flex-wrap items-center gap-2">
         {(Object.keys(layers) as LayerKey[])
           .filter((k) => k !== 'compare_zones' || compareZones?.available)
@@ -522,11 +628,12 @@ export default function BenchmarkCoverageMap({ runId, compareRunId, compareLabel
       )}
 
       <div className="flex flex-wrap gap-4 text-[11px] text-gray-500">
-        <span className="flex items-center gap-1"><span className="w-3 h-3 bg-red-500/50 border border-red-400" /> Problem zone (ranked)</span>
-        <span className="flex items-center gap-1"><span className="w-3 h-3 border border-blue-400 border-dashed" /> Baseline compare</span>
-        <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-cyan-400" /> Detections</span>
-        <span className="flex items-center gap-1"><span className="w-3 h-3 rounded-full border border-yellow-500/60" /> Blindspot</span>
-        <span className="flex items-center gap-1"><span className="w-3 h-3 bg-slate-500/30 border border-slate-400/50" /> DWG fixtures</span>
+        <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-green-400/40" /> Raw birth (before)</span>
+        <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-red-400/40" /> Raw death (before)</span>
+        <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-full bg-violet-400" /> Stable start (after)</span>
+        <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-full bg-emerald-400" /> Stable end (after)</span>
+        <span className="flex items-center gap-1"><span className="w-3 h-3 bg-red-500/50 border border-red-400" /> Problem zone</span>
+        <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-cyan-400" /> Detections (playback)</span>
       </div>
     </div>
   )

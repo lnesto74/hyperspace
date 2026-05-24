@@ -106,6 +106,15 @@ export default function benchmarkRoutes({
     }
   });
 
+  router.get('/runs/:id/coverage/reconciled/:config', (req, res) => {
+    try {
+      res.json(benchmarkCoverageService.getReconciledSpatial(req.params.id, req.params.config));
+    } catch (err) {
+      const status = err.message.includes('not found') ? 404 : 400;
+      res.status(status).json({ error: err.message });
+    }
+  });
+
   router.get('/runs/:id/coverage/heatmap', async (req, res) => {
     try {
       const live = req.query.live === '1' || req.query.live === 'true';

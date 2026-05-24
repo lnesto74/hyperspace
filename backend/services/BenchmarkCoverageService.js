@@ -132,6 +132,23 @@ export default class BenchmarkCoverageService {
     };
   }
 
+  getReconciledSpatial(runId, configName) {
+    const { runDir } = this.benchmarkRunService.resolveRunId(runId);
+    const safe = String(configName || '').replace(/[^a-zA-Z0-9_]+/g, '');
+    const spatialPath = path.join(runDir, 'artifacts', `reconciler_spatial_${safe}.json`);
+    if (!fs.existsSync(spatialPath)) {
+      return {
+        available: false,
+        reason: `reconciler_spatial_${safe}.json not found — re-run stage 06_verify`,
+        config: safe,
+      };
+    }
+    const data = JSON.parse(fs.readFileSync(spatialPath, 'utf8'));
+    const rawSpatial = this.getSpatial(runId);
+    const bbox = rawSpatial.bbox || null;
+    return { ...data, available: true, bbox };
+  }
+
   async renderVenueHeatmap(runId, { pixelsPerMeter = 10 } = {}) {
     if (!this.replayService) throw new Error('Replay service unavailable');
     const run = this.benchmarkRunService.getRun(runId, { includeReport: false });
