@@ -118,7 +118,8 @@ export default class BenchmarkJobService {
       env: {
         ...process.env,
         BENCHMARK_RUNS_DIR: this.runsDir,
-        PYTHON: process.env.PYTHON || 'python3',
+        PYTHON: process.env.PYTHON || '/opt/pybench/bin/python3',
+        PATH: `/opt/pybench/bin:${process.env.PATH || ''}`,
       },
       detached: false,
       stdio: ['ignore', logFd, logFd],

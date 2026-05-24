@@ -55,10 +55,14 @@ RUN apt-get update && apt-get install -y \
     curl \
     python3 \
     python3-pip \
+    python3-venv \
     && curl -fsSL https://tailscale.com/install.sh | sh \
-    && pip3 install --no-cache-dir pandas pyarrow matplotlib scipy numpy \
+    && python3 -m venv /opt/pybench \
+    && /opt/pybench/bin/pip install --no-cache-dir pandas pyarrow matplotlib scipy numpy \
     && rm -rf /var/lib/apt/lists/* \
     && ldconfig
+
+ENV PATH="/opt/pybench/bin:${PATH}"
 
 # Copy built app from builder
 COPY --from=builder /app /app
