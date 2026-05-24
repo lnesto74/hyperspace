@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { History, Play, Square, X, ChevronDown, ChevronUp, RefreshCw, Loader2, Circle } from 'lucide-react'
 import { API_BASE } from '../../config/api'
+import { useTrackingActions } from '../../context/TrackingContext'
 
 interface ReplayFile {
   name: string
@@ -88,6 +89,7 @@ const tsAtProgress = (meta: FileMeta | null, progress: number) => {
 const RECORD_SOFT_CAP_BYTES = 500 * 1024 * 1024
 
 export default function ReplayPanel({ onClose }: ReplayPanelProps) {
+  const { clearReplayTracks } = useTrackingActions()
   const [files, setFiles] = useState<ReplayFile[]>([])
   const [selected, setSelected] = useState<string>('')
   const [speed, setSpeed] = useState<number>(4)
@@ -304,13 +306,15 @@ export default function ReplayPanel({ onClose }: ReplayPanelProps) {
   }, [speed, refreshStatus, status?.file])
 
   const stop = useCallback(async () => {
+    clearReplayTracks()
     try {
       await fetch(`${API_BASE}/api/replay/stop`, { method: 'POST' })
+      clearReplayTracks()
       await refreshStatus()
     } catch (err) {
       console.error(err)
     }
-  }, [refreshStatus])
+  }, [refreshStatus, clearReplayTracks])
 
   const running = !!status?.running
   const playingFile = status?.file || null

@@ -51,6 +51,18 @@ export class TrackAggregator extends EventEmitter {
     }
   }
 
+  /** Remove only MQTT replay tracks (deviceId / trackKey prefixed with replay-). */
+  flushReplayTracks() {
+    const keys = [...this.tracks.keys()].filter(k => k.startsWith('replay-'));
+    if (keys.length === 0) return 0;
+    for (const trackKey of keys) {
+      this.tracks.delete(trackKey);
+      this.emit('track_removed', { trackKey });
+    }
+    console.log(`📊 Track aggregator flushed ${keys.length} replay tracks`);
+    return keys.length;
+  }
+
   setPlacement(deviceId, placement) {
     this.placements.set(deviceId, placement);
   }

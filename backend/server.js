@@ -341,7 +341,7 @@ app.use('/api/companies', companiesRoutes(db));
 app.use('/api/discovery', discoveryRoutes(tailscaleService, mockGenerator));
 app.use('/api/venues', venuesRoutes(db, { mqttService, io }));
 const replayDir = process.env.REPLAY_DIR || '/data/replay';
-const replayService = new ReplayService({ mqttService, replayDir });
+const replayService = new ReplayService({ mqttService, replayDir, trackAggregator });
 const mqttRecordService = new MqttRecordService({ replayDir });
 if (mqttService) mqttService.setMqttRecorder(mqttRecordService);
 app.use('/api/replay', replayRoutes({ replayService, mqttRecordService, mqttService, db }));

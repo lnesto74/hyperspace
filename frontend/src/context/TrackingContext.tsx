@@ -28,6 +28,7 @@ interface TrackingContextType {
   setReplayTracks: (tracks: Map<string, TrackWithTrail>) => void
   setTrackVisibility: (visible: boolean) => void
   setInterpolation: (enabled: boolean) => void
+  clearReplayTracks: () => void
 }
 
 const TrackingContext = createContext<TrackingContextType | null>(null)
@@ -45,6 +46,7 @@ interface TrackingActionsType {
   setReplayTracks: (tracks: Map<string, TrackWithTrail>) => void
   setTrackVisibility: (visible: boolean) => void
   setInterpolation: (enabled: boolean) => void
+  clearReplayTracks: () => void
 }
 const TrackingActionsContext = createContext<TrackingActionsType | null>(null)
 
@@ -202,7 +204,6 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
     })
 
     socket.on('track_removed', (data: { trackKey: string }) => {
-      if (isReplayMode) return
       if (DIAG) console.log(`[DIAG] track_removed event  key=${data.trackKey}  t=${Date.now()}`)
       setLiveTracks(prev => {
         const next = new Map(prev)
@@ -215,7 +216,6 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
     })
 
     socket.on('tracks_cleared', () => {
-      if (isReplayMode) return
       if (DIAG) console.log(`[DIAG] tracks_cleared event  t=${Date.now()}`)
       setLiveTracks(new Map())
       trackLastSeenRef.current.clear()
@@ -235,11 +235,11 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
       const staleKeys: string[] = []
       
       trackLastSeenRef.current.forEach((lastSeen, key) => {
-        if (now - lastSeen > TRACK_TTL_MS) {
+        const ttl = key.startsWith('replay-') ? 3000 : TRACK_TTL_MS
+        if (now - lastSeen > ttl) {
           staleKeys.push(key)
         }
       })
-      
       if (staleKeys.length > 0) {
         if (DIAG) {
           const total = trackLastSeenRef.current.size
@@ -434,6 +434,32 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
     }
   }, [interpLoop])
 
+  const clearReplayTracks = useCallback(() => {
+    const purge = (keys: Iterable<string>) => {
+      for (const key of keys) {
+        if (key.startsWith('replay-')) {
+          trackLastSeenRef.current.delete(key)
+          targetTracksRef.current.delete(key)
+          interpTsRef.current.delete(key)
+        }
+      }
+    }
+    purge(trackLastSeenRef.current.keys())
+    purge(targetTracksRef.current.keys())
+    setLiveTracks(prev => {
+      let changed = false
+      const next = new Map<string, TrackWithTrail>()
+      for (const [key, track] of prev) {
+        if (key.startsWith('replay-')) {
+          changed = true
+        } else {
+          next.set(key, track)
+        }
+      }
+      return changed ? next : prev
+    })
+  }, [])
+
   const contextValue = useMemo(() => ({ 
     tracks, 
     isConnected, 
@@ -443,8 +469,9 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
     setReplayMode,
     setReplayTracks,
     setTrackVisibility,
-    setInterpolation
-  }), [tracks, isConnected, isReplayMode, subscribe, unsubscribe, setReplayMode, setReplayTracks, setTrackVisibility, setInterpolation])
+    setInterpolation,
+    clearReplayTracks,
+  }), [tracks, isConnected, isReplayMode, subscribe, unsubscribe, setReplayMode, setReplayTracks, setTrackVisibility, setInterpolation, clearReplayTracks])
 
   const actionsValue = useMemo(() => ({
     subscribe,
@@ -452,8 +479,9 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
     setReplayMode,
     setReplayTracks,
     setTrackVisibility,
-    setInterpolation
-  }), [subscribe, unsubscribe, setReplayMode, setReplayTracks, setTrackVisibility, setInterpolation])
+    setInterpolation,
+    clearReplayTracks,
+  }), [subscribe, unsubscribe, setReplayMode, setReplayTracks, setTrackVisibility, setInterpolation, clearReplayTracks])
 
   return (
     <TracksRefContext.Provider value={stableTracksRef}>

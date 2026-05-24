@@ -23,11 +23,12 @@ import sharp from 'sharp';
 import { perceptionToFloor, applyTransformToPoint, normalizePerceptionTransform } from './PerceptionTransform.js';
 
 export default class ReplayService {
-  constructor({ replayDir, mqttBrokerUrl, mqttService } = {}) {
+  constructor({ replayDir, mqttBrokerUrl, mqttService, trackAggregator } = {}) {
     this.replayDir = replayDir || process.env.REPLAY_DIR || '/data/replay';
     this.brokerUrl = mqttBrokerUrl || process.env.MQTT_BROKER_URL || 'mqtt://mosquitto:1883';
     // When set, replay injects messages directly (no MQTT round-trip)
     this.mqttService = mqttService || null;
+    this.trackAggregator = trackAggregator || null;
     this.client = null;
     this.state = {
       running: false,
@@ -286,6 +287,7 @@ export default class ReplayService {
     if (this._abort) this._abort.aborted = true;
     this.state.running = false;
     this._tearDownPlayback();
+    this.trackAggregator?.flushReplayTracks?.();
     if (this._playbackDone) {
       await this._playbackDone;
       this._playbackDone = null;
@@ -419,6 +421,7 @@ export default class ReplayService {
       this.state.running = false;
       this._abort = null;
       this._tearDownPlayback();
+      this.trackAggregator?.flushReplayTracks?.();
       resolvePlayback?.();
       if (this._playbackDone) this._playbackDone = null;
     }
