@@ -1,0 +1,12 @@
+{
+  "capture_id": "baseline_v0_overnight_2026-05-23",
+  "source_file": "raw_tracks_trimmed.jsonl",
+  "venue_id": "55fdd53b-3298-4355-97c0-b4e789b11d06",
+  "recorded_at": "2026-05-23T23:03:00+08:00",
+  "stopped_at": "2026-05-24T11:08:00+08:00",
+  "perception_version": "fast3dis-unknown",
+  "reconciler_at_capture": "disabled",
+  "transform_version": "venue-dwg-v1",
+  "duration_hint": "overnight ~11h",
+  "notes": "Baseline v0 — trimmed from raw_tracks.jsonl at 9.9% byte position. Reconciler was OFF during capture."
+}

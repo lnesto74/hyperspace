@@ -1,0 +1,22 @@
+{
+  "messages": 884256,
+  "unique_perception_ids": 4382,
+  "time_span_h": 0.5774722222222223,
+  "median_dt_ms": 100.0,
+  "median_lifetime_s": 4.2,
+  "p25_lifetime_s": 1.2,
+  "p75_lifetime_s": 12.4,
+  "p95_lifetime_s": 65.38999999999997,
+  "max_lifetime_s": 2078.8,
+  "median_total_disp": 0.9132606878040752,
+  "p25_total_disp": 0.1304460978562758,
+  "p50_speed": 0.2062938754119808,
+  "p95_speed": 1.1241950308921673,
+  "p99_speed": 1.4813937235239387,
+  "p99_max_speed": 7.176343985244424,
+  "p99_implied_speed": 7.161032105165423,
+  "ids_under_500ms": 610,
+  "ids_under_2s": 1408,
+  "ids_no_motion_under_2s": 1119,
+  "ids_long_static_5min": 0
+}

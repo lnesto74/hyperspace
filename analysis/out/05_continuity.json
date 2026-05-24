@@ -1,0 +1,11 @@
+{
+  "walkable_area_m2": 2119.25,
+  "walkable_diameter_m": 65.10376333208396,
+  "expected_min_path_m": 32.55188166604198,
+  "ids_meeting_path_expectation": 120,
+  "ids_meeting_path_expectation_pct": 2.738475581926061,
+  "median_path_m": 0.9132606878040752,
+  "p95_path_m": 20.10503814946912,
+  "estimated_unique_shoppers": 276,
+  "perception_ids_per_real_shopper": 15.876811594202898
+}

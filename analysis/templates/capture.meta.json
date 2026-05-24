@@ -1,0 +1,12 @@
+{
+  "capture_id": "CHANGE_ME",
+  "source_file": "capture.jsonl",
+  "venue_id": "55fdd53b-3298-4355-97c0-b4e789b11d06",
+  "recorded_at": null,
+  "stopped_at": null,
+  "perception_version": null,
+  "reconciler_at_capture": null,
+  "transform_version": null,
+  "duration_hint": null,
+  "notes": null
+}
