@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
-import { Maximize2, Pause, Play, RefreshCw, RotateCcw, ZoomIn, ZoomOut } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { ChevronDown, ChevronUp, Maximize2, Move, Pause, Play, RefreshCw, RotateCcw, ZoomIn, ZoomOut } from 'lucide-react'
 import { API_BASE } from '../../../config/api'
 import type {
   CoverageSpatial,
@@ -12,12 +12,19 @@ import type {
 } from '../types'
 import type { PerceptionTransform } from '../../../types/perceptionTransform'
 import {
+  DEFAULT_MAP_CALIBRATION,
   DEFAULT_MAP_VIEW,
+  applyMapCalibration,
+  computeDisplayBbox,
+  floorplanImageRect,
+  loadMapCalibration,
   perceptionToVenue,
   projectPoint,
+  saveMapCalibration,
   severityColor,
-  transformZoneToVenue,
-  venueBbox,
+  transformZoneWithCalibration,
+  type DwgBootstrap,
+  type MapCalibration,
   type MapView,
 } from '../benchmarkMapUtils'
 
@@ -57,6 +64,8 @@ function reconciledConfigFor(view: TrackViewMode): string | null {
 function isOverlay(view: TrackViewMode) {
   return view.startsWith('overlay_')
 }
+
+interface Props {
   runId: string
   compareRunId?: string | null
   compareLabel?: string
@@ -67,8 +76,13 @@ function mapPoint(
   z: number,
   mode: 'venue' | 'sensor',
   transform: PerceptionTransform | null | undefined,
+  calibration: MapCalibration,
+  pivot: { x: number; z: number },
 ) {
-  if (mode === 'venue') return perceptionToVenue(x, z, transform)
+  if (mode === 'venue') {
+    const p = perceptionToVenue(x, z, transform)
+    return applyMapCalibration(p, calibration, pivot)
+  }
   return { x, z }
 }
 
@@ -82,6 +96,7 @@ export default function BenchmarkCoverageMap({ runId, compareRunId, compareLabel
   const [compareZones, setCompareZones] = useState<ProblemZonesData | null>(null)
   const [floorplan, setFloorplan] = useState<FloorplanContext | null>(null)
   const [floorplanImg, setFloorplanImg] = useState<HTMLImageElement | null>(null)
+  const [bootstrap, setBootstrap] = useState<DwgBootstrap | null>(null)
 
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -91,6 +106,8 @@ export default function BenchmarkCoverageMap({ runId, compareRunId, compareLabel
   const [view, setView] = useState<MapView>(DEFAULT_MAP_VIEW)
   const [coordMode, setCoordMode] = useState<'venue' | 'sensor'>('venue')
   const [selectedZone, setSelectedZone] = useState<ProblemZone | null>(null)
+  const [calibration, setCalibration] = useState<MapCalibration>(DEFAULT_MAP_CALIBRATION)
+  const [showAlignPanel, setShowAlignPanel] = useState(false)
 
   const [trackView, setTrackView] = useState<TrackViewMode>('overlay_GROCERY_BALANCED')
   const [reconciled, setReconciled] = useState<ReconciledSpatial | null>(null)
@@ -123,7 +140,23 @@ export default function BenchmarkCoverageMap({ runId, compareRunId, compareLabel
       setZones(zRes.ok ? await zRes.json() : { available: false })
       const fp: FloorplanContext = fpRes.ok ? await fpRes.json() : { available: false }
       setFloorplan(fp)
+      setBootstrap(null)
+      if (fp.available && fp.venue_id) {
+        setCalibration(loadMapCalibration(fp.venue_id))
+      } else {
+        setCalibration(DEFAULT_MAP_CALIBRATION)
+      }
       setFrame(0)
+
+      if (fp.available && fp.dwg_layout_version_id) {
+        const sc = fp.scaleCorrection ?? 1
+        fetch(`${API_BASE}/api/dwg/layout/${encodeURIComponent(fp.dwg_layout_version_id)}/as-venue-bootstrap?scaleCorrection=${sc}`)
+          .then((r) => (r.ok ? r.json() : null))
+          .then((data) => {
+            if (data?.transform) setBootstrap(data.transform as DwgBootstrap)
+          })
+          .catch(() => setBootstrap(null))
+      }
 
       if (compareRunId && compareRunId !== runId) {
         const czRes = await fetch(`${API_BASE}/api/benchmark/runs/${encodeURIComponent(compareRunId)}/coverage/zones`)
@@ -184,10 +217,48 @@ export default function BenchmarkCoverageMap({ runId, compareRunId, compareLabel
 
   const transform = floorplan?.perceptionTransform ?? null
   const useVenue = coordMode === 'venue' && floorplan?.available && floorplan.has_transform
+  const venueWidth = floorplan?.venue_width ?? 74
+  const venueDepth = floorplan?.venue_depth ?? 74
+  const venuePivot = useMemo(() => ({ x: venueWidth / 2, z: venueDepth / 2 }), [venueWidth, venueDepth])
 
-  const displayBbox: MapBbox | null = useVenue && floorplan?.venue_width && floorplan?.venue_depth
-    ? venueBbox(floorplan.venue_width, floorplan.venue_depth)
-    : spatial?.bbox ?? null
+  const floorplanRect = useMemo(() => {
+    if (!bootstrap || !floorplanImg || !floorplan?.floorplan_transform) return null
+    return floorplanImageRect(
+      floorplanImg.naturalWidth,
+      floorplanImg.naturalHeight,
+      floorplan.floorplan_transform,
+      bootstrap,
+    )
+  }, [bootstrap, floorplanImg, floorplan?.floorplan_transform])
+
+  const displayBbox: MapBbox | null = useMemo(() => {
+    if (!spatial?.bbox) return null
+    if (!useVenue) return spatial.bbox
+    return computeDisplayBbox({
+      spatialBbox: spatial.bbox,
+      useVenue: true,
+      transform,
+      calibration,
+      venueWidth,
+      venueDepth,
+      objects: floorplan?.objects,
+      floorplanRect,
+    })
+  }, [spatial?.bbox, useVenue, transform, calibration, venueWidth, venueDepth, floorplan?.objects, floorplanRect])
+
+  const updateCalibration = useCallback((patch: Partial<MapCalibration>) => {
+    setCalibration((prev) => {
+      const next = { ...prev, ...patch }
+      if (floorplan?.venue_id) saveMapCalibration(floorplan.venue_id, next)
+      return next
+    })
+  }, [floorplan?.venue_id])
+
+  const resetCalibration = useCallback(() => {
+    const next = { ...DEFAULT_MAP_CALIBRATION }
+    setCalibration(next)
+    if (floorplan?.venue_id) saveMapCalibration(floorplan.venue_id, next)
+  }, [floorplan?.venue_id])
 
   const draw = useCallback(() => {
     const canvas = canvasRef.current
@@ -214,8 +285,10 @@ export default function BenchmarkCoverageMap({ runId, compareRunId, compareLabel
     const playbackMode = playing && layers.detections && activeTimeline.length > 0
     const staticAlpha = playbackMode ? 0.15 : 0.55
     const mode: 'venue' | 'sensor' = useVenue ? 'venue' : 'sensor'
+    const pivot = venuePivot
 
     const proj = (x: number, z: number) => projectPoint(x, z, bbox, w, h, pad, view)
+    const toMap = (x: number, z: number) => mapPoint(x, z, mode, transform, calibration, pivot)
 
     const drawTrackEndpoints = (
       data: { births?: Array<{ x: number; z: number }>; deaths?: Array<{ x: number; z: number }> },
@@ -224,7 +297,7 @@ export default function BenchmarkCoverageMap({ runId, compareRunId, compareLabel
       if (layers.births && data.births) {
         ctx.fillStyle = opts.birthColor.replace('ALPHA', String(opts.alpha))
         for (const b of data.births) {
-          const p = mapPoint(b.x, b.z, mode, transform)
+          const p = toMap(b.x, b.z)
           const { cx, cy } = proj(p.x, p.z)
           ctx.beginPath()
           ctx.arc(cx, cy, opts.radius, 0, Math.PI * 2)
@@ -234,7 +307,7 @@ export default function BenchmarkCoverageMap({ runId, compareRunId, compareLabel
       if (layers.deaths && data.deaths) {
         ctx.fillStyle = opts.deathColor.replace('ALPHA', String(opts.alpha))
         for (const d of data.deaths) {
-          const p = mapPoint(d.x, d.z, mode, transform)
+          const p = toMap(d.x, d.z)
           const { cx, cy } = proj(p.x, p.z)
           ctx.beginPath()
           ctx.arc(cx, cy, opts.radius, 0, Math.PI * 2)
@@ -246,11 +319,24 @@ export default function BenchmarkCoverageMap({ runId, compareRunId, compareLabel
     ctx.fillStyle = '#0f1419'
     ctx.fillRect(0, 0, w, h)
 
-    // Floorplan raster underlay (venue coords, full venue extent)
-    if (layers.floorplan && floorplanImg && useVenue && floorplan?.venue_width && floorplan?.venue_depth) {
-      const tl = proj(0, floorplan.venue_depth)
-      const br = proj(floorplan.venue_width, 0)
-      ctx.globalAlpha = 0.35
+    // Floorplan raster — positioned like MainViewport (DXF transform + bootstrap)
+    if (layers.floorplan && floorplanImg && useVenue && floorplanRect) {
+      const fp = floorplanRect
+      const center = proj(fp.cx, fp.cz)
+      const halfW = (fp.w * center.scale) / 2
+      const halfD = (fp.d * center.scale) / 2
+      ctx.save()
+      ctx.translate(center.cx, center.cy)
+      ctx.rotate(-fp.rotationDeg * Math.PI / 180)
+      ctx.globalAlpha = fp.opacity
+      ctx.drawImage(floorplanImg, -halfW, -halfD, halfW * 2, halfD * 2)
+      ctx.restore()
+      ctx.globalAlpha = 1
+    } else if (layers.floorplan && floorplanImg && useVenue) {
+      // Fallback: full venue extent when bootstrap not loaded yet
+      const tl = proj(0, venueDepth)
+      const br = proj(venueWidth, 0)
+      ctx.globalAlpha = 0.25
       ctx.drawImage(floorplanImg, tl.cx, tl.cy, br.cx - tl.cx, br.cy - tl.cy)
       ctx.globalAlpha = 1
     }
@@ -274,7 +360,7 @@ export default function BenchmarkCoverageMap({ runId, compareRunId, compareLabel
     // Blindspots
     if (layers.blindspots && spatial.blindspots) {
       for (const b of spatial.blindspots) {
-        const p = mapPoint(b.x, b.z, mode, transform)
+        const p = toMap(b.x, b.z)
         const { cx, cy, scale } = proj(p.x, p.z)
         const r = Math.max(4, Math.sqrt(b.area_m2) * scale * 0.35)
         ctx.fillStyle = `rgba(234, 179, 8, ${0.12 * staticAlpha})`
@@ -290,7 +376,7 @@ export default function BenchmarkCoverageMap({ runId, compareRunId, compareLabel
     // Compare baseline zones (outline)
     if (layers.compare_zones && compareZones?.available && compareZones.zones?.length) {
       for (const z of compareZones.zones.slice(0, 30)) {
-        const zv = useVenue ? transformZoneToVenue(z, transform) : z
+        const zv = useVenue ? transformZoneWithCalibration(z, transform, calibration, pivot) : z
         const tl = proj(zv.x0, zv.z1)
         const br = proj(zv.x1, zv.z0)
         ctx.strokeStyle = 'rgba(59, 130, 246, 0.55)'
@@ -304,7 +390,7 @@ export default function BenchmarkCoverageMap({ runId, compareRunId, compareLabel
     // Problem zones (ranked squares)
     if (layers.problem_zones && zones?.available && zones.zones?.length) {
       for (const z of zones.zones) {
-        const zv = useVenue ? transformZoneToVenue(z, transform) : z
+        const zv = useVenue ? transformZoneWithCalibration(z, transform, calibration, pivot) : z
         const tl = proj(zv.x0, zv.z1)
         const br = proj(zv.x1, zv.z0)
         const isSel = selectedZone?.cell_id === z.cell_id
@@ -326,8 +412,8 @@ export default function BenchmarkCoverageMap({ runId, compareRunId, compareLabel
     // Fragmentation links (raw only)
     if (layers.links && showRaw && spatial.links) {
       for (const ln of spatial.links) {
-        const a = mapPoint(ln.x0, ln.z0, mode, transform)
-        const b = mapPoint(ln.x1, ln.z1, mode, transform)
+        const a = toMap(ln.x0, ln.z0)
+        const b = toMap(ln.x1, ln.z1)
         const pa = proj(a.x, a.z)
         const pb = proj(b.x, b.z)
         ctx.strokeStyle = LINK_COLORS[ln.category] || 'rgba(148, 163, 184, 0.2)'
@@ -342,7 +428,7 @@ export default function BenchmarkCoverageMap({ runId, compareRunId, compareLabel
     if (layers.ghosts && showRaw && spatial.ghosts) {
       ctx.fillStyle = `rgba(251, 146, 60, ${0.85 * staticAlpha})`
       for (const g of spatial.ghosts) {
-        const p = mapPoint(g.x, g.z, mode, transform)
+        const p = toMap(g.x, g.z)
         const { cx, cy } = proj(p.x, p.z)
         ctx.beginPath()
         ctx.arc(cx, cy, 1.5, 0, Math.PI * 2)
@@ -375,7 +461,7 @@ export default function BenchmarkCoverageMap({ runId, compareRunId, compareLabel
       const isReconciledPlayback = showReconciled && !isOverlay(trackView)
       ctx.fillStyle = isReconciledPlayback ? 'rgba(167, 139, 250, 0.92)' : 'rgba(34, 211, 238, 0.92)'
       for (const pt of bucket.points) {
-        const p = mapPoint(pt.x, pt.z, mode, transform)
+        const p = toMap(pt.x, pt.z)
         const { cx, cy } = proj(p.x, p.z)
         ctx.beginPath()
         ctx.arc(cx, cy, playbackMode ? 2.5 : 1.8, 0, Math.PI * 2)
@@ -389,8 +475,9 @@ export default function BenchmarkCoverageMap({ runId, compareRunId, compareLabel
     const br = proj(bbox.x1, bbox.z0)
     ctx.strokeRect(tl.cx, tl.cy, br.cx - tl.cx, br.cy - tl.cy)
   }, [
-    spatial, zones, compareZones, floorplan, floorplanImg, layers, frame, playing,
-    view, useVenue, transform, displayBbox, selectedZone, trackView, reconciled,
+    spatial, zones, compareZones, floorplan, floorplanImg, floorplanRect, layers, frame, playing,
+    view, useVenue, transform, calibration, venuePivot, displayBbox, selectedZone, trackView, reconciled,
+    venueWidth, venueDepth,
   ])
 
   useEffect(() => {
@@ -433,7 +520,7 @@ export default function BenchmarkCoverageMap({ runId, compareRunId, compareLabel
     const h = rect.height
 
     for (const z of zones.zones) {
-      const zv = useVenue ? transformZoneToVenue(z, transform) : z
+      const zv = useVenue ? transformZoneWithCalibration(z, transform, calibration, venuePivot) : z
       const tl = projectPoint(zv.x0, zv.z1, displayBbox, w, h, pad, view)
       const br = projectPoint(zv.x1, zv.z0, displayBbox, w, h, pad, view)
       if (clickX >= tl.cx && clickX <= br.cx && clickY >= tl.cy && clickY <= br.cy) {
@@ -554,6 +641,98 @@ export default function BenchmarkCoverageMap({ runId, compareRunId, compareLabel
         <p className="text-xs text-gray-500">
           No perception transform on venue — using sensor frame. Calibrate in Live Tuner to enable floorplan overlay.
         </p>
+      )}
+
+      {useVenue && (
+        <div className="rounded-xl border border-gray-700 bg-gray-900/60 overflow-hidden">
+          <button
+            type="button"
+            onClick={() => setShowAlignPanel((v) => !v)}
+            className="w-full flex items-center justify-between px-3 py-2 text-left hover:bg-gray-800/50 transition-colors"
+          >
+            <span className="flex items-center gap-2 text-xs text-gray-300">
+              <Move className="w-3.5 h-3.5 text-amber-400" />
+              Align trajectories to floorplan
+              {(calibration.offsetX !== 0 || calibration.offsetZ !== 0 || calibration.rotationDeg !== 0 || calibration.scale !== 1) && (
+                <span className="text-amber-400/90">(adjusted)</span>
+              )}
+            </span>
+            {showAlignPanel ? <ChevronUp className="w-4 h-4 text-gray-500" /> : <ChevronDown className="w-4 h-4 text-gray-500" />}
+          </button>
+          {showAlignPanel && (
+            <div className="px-3 pb-3 pt-1 border-t border-gray-800 space-y-3">
+              <p className="text-[10px] text-gray-500 leading-relaxed">
+                Uses your Live Tuner transform first. If tracks still don&apos;t line up with the DWG, nudge here — saved per venue in this browser.
+              </p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
+                <label className="space-y-1">
+                  <span className="text-gray-500">Shift X (m)</span>
+                  <input
+                    type="range"
+                    min={-25}
+                    max={25}
+                    step={0.25}
+                    value={calibration.offsetX}
+                    onChange={(e) => updateCalibration({ offsetX: Number(e.target.value) })}
+                    className="w-full accent-amber-500"
+                  />
+                  <span className="text-gray-400 tabular-nums">{calibration.offsetX.toFixed(2)} m</span>
+                </label>
+                <label className="space-y-1">
+                  <span className="text-gray-500">Shift Z (m)</span>
+                  <input
+                    type="range"
+                    min={-25}
+                    max={25}
+                    step={0.25}
+                    value={calibration.offsetZ}
+                    onChange={(e) => updateCalibration({ offsetZ: Number(e.target.value) })}
+                    className="w-full accent-amber-500"
+                  />
+                  <span className="text-gray-400 tabular-nums">{calibration.offsetZ.toFixed(2)} m</span>
+                </label>
+                <label className="space-y-1">
+                  <span className="text-gray-500">Rotation (°)</span>
+                  <input
+                    type="range"
+                    min={-180}
+                    max={180}
+                    step={0.5}
+                    value={calibration.rotationDeg}
+                    onChange={(e) => updateCalibration({ rotationDeg: Number(e.target.value) })}
+                    className="w-full accent-amber-500"
+                  />
+                  <span className="text-gray-400 tabular-nums">{calibration.rotationDeg.toFixed(1)}°</span>
+                </label>
+                <label className="space-y-1">
+                  <span className="text-gray-500">Scale</span>
+                  <input
+                    type="range"
+                    min={0.5}
+                    max={2}
+                    step={0.01}
+                    value={calibration.scale}
+                    onChange={(e) => updateCalibration({ scale: Number(e.target.value) })}
+                    className="w-full accent-amber-500"
+                  />
+                  <span className="text-gray-400 tabular-nums">{calibration.scale.toFixed(2)}×</span>
+                </label>
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                <button type="button" onClick={() => updateCalibration({ offsetX: calibration.offsetX - 0.5 })} className="px-2 py-1 rounded border border-gray-700 text-[10px] text-gray-400 hover:bg-gray-800">← X</button>
+                <button type="button" onClick={() => updateCalibration({ offsetX: calibration.offsetX + 0.5 })} className="px-2 py-1 rounded border border-gray-700 text-[10px] text-gray-400 hover:bg-gray-800">X →</button>
+                <button type="button" onClick={() => updateCalibration({ offsetZ: calibration.offsetZ + 0.5 })} className="px-2 py-1 rounded border border-gray-700 text-[10px] text-gray-400 hover:bg-gray-800">↑ Z</button>
+                <button type="button" onClick={() => updateCalibration({ offsetZ: calibration.offsetZ - 0.5 })} className="px-2 py-1 rounded border border-gray-700 text-[10px] text-gray-400 hover:bg-gray-800">Z ↓</button>
+                <button type="button" onClick={() => updateCalibration({ rotationDeg: calibration.rotationDeg - 5 })} className="px-2 py-1 rounded border border-gray-700 text-[10px] text-gray-400 hover:bg-gray-800">↺ 5°</button>
+                <button type="button" onClick={() => updateCalibration({ rotationDeg: calibration.rotationDeg + 5 })} className="px-2 py-1 rounded border border-gray-700 text-[10px] text-gray-400 hover:bg-gray-800">↻ 5°</button>
+                <button type="button" onClick={resetCalibration} className="px-2 py-1 rounded border border-amber-800/60 text-[10px] text-amber-300 hover:bg-amber-950/40 ml-auto">Reset alignment</button>
+              </div>
+              {!bootstrap && floorplan?.dwg_layout_version_id && (
+                <p className="text-[10px] text-amber-600/80">Loading DWG placement… floorplan may be approximate until bootstrap loads.</p>
+              )}
+            </div>
+          )}
+        </div>
       )}
 
       <div className="flex gap-3 flex-col lg:flex-row">

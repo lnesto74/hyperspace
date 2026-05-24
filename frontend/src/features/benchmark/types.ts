@@ -203,8 +203,12 @@ export interface FloorplanContext {
   venue_width?: number
   venue_depth?: number
   perceptionTransform?: import('../../types/perceptionTransform').PerceptionTransform | null
+  scaleCorrection?: number
+  dwg_layout_version_id?: string | null
   objects?: FloorplanObject[]
   floorplan_image_url?: string | null
+  floorplan_import_id?: string | null
+  floorplan_transform?: import('./benchmarkMapUtils').FloorplanTransform | null
   bbox_venue?: MapBbox
   has_transform?: boolean
 }

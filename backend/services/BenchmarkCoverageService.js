@@ -104,6 +104,7 @@ export default class BenchmarkCoverageService {
 
     let floorplanImageUrl = null;
     let floorplanImportId = null;
+    let floorplanTransform = null;
     if (venue.dwg_layout_version_id) {
       const layout = this.db.prepare(
         'SELECT import_id FROM dwg_layout_versions WHERE id = ?',
@@ -111,6 +112,16 @@ export default class BenchmarkCoverageService {
       if (layout?.import_id) {
         floorplanImportId = layout.import_id;
         floorplanImageUrl = `/api/dwg/import/${layout.import_id}/floorplan/image`;
+        try {
+          const fpRow = this.db.prepare(
+            'SELECT transform_json FROM dwg_floorplan_images WHERE import_id = ? ORDER BY created_at DESC LIMIT 1',
+          ).get(layout.import_id);
+          if (fpRow?.transform_json) {
+            const parsed = JSON.parse(fpRow.transform_json);
+            const { cropRect: _crop, ...transform } = parsed;
+            floorplanTransform = transform;
+          }
+        } catch { /* ignore */ }
       }
     }
 
@@ -124,9 +135,11 @@ export default class BenchmarkCoverageService {
       venue_depth: depth,
       perceptionTransform,
       scaleCorrection,
+      dwg_layout_version_id: venue.dwg_layout_version_id || null,
       objects,
       floorplan_image_url: floorplanImageUrl,
       floorplan_import_id: floorplanImportId,
+      floorplan_transform: floorplanTransform,
       bbox_venue: { x0: 0, z0: 0, x1: width, z1: depth },
       has_transform: !!perceptionTransform,
     };
