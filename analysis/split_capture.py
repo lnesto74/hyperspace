@@ -6,11 +6,17 @@ Examples:
   # Inspect only (no writes)
   python3 analysis/split_capture.py inspect /opt/hyperspace/replay/raw_tracks.jsonl
 
-  # Keep only messages from May 24 2026 onward → new clean file
+  # Keep from May 23 ~23:01 (timestamp cut)
   python3 analysis/split_capture.py filter \
     --input /opt/hyperspace/replay/raw_tracks.jsonl \
-    --output /opt/hyperspace/replay/raw_tracks_may24_only.jsonl \
-    --after 2026-05-24T00:00:00Z
+    --output /opt/hyperspace/replay/raw_tracks_may23_2301_onward.jsonl \
+    --after 2026-05-23T23:01:00Z
+
+  # Keep from ~9.9% byte position (matches Replay panel scrub slider)
+  python3 analysis/split_capture.py filter \
+    --input /opt/hyperspace/replay/raw_tracks.jsonl \
+    --output /opt/hyperspace/replay/raw_tracks_from_9p9pct.jsonl \
+    --after-progress 9.9
 
   # Split into before/after a cutoff date
   python3 analysis/split_capture.py split \
@@ -105,14 +111,66 @@ def write_line(out, raw: str) -> int:
     return len(raw) + 1
 
 
+def byte_offset_for_progress(path: Path, progress_pct: float) -> int:
+    """Match ReplayService byte seek — skip to progress % of file, next full line."""
+    total = path.stat().st_size
+    if total <= 0 or progress_pct <= 0:
+        return 0
+    if progress_pct >= 100:
+        return total
+    offset = min(total - 1, int(total * (progress_pct / 100.0)))
+    with path.open("rb") as f:
+        f.seek(offset)
+        chunk = f.read(min(16384, total - offset))
+        nl = chunk.find(b"\n")
+        if nl >= 0:
+            return offset + nl + 1
+        back_len = min(16384, offset)
+        f.seek(offset - back_len)
+        back = f.read(back_len)
+        last_nl = back.rfind(b"\n")
+        if last_nl >= 0:
+            return offset - back_len + last_nl + 1
+    return offset
+
+
+def iter_messages_from(path: Path, start_byte: int = 0):
+    """Like iter_messages but optionally skip leading bytes (for progress trim)."""
+    with path.open(errors="replace") as f:
+        if start_byte > 0:
+            f.seek(start_byte)
+        for line_no, line in enumerate(f, 1):
+            raw = line.rstrip("\n")
+            if not raw:
+                continue
+            if raw.startswith("nohup:") or raw.startswith("mosquitto_sub"):
+                continue
+            if " " not in raw:
+                continue
+            try:
+                topic, payload = raw.split(" ", 1)
+                d = json.loads(payload)
+            except Exception:
+                continue
+            ts = int(d.get("timestamp") or 0)
+            if ts <= 0:
+                continue
+            yield line_no, raw, topic, d, ts
+
+
 def cmd_filter(args) -> int:
     src = Path(args.input)
     dst = Path(args.output)
     after_ms = parse_when(args.after) if args.after else None
     before_ms = parse_when(args.before) if args.before else None
+    start_byte = 0
+    if args.after_progress is not None:
+        start_byte = byte_offset_for_progress(src, float(args.after_progress))
+        total = src.stat().st_size
+        print(f"Byte cut at {args.after_progress}% → offset {start_byte:,} / {total:,} ({100*start_byte/total:.1f}%)")
 
-    if not after_ms and not before_ms:
-        print("Specify --after and/or --before", file=sys.stderr)
+    if not after_ms and not before_ms and start_byte == 0:
+        print("Specify --after, --before, and/or --after-progress", file=sys.stderr)
         return 1
 
     dst.parent.mkdir(parents=True, exist_ok=True)
@@ -127,7 +185,7 @@ def cmd_filter(args) -> int:
         print(f"Keep before: {ts_iso(before_ms)}")
 
     with dst.open("w") as out:
-        for line_no, raw, topic, d, ts in iter_messages(src):
+        for line_no, raw, topic, d, ts in iter_messages_from(src, start_byte):
             if after_ms is not None and ts < after_ms:
                 skipped += 1
                 continue
@@ -252,8 +310,10 @@ def main():
     p_f = sub.add_parser("filter", help="Keep only messages in a time window")
     p_f.add_argument("--input", "-i", required=True)
     p_f.add_argument("--output", "-o", required=True)
-    p_f.add_argument("--after", help="Keep messages >= this time (ISO, e.g. 2026-05-24 or 2026-05-24T00:00:00Z)")
+    p_f.add_argument("--after", help="Keep messages >= this time (ISO, e.g. 2026-05-23T23:01:00Z)")
     p_f.add_argument("--before", help="Keep messages < this time")
+    p_f.add_argument("--after-progress", type=float, dest="after_progress",
+                     help="Drop everything before this file position %%, same as Replay scrub slider (e.g. 9.9)")
 
     p_s = sub.add_parser("split", help="Split into two files at a cutoff time")
     p_s.add_argument("--input", "-i", required=True)
