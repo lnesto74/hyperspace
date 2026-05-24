@@ -6,17 +6,19 @@ Examples:
   # Inspect only (no writes)
   python3 analysis/split_capture.py inspect /opt/hyperspace/replay/raw_tracks.jsonl
 
-  # Keep from May 23 ~23:01 (timestamp cut)
+  # Trim from scrub slider position ONLY (recommended — matches Replay UI exactly)
+  # Do NOT combine --after-progress with --after; timestamps in file are UTC but
+  # the Replay panel shows local time, so a UTC --after cut will drop hours you want.
   python3 analysis/split_capture.py filter \
     --input /opt/hyperspace/replay/raw_tracks.jsonl \
-    --output /opt/hyperspace/replay/raw_tracks_may23_2301_onward.jsonl \
-    --after 2026-05-23T23:01:00Z
-
-  # Keep from ~9.9% byte position (matches Replay panel scrub slider)
-  python3 analysis/split_capture.py filter \
-    --input /opt/hyperspace/replay/raw_tracks.jsonl \
-    --output /opt/hyperspace/replay/raw_tracks_from_9p9pct.jsonl \
+    --output /opt/hyperspace/replay/raw_tracks_trimmed.jsonl \
     --after-progress 9.9
+
+  # Timestamp cut (UTC only — use if you know the exact UTC epoch in the file)
+  python3 analysis/split_capture.py filter \
+    --input /opt/hyperspace/replay/raw_tracks.jsonl \
+    --output /opt/hyperspace/replay/raw_tracks_from_utc_cut.jsonl \
+    --after 2026-05-23T15:03:00Z
 
   # Split into before/after a cutoff date
   python3 analysis/split_capture.py split \
