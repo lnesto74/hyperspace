@@ -42,6 +42,8 @@ export default class ReplayService {
       delivery: this.mqttService ? 'direct' : 'mqtt',
     };
     this._abort = null;
+    /** Resolves when the active playback loop exits (used to serialize stop → start). */
+    this._playbackDone = null;
     // In-memory cache of parsed point sets — keyed by absolute file path.
     // Eliminates the multi-second re-parse on every preview render.
     this._pointCache = new Map();
@@ -95,10 +97,15 @@ export default class ReplayService {
         .map(name => {
           const fp = path.join(this.replayDir, name);
           let size = 0;
-          try { size = fs.statSync(fp).size; } catch { /* ignore */ }
-          return { name, size, path: fp };
+          let mtimeMs = 0;
+          try {
+            const st = fs.statSync(fp);
+            size = st.size;
+            mtimeMs = st.mtimeMs;
+          } catch { /* ignore */ }
+          return { name, size, path: fp, mtimeMs };
         })
-        .sort((a, b) => a.name.localeCompare(b.name));
+        .sort((a, b) => b.mtimeMs - a.mtimeMs || a.name.localeCompare(b.name));
     } catch (err) {
       return [];
     }
@@ -122,6 +129,10 @@ export default class ReplayService {
   async stop() {
     if (this._abort) this._abort.aborted = true;
     this.state.running = false;
+    if (this._playbackDone) {
+      await this._playbackDone;
+      this._playbackDone = null;
+    }
   }
 
   /**
@@ -130,7 +141,9 @@ export default class ReplayService {
    * returns immediately and polls `status()` afterwards.
    */
   async start({ file, speed = 1, rewriteTimestamps = true, devicePrefix = 'replay-' } = {}) {
-    if (this.state.running) throw new Error('Replay already running. Stop it first.');
+    if (this.state.running || this._playbackDone) {
+      await this.stop();
+    }
     if (!file) throw new Error('file is required');
     const fullPath = path.isAbsolute(file) ? file : path.join(this.replayDir, file);
     if (!fs.existsSync(fullPath)) throw new Error(`File not found: ${fullPath}`);
@@ -141,6 +154,7 @@ export default class ReplayService {
     const abort = { aborted: false };
     this._abort = abort;
     const deliveryMode = this.mqttService ? 'direct' : 'mqtt';
+
     this.state = {
       running: true,
       file: path.basename(fullPath),
@@ -155,6 +169,11 @@ export default class ReplayService {
       bytesRead: 0,
       delivery: deliveryMode,
     };
+
+    console.log(`[Replay] Starting ${path.basename(fullPath)} (${this.state.totalBytes} bytes) at ${this.state.speed}×`);
+
+    let resolvePlayback;
+    this._playbackDone = new Promise((resolve) => { resolvePlayback = resolve; });
 
     const sleep = (ms) => new Promise(r => setTimeout(r, ms));
     const rl = readline.createInterface({ input: fs.createReadStream(fullPath), crlfDelay: Infinity });
@@ -226,7 +245,11 @@ export default class ReplayService {
       this.state.running = false;
       this._abort = null;
       try { rl.close(); } catch {}
+      resolvePlayback?.();
+      if (this._playbackDone) this._playbackDone = null;
     }
+
+    console.log(`[Replay] Finished ${path.basename(fullPath)} — ${this.state.messagesPublished} msgs`);
   }
 
   /**

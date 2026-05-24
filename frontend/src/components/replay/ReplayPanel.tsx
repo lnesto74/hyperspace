@@ -6,6 +6,7 @@ interface ReplayFile {
   name: string
   size: number
   path: string
+  mtimeMs?: number
 }
 
 interface ReplayStatus {
@@ -49,6 +50,12 @@ const formatBytes = (n: number) => {
   return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`
 }
 
+const formatFileAge = (mtimeMs?: number) => {
+  if (!mtimeMs) return ''
+  const d = new Date(mtimeMs)
+  return d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+}
+
 const RECORD_SOFT_CAP_BYTES = 500 * 1024 * 1024
 
 export default function ReplayPanel({ onClose }: ReplayPanelProps) {
@@ -70,28 +77,37 @@ export default function ReplayPanel({ onClose }: ReplayPanelProps) {
 
   const recording = !!recordStatus?.recording
 
-  const refreshFiles = useCallback(async () => {
+  const refreshFiles = useCallback(async (preferNewest = false) => {
     setLoading(true)
     setError(null)
     try {
       const res = await fetch(`${API_BASE}/api/replay/files`)
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const data = await res.json()
-      setFiles(data.files || [])
+      const list: ReplayFile[] = data.files || []
+      setFiles(list)
       setReplayDir(data.replayDir || '')
-      if (!selected && data.files?.[0]?.name) setSelected(data.files[0].name)
+      setSelected(prev => {
+        if (preferNewest && list[0]?.name) return list[0].name
+        if (prev && list.some(f => f.name === prev)) return prev
+        return list[0]?.name || ''
+      })
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : String(err))
     } finally {
       setLoading(false)
     }
-  }, [selected])
+  }, [])
 
   const refreshStatus = useCallback(async () => {
     try {
       const res = await fetch(`${API_BASE}/api/replay/status`)
       if (!res.ok) return
-      setStatus(await res.json())
+      const next: ReplayStatus = await res.json()
+      setStatus(next)
+      if (next.running && next.file) {
+        setSelected(next.file)
+      }
     } catch { /* ignore */ }
   }, [])
 
@@ -144,7 +160,7 @@ export default function ReplayPanel({ onClose }: ReplayPanelProps) {
       if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`)
       setRecordStatus(data.stopped || null)
       if (data.file?.name) setSelected(data.file.name)
-      await refreshFiles()
+      await refreshFiles(true)
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : String(err))
     } finally {
@@ -156,20 +172,28 @@ export default function ReplayPanel({ onClose }: ReplayPanelProps) {
     if (!selected) return
     setError(null)
     try {
+      // Ensure any prior replay fully stops before starting a different file.
+      if (status?.running) {
+        await fetch(`${API_BASE}/api/replay/stop`, { method: 'POST' })
+        await new Promise(r => setTimeout(r, 300))
+      }
       const res = await fetch(`${API_BASE}/api/replay/start`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ file: selected, speed, rewriteTimestamps: true }),
       })
+      const data = await res.json().catch(() => ({}))
       if (!res.ok) {
-        const err = await res.json().catch(() => ({}))
-        throw new Error(err.error || `HTTP ${res.status}`)
+        throw new Error(data.error || `HTTP ${res.status}`)
+      }
+      if (data.status?.file && data.status.file !== selected) {
+        throw new Error(`Server started "${data.status.file}" instead of "${selected}"`)
       }
       await refreshStatus()
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : String(err))
     }
-  }, [selected, speed, refreshStatus])
+  }, [selected, speed, refreshStatus, status?.running])
 
   const stop = useCallback(async () => {
     try {
@@ -181,6 +205,8 @@ export default function ReplayPanel({ onClose }: ReplayPanelProps) {
   }, [refreshStatus])
 
   const running = !!status?.running
+  const playingFile = status?.file || null
+  const selectionMismatch = running && playingFile && playingFile !== selected
   const mqttActive = recordStatus?.mqtt?.active ?? false
   const streamLive = recordStatus?.lastMessageAt
     ? (Date.now() - recordStatus.lastMessageAt) < 4000
@@ -304,9 +330,17 @@ export default function ReplayPanel({ onClose }: ReplayPanelProps) {
             >
               {files.length === 0 && <option value="">(no files in {replayDir || '/data/replay'})</option>}
               {files.map(f => (
-                <option key={f.name} value={f.name}>{f.name} ({formatBytes(f.size)})</option>
+                <option key={f.name} value={f.name}>
+                  {f.name} ({formatBytes(f.size)}{f.mtimeMs ? ` · ${formatFileAge(f.mtimeMs)}` : ''})
+                </option>
               ))}
             </select>
+            {running && playingFile && (
+              <div className="mt-1 text-[10px] text-amber-400">
+                Now playing: <span className="font-mono">{playingFile}</span>
+                {selectionMismatch && ' — stop replay to switch files'}
+              </div>
+            )}
           </div>
 
           <div>

@@ -19,10 +19,16 @@ export default function replayRoutes({ replayService, mqttRecordService, mqttSer
   router.post('/start', async (req, res) => {
     const { file, speed, rewriteTimestamps, devicePrefix } = req.body || {};
     try {
+      if (!file) return res.status(400).json({ error: 'file is required' });
+      // Fire-and-forget playback loop, but surface synchronous validation errors.
       replayService.start({ file, speed, rewriteTimestamps, devicePrefix })
-        .catch((err) => { console.error('[Replay] start failed:', err.message); });
-      await new Promise(r => setTimeout(r, 100));
-      res.json({ success: true, status: replayService.status() });
+        .catch((err) => { console.error('[Replay] playback failed:', err.message); });
+      await new Promise(r => setTimeout(r, 150));
+      const status = replayService.status();
+      if (!status.running) {
+        return res.status(400).json({ error: status.lastError || 'Replay failed to start' });
+      }
+      res.json({ success: true, status });
     } catch (err) {
       res.status(400).json({ error: err.message });
     }
