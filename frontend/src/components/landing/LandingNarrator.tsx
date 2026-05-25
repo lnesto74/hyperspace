@@ -53,9 +53,10 @@ export default function LandingNarrator({ episodes }: LandingNarratorProps) {
     setHeadline(fallback);
 
     // Build a compact summary for the AI
-    const summaryParts = episodes.slice(0, 5).map(ep => 
-      `${ep.category}: "${ep.title}" (${ep.severity} severity)`
-    );
+    const summaryParts = episodes.slice(0, 5).map(ep => {
+      const cat = ep.product_category ? ` [${ep.product_category}]` : '';
+      return `${ep.category}: "${ep.title}"${cat} (${ep.severity} severity)`;
+    });
     const prompt = `You are briefing a retail executive. Given these ${episodes.length} detected behavior episodes at venue "${venue.name}":\n${summaryParts.join('\n')}\n\nWrite ONE sentence (max 20 words) summarizing the most important takeaway. Neutral tone, no "we", no questions. Business impact focus.`;
 
     abortRef.current = new AbortController();

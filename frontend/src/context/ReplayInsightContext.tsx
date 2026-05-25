@@ -41,6 +41,7 @@ export interface NarrationPack {
   episode_id: string;
   episode_type: string;
   category: string;
+  product_category?: string | null;
   color: string;
   severity: 'high' | 'medium' | 'low';
   title: string;

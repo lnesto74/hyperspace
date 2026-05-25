@@ -8,6 +8,7 @@
  */
 
 import { computeConfidence, MIN_POPULATION } from '../BaselineTracker.js';
+import { resolveRoiCategoryLabel } from '../RoiCategoryResolver.js';
 
 const EPISODE_TYPE = 'BROWSE_NO_CONVERT_PROXY';
 const WINDOW_MS = 30 * 60 * 1000;
@@ -118,6 +119,7 @@ export class BrowseNoConvertDetector {
         .map(v => v.track_key);
 
       const zoneName = zone.name || zone.id.substring(0, 8);
+      const productCategory = resolveRoiCategoryLabel(this.mainDb, venueId, zone.id);
 
       episodes.push({
         id: `ep-${EPISODE_TYPE}-${windowStart}-${zone.id.substring(0, 8)}`,
@@ -133,6 +135,7 @@ export class BrowseNoConvertDetector {
         },
         features: {
           zone_name: zoneName,
+          product_category: productCategory || null,
           engaged_visitors: totalEngaged,
           converted_count: convertedCount,
           not_converted_count: notConvertedCount,
@@ -152,10 +155,16 @@ export class BrowseNoConvertDetector {
           },
         },
         confidence,
-        title: `Shoppers browsed ${zoneName} but did not follow through`,
-        business_summary: `${totalEngaged} shoppers engaged with ${zoneName} for an average of ${Math.round(avgBrowseTime / 60000)}min, but only ${convertedCount} (${Math.round(conversionProxy * 100)}%) proceeded to checkout. This signals product interest without purchase commitment.`,
+        title: productCategory
+          ? `Shoppers browsed ${productCategory} at ${zoneName} but did not follow through`
+          : `Shoppers browsed ${zoneName} but did not follow through`,
+        business_summary: productCategory
+          ? `${totalEngaged} shoppers engaged with ${productCategory} at ${zoneName} for an average of ${Math.round(avgBrowseTime / 60000)}min, but only ${convertedCount} (${Math.round(conversionProxy * 100)}%) proceeded to checkout. This signals interest in ${productCategory} without purchase commitment.`
+          : `${totalEngaged} shoppers engaged with ${zoneName} for an average of ${Math.round(avgBrowseTime / 60000)}min, but only ${convertedCount} (${Math.round(conversionProxy * 100)}%) proceeded to checkout. This signals product interest without purchase commitment.`,
         recommended_actions: [
-          'Review pricing or promotional clarity in this category',
+          productCategory
+            ? `Review pricing or promotional clarity for ${productCategory}`
+            : 'Review pricing or promotional clarity in this category',
           'Consider in-aisle conversion triggers (samples, demos)',
           'Evaluate product availability and stock levels',
         ],

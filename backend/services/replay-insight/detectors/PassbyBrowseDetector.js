@@ -9,6 +9,7 @@
  */
 
 import { computeConfidence, MIN_POPULATION } from '../BaselineTracker.js';
+import { resolveRoiCategoryLabel } from '../RoiCategoryResolver.js';
 
 const EPISODE_TYPE = 'HIGH_PASSBY_LOW_BROWSE';
 const WINDOW_MS = 30 * 60 * 1000; // 30-minute windows for shelf analysis
@@ -94,6 +95,7 @@ export class PassbyBrowseDetector {
         .map(v => v.track_key);
 
       const zoneName = zone.name || zone.id.substring(0, 8);
+      const productCategory = resolveRoiCategoryLabel(this.mainDb, venueId, zone.id);
 
       episodes.push({
         id: `ep-${EPISODE_TYPE}-${windowStart}-${zone.id.substring(0, 8)}`,
@@ -137,10 +139,16 @@ export class PassbyBrowseDetector {
           },
         },
         confidence,
-        title: `Shoppers passed ${zoneName} without engagement`,
-        business_summary: `${passByCount} of ${totalVisits} visitors (${Math.round(passByRate * 100)}%) walked past ${zoneName} without stopping. Browse rate: ${Math.round(browseRate * 100)}%. This suggests the category display is not capturing attention.`,
+        title: productCategory
+          ? `Shoppers passed ${productCategory} at ${zoneName} without engagement`
+          : `Shoppers passed ${zoneName} without engagement`,
+        business_summary: productCategory
+          ? `${passByCount} of ${totalVisits} visitors (${Math.round(passByRate * 100)}%) walked past ${productCategory} at ${zoneName} without stopping. Browse rate: ${Math.round(browseRate * 100)}%. This suggests the ${productCategory} display is not capturing attention.`
+          : `${passByCount} of ${totalVisits} visitors (${Math.round(passByRate * 100)}%) walked past ${zoneName} without stopping. Browse rate: ${Math.round(browseRate * 100)}%. This suggests the category display is not capturing attention.`,
         recommended_actions: [
-          `Review visual merchandising and signage for ${zoneName}`,
+          productCategory
+            ? `Review visual merchandising and signage for ${productCategory} at ${zoneName}`
+            : `Review visual merchandising and signage for ${zoneName}`,
           'Consider promotional displays or end-cap repositioning',
           'Evaluate product placement relative to traffic flow',
         ],

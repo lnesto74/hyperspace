@@ -7,6 +7,8 @@
  * No "we", no technical language, business-first phrasing.
  */
 
+import { resolveRoiCategoryLabel } from './RoiCategoryResolver.js';
+
 // Episode type → business-friendly category labels
 const EPISODE_CATEGORIES = {
   QUEUE_BUILDUP_SPIKE: 'Checkout Operations',
@@ -68,6 +70,14 @@ const EPISODE_SEVERITY = {
 };
 
 export class NarrationPackBuilder {
+  constructor(mainDb = null) {
+    this.mainDb = mainDb;
+  }
+
+  setMainDb(mainDb) {
+    this.mainDb = mainDb;
+  }
+
   /**
    * Build a narration pack for an episode
    * @param {Object} episode - Scored + enriched episode
@@ -76,6 +86,9 @@ export class NarrationPackBuilder {
   buildPack(episode) {
     const kpiCards = this._buildKpiCards(episode.kpi_deltas);
     const timeLabel = this._formatTimeLabel(episode.start_ts, episode.end_ts);
+    const productCategory = this._resolveProductCategory(episode);
+    const title = this._enrichTitle(episode, productCategory);
+    const businessSummary = this._enrichSummary(episode, productCategory);
 
     return {
       episode_id: episode.id,
@@ -83,10 +96,11 @@ export class NarrationPackBuilder {
       category: EPISODE_CATEGORIES[episode.episode_type] || 'General',
       color: EPISODE_COLORS[episode.episode_type] || '#6b7280',
       severity: EPISODE_SEVERITY[episode.episode_type] || 'low',
+      product_category: productCategory,
       
       // Display content
-      title: episode.title,
-      business_summary: episode.business_summary,
+      title,
+      business_summary: businessSummary,
       time_label: timeLabel,
       
       // KPI cards for the panel
@@ -205,6 +219,46 @@ export class NarrationPackBuilder {
   /**
    * Format time label for display
    */
+  _resolveProductCategory(episode) {
+    const fromFeatures = episode.features?.product_category;
+    if (typeof fromFeatures === 'string' && fromFeatures.trim()) return fromFeatures.trim();
+
+    const zoneId = episode.entities?.zone_ids?.[0]
+      || episode.highlight_zones?.[0]?.id;
+    if (!zoneId || !this.mainDb) return null;
+
+    return resolveRoiCategoryLabel(this.mainDb, episode.venue_id, zoneId);
+  }
+
+  _textIncludesCategory(text, category) {
+    if (!text || !category) return false;
+    return text.toLowerCase().includes(category.toLowerCase());
+  }
+
+  _enrichTitle(episode, productCategory) {
+    const title = episode.title || '';
+    if (!productCategory || this._textIncludesCategory(title, productCategory)) return title;
+
+    const zoneName = episode.features?.zone_name;
+    if (zoneName && title.includes(zoneName)) {
+      return title.replace(zoneName, `${productCategory} at ${zoneName}`);
+    }
+
+    return title;
+  }
+
+  _enrichSummary(episode, productCategory) {
+    const summary = episode.business_summary || '';
+    if (!productCategory || this._textIncludesCategory(summary, productCategory)) return summary;
+
+    const zoneName = episode.features?.zone_name;
+    if (zoneName && summary.includes(zoneName)) {
+      return summary.replace(zoneName, `${productCategory} at ${zoneName}`);
+    }
+
+    return summary;
+  }
+
   _formatTimeLabel(startTs, endTs) {
     const start = new Date(startTs);
     const end = new Date(endTs);

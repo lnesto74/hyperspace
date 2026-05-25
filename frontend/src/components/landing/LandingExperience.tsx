@@ -12,6 +12,8 @@ import { useReplayInsight, NarrationPack } from '../../context/ReplayInsightCont
 import type { CaptureScreenshotFn } from '../venue/MainViewport';
 import HistogramTimeline from './HistogramTimeline';
 import LandingNarrator from './LandingNarrator';
+import { highlightTerms, episodeHighlightTerms } from '../../utils/episodeTextUtils';
+import { ROI_CATEGORY_COLOR } from '../../utils/roiCategoryUtils';
 
 type Stage = 'black' | 'fade' | 'venue' | 'headline' | 'episodes' | 'ready';
 const STAGE_TIMINGS: Record<Stage, number> = { black: 0, fade: 200, venue: 800, headline: 1600, episodes: 2400, ready: 3200 };
@@ -57,6 +59,9 @@ function VenueListCard({ name, dimensions, onClick, index }: { name: string; dim
 function HeroSlide({ episode, screenshot, isActive, onClick }: { episode: NarrationPack; screenshot: string | null; isActive: boolean; onClick: () => void }) {
   const config = EPISODE_CONFIG[episode.episode_type] || { icon: Zap, label: episode.episode_type };
   const Icon = config.icon;
+  const productCategory = episode.product_category || (episode.features?.product_category as string | undefined) || null;
+  const highlightTermsList = episodeHighlightTerms(episode);
+
   return (
     <button
       onClick={onClick}
@@ -80,16 +85,27 @@ function HeroSlide({ episode, screenshot, isActive, onClick }: { episode: Narrat
       {/* Content */}
       <div className="relative h-full flex flex-col justify-end p-8 text-left">
         {/* Top badges */}
-        <div className="absolute top-6 left-8 right-8 flex items-center justify-between">
-          <div className="flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-semibold uppercase tracking-wider backdrop-blur-md" style={{ color: episode.color, backgroundColor: `${episode.color}25`, border: `1px solid ${episode.color}40` }}>
-            <Icon className="w-3.5 h-3.5" />{config.label}
+        <div className="absolute top-6 left-8 right-8 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2 min-w-0">
+            <div className="flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-semibold uppercase tracking-wider backdrop-blur-md shrink-0" style={{ color: episode.color, backgroundColor: `${episode.color}25`, border: `1px solid ${episode.color}40` }}>
+              <Icon className="w-3.5 h-3.5" />{config.label}
+            </div>
+            {productCategory && (
+              <div
+                className="px-3 py-1.5 rounded-full text-xs font-semibold backdrop-blur-md truncate max-w-[220px] shrink"
+                style={{ color: ROI_CATEGORY_COLOR, backgroundColor: 'rgba(252,211,77,0.15)', border: '1px solid rgba(252,211,77,0.35)' }}
+                title={productCategory}
+              >
+                {productCategory}
+              </div>
+            )}
           </div>
-          <span className="text-xs text-gray-300 bg-black/40 backdrop-blur-md px-3 py-1 rounded-full border border-white/10">{episode.time_label}</span>
+          <span className="text-xs text-gray-300 bg-black/40 backdrop-blur-md px-3 py-1 rounded-full border border-white/10 shrink-0">{episode.time_label}</span>
         </div>
 
         {/* Title */}
-        <h3 className="text-2xl font-bold text-white mb-3 leading-tight max-w-lg drop-shadow-lg">{episode.title}</h3>
-        <p className="text-sm text-gray-200 mb-4 max-w-lg line-clamp-2 leading-relaxed drop-shadow-md">{episode.business_summary}</p>
+        <h3 className="text-2xl font-bold text-white mb-3 leading-tight max-w-lg drop-shadow-lg">{highlightTerms(episode.title, highlightTermsList)}</h3>
+        <p className="text-sm text-gray-200 mb-4 max-w-lg line-clamp-2 leading-relaxed drop-shadow-md">{highlightTerms(episode.business_summary, highlightTermsList)}</p>
 
         {/* KPI chips */}
         <div className="flex flex-wrap gap-2 mb-2">

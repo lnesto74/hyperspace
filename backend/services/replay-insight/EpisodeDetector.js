@@ -78,6 +78,7 @@ export class EpisodeDetectorOrchestrator {
       // Initialize services
       this.baselineTracker = new BaselineTracker(this.mainDb, this.episodeStore);
       this.clipBuilder = new ReplayClipBuilder(this.mainDb);
+      this.narrationBuilder.setMainDb(this.mainDb);
       this.storyRecipeEngine = new StoryRecipeEngine(this.episodeStore);
 
       // Initialize detectors
