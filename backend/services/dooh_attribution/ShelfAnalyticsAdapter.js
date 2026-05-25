@@ -16,6 +16,8 @@ const SHELF_NAME_PATTERNS = [
   'shelf', 'display', 'gondola', 'rack', 'scaffale', 'regal', 'fridge', 'frigo',
   'banco', 'bancone', 'refriger', 'gastronomia', 'freezer', 'schematico',
 ];
+// Align with TrajectoryStorageService.MIN_VISIT_DURATION_MS — visits shorter than this are not stored.
+const SHELF_MIN_DWELL_MS = 1000;
 
 function parseJson(raw) {
   if (!raw) return null;
@@ -171,38 +173,79 @@ export class ShelfAnalyticsAdapter {
    * @param {Object} targetJson - {type:"shelf|category|brand|sku|slot", ids:[...]}
    * @returns {Object|null} First matching engagement or null
    */
+  /** Track keys may differ between exposure rows and zone_visits (reconciler vs raw id). */
+  _trackKeySuffix(trackKey) {
+    if (!trackKey) return '';
+    const idx = trackKey.indexOf(':');
+    return idx >= 0 ? trackKey.slice(idx + 1) : trackKey;
+  }
+
+  _visitEndTs(visit) {
+    if (visit.end_time != null) return visit.end_time;
+    return visit.start_time + (visit.duration_ms || 0);
+  }
+
+  /** Visit overlaps the post-exposure action window (not just start-in-window). */
+  _visitOverlapsWindow(visit, windowStart, windowEnd) {
+    const vEnd = this._visitEndTs(visit);
+    return visit.start_time <= windowEnd && vEnd >= windowStart;
+  }
+
+  _isQualifyingVisit(visit) {
+    return (
+      Number(visit.is_dwell) === 1
+      || Number(visit.is_engagement) === 1
+      || (visit.duration_ms || 0) >= SHELF_MIN_DWELL_MS
+    );
+  }
+
+  _getVisitsForTrack(venueId, trackKey, windowStart, windowEnd) {
+    const suffix = this._trackKeySuffix(trackKey);
+    const matchesWindow = (v) => this._visitOverlapsWindow(v, windowStart, windowEnd);
+
+    if (this._zoneVisitsIndex) {
+      const seen = new Set();
+      const merged = [];
+      const keysToTry = new Set([trackKey]);
+      if (suffix) {
+        for (const key of this._zoneVisitsIndex.keys()) {
+          if (key === trackKey || key.endsWith(`:${suffix}`) || key === suffix) {
+            keysToTry.add(key);
+          }
+        }
+      }
+      for (const key of keysToTry) {
+        for (const v of this._zoneVisitsIndex.get(key) || []) {
+          if (seen.has(v.id)) continue;
+          if (!matchesWindow(v)) continue;
+          seen.add(v.id);
+          merged.push(v);
+        }
+      }
+      merged.sort((a, b) => a.start_time - b.start_time);
+      return merged;
+    }
+
+    return this.db.prepare(`
+      SELECT 
+        zv.id, zv.roi_id, zv.track_key, zv.start_time, zv.end_time,
+        zv.duration_ms, zv.is_dwell, zv.is_engagement,
+        r.name as roi_name, r.metadata_json
+      FROM zone_visits zv
+      JOIN regions_of_interest r ON zv.roi_id = r.id
+      WHERE zv.venue_id = ?
+        AND (zv.track_key = ? OR zv.track_key LIKE ? OR zv.track_key = ?)
+        AND zv.start_time <= ?
+        AND COALESCE(zv.end_time, zv.start_time + COALESCE(zv.duration_ms, 0)) >= ?
+      ORDER BY zv.start_time ASC
+    `).all(venueId, trackKey, `%:${suffix}`, suffix, windowEnd, windowStart);
+  }
+
   queryEngagementsForTrack(venueId, trackKey, startTs, endTs, targetJson) {
     const { type, ids } = targetJson;
-    
-    const SHELF_MIN_DWELL_MS = 3000;
-    const isQualifyingVisit = (v) => (
-      Number(v.is_dwell) === 1 || Number(v.is_engagement) === 1 || (v.duration_ms || 0) >= SHELF_MIN_DWELL_MS
-    );
 
-    // Use pre-loaded zone visits if available (batch mode)
-    let visits;
-    if (this._zoneVisitsIndex) {
-      const allVisits = this._zoneVisitsIndex.get(trackKey) || [];
-      visits = allVisits.filter(v =>
-        v.start_time >= startTs && v.start_time <= endTs && isQualifyingVisit(v)
-      );
-    } else {
-      // Fallback: individual query
-      visits = this.db.prepare(`
-        SELECT 
-          zv.id, zv.roi_id, zv.start_time, zv.end_time,
-          zv.duration_ms, zv.is_dwell, zv.is_engagement,
-          r.name as roi_name, r.metadata_json
-        FROM zone_visits zv
-        JOIN regions_of_interest r ON zv.roi_id = r.id
-        WHERE zv.venue_id = ? 
-          AND zv.track_key = ?
-          AND zv.start_time >= ?
-          AND zv.start_time <= ?
-          AND (zv.is_dwell = 1 OR zv.is_engagement = 1 OR zv.duration_ms >= ?)
-        ORDER BY zv.start_time ASC
-      `).all(venueId, trackKey, startTs, endTs, SHELF_MIN_DWELL_MS);
-    }
+    const visits = this._getVisitsForTrack(venueId, trackKey, startTs, endTs)
+      .filter(v => this._isQualifyingVisit(v));
 
     for (const visit of visits) {
       const metadata = parseJson(visit.metadata_json) || {};
@@ -415,8 +458,8 @@ export class ShelfAnalyticsAdapter {
       ORDER BY timestamp ASC
     `).all(venueId, trackKey, startTs, endTs);
 
-    const ENGAGEMENT_DISTANCE = 1.5; // meters
-    const MIN_DWELL_MS = 2000; // 2 seconds minimum
+    const ENGAGEMENT_DISTANCE = 2.5; // meters — shelf engagement zones are wider than fixture center
+    const MIN_DWELL_MS = SHELF_MIN_DWELL_MS;
 
     for (const shelf of shelves) {
       let dwellStart = null;

@@ -572,6 +572,35 @@ router.get('/kpis/summary', (req, res) => {
 // ============================================
 
 /**
+ * GET /api/dooh-attribution/debug/match-audit - Diagnose zero conversion issues
+ */
+router.get('/debug/match-audit', (req, res) => {
+  try {
+    const db = req.app.get('db');
+    const { venueId, campaignId, startTs, endTs } = req.query;
+
+    if (!venueId || !campaignId || !startTs || !endTs) {
+      return res.status(400).json({
+        error: 'venueId, campaignId, startTs, and endTs are required',
+      });
+    }
+
+    const engine = new DoohAttributionEngine(db);
+    const audit = engine.auditConversionMatching(
+      venueId,
+      campaignId,
+      parseInt(startTs, 10),
+      parseInt(endTs, 10),
+    );
+
+    res.json(audit);
+  } catch (err) {
+    console.error('❌ Failed to run DOOH match audit:', err.message);
+    res.status(500).json({ error: 'Failed to run match audit', message: err.message });
+  }
+});
+
+/**
  * GET /api/dooh-attribution/debug/events - Get attribution events for debugging
  */
 router.get('/debug/events', (req, res) => {

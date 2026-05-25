@@ -365,6 +365,64 @@ describe('Target Matching Logic', () => {
     expect(result.roiId).toBe('roi-shelf-1');
     expect(result.shelfId).toBe('shelf-1');
   });
+
+  it('should match visit that overlaps action window even if it started before exposure end', () => {
+    adapter.initTargetCache('venue-1', {
+      type: 'shelf',
+      ids: ['shelf-1'],
+      engagementRoiIds: ['roi-shelf-1'],
+    });
+
+    db.exec(`
+      INSERT OR REPLACE INTO zone_visits (
+        id, venue_id, roi_id, track_key, start_time, end_time, duration_ms,
+        is_dwell, is_engagement
+      ) VALUES (
+        'visit-overlap', 'venue-1', 'roi-shelf-1', 'edge:person-2',
+        98000, 103000, 5000, 0, 0
+      );
+    `);
+
+    const result = adapter.queryEngagementsForTrack(
+      'venue-1',
+      'edge:person-2',
+      99000,
+      120000,
+      { type: 'shelf', ids: ['shelf-1'], engagementRoiIds: ['roi-shelf-1'] },
+    );
+
+    expect(result).not.toBeNull();
+    expect(result.roiId).toBe('roi-shelf-1');
+  });
+
+  it('should match zone visit when track key suffix matches reconciled id alias', () => {
+    adapter.initTargetCache('venue-1', {
+      type: 'shelf',
+      ids: ['shelf-1'],
+      engagementRoiIds: ['roi-shelf-1'],
+    });
+
+    db.exec(`
+      INSERT OR REPLACE INTO zone_visits (
+        id, venue_id, roi_id, track_key, start_time, end_time, duration_ms,
+        is_dwell, is_engagement
+      ) VALUES (
+        'visit-alias', 'venue-1', 'roi-shelf-1', 'other-device:person-9',
+        100000, 105000, 4000, 0, 0
+      );
+    `);
+
+    const result = adapter.queryEngagementsForTrack(
+      'venue-1',
+      'lidar-edge-001:person-9',
+      99000,
+      120000,
+      { type: 'shelf', ids: ['shelf-1'], engagementRoiIds: ['roi-shelf-1'] },
+    );
+
+    expect(result).not.toBeNull();
+    expect(result.roiId).toBe('roi-shelf-1');
+  });
 });
 
 // ============================================

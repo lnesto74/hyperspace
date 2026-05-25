@@ -11,7 +11,7 @@
 
 import { v4 as uuidv4 } from 'uuid';
 import { ShelfAnalyticsAdapter } from './ShelfAnalyticsAdapter.js';
-import { clearCampaignAttribution } from './CampaignTargetResolver.js';
+import { resolveCampaignTarget, clearCampaignAttribution } from './CampaignTargetResolver.js';
 import { pointInPolygon, distance2D } from '../dooh/DoohKpiEngine.js';
 
 // Default campaign parameters
@@ -674,7 +674,7 @@ export class DoohAttributionEngine {
     }
 
     const params = campaign.params;
-    const target = campaign.target;
+    const target = resolveCampaignTarget(this.db, venueId, campaign.target);
     const actionWindowMs = params.action_window_minutes * 60 * 1000;
     const bucketMs = params.match_time_bucket_min * 60 * 1000;
     const prePostWindowMs = (params.pre_post_window_s || 30) * 1000;
@@ -1217,6 +1217,101 @@ export class DoohAttributionEngine {
     });
 
     insertMany(kpis);
+  }
+
+  /**
+   * Diagnostic: why conversions may be zero for a campaign/time range.
+   */
+  auditConversionMatching(venueId, campaignId, startTs, endTs) {
+    const campaign = this.getCampaign(campaignId);
+    if (!campaign) throw new Error(`Campaign ${campaignId} not found`);
+
+    const target = resolveCampaignTarget(this.db, venueId, campaign.target);
+    this.shelfAdapter.initTargetCache(venueId, target);
+    const engagementRoiIds = [...(this.shelfAdapter._targetEngagementRoiIds || [])];
+    const actionWindowMs = (campaign.params.action_window_minutes || 15) * 60 * 1000;
+
+    const events = this.db.prepare(`
+      SELECT id, track_key, exposure_end_ts, converted
+      FROM dooh_attribution_events
+      WHERE campaign_id = ? AND exposure_end_ts >= ? AND exposure_end_ts <= ?
+    `).all(campaignId, startTs, endTs);
+
+    const roiPlaceholders = engagementRoiIds.length
+      ? engagementRoiIds.map(() => '?').join(',')
+      : null;
+
+    let visitsOnTarget = 0;
+    let visitsOverlap = 0;
+    let convertedStored = 0;
+    const sampleNonMatches = [];
+
+    for (const event of events) {
+      if (event.converted === 1) convertedStored++;
+
+      const windowEnd = event.exposure_end_ts + actionWindowMs;
+      const suffix = event.track_key.includes(':')
+        ? event.track_key.slice(event.track_key.indexOf(':') + 1)
+        : event.track_key;
+
+      const visitRows = this.db.prepare(`
+        SELECT id, roi_id, track_key, start_time, end_time, duration_ms, is_dwell, is_engagement
+        FROM zone_visits
+        WHERE venue_id = ?
+          AND (track_key = ? OR track_key LIKE ? OR track_key = ?)
+          AND start_time <= ?
+          AND COALESCE(end_time, start_time + COALESCE(duration_ms, 0)) >= ?
+      `).all(venueId, event.track_key, `%:${suffix}`, suffix, windowEnd, event.exposure_end_ts);
+
+      const onTarget = roiPlaceholders
+        ? visitRows.filter(v => engagementRoiIds.includes(v.roi_id))
+        : [];
+      if (onTarget.length > 0) visitsOnTarget++;
+
+      const overlap = onTarget.filter(v =>
+        (Number(v.is_dwell) === 1 || Number(v.is_engagement) === 1 || (v.duration_ms || 0) >= 1000)
+      );
+      if (overlap.length > 0) visitsOverlap++;
+
+      if (sampleNonMatches.length < 5 && visitRows.length === 0) {
+        sampleNonMatches.push({
+          trackKey: event.track_key,
+          exposureEndTs: event.exposure_end_ts,
+          reason: 'no_zone_visits_for_track_in_action_window',
+        });
+      } else if (sampleNonMatches.length < 5 && visitRows.length > 0 && overlap.length === 0) {
+        sampleNonMatches.push({
+          trackKey: event.track_key,
+          exposureEndTs: event.exposure_end_ts,
+          reason: 'visits_found_but_not_on_target_or_too_short',
+          visitCount: visitRows.length,
+          targetVisitCount: onTarget.length,
+        });
+      }
+    }
+
+    const targetVisitTotals = roiPlaceholders
+      ? this.db.prepare(`
+          SELECT COUNT(*) as c FROM zone_visits
+          WHERE venue_id = ? AND roi_id IN (${roiPlaceholders})
+            AND start_time <= ? AND COALESCE(end_time, start_time + COALESCE(duration_ms, 0)) >= ?
+        `).get(venueId, ...engagementRoiIds, endTs, startTs)
+      : { c: 0 };
+
+    return {
+      campaign: campaign.name,
+      targetType: target.type,
+      targetShelfIds: target.ids,
+      engagementRoiIds,
+      engagementRoiCount: engagementRoiIds.length,
+      attributionEvents: events.length,
+      storedConversions: convertedStored,
+      eventsWithTargetVisits: visitsOnTarget,
+      eventsWithQualifyingTargetVisits: visitsOverlap,
+      totalTargetRoiVisitsInRange: targetVisitTotals.c || 0,
+      actionWindowMinutes: campaign.params.action_window_minutes,
+      sampleNonMatches,
+    };
   }
 
   /**
