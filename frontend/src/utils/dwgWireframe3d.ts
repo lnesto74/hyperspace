@@ -2,34 +2,91 @@ import * as THREE from 'three'
 import type { VenueObject } from '../types'
 import { getDrawableFixtureOutline, venueObjectsToFixtures } from './venueFloorPlanMap'
 
-const DEFAULT_WIRE_COLOR = 0x00d2ff
+const CYAN = 0x00e5ff
+const CYAN_FILL = 0x00bcd4
+
+/** Parallel XZ planes — heatmap bars float on the pedestal plane (Y ≈ 0.5). */
+export type DwgWireframePlane = 'floor' | 'pedestal'
+
+export const DWG_WIREFRAME_PLANE_Y: Record<DwgWireframePlane, number> = {
+  floor: 0.035,
+  pedestal: 0.47,
+}
 
 export interface DwgWireframe3DOptions {
-  /** Ground-plane height (world Y). Keep below elevated heatmap tiles. */
-  y?: number
-  color?: number
-  opacity?: number
-  /** Subtle ground fill like FloorPlanMiniMap */
+  plane?: DwgWireframePlane
+  /** High-contrast white strokes + dark halo (recommended). */
+  highContrast?: boolean
   showFill?: boolean
+}
+
+function addEdgeBar(
+  group: THREE.Group,
+  a: { x: number; z: number },
+  b: { x: number; z: number },
+  y: number,
+  width: number,
+  color: number,
+  tag: string,
+) {
+  const dx = b.x - a.x
+  const dz = b.z - a.z
+  const len = Math.hypot(dx, dz)
+  if (len < 0.02) return
+
+  const geom = new THREE.BoxGeometry(len, 0.028, width)
+  const mat = new THREE.MeshBasicMaterial({
+    color,
+    depthWrite: true,
+    toneMapped: false,
+  })
+  const mesh = new THREE.Mesh(geom, mat)
+  mesh.position.set((a.x + b.x) / 2, y, (a.z + b.z) / 2)
+  mesh.rotation.y = Math.atan2(dz, dx)
+  mesh.userData.isDwgWireframe = true
+  mesh.userData.dwgPart = tag
+  mesh.renderOrder = tag === 'halo' ? 1 : 2
+  group.add(mesh)
+}
+
+function addPolygonEdges(
+  group: THREE.Group,
+  outline: { x: number; z: number }[],
+  y: number,
+  lineWidth: number,
+  color: number,
+  tag: string,
+) {
+  for (let i = 0; i < outline.length; i++) {
+    addEdgeBar(group, outline[i], outline[(i + 1) % outline.length], y, lineWidth, color, tag)
+  }
 }
 
 /**
  * Build a 3D DWG fixture wireframe group in venue coordinates (X/Z floor, Y up).
- * Uses the same footprint logic as FloorPlanMiniMap / Business Reporting.
+ * Uses solid extruded edges (not 1px GL lines) for readability in the 3D heatmap.
  */
 export function buildDwgWireframeGroup(
   objects: VenueObject[],
   options: DwgWireframe3DOptions = {},
 ): THREE.Group {
   const {
-    y = 0.02,
-    color = DEFAULT_WIRE_COLOR,
-    opacity = 0.55,
+    plane = 'floor',
+    highContrast = true,
     showFill = true,
   } = options
 
+  const y = DWG_WIREFRAME_PLANE_Y[plane]
+  const strokeColor = highContrast ? 0xf0fdff : CYAN
+  const haloColor = highContrast ? 0x061018 : 0x003344
+  const lineWidth = highContrast ? 0.14 : 0.1
+  const haloWidth = lineWidth * 1.75
+  const fillColor = highContrast ? 0x1a3a4a : CYAN_FILL
+  const fillOpacity = highContrast ? 0.35 : 0.22
+
   const group = new THREE.Group()
   group.name = 'DwgWireframeOverlay'
+  group.userData.plane = plane
 
   const fixtures = venueObjectsToFixtures(objects)
 
@@ -47,49 +104,28 @@ export function buildDwgWireframeGroup(
 
       const fillGeom = new THREE.ShapeGeometry(shape)
       fillGeom.rotateX(Math.PI / 2)
-      fillGeom.translate(0, y - 0.004, 0)
+      fillGeom.translate(0, y - 0.012, 0)
 
       const fillMat = new THREE.MeshBasicMaterial({
-        color,
+        color: fillColor,
         transparent: true,
-        opacity: opacity * 0.15,
+        opacity: fillOpacity,
         depthWrite: false,
         side: THREE.DoubleSide,
+        toneMapped: false,
       })
       const fillMesh = new THREE.Mesh(fillGeom, fillMat)
-      fillMesh.renderOrder = -2
+      fillMesh.renderOrder = 0
       fillMesh.userData.isDwgWireframe = true
+      fillMesh.userData.dwgPart = 'fill'
       group.add(fillMesh)
     }
 
-    const points = outline.map(p => new THREE.Vector3(p.x, y, p.z))
-    points.push(points[0].clone())
-    const lineGeom = new THREE.BufferGeometry().setFromPoints(points)
-    const lineMat = new THREE.LineBasicMaterial({
-      color,
-      transparent: true,
-      opacity,
-      depthWrite: false,
-    })
-    const line = new THREE.Line(lineGeom, lineMat)
-    line.renderOrder = -1
-    line.userData.isDwgWireframe = true
-    group.add(line)
+    addPolygonEdges(group, outline, y - 0.006, haloWidth, haloColor, 'halo')
+    addPolygonEdges(group, outline, y, lineWidth, strokeColor, 'stroke')
   }
 
   return group
-}
-
-export function setDwgWireframeOpacity(group: THREE.Group, opacity: number) {
-  group.traverse(obj => {
-    if (!obj.userData.isDwgWireframe) return
-    const mat = (obj as THREE.Mesh | THREE.Line).material
-    if (mat && 'opacity' in mat) {
-      const m = mat as THREE.Material & { opacity: number }
-      m.opacity = obj instanceof THREE.Mesh ? opacity * 0.15 : opacity
-      m.transparent = true
-    }
-  })
 }
 
 export function disposeObject3D(root: THREE.Object3D) {

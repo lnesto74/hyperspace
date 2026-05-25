@@ -9,7 +9,7 @@ import { Vector2 } from '../../types'
 import {
   buildDwgWireframeGroup,
   disposeObject3D,
-  setDwgWireframeOpacity as applyDwgWireframeOpacity,
+  type DwgWireframePlane,
 } from '../../utils/dwgWireframe3d'
 
 const KPI_OPTIONS = [
@@ -114,7 +114,7 @@ export default function HeatmapViewerModal({ isOpen, onClose }: HeatmapViewerMod
   const [selectedZoneIds, setSelectedZoneIds] = useState<Set<string>>(new Set())
   const [showZoneDropdown, setShowZoneDropdown] = useState(false)
   const [showDwgWireframe, setShowDwgWireframe] = useState(true)
-  const [dwgWireframeOpacity, setDwgWireframeOpacity] = useState(0.55)
+  const [dwgWireframePlane, setDwgWireframePlane] = useState<DwgWireframePlane>('pedestal')
   
   const canvasRef = useRef<HTMLDivElement>(null)
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null)
@@ -125,6 +125,7 @@ export default function HeatmapViewerModal({ isOpen, onClose }: HeatmapViewerMod
   const zoneGroupRef = useRef<THREE.Group | null>(null)
   const dwgWireframeGroupRef = useRef<THREE.Group | null>(null)
   const floorRef = useRef<THREE.Mesh | null>(null)
+  const gridHelperRef = useRef<THREE.GridHelper | null>(null)
   const animationFrameRef = useRef<number | null>(null)
 
   // Load heatmap when modal opens
@@ -194,6 +195,7 @@ export default function HeatmapViewerModal({ isOpen, onClose }: HeatmapViewerMod
     ;(gridHelper.material as THREE.Material).opacity = 0.15
     ;(gridHelper.material as THREE.Material).transparent = true
     scene.add(gridHelper)
+    gridHelperRef.current = gridHelper
 
     // Groups for dynamic content
     const heatmapGroup = new THREE.Group()
@@ -250,18 +252,36 @@ export default function HeatmapViewerModal({ isOpen, onClose }: HeatmapViewerMod
     if (objects.length === 0) return
 
     const overlay = buildDwgWireframeGroup(objects, {
-      y: 0.02,
-      opacity: dwgWireframeOpacity,
+      plane: dwgWireframePlane,
+      highContrast: true,
       showFill: true,
     })
     host.add(overlay)
-  }, [isOpen, objects, dwgWireframeOpacity])
+  }, [isOpen, objects, dwgWireframePlane])
 
+  // Dim base floor/grid when DWG underlay is on so strokes pop
   useEffect(() => {
-    if (!dwgWireframeGroupRef.current) return
-    dwgWireframeGroupRef.current.visible = showDwgWireframe
-    applyDwgWireframeOpacity(dwgWireframeGroupRef.current, dwgWireframeOpacity)
-  }, [showDwgWireframe, dwgWireframeOpacity])
+    const floor = floorRef.current
+    const grid = gridHelperRef.current
+    if (!floor) return
+
+    if (showDwgWireframe && objects.length > 0) {
+      const mat = floor.material as THREE.MeshStandardMaterial
+      mat.opacity = dwgWireframePlane === 'floor' ? 0.35 : 0.55
+      mat.transparent = true
+      if (grid) {
+        grid.visible = dwgWireframePlane !== 'floor'
+      }
+    } else {
+      const mat = floor.material as THREE.MeshStandardMaterial
+      mat.opacity = 0.8
+      if (grid) grid.visible = true
+    }
+
+    if (dwgWireframeGroupRef.current) {
+      dwgWireframeGroupRef.current.visible = showDwgWireframe
+    }
+  }, [showDwgWireframe, dwgWireframePlane, objects.length])
 
   // Filter tiles by selected zones
   const filteredTiles = useMemo(() => {
@@ -621,7 +641,7 @@ export default function HeatmapViewerModal({ isOpen, onClose }: HeatmapViewerMod
             <span className="text-xs text-white w-7">{Math.round(opacity * 100)}%</span>
           </div>
 
-          {/* DWG wireframe overlay */}
+          {/* DWG wireframe — solid strokes on a parallel plane (no opacity slider) */}
           <div className="flex items-center gap-2 flex-1 min-w-0">
             <button
               type="button"
@@ -637,17 +657,16 @@ export default function HeatmapViewerModal({ isOpen, onClose }: HeatmapViewerMod
               {showDwgWireframe ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5" />}
               DWG
             </button>
-            <input
-              type="range"
-              min="0.1"
-              max="1"
-              step="0.05"
-              value={dwgWireframeOpacity}
-              onChange={(e) => setDwgWireframeOpacity(parseFloat(e.target.value))}
+            <select
+              value={dwgWireframePlane}
+              onChange={(e) => setDwgWireframePlane(e.target.value as DwgWireframePlane)}
               disabled={!showDwgWireframe || objects.length === 0}
-              className="w-20 h-1.5 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-cyan-500 disabled:opacity-40"
-            />
-            <span className="text-xs text-white w-7">{Math.round(dwgWireframeOpacity * 100)}%</span>
+              className="bg-gray-800 border border-gray-600 rounded px-2 py-1 text-xs text-white disabled:opacity-40"
+              title="Ground = floor plane; Pedestal = base of heatmap bars (recommended)"
+            >
+              <option value="pedestal">Pedestal plane</option>
+              <option value="floor">Ground plane</option>
+            </select>
           </div>
 
           {/* Focus Button */}
