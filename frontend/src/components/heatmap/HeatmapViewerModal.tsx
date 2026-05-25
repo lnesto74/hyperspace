@@ -1,11 +1,16 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
-import { X, Thermometer, Calendar, BarChart3, Eye, ChevronDown, Check, Layers } from 'lucide-react'
+import { X, Thermometer, Calendar, BarChart3, Eye, EyeOff, ChevronDown, Check, Layers, Map } from 'lucide-react'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { useHeatmap } from '../../context/HeatmapContext'
 import { useRoi } from '../../context/RoiContext'
 import { useVenue } from '../../context/VenueContext'
 import { Vector2 } from '../../types'
+import {
+  buildDwgWireframeGroup,
+  disposeObject3D,
+  setDwgWireframeOpacity as applyDwgWireframeOpacity,
+} from '../../utils/dwgWireframe3d'
 
 const KPI_OPTIONS = [
   { value: 'visits', label: 'Visits' },
@@ -90,7 +95,7 @@ function getHeatColor(value: number, max: number): THREE.Color {
 }
 
 export default function HeatmapViewerModal({ isOpen, onClose }: HeatmapViewerModalProps) {
-  const { venue } = useVenue()
+  const { venue, objects } = useVenue()
   const { regions } = useRoi()
   const {
     isLoading,
@@ -116,6 +121,7 @@ export default function HeatmapViewerModal({ isOpen, onClose }: HeatmapViewerMod
   const controlsRef = useRef<OrbitControls | null>(null)
   const heatmapGroupRef = useRef<THREE.Group | null>(null)
   const zoneGroupRef = useRef<THREE.Group | null>(null)
+  const dwgWireframeGroupRef = useRef<THREE.Group | null>(null)
   const floorRef = useRef<THREE.Mesh | null>(null)
   const animationFrameRef = useRef<number | null>(null)
 
@@ -196,6 +202,10 @@ export default function HeatmapViewerModal({ isOpen, onClose }: HeatmapViewerMod
     scene.add(zoneGroup)
     zoneGroupRef.current = zoneGroup
 
+    const dwgWireframeGroup = new THREE.Group()
+    scene.add(dwgWireframeGroup)
+    dwgWireframeGroupRef.current = dwgWireframeGroup
+
     // Animation loop
     const animate = () => {
       animationFrameRef.current = requestAnimationFrame(animate)
@@ -223,6 +233,33 @@ export default function HeatmapViewerModal({ isOpen, onClose }: HeatmapViewerMod
       container.removeChild(renderer.domElement)
     }
   }, [isOpen, venue])
+
+  // DWG wireframe overlay (same footprints as Business Reporting floor plan)
+  useEffect(() => {
+    if (!isOpen || !dwgWireframeGroupRef.current) return
+    const host = dwgWireframeGroupRef.current
+
+    while (host.children.length > 0) {
+      const child = host.children[0]
+      disposeObject3D(child)
+      host.remove(child)
+    }
+
+    if (objects.length === 0) return
+
+    const overlay = buildDwgWireframeGroup(objects, {
+      y: 0.02,
+      opacity: dwgWireframeOpacity,
+      showFill: true,
+    })
+    host.add(overlay)
+  }, [isOpen, objects, dwgWireframeOpacity])
+
+  useEffect(() => {
+    if (!dwgWireframeGroupRef.current) return
+    dwgWireframeGroupRef.current.visible = showDwgWireframe
+    applyDwgWireframeOpacity(dwgWireframeGroupRef.current, dwgWireframeOpacity)
+  }, [showDwgWireframe, dwgWireframeOpacity])
 
   // Filter tiles by selected zones
   const filteredTiles = useMemo(() => {
@@ -566,10 +603,10 @@ export default function HeatmapViewerModal({ isOpen, onClose }: HeatmapViewerMod
             </select>
           </div>
 
-          {/* Opacity */}
-          <div className="flex items-center gap-2 flex-1">
+          {/* Heatmap tile opacity */}
+          <div className="flex items-center gap-2">
             <Eye className="w-4 h-4 text-gray-400" />
-            <span className="text-xs text-gray-400">Opacity:</span>
+            <span className="text-xs text-gray-400">Tiles:</span>
             <input
               type="range"
               min="0.2"
@@ -577,9 +614,38 @@ export default function HeatmapViewerModal({ isOpen, onClose }: HeatmapViewerMod
               step="0.05"
               value={opacity}
               onChange={(e) => setOpacity(parseFloat(e.target.value))}
-              className="w-24 h-1.5 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-orange-500"
+              className="w-20 h-1.5 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-orange-500"
             />
-            <span className="text-xs text-white w-8">{Math.round(opacity * 100)}%</span>
+            <span className="text-xs text-white w-7">{Math.round(opacity * 100)}%</span>
+          </div>
+
+          {/* DWG wireframe overlay */}
+          <div className="flex items-center gap-2 flex-1 min-w-0">
+            <button
+              type="button"
+              onClick={() => setShowDwgWireframe(v => !v)}
+              className={`flex items-center gap-1.5 px-2 py-1 rounded text-xs transition-colors ${
+                showDwgWireframe
+                  ? 'bg-cyan-900/40 text-cyan-300 border border-cyan-700/50'
+                  : 'text-gray-500 border border-gray-700 hover:text-gray-300'
+              }`}
+              title="Toggle DWG floor plan wireframe"
+            >
+              <Map className="w-3.5 h-3.5" />
+              {showDwgWireframe ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5" />}
+              DWG
+            </button>
+            <input
+              type="range"
+              min="0.1"
+              max="1"
+              step="0.05"
+              value={dwgWireframeOpacity}
+              onChange={(e) => setDwgWireframeOpacity(parseFloat(e.target.value))}
+              disabled={!showDwgWireframe || objects.length === 0}
+              className="w-20 h-1.5 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-cyan-500 disabled:opacity-40"
+            />
+            <span className="text-xs text-white w-7">{Math.round(dwgWireframeOpacity * 100)}%</span>
           </div>
 
           {/* Focus Button */}
