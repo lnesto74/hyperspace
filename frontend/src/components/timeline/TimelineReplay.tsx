@@ -67,12 +67,19 @@ export default function TimelineReplay({ venueId, isOpen, onTimeChange }: Timeli
     return () => setReplayMode(false)
   }, [isOpen, timelineData.length, setReplayMode])
 
-  // Fetch ROIs/zones for the venue
+  // Fetch ROIs/zones for the venue (all layouts — includes DWG smart-kpi shelf zones)
   useEffect(() => {
     if (!venueId) return
-    fetch(`${API_BASE}/api/venues/${venueId}/regions`)
-      .then(res => res.json())
-      .then(data => setZones(data.regions || []))
+    fetch(`${API_BASE}/api/venues/${venueId}/roi?all=true`)
+      .then(res => res.ok ? res.json() : [])
+      .then(data => {
+        const list = Array.isArray(data) ? data : []
+        setZones(list.map((r: { id: string; name: string; color: string }) => ({
+          id: r.id,
+          name: r.name,
+          color: r.color,
+        })))
+      })
       .catch(err => console.error('Failed to fetch zones:', err))
   }, [venueId])
 

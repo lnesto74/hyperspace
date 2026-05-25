@@ -219,13 +219,26 @@ function getCachedRois(venueId) {
   if (cached && now - cached.timestamp < ROI_CACHE_TTL_MS) {
     return cached.rois;
   }
-  const rois = db.prepare(`SELECT id, name, vertices, color FROM regions_of_interest WHERE venue_id = ?`).all(venueId);
+  const rois = db.prepare(`SELECT id, name, vertices, color, metadata_json FROM regions_of_interest WHERE venue_id = ?`).all(venueId);
   const parsedRois = rois.map(r => {
     const vertices = JSON.parse(r.vertices);
-    return { ...r, vertices, bbox: roiBBox(vertices) };
+    let metadata = null;
+    if (r.metadata_json) {
+      try { metadata = JSON.parse(r.metadata_json); } catch { /* ignore */ }
+    }
+    return { ...r, vertices, metadata, bbox: roiBBox(vertices) };
   });
   roiCache.set(venueId, { rois: parsedRois, timestamp: now });
   return parsedRois;
+}
+
+function shouldRecordKpiForRoi(roi, heavyLoad) {
+  const name = roi.name || '';
+  if (name.includes('LiDAR Coverage')) return false;
+  const meta = roi.metadata;
+  if (meta?.type === 'smart-kpi') return true;
+  if (/Engagement|Queue|Service/i.test(name)) return true;
+  return !heavyLoad;
 }
 
 function getKpiIntervalMs(trackCount, roiCount) {
@@ -271,9 +284,9 @@ trackAggregator.on('tracks', (data) => {
     const _t0 = Date.now();
     const parsedRois = parsedRoisPreview;
     const heavyLoad = liveTracks.length * parsedRois.length > 2500;
-    // Under load, only run queue/checkout ROI KPI — alerts use TrackAggregator occupancy anyway.
+    // Under load, skip misc ROIs but keep all smart-kpi zones (shelf engagement + checkout).
     const kpiRois = heavyLoad
-      ? parsedRois.filter(r => r.name?.includes('Queue') || r.name?.includes('Service'))
+      ? parsedRois.filter(r => shouldRecordKpiForRoi(r, true))
       : parsedRois;
     
     for (const track of liveTracks) {

@@ -391,11 +391,13 @@ export default function ZoneKPIPopup({ roiId, roiName, roiColor, onClose, shelfI
     }
   }, [roiId])
 
-  // Fetch data only on open (no auto-refresh)
+  // Fetch on open, when period changes, or when roi changes
   useEffect(() => {
     fetchKPIs()
     fetchLiveOccupancy()
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+    const interval = setInterval(fetchLiveOccupancy, 2000)
+    return () => clearInterval(interval)
+  }, [fetchKPIs, fetchLiveOccupancy])
 
   // Manual refresh handler
   const handleRefresh = useCallback(() => {
