@@ -61,11 +61,11 @@ export default function TimelineReplay({ venueId, isOpen, onTimeChange }: Timeli
   const playIntervalRef = useRef<NodeJS.Timeout | null>(null)
   const timelineRef = useRef<HTMLDivElement>(null)
 
-  // Enable/disable replay mode when timeline opens/closes
+  // Historical timeline replay — only after slots load; never block MQTT JSONL replay.
   useEffect(() => {
-    setReplayMode(isOpen)
+    setReplayMode(isOpen && timelineData.length > 0)
     return () => setReplayMode(false)
-  }, [isOpen, setReplayMode])
+  }, [isOpen, timelineData.length, setReplayMode])
 
   // Fetch ROIs/zones for the venue
   useEffect(() => {

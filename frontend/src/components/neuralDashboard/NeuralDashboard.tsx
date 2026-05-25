@@ -67,9 +67,11 @@ export default function NeuralDashboard({ children, enabled = true, leftOffset =
   
   // Toggle track interpolation when Neural Dashboard is enabled/disabled
   useEffect(() => {
-    setInterpolation(enabled && !isReplayMode)
+    const trackCount = tracksRef.current.size
+    const tooManyTracks = trackCount > 80
+    setInterpolation(enabled && !isReplayMode && !tooManyTracks)
     return () => setInterpolation(false)
-  }, [enabled, isReplayMode, setInterpolation])
+  }, [enabled, isReplayMode, setInterpolation, tracksRef])
   
   // Throttled metrics — recompute at most once per second to avoid lag
   const [metrics, setMetrics] = useState({
@@ -92,6 +94,18 @@ export default function NeuralDashboard({ children, enabled = true, leftOffset =
       const totalPax = currentTracks.size
       
       if (totalPax === 0) return // keep last known values
+
+      // Heavy ROI×track scan — skip when load would block the main thread
+      const scanCost = totalPax * currentRegions.length
+      if (scanCost > 8000) {
+        peakRef.current = Math.max(totalPax, peakRef.current)
+        setMetrics(prev => ({
+          ...prev,
+          totalPax,
+          peakOccupancy: peakRef.current,
+        }))
+        return
+      }
       
       // Count tracks per zone
       let activeZones = 0

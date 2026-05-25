@@ -8,6 +8,7 @@ const MAX_TRAIL_LENGTH = 50 // ~5 seconds at 10Hz (reduced from 100 to save memo
 const TRACK_TTL_MS = 20000 // 20s — generous margin to survive backend event-loop stalls without removing tracks
 const SNAPSHOT_GRACE_MS = 900 // keep tracks briefly if missing from one aggregator snapshot (re-ID gap)
 const CLEANUP_INTERVAL_MS = 1000 // Cleanup stale tracks every 1 second
+const INTERP_MAX_TRACKS = 80 // Disable interpolation above this — replay ID churn freezes the UI
 const LERP_SPEED = 0.18 // Exponential smoothing factor per frame
 const EXTRAP_FACTOR = 0.001 // Velocity extrapolation: m/s → m/frame (tuned for 60fps)
 const INTERP_TRAIL_INTERVAL = 3 // Add trail point every N interpolation frames
@@ -23,12 +24,15 @@ interface TrackingContextType {
   tracks: Map<string, TrackWithTrail>
   isConnected: boolean
   isReplayMode: boolean
+  mqttReplayActive: boolean
+  useHistoricalTracks: boolean
   subscribe: (venueId: string) => void
   unsubscribe: (venueId: string) => void
   setReplayMode: (enabled: boolean) => void
   setReplayTracks: (tracks: Map<string, TrackWithTrail>) => void
   setTrackVisibility: (visible: boolean) => void
   setInterpolation: (enabled: boolean) => void
+  setMqttReplayActive: (active: boolean) => void
   clearReplayTracks: () => void
 }
 
@@ -47,6 +51,7 @@ interface TrackingActionsType {
   setReplayTracks: (tracks: Map<string, TrackWithTrail>) => void
   setTrackVisibility: (visible: boolean) => void
   setInterpolation: (enabled: boolean) => void
+  setMqttReplayActive: (active: boolean) => void
   clearReplayTracks: () => void
 }
 const TrackingActionsContext = createContext<TrackingActionsType | null>(null)
@@ -68,6 +73,9 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
   replayTracksRef.current = replayTracks
   const [isConnected, setIsConnected] = useState(false)
   const [isReplayMode, setIsReplayMode] = useState(false)
+  const [mqttReplayActive, setMqttReplayActiveState] = useState(false)
+  const mqttReplayActiveRef = useRef(false)
+  mqttReplayActiveRef.current = mqttReplayActive
   const socketRef = useRef<Socket | null>(null)
   const subscribedVenueRef = useRef<string | null>(null)
   const venueIdRef = useRef<string | null>(null)
@@ -88,8 +96,9 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
   const pendingRemovalsRef = useRef<Set<string>>(new Set())
   const removalFlushTimerRef = useRef<number | null>(null)
   
-  // Return replay tracks when in replay mode, otherwise live tracks
-  const tracks = isReplayMode ? replayTracks : liveTracks
+  // Historical timeline/insight replay uses DB snapshots; MQTT JSONL replay uses live socket.
+  const useHistoricalTracks = isReplayMode && !mqttReplayActive
+  const tracks = useHistoricalTracks ? replayTracks : liveTracks
   
   // Stable ref always points to latest tracks — consumers using useTracksRef() 
   // won't re-render when tracks change
@@ -198,7 +207,7 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
     
     socket.on('tracks', (data: { venueId: string, tracks: Track[] }) => {
       if (data.venueId !== subscribedVenueRef.current) return
-      if (isReplayModeRef.current) return
+      if (isReplayModeRef.current && !mqttReplayActiveRef.current) return
 
       const now = Date.now()
 
@@ -381,8 +390,20 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
   
   const interpLoop = useCallback(() => {
     if (!interpEnabledRef.current) return
-    
+
     const targets = targetTracksRef.current
+    if (targets.size > INTERP_MAX_TRACKS) {
+      interpEnabledRef.current = false
+      if (interpRAFRef.current) {
+        cancelAnimationFrame(interpRAFRef.current)
+        interpRAFRef.current = null
+      }
+      if (DIAG) {
+        console.warn(`[DIAG] Interp auto-disabled  targets=${targets.size}  max=${INTERP_MAX_TRACKS}  t=${Date.now()}`)
+      }
+      return
+    }
+    
     const now = Date.now()
 
     // Prune stale targets that haven't received an update within TTL
@@ -486,9 +507,20 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
     interpRAFRef.current = requestAnimationFrame(interpLoop)
   }, [])
 
+  const setMqttReplayActive = useCallback((active: boolean) => {
+    mqttReplayActiveRef.current = active
+    setMqttReplayActiveState(active)
+  }, [])
+
   const setInterpolation = useCallback((enabled: boolean) => {
-    const shouldInterp = enabled && !isReplayModeRef.current
-    if (DIAG) console.log(`[DIAG] setInterpolation  enabled=${enabled}  active=${shouldInterp}  replay=${isReplayModeRef.current}  t=${Date.now()}`)
+    const historicalReplay = isReplayModeRef.current && !mqttReplayActiveRef.current
+    const trackCount = liveTracksRef.current.size
+    const shouldInterp = enabled && !historicalReplay && trackCount <= INTERP_MAX_TRACKS
+    if (DIAG) {
+      console.log(
+        `[DIAG] setInterpolation  enabled=${enabled}  active=${shouldInterp}  historicalReplay=${historicalReplay}  tracks=${trackCount}  t=${Date.now()}`
+      )
+    }
     interpEnabledRef.current = shouldInterp
     if (shouldInterp) {
       seedInterpolationTargets()
@@ -548,8 +580,11 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
     setReplayTracks,
     setTrackVisibility,
     setInterpolation,
+    setMqttReplayActive,
     clearReplayTracks,
-  }), [tracks, isConnected, isReplayMode, subscribe, unsubscribe, setReplayMode, setReplayTracks, setTrackVisibility, setInterpolation, clearReplayTracks])
+    mqttReplayActive,
+    useHistoricalTracks,
+  }), [tracks, isConnected, isReplayMode, mqttReplayActive, useHistoricalTracks, subscribe, unsubscribe, setReplayMode, setReplayTracks, setTrackVisibility, setInterpolation, setMqttReplayActive, clearReplayTracks])
 
   const actionsValue = useMemo(() => ({
     subscribe,
@@ -558,8 +593,9 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
     setReplayTracks,
     setTrackVisibility,
     setInterpolation,
+    setMqttReplayActive,
     clearReplayTracks,
-  }), [subscribe, unsubscribe, setReplayMode, setReplayTracks, setTrackVisibility, setInterpolation, clearReplayTracks])
+  }), [subscribe, unsubscribe, setReplayMode, setReplayTracks, setTrackVisibility, setInterpolation, setMqttReplayActive, clearReplayTracks])
 
   return (
     <TracksRefContext.Provider value={stableTracksRef}>

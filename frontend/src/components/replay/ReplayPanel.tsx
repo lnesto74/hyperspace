@@ -89,7 +89,7 @@ const tsAtProgress = (meta: FileMeta | null, progress: number) => {
 const RECORD_SOFT_CAP_BYTES = 500 * 1024 * 1024
 
 export default function ReplayPanel({ onClose }: ReplayPanelProps) {
-  const { clearReplayTracks } = useTrackingActions()
+  const { clearReplayTracks, setMqttReplayActive } = useTrackingActions()
   const [files, setFiles] = useState<ReplayFile[]>([])
   const [selected, setSelected] = useState<string>('')
   const [speed, setSpeed] = useState<number>(4)
@@ -153,13 +153,14 @@ export default function ReplayPanel({ onClose }: ReplayPanelProps) {
       if (!res.ok) return
       const next: ReplayStatus = await res.json()
       setStatus(next)
+      setMqttReplayActive(!!next.running)
       // Only mirror the active file into the dropdown while playback is running.
       if (next.running && next.file) {
         setSelected(next.file)
         selectedRef.current = next.file
       }
     } catch { /* ignore */ }
-  }, [])
+  }, [setMqttReplayActive])
 
   const refreshRecordStatus = useCallback(async () => {
     try {
@@ -179,8 +180,9 @@ export default function ReplayPanel({ onClose }: ReplayPanelProps) {
     return () => {
       if (pollRef.current) clearInterval(pollRef.current)
       if (recordPollRef.current) clearInterval(recordPollRef.current)
+      setMqttReplayActive(false)
     }
-  }, [refreshFiles, refreshStatus, refreshRecordStatus])
+  }, [refreshFiles, refreshStatus, refreshRecordStatus, setMqttReplayActive])
 
   useEffect(() => {
     if (!selected) {

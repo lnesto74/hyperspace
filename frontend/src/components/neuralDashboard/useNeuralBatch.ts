@@ -44,9 +44,9 @@ export function useNeuralBatch(range: string = '1h') {
       if (res.ok) {
         const json = await res.json()
         setData(json)
-        if (elapsed > 500) {
+        if (elapsed > 500 && import.meta.env.DEV) {
           console.warn(`[DIAG] batch fetch SLOW  ${elapsed}ms  status=${res.status}  t=${Date.now()}`)
-        } else {
+        } else if (import.meta.env.DEV) {
           console.log(`[DIAG] batch fetch OK  ${elapsed}ms  t=${Date.now()}`)
         }
       } else {
