@@ -318,7 +318,9 @@ trackAggregator.on('tracks', (data) => {
       recordKpiBatch(liveTracks, trajectoryStorage);
     }
 
-    if (replayTracks.length > 0) {
+    // Replay KPI recording is expensive (all ROIs × all tracks). When live edge
+    // MQTT is also active, skip replay KPI so the event loop keeps emitting live tracks.
+    if (replayTracks.length > 0 && liveTracks.length === 0) {
       const demoStorage = demoSessionService.getTrajectoryStorage(data.venueId);
       if (demoStorage) {
         recordKpiBatch(replayTracks, demoStorage);

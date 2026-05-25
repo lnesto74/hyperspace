@@ -56,6 +56,7 @@ const INTERP_TRAIL_INTERVAL = 3 // Add trail point every N interpolation frames
 const DIAG = import.meta.env.DEV || localStorage.getItem('hyperspace-diag') === '1'
 let diagLastTrackCount = 0
 let diagLastSocketTs = 0
+let diagTrackRecvCount = 0
 let diagInterpFrameCount = 0
 let diagInterpDrops = 0
 
@@ -152,22 +153,24 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
   const stableTracksRef = useRef(tracks)
   stableTracksRef.current = tracks
 
-  const subscribe = useCallback((venueId: string) => {
-    if (subscribedVenueRef.current === venueId && socketRef.current?.connected) {
+  const subscribe = useCallback((venueId: string, { force = false }: { force?: boolean } = {}) => {
+    // Socket.io drops room membership on reconnect — must re-emit subscribe for the same venue.
+    if (!force && subscribedVenueRef.current === venueId && socketRef.current?.connected) {
       return
     }
     if (subscribedVenueRef.current && subscribedVenueRef.current !== venueId) {
       socketRef.current?.emit('unsubscribe', { venueId: subscribedVenueRef.current })
     }
+    const venueChanged = subscribedVenueRef.current !== venueId
     subscribedVenueRef.current = venueId
-    if (DIAG) console.log(`[DIAG] subscribe venue=${venueId}  connected=${!!socketRef.current?.connected}  t=${Date.now()}`)
+    if (DIAG) console.log(`[DIAG] subscribe venue=${venueId}  force=${force}  connected=${!!socketRef.current?.connected}  t=${Date.now()}`)
     socketRef.current?.emit('subscribe', { venueId })
-    setLiveTracks(new Map())
+    if (venueChanged) setLiveTracks(new Map())
   }, [])
 
   subscribeRef.current = subscribe
 
-  // Restore demo session after page refresh (replay may still be running server-side).
+  // Restore demo session + replay flag after page refresh (server-side replay survives reload).
   useEffect(() => {
     if (!venue?.id) return
     let cancelled = false
@@ -193,13 +196,14 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
       setIsConnected(true)
       const targetVenue = subscribedVenueRef.current || venueIdRef.current
       if (targetVenue) {
-        subscribeRef.current(targetVenue)
+        subscribeRef.current(targetVenue, { force: true })
       }
     })
 
     socket.on('disconnect', (reason) => {
       if (DIAG) console.warn(`[DIAG] Socket DISCONNECTED  reason="${reason}"  t=${Date.now()}`)
       setIsConnected(false)
+      subscribedVenueRef.current = null
     })
 
     socket.io.on('reconnect_attempt', (attempt) => {
@@ -270,7 +274,10 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
     }
     
     socket.on('tracks', (data: { venueId: string, tracks: Track[] }) => {
-      if (data.venueId !== subscribedVenueRef.current) return
+      if (data.venueId !== subscribedVenueRef.current) {
+        if (DIAG) console.warn(`[DIAG] tracks IGNORED  eventVenue=${data.venueId}  subscribed=${subscribedVenueRef.current}  n=${data.tracks.length}  t=${Date.now()}`)
+        return
+      }
       if (isReplayModeRef.current && !mqttReplayActiveRef.current) return
 
       const now = Date.now()
@@ -280,6 +287,11 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
         diagLastSocketTs = now
         if (gap > 2000) {
           console.warn(`[DIAG] Socket tracks GAP  ${gap}ms since last emission  n=${data.tracks.length}  t=${now}`)
+        }
+        diagTrackRecvCount += 1
+        if (diagTrackRecvCount <= 3 || diagTrackRecvCount % 300 === 0) {
+          const sample = data.tracks[0]
+          console.log(`[DIAG] tracks recv  n=${data.tracks.length}  sample=${sample?.trackKey}  pos=(${sample?.venuePosition?.x?.toFixed(2)},${sample?.venuePosition?.z?.toFixed(2)})  #=${diagTrackRecvCount}  t=${now}`)
         }
       }
       
@@ -346,8 +358,15 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
     }
 
     socket.on('track_removed', (data: { trackKey: string }) => {
-      // Full aggregator snapshots arrive every 100ms — they are authoritative.
-      // Batch removals so replay ID churn doesn't schedule thousands of timers.
+      // With interpolation on, full snapshots every 100ms are authoritative — track_removed
+      // from aggregator prune/re-ID churn only causes frozen grace meshes.
+      if (interpEnabledRef.current) {
+        if (DIAG && pendingRemovalsRef.current.size === 0) {
+          // Throttle: log once per burst
+          console.log(`[DIAG] track_removed ignored (interp snapshots authoritative)  key=${data.trackKey}  t=${Date.now()}`)
+        }
+        return
+      }
       pendingRemovalsRef.current.add(data.trackKey)
       if (removalFlushTimerRef.current != null) {
         window.clearTimeout(removalFlushTimerRef.current)
@@ -503,10 +522,10 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
       return
     }
 
-    if (DIAG) {
-      const frameDelta = now - interpLastFlushRef.current
-      diagInterpFrameCount++
-      if (frameDelta > 200) {
+      if (DIAG) {
+        const frameDelta = interpLastFlushRef.current > 0 ? now - interpLastFlushRef.current : 0
+        diagInterpFrameCount++
+        if (frameDelta > 200) {
         diagInterpDrops++
         console.warn(`[DIAG] Interp FRAME DROP  delta=${frameDelta}ms  targets=${targets.size}  drop#=${diagInterpDrops}  t=${now}`)
       }
@@ -615,6 +634,30 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
     setMqttReplayActiveState(active)
     setInterpolationRef.current(smoothMotionRequestedRef.current)
   }, [])
+
+  // Keep mqttReplayActive in sync when replay runs server-side (ReplayPanel may be closed).
+  useEffect(() => {
+    if (!venue?.id) return
+    let cancelled = false
+    const poll = async () => {
+      try {
+        const res = await fetch(`${API_BASE}/api/replay/status`)
+        if (!res.ok || cancelled) return
+        const status = await res.json()
+        const running = !!status.running
+        if (running !== mqttReplayActiveRef.current) {
+          setMqttReplayActive(running)
+        }
+        if (!running && demoSessionIdRef.current) {
+          demoSessionIdRef.current = null
+          setDemoSessionId(null)
+        }
+      } catch { /* ignore */ }
+    }
+    poll()
+    const iv = window.setInterval(poll, 3000)
+    return () => { cancelled = true; window.clearInterval(iv) }
+  }, [venue?.id, setMqttReplayActive])
 
   const startDemoSession = useCallback(async (venueId: string) => {
     try {

@@ -73,7 +73,7 @@ export class TrackAggregator extends EventEmitter {
   }
 
   addTrack(rawTrack) {
-    const trackKey = `${rawTrack.deviceId}:${rawTrack.id}`;
+    const trackKey = rawTrack.trackKey || `${rawTrack.deviceId}:${rawTrack.id}`;
 
     // If the caller already supplied a venuePosition (e.g. MqttTrajectoryService applied
     // the per-venue perceptionTransform), trust it. Otherwise fall back to the legacy

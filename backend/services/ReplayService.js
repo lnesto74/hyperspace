@@ -288,6 +288,7 @@ export default class ReplayService {
     this.state.running = false;
     this._tearDownPlayback();
     this.trackAggregator?.flushReplayTracks?.();
+    this.mqttService?.flushReplayTracks?.();
     if (this._playbackDone) {
       await this._playbackDone;
       this._playbackDone = null;
@@ -353,7 +354,9 @@ export default class ReplayService {
     let firstRecordedTs = null;
     let replayStartTs = Date.now();
     const SLEEP_SLACK_MS = 5;
+    const YIELD_EVERY = 40; // yield event loop so live MQTT tracks keep emitting
     let pending = 0;
+    let sinceYield = 0;
 
     const inject = (topic, msg) => {
       if (this.mqttService) {
@@ -413,6 +416,11 @@ export default class ReplayService {
 
         inject(topic, msg);
         this.state.messagesPublished++;
+        sinceYield++;
+        if (sinceYield >= YIELD_EVERY) {
+          sinceYield = 0;
+          await new Promise((resolve) => setImmediate(resolve));
+        }
       }
     } catch (err) {
       this.state.lastError = err.message;

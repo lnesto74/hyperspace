@@ -424,6 +424,20 @@ class MqttTrajectoryService {
     return baseStatus
   }
 
+  /** Drop replay-* tracks from the live snapshot (after JSONL playback stops). */
+  flushReplayTracks() {
+    let n = 0
+    for (const key of [...this.tracks.keys()]) {
+      if (key.startsWith('replay-')) {
+        this.tracks.delete(key)
+        this.trackColors.delete(key)
+        n++
+      }
+    }
+    if (n > 0) console.log(`[MQTT] Flushed ${n} replay tracks from snapshot`)
+    return n
+  }
+
   // Clean up stale tracks (older than TTL)
   cleanupStaleTracks(ttlMs = 5000) {
     const now = Date.now()
