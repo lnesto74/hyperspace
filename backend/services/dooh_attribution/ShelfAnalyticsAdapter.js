@@ -11,6 +11,7 @@
 import { shelfPlanogramQueries, skuItemQueries } from '../../database/schema.js';
 import { resolveShelfCategories } from '../ShelfCategoryResolver.js';
 import { getDefaultMatchingProfile } from './MatchingProfiles.js';
+import { tracksLinkedByReidFromDb } from './TrackIdentityMatcher.js';
 
 const SHELF_ENGAGEMENT_TYPES = ['shelf', 'fridge', 'service_counter'];
 const SHELF_NAME_PATTERNS = [
@@ -204,7 +205,7 @@ export class ShelfAnalyticsAdapter {
 
   _trackKeysToTry(trackKey) {
     const keys = new Set([trackKey]);
-    if (this.matchingProfile.trackKeyMode === 'suffix_alias') {
+    if (this.matchingProfile.trackKeyMode === 'suffix_alias' || this.matchingProfile.trackKeyMode === 'reid_chain') {
       const suffix = this._trackKeySuffix(trackKey);
       if (suffix) {
         keys.add(suffix);
@@ -237,7 +238,7 @@ export class ShelfAnalyticsAdapter {
       return merged;
     }
 
-    if (this.matchingProfile.trackKeyMode === 'suffix_alias') {
+    if (this.matchingProfile.trackKeyMode === 'suffix_alias' || this.matchingProfile.trackKeyMode === 'reid_chain') {
       const suffix = this._trackKeySuffix(trackKey);
       return this.db.prepare(`
         SELECT 
@@ -339,9 +340,76 @@ export class ShelfAnalyticsAdapter {
       }
     }
 
-    if (!profile.usePositionFallback) return null;
+    if (!profile.usePositionFallback) {
+      if (profile.trackKeyMode === 'reid_chain') {
+        return this.queryEngagementsViaReidChain(
+          venueId, trackKey, startTs, endTs, targetJson, { matchMeta },
+        );
+      }
+      return null;
+    }
+
+    const reidMatch = profile.trackKeyMode === 'reid_chain'
+      ? this.queryEngagementsViaReidChain(venueId, trackKey, startTs, endTs, targetJson, { matchMeta })
+      : null;
+    if (reidMatch) return reidMatch;
 
     return this.queryPositionBasedEngagement(venueId, trackKey, startTs, endTs, targetJson, { matchMeta });
+  }
+
+  /** Target shelf visits in window from ANY track — linked via re-ID chain to exposure track. */
+  queryEngagementsViaReidChain(venueId, trackKey, startTs, endTs, targetJson, options = {}) {
+    const { matchMeta = false } = options;
+    const profile = this.matchingProfile;
+    if (!this._targetEngagementRoiIds?.size) return null;
+
+    const roiList = [...this._targetEngagementRoiIds];
+    const placeholders = roiList.map(() => '?').join(',');
+
+    const visits = this.db.prepare(`
+      SELECT 
+        zv.id, zv.roi_id, zv.track_key, zv.start_time, zv.end_time,
+        zv.duration_ms, zv.is_dwell, zv.is_engagement,
+        r.name as roi_name, r.metadata_json
+      FROM zone_visits zv
+      JOIN regions_of_interest r ON zv.roi_id = r.id
+      WHERE zv.venue_id = ?
+        AND zv.roi_id IN (${placeholders})
+        AND zv.start_time <= ?
+        AND COALESCE(zv.end_time, zv.start_time + COALESCE(zv.duration_ms, 0)) >= ?
+      ORDER BY zv.start_time ASC
+    `).all(venueId, ...roiList, endTs, startTs);
+
+    for (const visit of visits) {
+      if (!this._isQualifyingVisit(visit)) continue;
+      if (!this._visitInWindow(visit, startTs, endTs)) continue;
+
+      const sameTrack = this._resolveTrackKeyMatch(trackKey, visit.track_key);
+      if (sameTrack === 'exact' || sameTrack === 'alias') {
+        const metadata = parseJson(visit.metadata_json) || {};
+        return this._annotateMatch(this.buildEngagementResult(visit, {
+          ...metadata,
+          shelfId: metadata.shelfId || targetJson.ids[0],
+          template: metadata.template || 'shelf-engagement',
+        }), matchMeta ? { source: 'roi_visit', trackKeyMatch: sameTrack } : null);
+      }
+
+      const visitEnd = visit.end_time ?? (visit.start_time + (visit.duration_ms || 0));
+      if (!tracksLinkedByReidFromDb(
+        this.db, venueId, trackKey, visit.track_key, startTs, visitEnd, profile,
+      )) {
+        continue;
+      }
+
+      const metadata = parseJson(visit.metadata_json) || {};
+      return this._annotateMatch(this.buildEngagementResult(visit, {
+        ...metadata,
+        shelfId: metadata.shelfId || targetJson.ids[0],
+        template: metadata.template || 'shelf-engagement',
+      }), matchMeta ? { source: 'reid_chain', trackKeyMatch: 'relink' } : null);
+    }
+
+    return null;
   }
 
   /**
@@ -506,10 +574,10 @@ export class ShelfAnalyticsAdapter {
     if (!shelves || shelves.length === 0) return null;
 
     const suffix = this._trackKeySuffix(trackKey);
-    const trackFilter = profile.trackKeyMode === 'suffix_alias'
+    const trackFilter = (profile.trackKeyMode === 'suffix_alias' || profile.trackKeyMode === 'reid_chain')
       ? `(track_key = ? OR track_key LIKE ? OR track_key = ?)`
       : `track_key = ?`;
-    const trackParams = profile.trackKeyMode === 'suffix_alias'
+    const trackParams = (profile.trackKeyMode === 'suffix_alias' || profile.trackKeyMode === 'reid_chain')
       ? [trackKey, `%:${suffix}`, suffix]
       : [trackKey];
 

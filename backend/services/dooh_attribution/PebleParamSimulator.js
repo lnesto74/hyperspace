@@ -37,6 +37,51 @@ export class PebleParamSimulator {
     };
   }
 
+  computeIdentityDiagnostics(venueId, events, startTs, endTs) {
+    const expKeys = [...new Set(events.map(e => e.track_key))];
+    const visitKeyRows = this.db.prepare(`
+      SELECT DISTINCT track_key FROM zone_visits
+      WHERE venue_id = ? AND start_time <= ? AND COALESCE(end_time, start_time + COALESCE(duration_ms, 0)) >= ?
+    `).all(venueId, endTs, startTs);
+    const visitKeys = new Set(visitKeyRows.map(r => r.track_key));
+
+    const expSuffixes = new Set(expKeys.map(trackSuffix));
+    const visitSuffixes = new Set([...visitKeys].map(trackSuffix));
+
+    let exactIntersection = 0;
+    let suffixIntersection = 0;
+    for (const k of expKeys) {
+      if (visitKeys.has(k)) exactIntersection++;
+      if (visitSuffixes.has(trackSuffix(k))) suffixIntersection++;
+    }
+
+    const sampleKeys = expKeys.slice(0, 8);
+    let positionSamples = 0;
+    if (sampleKeys.length) {
+      const ph = sampleKeys.map(() => '?').join(',');
+      positionSamples = this.db.prepare(`
+        SELECT COUNT(*) as c FROM track_positions
+        WHERE venue_id = ? AND track_key IN (${ph})
+          AND timestamp >= ? AND timestamp <= ?
+      `).get(venueId, ...sampleKeys, startTs, endTs)?.c || 0;
+    }
+
+    return {
+      exposureUniqueTrackKeys: expKeys.length,
+      zoneVisitUniqueTrackKeys: visitKeys.size,
+      exactTrackKeyOverlap: exactIntersection,
+      suffixOverlap: suffixIntersection,
+      pctExactKeyOverlap: expKeys.length ? +((exactIntersection / expKeys.length) * 100).toFixed(2) : 0,
+      pctSuffixOverlap: expKeys.length ? +((suffixIntersection / expKeys.length) * 100).toFixed(2) : 0,
+      positionSamplesForSampleExposureKeys: positionSamples,
+      sampleExposureTrackKeys: sampleKeys,
+      sampleZoneVisitTrackKeys: [...visitKeys].slice(0, 8),
+      note: exactIntersection === 0
+        ? 'Zero track_key overlap — exposures and zone_visits use disjoint ID spaces; re-ID chain profiles required.'
+        : null,
+    };
+  }
+
   /** Fragmentation context for the exposure sample. */
   computeFragmentationContext(venueId, events, actionWindowMs) {
     let anyVisit = 0;
@@ -102,7 +147,7 @@ export class PebleParamSimulator {
 
     let conversions = 0;
     const ttaSamples = [];
-    const matchSource = { roi_visit: 0, position: 0, none: 0 };
+    const matchSource = { roi_visit: 0, reid_chain: 0, position: 0, none: 0 };
     const trackKeyMatch = { exact: 0, alias: 0, none: 0 };
 
     for (const event of events) {
@@ -124,6 +169,7 @@ export class PebleParamSimulator {
 
       conversions++;
       if (engagement._matchSource === 'position') matchSource.position++;
+      else if (engagement._matchSource === 'reid_chain') matchSource.reid_chain++;
       else matchSource.roi_visit++;
 
       if (engagement._trackKeyMatch === 'alias') trackKeyMatch.alias++;
@@ -190,6 +236,7 @@ export class PebleParamSimulator {
       .map(id => getMatchingProfile(id));
 
     const fragmentation = this.computeFragmentationContext(venueId, events, baseActionWindowMs);
+    const identity = this.computeIdentityDiagnostics(venueId, events, startTs, endTs);
 
     const targetRoiVisits = this.db.prepare(`
       SELECT COUNT(*) as c FROM zone_visits zv
@@ -222,6 +269,7 @@ export class PebleParamSimulator {
       targetShelfCount: target.ids?.length || 0,
       engagementRoiIds: resolveCampaignTarget(this.db, venueId, target).engagementRoiIds || [],
       shelfEngagementVisitsInRange: targetRoiVisits,
+      identity,
       fragmentation,
       profiles: results,
       recommendation: ranked[0] ? {

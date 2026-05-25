@@ -7,7 +7,7 @@
  */
 
 /** @typedef {'start_in' | 'overlap'} WindowMode */
-/** @typedef {'exact' | 'suffix_alias'} TrackKeyMode */
+/** @typedef {'exact' | 'suffix_alias' | 'reid_chain'} TrackKeyMode */
 
 /**
  * @typedef {Object} MatchingProfile
@@ -22,6 +22,8 @@
  * @property {number} positionMinDwellMs
  * @property {boolean} usePositionFallback
  * @property {boolean} useZoneVisits
+ * @property {number} [reidMaxGapMs]
+ * @property {number} [reidMaxDistanceM]
  */
 
 /** @type {MatchingProfile[]} */
@@ -116,6 +118,51 @@ export const MATCHING_PROFILES = [
     positionMinDwellMs: 1500,
     usePositionFallback: true,
     useZoneVisits: false,
+  },
+  {
+    id: 'frag_reid_15m',
+    label: 'Re-ID chain 15m',
+    rationale: 'Bridge fragmented track IDs via spatiotemporal proximity at occlusion gaps (4m / 15s).',
+    actionWindowMinutes: 15,
+    minVisitDurationMs: 1000,
+    windowMode: 'overlap',
+    trackKeyMode: 'reid_chain',
+    positionFallbackM: 2.5,
+    positionMinDwellMs: 1000,
+    usePositionFallback: true,
+    useZoneVisits: true,
+    reidMaxGapMs: 15_000,
+    reidMaxDistanceM: 4,
+  },
+  {
+    id: 'frag_reid_25m',
+    label: 'Re-ID chain 25m',
+    rationale: 'Re-ID chain + 25m window for cross-aisle journeys after ID splits.',
+    actionWindowMinutes: 25,
+    minVisitDurationMs: 1000,
+    windowMode: 'overlap',
+    trackKeyMode: 'reid_chain',
+    positionFallbackM: 3.0,
+    positionMinDwellMs: 1500,
+    usePositionFallback: true,
+    useZoneVisits: true,
+    reidMaxGapMs: 20_000,
+    reidMaxDistanceM: 5,
+  },
+  {
+    id: 'frag_reid_30m_loose',
+    label: 'Re-ID chain 30m (looser gap)',
+    rationale: 'Looser re-ID thresholds (5m / 25s) — upper exploratory bound for heavy fragmentation.',
+    actionWindowMinutes: 30,
+    minVisitDurationMs: 1000,
+    windowMode: 'overlap',
+    trackKeyMode: 'reid_chain',
+    positionFallbackM: 3.5,
+    positionMinDwellMs: 1500,
+    usePositionFallback: true,
+    useZoneVisits: true,
+    reidMaxGapMs: 25_000,
+    reidMaxDistanceM: 5,
   },
 ];
 
