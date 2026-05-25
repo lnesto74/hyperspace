@@ -240,34 +240,40 @@ trackAggregator.on('tracks', (data) => {
   lastKpiRecordTime.set(data.venueId, now);
 
   setImmediate(() => {
+    const liveTracks = data.tracks.filter(t => !t.trackKey?.startsWith('replay-'));
+    // JSONL replay floods hundreds of ephemeral perception IDs — skip KPI/occupancy
+    // (28 ROIs × 600+ tracks ≈ 17k polygon tests every 5s blocks the event loop).
+    if (liveTracks.length === 0) return;
+
     const _t0 = Date.now();
     const parsedRois = getCachedRois(data.venueId);
     
-    for (const track of data.tracks) {
+    for (const track of liveTracks) {
       trajectoryStorage.recordTrackPosition(data.venueId, track, parsedRois);
     }
     
     const kpiElapsed = Date.now() - _t0;
     if (kpiElapsed > 100) {
-      console.warn(`[DIAG] KPI recording SLOW  ${kpiElapsed}ms  tracks=${data.tracks.length}  t=${Date.now()}`);
+      console.warn(`[DIAG] KPI recording SLOW  ${kpiElapsed}ms  tracks=${liveTracks.length}  t=${Date.now()}`);
     }
 
     const now2 = Date.now();
     const lastRecord = lastOccupancyRecordTime.get(data.venueId) || 0;
     if (now2 - lastRecord >= 10000) {
       lastOccupancyRecordTime.set(data.venueId, now2);
-      const tracksMap = new Map(data.tracks.map(t => [t.trackKey, t]));
+      const tracksMap = new Map(liveTracks.map(t => [t.trackKey, t]));
       trajectoryStorage.recordOccupancy(data.venueId, parsedRois, tracksMap);
     }
     const _elapsed = Date.now() - _t0;
-    if (_elapsed > 50) console.warn(`⏱️ KPI batch took ${_elapsed}ms (${data.tracks.length} tracks, ${parsedRois.length} ROIs)`);
+    if (_elapsed > 50) console.warn(`⏱️ KPI batch took ${_elapsed}ms (${liveTracks.length} tracks, ${parsedRois.length} ROIs)`);
   });
 });
 
 trackAggregator.on('track_removed', (data) => {
+  // Replay snapshots already drop stale IDs every 100ms — skip flood of track_removed.
+  if (data.trackKey?.startsWith('replay-')) return;
+
   io.of('/tracking').emit('track_removed', data);
-  
-  // End any active sessions for this track
   trajectoryStorage.endTrackSessions(data.trackKey);
 });
 

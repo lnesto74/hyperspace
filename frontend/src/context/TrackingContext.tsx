@@ -12,8 +12,8 @@ const LERP_SPEED = 0.18 // Exponential smoothing factor per frame
 const EXTRAP_FACTOR = 0.001 // Velocity extrapolation: m/s → m/frame (tuned for 60fps)
 const INTERP_TRAIL_INTERVAL = 3 // Add trail point every N interpolation frames
 
-// Diagnostic logging — filter browser console with "[DIAG]"
-const DIAG = true
+// Diagnostic logging — off in production; set localStorage hyperspace-diag=1 to enable
+const DIAG = import.meta.env.DEV || localStorage.getItem('hyperspace-diag') === '1'
 let diagLastTrackCount = 0
 let diagLastSocketTs = 0
 let diagInterpFrameCount = 0
@@ -85,6 +85,8 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
   const targetTracksRef = useRef<Map<string, Track>>(new Map())
   // Timestamp when each target was received (for velocity extrapolation)
   const interpTsRef = useRef<Map<string, number>>(new Map())
+  const pendingRemovalsRef = useRef<Set<string>>(new Set())
+  const removalFlushTimerRef = useRef<number | null>(null)
   
   // Return replay tracks when in replay mode, otherwise live tracks
   const tracks = isReplayMode ? replayTracks : liveTracks
@@ -238,26 +240,46 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
       }
     })
 
+    const flushPendingRemovals = () => {
+      removalFlushTimerRef.current = null
+      const keys = [...pendingRemovalsRef.current]
+      pendingRemovalsRef.current.clear()
+      if (keys.length === 0) return
+
+      const now = Date.now()
+      const toRemove = keys.filter((key) => {
+        const lastSeen = trackLastSeenRef.current.get(key) ?? 0
+        return now - lastSeen >= SNAPSHOT_GRACE_MS
+      })
+      if (toRemove.length === 0) return
+
+      if (DIAG) {
+        console.log(
+          `[DIAG] track_removed batch flush  n=${toRemove.length}  t=${now}`
+        )
+      }
+
+      setLiveTracks(prev => {
+        let changed = false
+        const next = new Map(prev)
+        for (const key of toRemove) {
+          if (next.delete(key)) changed = true
+          trackLastSeenRef.current.delete(key)
+          targetTracksRef.current.delete(key)
+          interpTsRef.current.delete(key)
+        }
+        return changed ? next : prev
+      })
+    }
+
     socket.on('track_removed', (data: { trackKey: string }) => {
       // Full aggregator snapshots arrive every 100ms — they are authoritative.
-      // Immediate track_removed (reconciler sweep) caused visible blink when re-ID
-      // restored the same shopper on the next frame. Grace-delete only if absent
-      // from snapshots for a short window.
-      if (DIAG) console.log(`[DIAG] track_removed deferred  key=${data.trackKey}  t=${Date.now()}`)
-      const key = data.trackKey
-      window.setTimeout(() => {
-        const lastSeen = trackLastSeenRef.current.get(key) ?? 0
-        if (Date.now() - lastSeen < SNAPSHOT_GRACE_MS) return
-        setLiveTracks(prev => {
-          if (!prev.has(key)) return prev
-          const next = new Map(prev)
-          next.delete(key)
-          return next
-        })
-        trackLastSeenRef.current.delete(key)
-        targetTracksRef.current.delete(key)
-        interpTsRef.current.delete(key)
-      }, SNAPSHOT_GRACE_MS)
+      // Batch removals so replay ID churn doesn't schedule thousands of timers.
+      pendingRemovalsRef.current.add(data.trackKey)
+      if (removalFlushTimerRef.current != null) {
+        window.clearTimeout(removalFlushTimerRef.current)
+      }
+      removalFlushTimerRef.current = window.setTimeout(flushPendingRemovals, SNAPSHOT_GRACE_MS)
     })
 
     socket.on('tracks_cleared', () => {
@@ -280,8 +302,7 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
       const staleKeys: string[] = []
       
       trackLastSeenRef.current.forEach((lastSeen, key) => {
-        const ttl = key.startsWith('replay-') ? 3000 : TRACK_TTL_MS
-        if (now - lastSeen > ttl) {
+        if (now - lastSeen > TRACK_TTL_MS) {
           staleKeys.push(key)
         }
       })
@@ -307,9 +328,13 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
     }, CLEANUP_INTERVAL_MS)
 
     return () => {
+      if (removalFlushTimerRef.current != null) {
+        window.clearTimeout(removalFlushTimerRef.current)
+      }
       socket.disconnect()
       clearInterval(cleanupInterval)
       trackLastSeenRef.current.clear()
+      pendingRemovalsRef.current.clear()
     }
   }, [])
 
