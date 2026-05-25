@@ -60,9 +60,13 @@ export class PebleParamSimulator {
     if (!screenIds?.length) return [];
 
     const ph = screenIds.map(() => '?').join(',');
+    const endPosCols = this.hasExposureEndPositionColumns()
+      ? 'end_position_x, end_position_z'
+      : 'NULL as end_position_x, NULL as end_position_z';
+
     const fromExposure = this.db.prepare(`
       SELECT id, track_key, end_ts as exposure_end_ts, screen_id,
-             end_position_x, end_position_z, aqs
+             ${endPosCols}, aqs
       FROM dooh_exposure_events
       WHERE venue_id = ? AND screen_id IN (${ph})
         AND end_ts >= ? AND end_ts <= ?
@@ -78,6 +82,17 @@ export class PebleParamSimulator {
       WHERE campaign_id = ? AND exposure_end_ts >= ? AND exposure_end_ts <= ?
       ORDER BY exposure_end_ts ASC
     `).all(campaignId, startTs, endTs);
+  }
+
+  hasExposureEndPositionColumns() {
+    if (this._hasEndPositionCols != null) return this._hasEndPositionCols;
+    try {
+      const names = this.db.prepare('PRAGMA table_info(dooh_exposure_events)').all().map(c => c.name);
+      this._hasEndPositionCols = names.includes('end_position_x');
+    } catch {
+      this._hasEndPositionCols = false;
+    }
+    return this._hasEndPositionCols;
   }
 
   computeAnchorDiagnostics(events, screenPositions) {

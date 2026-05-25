@@ -17,6 +17,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import Database from 'better-sqlite3';
+import { migrateDoohExposureEndPosition } from '../database/schema.js';
 import { PebleParamSimulator } from '../services/dooh_attribution/PebleParamSimulator.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -34,6 +35,7 @@ const startTs = parseInt(arg('start-ts', '0'), 10);
 const endTs = parseInt(arg('end-ts', '0'), 10);
 const outPath = arg('out', path.join(__dirname, '../../analysis/out/peble_param_sim.json'));
 const maxEvents = parseInt(arg('max-events', '5000'), 10);
+const skipMigrate = process.argv.includes('--skip-migrate');
 
 if (!venueId || !campaignId || !startTs || !endTs) {
   console.error(`Usage: node scripts/peble_param_sim.mjs \\
@@ -49,6 +51,14 @@ if (!fs.existsSync(dbPath)) {
   console.error(`Database not found: ${dbPath}`);
   console.error('Production default is /data/db/hyperspace.db (DB_PATH env).');
   process.exit(1);
+}
+
+if (!skipMigrate) {
+  const migrateDb = new Database(dbPath);
+  if (migrateDoohExposureEndPosition(migrateDb)) {
+    console.log('Applied dooh_exposure_events end_position_x/z migration');
+  }
+  migrateDb.close();
 }
 
 const db = new Database(dbPath, { readonly: true });

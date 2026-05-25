@@ -4,6 +4,32 @@ import { dirname } from 'path';
 
 const DB_PATH = process.env.DB_PATH || './database/hyperspace.db';
 
+/** Add end_position_x/z to dooh_exposure_events if missing (PEBLE journey matching). */
+export function migrateDoohExposureEndPosition(db) {
+  try {
+    const expCols = db.prepare('PRAGMA table_info(dooh_exposure_events)').all();
+    const expNames = expCols.map(c => c.name);
+    if (expNames.length > 0 && !expNames.includes('end_position_x')) {
+      db.exec('ALTER TABLE dooh_exposure_events ADD COLUMN end_position_x REAL DEFAULT NULL');
+      db.exec('ALTER TABLE dooh_exposure_events ADD COLUMN end_position_z REAL DEFAULT NULL');
+      console.log('📦 Migration: Added end_position_x/z to dooh_exposure_events');
+      return true;
+    }
+  } catch {
+    // Table may not exist yet
+  }
+  return false;
+}
+
+export function hasDoohExposureEndPositionColumns(db) {
+  try {
+    const expNames = db.prepare('PRAGMA table_info(dooh_exposure_events)').all().map(c => c.name);
+    return expNames.includes('end_position_x');
+  } catch {
+    return false;
+  }
+}
+
 export function initDatabase() {
   // Ensure database directory exists
   const dbDir = dirname(DB_PATH);
@@ -925,18 +951,7 @@ export function initDatabase() {
     console.log('📦 Migration check completed (columns may already exist)');
   }
 
-  // Migration for dooh_exposure_events end position (PEBLE journey matching)
-  try {
-    const expCols = db.prepare("PRAGMA table_info(dooh_exposure_events)").all();
-    const expNames = expCols.map(c => c.name);
-    if (expNames.length > 0 && !expNames.includes('end_position_x')) {
-      db.exec("ALTER TABLE dooh_exposure_events ADD COLUMN end_position_x REAL DEFAULT NULL");
-      db.exec("ALTER TABLE dooh_exposure_events ADD COLUMN end_position_z REAL DEFAULT NULL");
-      console.log('📦 Migration: Added end_position_x/z to dooh_exposure_events');
-    }
-  } catch (migrationErr) {
-    // Table may not exist yet
-  }
+  migrateDoohExposureEndPosition(db);
 
   // Migration for dooh_screens double_sided column
   try {
