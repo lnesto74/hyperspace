@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { ShelfKPIEnricher } from '../services/ShelfKPIEnricher.js';
+import { resolveShelfCategories } from '../services/ShelfCategoryResolver.js';
 import { shelfPlanogramQueries, planogramQueries } from '../database/schema.js';
 
 // Timeline cache - stores computed timeline data
@@ -1297,8 +1298,26 @@ export default function createKpiRoutes(db, kpiCalculator, trajectoryStorage, de
       }
       
       if (!shelfId) {
+        if (roi.metadata_json) {
+          const metadata = JSON.parse(roi.metadata_json);
+          if (metadata.business_category_label) {
+            return res.json({
+              roiId,
+              shelfId: null,
+              shelfName: null,
+              planogramId: null,
+              categories: [metadata.business_category_label],
+              categorySource: 'roi',
+              objectType: metadata.fixtureType || null,
+              businessCategory: metadata.business_category_label,
+            });
+          }
+        }
         return res.json({ roiId, shelfId: null, shelfName: null, planogramId: null, message: 'No shelf found for this ROI' });
       }
+
+      const shelfObject = db.prepare('SELECT type FROM venue_objects WHERE id = ?').get(shelfId);
+      const categoryInfo = resolveShelfCategories(db, shelfId);
       
       // Get active planogram for this shelf
       let planogramId = null;
@@ -1324,6 +1343,12 @@ export default function createKpiRoutes(db, kpiCalculator, trajectoryStorage, de
         shelfId,
         shelfName,
         planogramId,
+        categories: categoryInfo.categories,
+        categorySource: categoryInfo.source,
+        objectType: categoryInfo.objectType || shelfObject?.type || null,
+        businessCategory: categoryInfo.business_category?.business_category_label
+          || categoryInfo.categories[0]
+          || null,
       });
     } catch (err) {
       console.error('Failed to get shelf info for ROI:', err);

@@ -325,6 +325,8 @@ export default function ZoneKPIPopup({ roiId, roiName, roiColor, onClose, shelfI
   // Auto-detected shelf info (fetched from backend)
   const [detectedShelfId, setDetectedShelfId] = useState<string | null>(null)
   const [detectedPlanogramId, setDetectedPlanogramId] = useState<string | null>(null)
+  const [shelfCategoryLabel, setShelfCategoryLabel] = useState<string | null>(null)
+  const [shelfObjectType, setShelfObjectType] = useState<string | null>(null)
   const [shelfInfoLoading, setShelfInfoLoading] = useState(false)
   
   // Use props if provided, otherwise use detected values
@@ -340,6 +342,9 @@ export default function ZoneKPIPopup({ roiId, roiName, roiColor, onClose, shelfI
       // Skip if already provided via props
       if (propShelfId && propPlanogramId) return
       
+      setShelfCategoryLabel(null)
+      setShelfObjectType(null)
+      
       // Check if this looks like a shelf engagement zone
       const isLikelyShelfZone = roiName.toLowerCase().includes('engagement') || 
                                 roiName.toLowerCase().includes('shelf')
@@ -354,6 +359,14 @@ export default function ZoneKPIPopup({ roiId, roiName, roiColor, onClose, shelfI
             setDetectedShelfId(data.shelfId)
             setDetectedPlanogramId(data.planogramId)
           }
+          if (data.businessCategory) {
+            setShelfCategoryLabel(data.businessCategory)
+          } else if (Array.isArray(data.categories) && data.categories.length > 0) {
+            setShelfCategoryLabel(data.categories.join(', '))
+          } else {
+            setShelfCategoryLabel(null)
+          }
+          setShelfObjectType(data.objectType || null)
         }
       } catch (err) {
         console.error('Failed to fetch shelf info:', err)
@@ -432,7 +445,11 @@ export default function ZoneKPIPopup({ roiId, roiName, roiColor, onClose, shelfI
             />
             <div>
               <h2 className="text-lg font-semibold text-white">{roiName}</h2>
-              <p className="text-xs text-gray-400">Zone Analytics & KPIs</p>
+              <p className="text-xs text-gray-400">
+                {shelfCategoryLabel
+                  ? `${shelfCategoryLabel}${shelfObjectType ? ` · ${shelfObjectType.replace(/_/g, ' ')}` : ''}`
+                  : 'Zone Analytics & KPIs'}
+              </p>
             </div>
           </div>
           <div className="flex items-center gap-4">

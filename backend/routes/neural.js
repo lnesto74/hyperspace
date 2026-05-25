@@ -17,6 +17,7 @@ import {
 } from '../services/CheckoutAlertConfig.js';
 import { getCheckoutLanes } from '../services/CheckoutLiveStatus.js';
 import { resolveKpiContext, demoCacheSuffix } from '../utils/demoKpiContext.js';
+import { resolveShelfCategories } from '../services/ShelfCategoryResolver.js';
 
 // Stale-while-revalidate cache with staggered background recomputes.
 // On cache HIT: return data instantly.
@@ -934,31 +935,15 @@ function resolveZoneCategories(db, zoneIds) {
       shelfName = s?.name || null;
     }
 
-    const sp = db.prepare('SELECT slots_json FROM shelf_planograms WHERE shelf_id = ?').get(shelfId);
-    if (!sp || !sp.slots_json) {
-      result.set(roi.id, { shelfId, shelfName, categories: [] });
-      continue;
-    }
-
-    const skuIds = new Set();
-    try {
-      const slots = JSON.parse(sp.slots_json);
-      (slots.levels || []).forEach(lv => {
-        (lv.slots || []).forEach(sl => { if (sl.skuItemId) skuIds.add(sl.skuItemId); });
-      });
-    } catch {}
-
-    if (skuIds.size === 0) {
-      result.set(roi.id, { shelfId, shelfName, categories: [] });
-      continue;
-    }
-
-    const skuPh = Array.from(skuIds).map(() => '?').join(',');
-    const cats = db.prepare(
-      `SELECT DISTINCT category FROM sku_items WHERE id IN (${skuPh}) AND category IS NOT NULL ORDER BY category`
-    ).all(...skuIds).map(r => r.category);
-
-    result.set(roi.id, { shelfId, shelfName, categories: cats });
+    const resolved = resolveShelfCategories(db, shelfId);
+    result.set(roi.id, {
+      shelfId,
+      shelfName,
+      categories: resolved.categories,
+      categorySource: resolved.source,
+      objectType: resolved.objectType,
+      business_category: resolved.business_category,
+    });
   }
 
   return result;
@@ -1144,22 +1129,19 @@ function computeXRayZones(db, venueId) {
       zone.shelfId = shelfId;
       zone.categories = [];
       if (shelfId) {
-        try {
-          const sp = db.prepare('SELECT slots_json FROM shelf_planograms WHERE shelf_id = ?').get(shelfId);
-          if (sp && sp.slots_json) {
-            const skuIds = new Set();
-            const slots = JSON.parse(sp.slots_json);
-            (slots.levels || []).forEach(lv => {
-              (lv.slots || []).forEach(sl => { if (sl.skuItemId) skuIds.add(sl.skuItemId); });
-            });
-            if (skuIds.size > 0) {
-              const skuPh = Array.from(skuIds).map(() => '?').join(',');
-              zone.categories = db.prepare(
-                `SELECT DISTINCT category FROM sku_items WHERE id IN (${skuPh}) AND category IS NOT NULL ORDER BY category`
-              ).all(...skuIds).map(r => r.category);
-            }
-          }
-        } catch (e) {}
+        const resolved = resolveShelfCategories(db, shelfId);
+        zone.categories = resolved.categories;
+        zone.categorySource = resolved.source;
+        if (resolved.objectType) zone.objectType = resolved.objectType;
+        if (resolved.business_category) {
+          zone.businessCategory = resolved.business_category.business_category_label;
+        }
+      }
+      // Custom category zones store business_category directly on ROI metadata
+      if (zone.categories.length === 0 && meta.business_category_label) {
+        zone.categories = [meta.business_category_label];
+        zone.categorySource = 'roi';
+        zone.businessCategory = meta.business_category_label;
       }
     }
 

@@ -4,6 +4,7 @@ import multer from 'multer';
 import * as XLSX from 'xlsx';
 import { skuCatalogQueries, skuItemQueries, planogramQueries, shelfPlanogramQueries } from '../database/schema.js';
 import { placeSkusOnShelf, computeShelfSlots } from '../services/PlacementService.js';
+import { resolveShelfCategories } from '../services/ShelfCategoryResolver.js';
 
 const upload = multer({ storage: multer.memoryStorage() });
 
@@ -521,52 +522,18 @@ export default function createPlanogramRoutes(db) {
     }
   });
 
-  // Get categories for a shelf (from its planogram SKUs)
+  // Get categories for a shelf (planogram SKUs, else object business category)
   router.get('/shelves/:shelfId/categories', (req, res) => {
     try {
       const { shelfId } = req.params;
-      
-      // Get shelf planogram
-      const shelfPlanogram = db.prepare(`
-        SELECT sp.slots_json 
-        FROM shelf_planograms sp 
-        WHERE sp.shelf_id = ?
-      `).get(shelfId);
-      
-      if (!shelfPlanogram || !shelfPlanogram.slots_json) {
-        return res.json({ categories: [], shelfId });
-      }
-      
-      // Parse slots and collect SKU IDs
-      const slots = JSON.parse(shelfPlanogram.slots_json);
-      const skuIds = new Set();
-      
-      slots.levels?.forEach(level => {
-        level.slots?.forEach(slot => {
-          if (slot.skuItemId) {
-            skuIds.add(slot.skuItemId);
-          }
-        });
-      });
-      
-      if (skuIds.size === 0) {
-        return res.json({ categories: [], shelfId });
-      }
-      
-      // Get categories for these SKUs
-      const placeholders = Array.from(skuIds).map(() => '?').join(',');
-      const categories = db.prepare(`
-        SELECT DISTINCT category, COUNT(*) as count
-        FROM sku_items 
-        WHERE id IN (${placeholders}) AND category IS NOT NULL
-        GROUP BY category
-        ORDER BY count DESC
-      `).all(...skuIds);
-      
+      const resolved = resolveShelfCategories(db, shelfId);
+
       res.json({
         shelfId,
-        categories: categories.map(c => c.category),
-        categoryCounts: categories
+        categories: resolved.categories,
+        categorySource: resolved.source,
+        objectType: resolved.objectType,
+        businessCategory: resolved.business_category?.business_category_label || null,
       });
     } catch (err) {
       res.status(500).json({ error: err.message });
