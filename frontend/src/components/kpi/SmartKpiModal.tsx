@@ -16,6 +16,7 @@ import {
 import {
   ShelfCalibration,
   DEFAULT_SHELF_CALIBRATION,
+  computeAutoShelfCalibration,
   extractShelfCalibration,
   regionsToPreviewShelfRois,
 } from './shelfCalibrationUtils'
@@ -64,6 +65,7 @@ interface SmartKpiTemplate {
   roiConfig?: RoiConfig
   detectedCount?: number
   detectedObjects?: DetectedObject[]
+  mapFixtures?: DetectedObject[]
   sizeDistribution?: Record<string, number>
   canGenerate?: boolean
 }
@@ -98,6 +100,19 @@ const ICON_MAP: Record<string, React.ComponentType<{ className?: string }>> = {
   ShoppingCart,
   DoorOpen,
   Package,
+}
+
+function toFixtureInfo(obj: DetectedObject): FixtureInfo {
+  return {
+    id: obj.id,
+    name: obj.name,
+    type: obj.type,
+    position: obj.position,
+    rotation: obj.rotation,
+    scale: obj.scale,
+    source: obj.source,
+    footprintPoints: obj.footprintPoints,
+  }
 }
 
 // Mini 2D preview component for ROIs
@@ -531,29 +546,22 @@ export default function SmartKpiModal({ isOpen, onClose, dwgLayoutId: propDwgLay
 
   const cashierFixtures = useMemo<FixtureInfo[]>(() => {
     const template = availableTemplates.find(t => t.id === 'cashier-queue')
-    return (template?.detectedObjects ?? []).map(obj => ({
-      id: obj.id,
-      name: obj.name,
-      position: obj.position,
-      rotation: obj.rotation,
-      scale: obj.scale,
-      source: obj.source,
-      footprintPoints: obj.footprintPoints,
-    }))
+    return (template?.detectedObjects ?? []).map(toFixtureInfo)
   }, [availableTemplates])
 
   const shelfFixtures = useMemo<FixtureInfo[]>(() => {
     const template = availableTemplates.find(t => t.id === 'shelf-engagement')
-    return (template?.detectedObjects ?? []).map(obj => ({
-      id: obj.id,
-      name: obj.name,
-      position: obj.position,
-      rotation: obj.rotation,
-      scale: obj.scale,
-      source: obj.source,
-      footprintPoints: obj.footprintPoints,
-    }))
+    return (template?.detectedObjects ?? []).map(toFixtureInfo)
   }, [availableTemplates])
+
+  const shelfMapFixtures = useMemo<FixtureInfo[]>(() => {
+    const template = availableTemplates.find(t => t.id === 'shelf-engagement')
+    const source = template?.mapFixtures?.length ? template.mapFixtures : template?.detectedObjects ?? []
+    const byId = new Map<string, FixtureInfo>()
+    for (const obj of source) byId.set(obj.id, toFixtureInfo(obj))
+    for (const f of shelfFixtures) byId.set(f.id, f)
+    return sortFixtures(Array.from(byId.values()))
+  }, [availableTemplates, shelfFixtures])
 
   const syncCalibrationFromPreview = useCallback((fixtureId: string, rois: PreviewRoi[]) => {
     if (!fixtureId || rois.length === 0) return
@@ -582,7 +590,16 @@ export default function SmartKpiModal({ isOpen, onClose, dwgLayoutId: propDwgLay
     setReferenceFixtureId(fixtureId)
     setCalibrationValidated(false)
     setCalibrationAppliedToAll(false)
-    if (previewRois.length > 0) {
+    if (selectedTemplate === 'shelf-engagement' && shelfFixtures.length > 0 && fixtureId) {
+      const rois = generateCalibratedShelfPreviewRois(
+        shelfFixtures,
+        shelfCalibration,
+        { left: '#a855f7', right: '#f59e0b' },
+      )
+      if (rois.length > 0) {
+        setShelfCalibration(extractShelfCalibration(rois, shelfFixtures, fixtureId))
+      }
+    } else if (previewRois.length > 0) {
       syncCalibrationFromPreview(fixtureId, previewRois)
     }
   }
@@ -592,6 +609,16 @@ export default function SmartKpiModal({ isOpen, onClose, dwgLayoutId: propDwgLay
     setCalibrationValidated(false)
     setCalibrationAppliedToAll(false)
     calibrationInitializedRef.current = false
+
+    if (selectedTemplate === 'shelf-engagement' && shelfFixtures.length > 0) {
+      const ref = shelfFixtures.find(f => f.id === referenceFixtureId) ?? shelfFixtures[0]
+      const autoCal = computeAutoShelfCalibration(ref, shelfFixtures, engagementDepth)
+      setShelfCalibration(autoCal)
+      setPreviewRois(generateCalibratedShelfPreviewRois(shelfFixtures, autoCal, { left: '#a855f7', right: '#f59e0b' }))
+      calibrationInitializedRef.current = true
+      return
+    }
+
     const rois = await previewWithCalibration(null, null)
     if (referenceFixtureId && rois.length > 0) {
       syncCalibrationFromPreview(referenceFixtureId, rois)
@@ -971,6 +998,7 @@ export default function SmartKpiModal({ isOpen, onClose, dwgLayoutId: propDwgLay
           ) : activeTab === 'calibrate' && isShelfEngagement ? (
             <ShelfCalibrationPanel
               fixtures={shelfFixtures}
+              mapFixtures={shelfMapFixtures}
               previewRois={previewRois}
               calibration={shelfCalibration}
               customZones={shelfCustomZones}

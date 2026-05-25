@@ -49,8 +49,8 @@ const SMART_KPI_TEMPLATES = {
     name: 'Shelf Engagement',
     description: 'Measure customer interaction with product shelves and displays',
     icon: 'Package',
-    objectTypes: ['shelf'],
-    namePatterns: ['shelf', 'display', 'gondola', 'rack', 'scaffale', 'regal'],
+    objectTypes: ['shelf', 'fridge', 'service_counter'],
+    namePatterns: ['shelf', 'display', 'gondola', 'rack', 'scaffale', 'regal', 'fridge', 'frigo', 'banco', 'bancone', 'refriger', 'gastronomia', 'freezer'],
     kpis: [
       { id: 'browsingRate', name: 'Browsing Rate', unit: '%', description: 'Visitors who stopped at shelf' },
       { id: 'avgBrowseTime', name: 'Avg Browse Time', unit: 'seconds', description: 'Time spent looking' },
@@ -90,12 +90,17 @@ export class SmartKpiService {
       
       if (matchingObjects.length > 0) {
         detectedObjects[templateId] = matchingObjects;
-        availableKpis.push({
+        const kpiEntry = {
           ...template,
           detectedCount: matchingObjects.length,
           detectedObjects: matchingObjects.map(o => this.serializeFixtureForKpiApi(o)),
           canGenerate: true,
-        });
+        };
+        if (templateId === 'shelf-engagement') {
+          const mapObjects = objects.filter(o => this.isMapDisplayFixture(o));
+          kpiEntry.mapFixtures = mapObjects.map(o => this.serializeFixtureForKpiApi(o));
+        }
+        availableKpis.push(kpiEntry);
       }
     }
 
@@ -553,6 +558,111 @@ export class SmartKpiService {
     return this.getCashierAxes(shelf, sorted, isHorizontalRow, isVerticalRow, defaultFacingX, defaultFacingZ);
   }
 
+  getFootprintExtents(fixture, axes) {
+    const footprint = fixture.footprintPoints || fixture.metadata?.dwg_footprint_points;
+    const cx = fixture.position.x;
+    const cz = fixture.position.z;
+    let points;
+    if (footprint && footprint.length >= 3) {
+      points = footprint;
+    } else {
+      const hw = (fixture.scale?.x || 2) / 2;
+      const hd = (fixture.scale?.z || 0.5) / 2;
+      points = [
+        { x: cx - hw, z: cz - hd },
+        { x: cx + hw, z: cz - hd },
+        { x: cx + hw, z: cz + hd },
+        { x: cx - hw, z: cz + hd },
+      ];
+    }
+
+    let minAlong = Infinity;
+    let maxAlong = -Infinity;
+    let minFrom = Infinity;
+    let maxFrom = -Infinity;
+    for (const p of points) {
+      const along = (p.x - cx) * axes.alongX + (p.z - cz) * axes.alongZ;
+      const from = (p.x - cx) * axes.fromX + (p.z - cz) * axes.fromZ;
+      minAlong = Math.min(minAlong, along);
+      maxAlong = Math.max(maxAlong, along);
+      minFrom = Math.min(minFrom, from);
+      maxFrom = Math.max(maxFrom, from);
+    }
+
+    return {
+      alongLen: Math.max(0.5, maxAlong - minAlong),
+      fromLen: Math.max(0.3, maxFrom - minFrom),
+      minAlong,
+      maxAlong,
+      minFrom,
+      maxFrom,
+      centerAlong: (minAlong + maxAlong) / 2,
+    };
+  }
+
+  getAutoShelfZoneCalibration(ext, zoneType, engagementDepth) {
+    const depth = engagementDepth;
+    const fromCounter = zoneType === 'left'
+      ? ext.minFrom - depth / 2
+      : ext.maxFrom + depth / 2;
+    return {
+      width: ext.alongLen,
+      depth,
+      alongCounter: ext.centerAlong,
+      fromCounter,
+      rotationOffset: 0,
+    };
+  }
+
+  getShelfZoneRotation(axes, rotationOffsetDeg = 0) {
+    return Math.atan2(axes.alongZ, axes.alongX) + (rotationOffsetDeg * Math.PI / 180);
+  }
+
+  createShelfEngagementRoiFromCal(shelf, uniqueName, zoneType, zoneCal, axes, config, index) {
+    const {
+      width,
+      depth,
+      alongCounter = 0,
+      fromCounter = 0,
+      rotationOffset = 0,
+    } = zoneCal;
+
+    const centerX = shelf.position.x + axes.alongX * alongCounter + axes.fromX * fromCounter;
+    const centerZ = shelf.position.z + axes.alongZ * alongCounter + axes.fromZ * fromCounter;
+    const rotation = this.getShelfZoneRotation(axes, rotationOffset);
+    const label = zoneType === 'left' ? 'Left' : 'Right';
+    const color = zoneType === 'left' ? config.color : (config.colorBack || config.color);
+
+    return this.createRectangularRoi({
+      name: `${uniqueName} - Engagement (${label})`,
+      centerX,
+      centerZ,
+      width,
+      depth,
+      rotation,
+      color,
+      opacity: 0.3,
+      metadata: {
+        type: 'smart-kpi',
+        template: 'shelf-engagement',
+        zoneType,
+        shelfId: shelf.id,
+        shelfIndex: index,
+        fixtureType: shelf.type || 'shelf',
+        calibrated: Boolean(zoneCal.calibrated),
+      },
+    });
+  }
+
+  isMapDisplayFixture(fixture) {
+    const type = (fixture.type || '').toLowerCase();
+    const name = (fixture.name || '').toLowerCase();
+    if (['shelf', 'fridge', 'service_counter'].includes(type)) return true;
+    return ['banco', 'bancone', 'frigo', 'gondola', 'scaffale', 'fridge', 'freezer', 'refriger'].some(
+      hint => name.includes(hint) || type.includes(hint),
+    );
+  }
+
   generateCalibratedShelfRois(sorted, config, options) {
     const cal = options.shelfCalibration;
     const rois = [];
@@ -573,42 +683,19 @@ export class SmartKpiService {
       const uniqueName = this.isNameUnique(shelf.name, sorted) ? shelf.name : `Shelf ${shelfNumber}`;
 
       for (const { zoneType, zoneCal, color } of [
-        { zoneType: 'left', zoneCal: cal.left, color: config.color },
-        { zoneType: 'right', zoneCal: cal.right, color: config.colorBack || config.color },
+        { zoneType: 'left', zoneCal: cal.left },
+        { zoneType: 'right', zoneCal: cal.right },
       ]) {
         if (!zoneCal) continue;
-
-        const {
-          width,
-          depth,
-          alongCounter = 0,
-          fromCounter = 0,
-          rotationOffset = 0,
-        } = zoneCal;
-
-        const centerX = shelf.position.x + axes.alongX * alongCounter + axes.fromX * fromCounter;
-        const centerZ = shelf.position.z + axes.alongZ * alongCounter + axes.fromZ * fromCounter;
-        const rotation = Math.atan2(axes.fromX, axes.fromZ) + (rotationOffset * Math.PI / 180);
-        const label = zoneType === 'left' ? 'Left' : 'Right';
-
-        rois.push(this.createRectangularRoi({
-          name: `${uniqueName} - Engagement (${label})`,
-          centerX,
-          centerZ,
-          width,
-          depth,
-          rotation,
-          color,
-          opacity: 0.3,
-          metadata: {
-            type: 'smart-kpi',
-            template: 'shelf-engagement',
-            zoneType,
-            shelfId: shelf.id,
-            shelfIndex: index,
-            calibrated: true,
-          },
-        }));
+        rois.push(this.createShelfEngagementRoiFromCal(
+          shelf,
+          uniqueName,
+          zoneType,
+          { ...zoneCal, calibrated: true },
+          axes,
+          config,
+          index,
+        ));
       }
     });
 
@@ -637,74 +724,37 @@ export class SmartKpiService {
       return (a.position?.z || 0) - (b.position?.z || 0);
     });
 
-    sortedShelves.forEach((shelf, index) => {
-      const { position, scale, rotation, name } = shelf;
-      const scaleX = scale?.x || 2.0;
-      const scaleZ = scale?.z || 0.5;
-      const rotY = rotation?.y || 0;
+    const xSpread = Math.max(...sortedShelves.map(s => s.position.x)) - Math.min(...sortedShelves.map(s => s.position.x));
+    const zSpread = Math.max(...sortedShelves.map(s => s.position.z)) - Math.min(...sortedShelves.map(s => s.position.z));
+    const isHorizontalRow = xSpread > zSpread * 2 && sortedShelves.length > 1;
+    const isVerticalRow = zSpread > xSpread * 2 && sortedShelves.length > 1;
+    let defaultFacingX = 0;
+    let defaultFacingZ = 1;
+    if (isVerticalRow) {
+      defaultFacingX = 1;
+      defaultFacingZ = 0;
+    }
 
-      // Use sequential numbering for unique names (like checkout zones)
+    sortedShelves.forEach((shelf, index) => {
+      const { name } = shelf;
       const shelfNumber = index + 1;
-      // Create unique display name: "Shelf 1", "Shelf 2", etc. (or original name if already unique)
       const uniqueName = this.isNameUnique(name, shelves) ? name : `Shelf ${shelfNumber}`;
 
-      // Determine long side (product display) for zone height
-      const longSide = Math.max(scaleX, scaleZ);
-      
-      // Offset from shelf center to zone center
-      // Zones go in ±X direction, so offset by scaleX/2 (half the shelf width in X)
-      const offset = scaleX / 2 + engagementDepth / 2;
+      const axes = this.getShelfAxes(shelf, sortedShelves, isHorizontalRow, isVerticalRow, defaultFacingX, defaultFacingZ);
+      const ext = this.getFootprintExtents(shelf, axes);
 
-      // Apply rotation - zones always go on LEFT/RIGHT sides (±X direction before rotation)
-      const cos = Math.cos(rotY);
-      const sin = Math.sin(rotY);
-      
-      // LEFT zone direction (+X rotated)
-      const leftDirX = cos;
-      const leftDirZ = sin;
-      // RIGHT zone direction (-X rotated)
-      const rightDirX = -cos;
-      const rightDirZ = -sin;
-
-      // LEFT engagement zone
-      const leftRoi = this.createRectangularRoi({
-        name: `${uniqueName} - Engagement (Left)`,
-        centerX: position.x + leftDirX * offset,
-        centerZ: position.z + leftDirZ * offset,
-        width: engagementDepth,
-        depth: longSide,
-        rotation: rotY,
-        color: config.color,
-        opacity: 0.3,
-        metadata: {
-          type: 'smart-kpi',
-          template: 'shelf-engagement',
-          zoneType: 'left',
-          shelfId: shelf.id,
-          shelfIndex: index,
-        }
-      });
-      rois.push(leftRoi);
-
-      // RIGHT engagement zone
-      const rightRoi = this.createRectangularRoi({
-        name: `${uniqueName} - Engagement (Right)`,
-        centerX: position.x + rightDirX * offset,
-        centerZ: position.z + rightDirZ * offset,
-        width: engagementDepth,
-        depth: longSide,
-        rotation: rotY,
-        color: config.colorBack || config.color,
-        opacity: 0.3,
-        metadata: {
-          type: 'smart-kpi',
-          template: 'shelf-engagement',
-          zoneType: 'right',
-          shelfId: shelf.id,
-          shelfIndex: index,
-        }
-      });
-      rois.push(rightRoi);
+      for (const zoneType of ['left', 'right']) {
+        const zoneCal = this.getAutoShelfZoneCalibration(ext, zoneType, engagementDepth);
+        rois.push(this.createShelfEngagementRoiFromCal(
+          shelf,
+          uniqueName,
+          zoneType,
+          zoneCal,
+          axes,
+          config,
+          index,
+        ));
+      }
     });
 
     return rois;
@@ -1094,6 +1144,14 @@ export class SmartKpiService {
             ...this.serializeFixtureForKpiApi(f),
             maxDimension: f.scale ? Math.max(f.scale.x || 0, f.scale.z || 0) : null,
           })),
+          ...(templateId === 'shelf-engagement' ? {
+            mapFixtures: fixtures
+              .filter(f => this.isMapDisplayFixture(f))
+              .map(f => ({
+                ...this.serializeFixtureForKpiApi(f),
+                maxDimension: f.scale ? Math.max(f.scale.x || 0, f.scale.z || 0) : null,
+              })),
+          } : {}),
           sizeDistribution,
           canGenerate: true,
         });

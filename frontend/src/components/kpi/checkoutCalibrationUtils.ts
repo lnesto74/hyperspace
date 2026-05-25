@@ -14,9 +14,12 @@ export interface CheckoutCalibration {
 export interface FixtureInfo {
   id: string
   name: string
+  type?: string
   position: { x: number; y: number; z: number }
   rotation?: { x: number; y: number; z: number }
   scale?: { x: number; y: number; z: number }
+  source?: string | null
+  footprintPoints?: { x: number; z: number }[] | null
 }
 
 export interface PreviewRoiLike {
@@ -53,16 +56,6 @@ export function getCheckoutNumber(fixtureId: string, fixtures: FixtureInfo[]): n
   const sorted = sortFixtures(fixtures)
   const idx = sorted.findIndex(f => f.id === fixtureId)
   return idx >= 0 ? idx + 1 : 1
-}
-
-export interface FixtureInfo {
-  id: string
-  name: string
-  position: { x: number; y: number; z: number }
-  rotation?: { x: number; y: number; z: number }
-  scale?: { x: number; y: number; z: number }
-  source?: string | null
-  footprintPoints?: { x: number; z: number }[] | null
 }
 
 function computeAxesFromFootprint(
@@ -263,10 +256,56 @@ function normalizeDegrees(deg: number) {
   return d
 }
 
+export function getShelfZoneRotation(axes: { alongX: number; alongZ: number }, rotationOffsetDeg = 0) {
+  return Math.atan2(axes.alongZ, axes.alongX) + (rotationOffsetDeg * Math.PI / 180)
+}
+
+export function getFootprintExtents(fixture: FixtureInfo, axes: ReturnType<typeof getFixtureAxes>) {
+  const cx = fixture.position.x
+  const cz = fixture.position.z
+  let points: { x: number; z: number }[]
+  if (fixture.footprintPoints && fixture.footprintPoints.length >= 3) {
+    points = fixture.footprintPoints
+  } else {
+    const hw = (fixture.scale?.x ?? 2) / 2
+    const hd = (fixture.scale?.z ?? 0.5) / 2
+    points = [
+      { x: cx - hw, z: cz - hd },
+      { x: cx + hw, z: cz - hd },
+      { x: cx + hw, z: cz + hd },
+      { x: cx - hw, z: cz + hd },
+    ]
+  }
+
+  let minAlong = Infinity
+  let maxAlong = -Infinity
+  let minFrom = Infinity
+  let maxFrom = -Infinity
+  for (const p of points) {
+    const along = (p.x - cx) * axes.alongX + (p.z - cz) * axes.alongZ
+    const from = (p.x - cx) * axes.fromX + (p.z - cz) * axes.fromZ
+    minAlong = Math.min(minAlong, along)
+    maxAlong = Math.max(maxAlong, along)
+    minFrom = Math.min(minFrom, from)
+    maxFrom = Math.max(maxFrom, from)
+  }
+
+  return {
+    alongLen: Math.max(0.5, maxAlong - minAlong),
+    fromLen: Math.max(0.3, maxFrom - minFrom),
+    minAlong,
+    maxAlong,
+    minFrom,
+    maxFrom,
+    centerAlong: (minAlong + maxAlong) / 2,
+  }
+}
+
 export function extractZoneCalibration(
   roi: PreviewRoiLike,
   fixture: FixtureInfo,
   allFixtures?: FixtureInfo[],
+  options?: { shelfMode?: boolean },
 ): ZoneCalibration {
   const locals = roi.vertices.map(v => worldToLocal(v.x, v.z, fixture, allFixtures))
   const alongs = locals.map(l => l.along)
@@ -276,7 +315,10 @@ export function extractZoneCalibration(
   const center = getRoiCenter(roi.vertices)
   const centerLocal = worldToLocal(center.x, center.z, fixture, allFixtures)
 
-  const { fromX, fromZ, baseRotation } = getFixtureAxes(fixture, allFixtures)
+  const axes = getFixtureAxes(fixture, allFixtures)
+  const baseRotation = options?.shelfMode
+    ? getShelfZoneRotation(axes)
+    : axes.baseRotation
   const v0 = roi.vertices[0]
   const v1 = roi.vertices[1]
   const edgeX = v1.x - v0.x

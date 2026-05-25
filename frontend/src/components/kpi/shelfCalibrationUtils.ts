@@ -3,6 +3,8 @@ import {
   PreviewRoiLike,
   ZoneCalibration,
   extractZoneCalibration,
+  getFixtureAxes,
+  getFootprintExtents,
   sortFixtures,
 } from './checkoutCalibrationUtils'
 
@@ -13,9 +15,32 @@ export interface ShelfCalibration {
   right: ZoneCalibration
 }
 
+export const DEFAULT_SHELF_ENGAGEMENT_DEPTH = 1.5
+
 export const DEFAULT_SHELF_CALIBRATION: ShelfCalibration = {
-  left: { width: 1.5, depth: 4, alongCounter: 0, fromCounter: -2, rotationOffset: 0 },
-  right: { width: 1.5, depth: 4, alongCounter: 0, fromCounter: 2, rotationOffset: 0 },
+  left: { width: 4, depth: DEFAULT_SHELF_ENGAGEMENT_DEPTH, alongCounter: 0, fromCounter: -1.25, rotationOffset: 0 },
+  right: { width: 4, depth: DEFAULT_SHELF_ENGAGEMENT_DEPTH, alongCounter: 0, fromCounter: 1.25, rotationOffset: 0 },
+}
+
+export function computeAutoShelfCalibration(
+  fixture: FixtureInfo,
+  fixtures: FixtureInfo[],
+  engagementDepth = DEFAULT_SHELF_ENGAGEMENT_DEPTH,
+): ShelfCalibration {
+  const axes = getFixtureAxes(fixture, fixtures)
+  const ext = getFootprintExtents(fixture, axes)
+  const leftFrom = ext.minFrom - engagementDepth / 2
+  const rightFrom = ext.maxFrom + engagementDepth / 2
+  const base = {
+    width: ext.alongLen,
+    depth: engagementDepth,
+    alongCounter: ext.centerAlong,
+    rotationOffset: 0,
+  }
+  return {
+    left: { ...base, fromCounter: leftFrom },
+    right: { ...base, fromCounter: rightFrom },
+  }
 }
 
 export { sortFixtures } from './checkoutCalibrationUtils'
@@ -61,10 +86,10 @@ export function extractShelfCalibration(
 
   return {
     left: leftRoi
-      ? extractZoneCalibration(leftRoi, fixture, fixtures)
+      ? extractZoneCalibration(leftRoi, fixture, fixtures, { shelfMode: true })
       : { ...DEFAULT_SHELF_CALIBRATION.left },
     right: rightRoi
-      ? extractZoneCalibration(rightRoi, fixture, fixtures)
+      ? extractZoneCalibration(rightRoi, fixture, fixtures, { shelfMode: true })
       : { ...DEFAULT_SHELF_CALIBRATION.right },
   }
 }

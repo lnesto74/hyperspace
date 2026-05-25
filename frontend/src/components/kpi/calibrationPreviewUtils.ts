@@ -1,4 +1,4 @@
-import { getFixtureAxes, sortFixtures, FixtureInfo, PreviewRoiLike, ZoneCalibration } from './checkoutCalibrationUtils'
+import { getFixtureAxes, getShelfZoneRotation, sortFixtures, FixtureInfo, PreviewRoiLike, ZoneCalibration } from './checkoutCalibrationUtils'
 import { ShelfCalibration, getShelfEngagementLabel } from './shelfCalibrationUtils'
 
 export function createRectangularRoiVertices(
@@ -36,7 +36,7 @@ function zoneCenterAndRotation(
   const axes = getFixtureAxes(fixture, fixtures)
   const centerX = fixture.position.x + axes.alongX * zoneCal.alongCounter + axes.fromX * zoneCal.fromCounter
   const centerZ = fixture.position.z + axes.alongZ * zoneCal.alongCounter + axes.fromZ * zoneCal.fromCounter
-  const rotation = Math.atan2(axes.fromX, axes.fromZ) + (zoneCal.rotationOffset * Math.PI / 180)
+  const rotation = getShelfZoneRotation(axes, zoneCal.rotationOffset)
   return { centerX, centerZ, rotation, axes }
 }
 

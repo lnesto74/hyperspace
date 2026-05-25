@@ -49,6 +49,7 @@ import {
 
 interface ShelfCalibrationPanelProps {
   fixtures: FixtureInfo[]
+  mapFixtures?: FixtureInfo[]
   previewRois: PreviewRoiLike[]
   calibration: ShelfCalibration
   customZones: ShelfCustomZone[]
@@ -78,6 +79,34 @@ const ZONE_META: Record<ZoneType, { label: string; color: string }> = {
 }
 
 const ZONE_COLORS = { left: '#a855f7', right: '#f59e0b' }
+
+type FixtureDisplayKind = 'shelf' | 'fridge' | 'banco' | 'other'
+
+function resolveFixtureDisplayKind(fixture: FixtureInfo): FixtureDisplayKind {
+  const type = (fixture.type || '').toLowerCase()
+  const name = (fixture.name || '').toLowerCase()
+  if (type === 'fridge' || name.includes('fridge') || name.includes('frigo') || name.includes('freezer') || name.includes('refriger')) {
+    return 'fridge'
+  }
+  if (type === 'service_counter' || name.includes('banco') || name.includes('bancone') || name.includes('gastronomia')) {
+    return 'banco'
+  }
+  if (type === 'shelf' || name.includes('shelf') || name.includes('gondola') || name.includes('scaffale') || name.includes('regal')) {
+    return 'shelf'
+  }
+  return 'other'
+}
+
+const FIXTURE_DISPLAY: Record<FixtureDisplayKind, { fill: string; fillHi: string; stroke: string; strokeHi: string; label: string }> = {
+  shelf: { fill: '#1e1b4b', fillHi: '#312e81', stroke: '#c084fc', strokeHi: '#e9d5ff', label: 'Shelf' },
+  fridge: { fill: '#083344', fillHi: '#164e63', stroke: '#22d3ee', strokeHi: '#a5f3fc', label: 'Fridge' },
+  banco: { fill: '#451a03', fillHi: '#78350f', stroke: '#fbbf24', strokeHi: '#fde68a', label: 'Banco' },
+  other: { fill: '#1e293b', fillHi: '#334155', stroke: '#94a3b8', strokeHi: '#e2e8f0', label: 'Fixture' },
+}
+
+function fixtureHasRoiTarget(fixture: FixtureInfo, roiFixtures: FixtureInfo[]): boolean {
+  return roiFixtures.some(f => f.id === fixture.id)
+}
 
 function CalibrationSlider({
   label,
@@ -123,11 +152,13 @@ function FixtureFootprint({
   fixture,
   highlighted,
   dimmed,
+  hasRoiTarget,
   onSelect,
 }: {
   fixture: FixtureInfo
   highlighted?: boolean
   dimmed?: boolean
+  hasRoiTarget?: boolean
   onSelect?: () => void
 }) {
   const outline = getFixtureOutlinePoints(fixture)
@@ -136,19 +167,22 @@ function FixtureFootprint({
   const labelY = bounds.minZ - 0.35
   const labelX = (bounds.minX + bounds.maxX) / 2
   const hasPolygon = (fixture.footprintPoints?.length ?? 0) >= 3
+  const kind = resolveFixtureDisplayKind(fixture)
+  const style = FIXTURE_DISPLAY[kind]
+  const strokeWidth = highlighted ? 0.14 : 0.1
 
   return (
-    <g opacity={dimmed ? 0.35 : 1} onClick={(e) => { e.stopPropagation(); onSelect?.() }} style={{ cursor: onSelect ? 'pointer' : undefined }}>
+    <g opacity={dimmed ? 0.45 : 1} onClick={(e) => { e.stopPropagation(); onSelect?.() }} style={{ cursor: onSelect ? 'pointer' : undefined }}>
       <polygon
         points={pointsStr}
-        fill={highlighted ? '#3b0764' : '#1e293b'}
-        fillOpacity={highlighted ? 0.55 : 0.35}
-        stroke={highlighted ? '#c084fc' : '#a855f7'}
-        strokeWidth={highlighted ? 0.07 : 0.05}
+        fill={highlighted ? style.fillHi : style.fill}
+        fillOpacity={highlighted ? 0.72 : 0.55}
+        stroke={highlighted ? style.strokeHi : style.stroke}
+        strokeWidth={strokeWidth}
         strokeLinejoin="round"
       />
       {(highlighted || !dimmed) && (
-        <text x={labelX} y={labelY} textAnchor="middle" fontSize={0.32} fill={highlighted ? '#e9d5ff' : '#94a3b8'} pointerEvents="none">
+        <text x={labelX} y={labelY} textAnchor="middle" fontSize={0.34} fill={highlighted ? style.strokeHi : '#cbd5e1'} pointerEvents="none">
           {fixture.name}
         </text>
       )}
@@ -157,12 +191,18 @@ function FixtureFootprint({
           (no DWG polygon — using box fallback)
         </text>
       )}
+      {!hasRoiTarget && !dimmed && (
+        <text x={labelX} y={bounds.maxZ + 0.35} textAnchor="middle" fontSize={0.26} fill={style.stroke} pointerEvents="none">
+          {style.label} (display only)
+        </text>
+      )}
     </g>
   )
 }
 
 export default function ShelfCalibrationPanel({
   fixtures,
+  mapFixtures,
   previewRois,
   calibration,
   customZones,
@@ -208,6 +248,13 @@ export default function ShelfCalibrationPanel({
   } | null>(null)
 
   const sortedFixtures = useMemo(() => sortFixtures(fixtures), [fixtures])
+  const displayFixtures = useMemo(() => {
+    const source = mapFixtures?.length ? mapFixtures : fixtures
+    const byId = new Map<string, FixtureInfo>()
+    for (const f of source) byId.set(f.id, f)
+    for (const f of fixtures) byId.set(f.id, f)
+    return sortFixtures(Array.from(byId.values()))
+  }, [mapFixtures, fixtures])
   const referenceFixture = sortedFixtures.find(f => f.id === referenceFixtureId) ?? sortedFixtures[0]
   const zoneConfig = calibration[selectedZone]
   const selectedCustomZone = customZones.find(z => z.id === selectedCustomZoneId) ?? null
@@ -233,7 +280,7 @@ export default function ShelfCalibrationPanel({
   }, [viewMode, liveRois, referenceFixture, fixtures])
 
   const bounds = useMemo(() => {
-    const footprintPts = fixtures.flatMap(f => getFixtureOutlinePoints(f))
+    const footprintPts = displayFixtures.flatMap(f => getFixtureOutlinePoints(f))
     const points = [
       ...liveRois.flatMap(r => r.vertices),
       ...customZones.flatMap(z => z.vertices),
@@ -253,7 +300,7 @@ export default function ShelfCalibrationPanel({
       minZ: cz - halfD + panOffset.z,
       maxZ: cz + halfD + panOffset.z,
     }
-  }, [liveRois, customZones, drawPreview, fixtures, viewMode, referenceFixture, selectedCustomZoneId, panOffset, zoom])
+  }, [liveRois, customZones, drawPreview, displayFixtures, viewMode, referenceFixture, selectedCustomZoneId, panOffset, zoom])
 
   const viewBox = `${bounds.minX} ${bounds.minZ} ${bounds.maxX - bounds.minX} ${bounds.maxZ - bounds.minZ}`
 
@@ -366,7 +413,7 @@ export default function ShelfCalibrationPanel({
         return
       }
 
-      if (zoneType && referenceFixture && viewMode === 'focus') {
+      if (zoneType && referenceFixture) {
         setSelectedCustomZoneId(null)
         setSelectedZone(zoneType)
         dragRef.current = {
@@ -417,7 +464,6 @@ export default function ShelfCalibrationPanel({
       if (roiId) {
         const fixtureId = roiId.replace(/::(left|right)$/, '')
         if (fixtureId && fixtureId !== referenceFixtureId) onReferenceChange(fixtureId)
-        if (viewMode === 'all') setViewMode('focus')
       }
       if (zoneType) setSelectedZone(zoneType)
       if (referenceFixture || roiId) {
@@ -438,18 +484,17 @@ export default function ShelfCalibrationPanel({
     }
 
     const world = screenToWorld(e.clientX, e.clientY, svg)
-    const clickedFixture = getFixtureAtPoint(sortedFixtures, world.worldX, world.worldZ)
+    const clickedFixture = getFixtureAtPoint(displayFixtures, world.worldX, world.worldZ)
     if (clickedFixture) {
       setSelectedCustomZoneId(null)
       onReferenceChange(clickedFixture.id)
-      setViewMode('focus')
     } else {
       setSelectedCustomZoneId(null)
     }
   }, [
     mapTool, panOffset, bounds, retailCategories, effectiveDrawCategoryId, screenToWorld,
     customZones, referenceFixture, viewMode, calibration, selectedZone, referenceFixtureId,
-    onReferenceChange, sortedFixtures,
+    onReferenceChange, displayFixtures,
   ])
 
   const handleSvgMouseMove = useCallback((e: React.MouseEvent<SVGSVGElement>) => {
@@ -540,7 +585,7 @@ export default function ShelfCalibrationPanel({
   const referenceLeft = referenceFixture ? findRoiForShelf(liveRois, fixtures, referenceFixture.id, 'left') : undefined
   const referenceRight = referenceFixture ? findRoiForShelf(liveRois, fixtures, referenceFixture.id, 'right') : undefined
   const selectedRoi = selectedZone === 'left' ? referenceLeft : referenceRight
-  const templateHandles = referenceFixture && viewMode === 'focus' && !selectedCustomZoneId
+  const templateHandles = referenceFixture && !selectedCustomZoneId && selectedRoi
     ? getZoneHandlePositions(referenceFixture, fixtures, calibration[selectedZone])
     : null
   const customHandles = selectedCustomZone && mapTool === 'select'
@@ -706,7 +751,7 @@ export default function ShelfCalibrationPanel({
             <Eye className="w-4 h-4 text-purple-400" />
             Shelf zone map
             <span className="text-[10px] text-gray-500 font-normal">
-              ({liveRois.length} template · {customZones.length} custom)
+              ({liveRois.length} template · {customZones.length} custom · {displayFixtures.length} fixtures)
             </span>
           </h3>
           <div className="flex items-center gap-1">
@@ -739,13 +784,14 @@ export default function ShelfCalibrationPanel({
             </defs>
             <rect x={bounds.minX} y={bounds.minZ} width={bounds.maxX - bounds.minX} height={bounds.maxZ - bounds.minZ} fill="url(#shelfCalGrid)" />
 
-            {fixtures.map(fixture => (
+            {displayFixtures.map(fixture => (
               <FixtureFootprint
                 key={fixture.id}
                 fixture={fixture}
                 highlighted={fixture.id === referenceFixtureId && !selectedCustomZoneId}
                 dimmed={viewMode === 'focus' && fixture.id !== referenceFixtureId && !selectedCustomZoneId}
-                onSelect={() => { onReferenceChange(fixture.id); setViewMode('focus'); setSelectedCustomZoneId(null) }}
+                hasRoiTarget={fixtureHasRoiTarget(fixture, sortedFixtures)}
+                onSelect={() => { onReferenceChange(fixture.id); setSelectedCustomZoneId(null) }}
               />
             ))}
 
@@ -834,9 +880,12 @@ export default function ShelfCalibrationPanel({
           </svg>
 
           <div className="absolute bottom-2 left-2 flex flex-wrap gap-2 text-[10px] text-gray-400 bg-gray-900/90 px-2 py-1 rounded max-w-[95%]">
-            <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-sm bg-purple-500/60 border border-purple-500" /> Left</span>
-            <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-sm bg-amber-500/60 border border-amber-500" /> Right</span>
-            <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-sm bg-teal-500/60 border border-teal-500" /> Custom category</span>
+            <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm bg-purple-900/80 border-2 border-purple-400" /> Shelf</span>
+            <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm bg-cyan-950/80 border-2 border-cyan-400" /> Fridge</span>
+            <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm bg-amber-950/80 border-2 border-amber-400" /> Banco</span>
+            <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-sm bg-purple-500/60 border border-purple-500" /> Left zone</span>
+            <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-sm bg-amber-500/60 border border-amber-500" /> Right zone</span>
+            <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-sm bg-teal-500/60 border border-teal-500" /> Custom</span>
             <span className="text-gray-500">Zoom {(zoom * 100).toFixed(0)}%</span>
           </div>
         </div>
