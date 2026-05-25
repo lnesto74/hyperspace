@@ -9,7 +9,6 @@ import { useVenue } from '../../context/VenueContext';
 import { useLidar } from '../../context/LidarContext';
 import type { LidarPlacement } from '../../types';
 import { useReplayInsight, NarrationPack } from '../../context/ReplayInsightContext';
-import { useTracksRef } from '../../context/TrackingContext';
 import type { CaptureScreenshotFn } from '../venue/MainViewport';
 import HistogramTimeline from './HistogramTimeline';
 import LandingNarrator from './LandingNarrator';
@@ -135,7 +134,6 @@ export default function LandingExperience({ onDismiss, captureScreenshot }: Land
   const { venue, venueList, fetchVenueList, loadVenue } = useVenue();
   const { episodes, fetchEpisodes, selectEpisode } = useReplayInsight();
   const { setPlacements } = useLidar();
-  const tracksRef = useTracksRef();
   const [stage, setStage] = useState<Stage>('black');
   const [phase, setPhase] = useState<'welcome' | 'briefing'>('welcome');
   const [isExiting, setIsExiting] = useState(false);
@@ -171,27 +169,22 @@ export default function LandingExperience({ onDismiss, captureScreenshot }: Land
     return () => { stageTimerRef.current.forEach(clearTimeout); };
   }, []);
 
-  // Capture contextual 3D screenshots — staggered to avoid blocking the main thread.
-  // Skip entirely while live LiDAR tracks are active (competes with mesh sync + GPU).
+  // Capture contextual 3D screenshots — staggered one frame apart to avoid blocking the main thread.
   const [captureAttempt, setCaptureAttempt] = useState(0);
   useEffect(() => {
     if (!captureScreenshot || episodes.length === 0 || screenshots.size > 0) return;
     if (captureAttempt >= 5) return;
-    if (tracksRef.current.size > 0) {
-      console.log('[Landing] Skipping screenshots — live tracks active (', tracksRef.current.size, ')');
-      return;
-    }
     const delay = captureAttempt === 0 ? 3000 : 2000;
     console.log('[Landing] Screenshot attempt', captureAttempt + 1, '- delay', delay);
     let cancelled = false;
     const timer = setTimeout(async () => {
-      if (cancelled || tracksRef.current.size > 0) return;
+      if (cancelled) return;
       const m = new Map<string, string>();
       const vcx = venue ? (venue.width || 10) / 2 : 5;
       const vcz = venue ? (venue.depth || 10) / 2 : 5;
       const batch = episodes.slice(0, 10);
       for (let idx = 0; idx < batch.length; idx++) {
-        if (cancelled || tracksRef.current.size > 0) break;
+        if (cancelled) break;
         await new Promise<void>(r => requestAnimationFrame(() => requestAnimationFrame(() => r())));
         const ep = batch[idx];
         const zones = (ep.highlight_zones || [])
@@ -236,7 +229,7 @@ export default function LandingExperience({ onDismiss, captureScreenshot }: Land
       }
     }, delay);
     return () => { cancelled = true; clearTimeout(timer); };
-  }, [captureScreenshot, episodes, screenshots.size, venue, captureAttempt, tracksRef]);
+  }, [captureScreenshot, episodes, screenshots.size, venue, captureAttempt]);
 
   // Auto-advance slideshow
   useEffect(() => {

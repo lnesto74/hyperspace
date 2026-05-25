@@ -1246,6 +1246,7 @@ export default function MainViewport({
         imageHeight: capH = 450,
         zones,
         angleOffset = 0,
+        trackPositions,
       }) => {
         try {
           // Save current state
@@ -1314,7 +1315,7 @@ export default function MainViewport({
             // Hide live tracks during capture to avoid overlap
             trackMeshesRef.current.forEach(g => { g.visible = false })
           }
-          const trackOpts = (zones && zones.length > 0) ? options.trackPositions : undefined
+          const trackOpts = (zones && zones.length > 0) ? trackPositions : undefined
           if (trackOpts && trackOpts.length > 0) {
             for (const tp of trackOpts) {
               const cylGeo = new THREE.CylinderGeometry(0.2, 0.2, 1.7, 8)
