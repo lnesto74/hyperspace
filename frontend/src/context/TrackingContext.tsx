@@ -134,6 +134,8 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
   const interpTsRef = useRef<Map<string, number>>(new Map())
   const pendingRemovalsRef = useRef<Set<string>>(new Set())
   const removalFlushTimerRef = useRef<number | null>(null)
+  const smoothMotionRequestedRef = useRef(true)
+  const setInterpolationRef = useRef<(enabled: boolean) => void>(() => {})
   
   // Historical timeline/insight replay uses DB snapshots; MQTT JSONL replay uses live socket.
   const useHistoricalTracks = isReplayMode && !mqttReplayActive
@@ -260,7 +262,7 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
         }
       }
       
-      if (interpEnabledRef.current) {
+      if (interpEnabledRef.current && !mqttReplayActiveRef.current) {
         // Build a Set of trackKeys in this snapshot to prune stale targets
         const incomingKeys = new Set<string>()
         for (const track of data.tracks) {
@@ -553,18 +555,18 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
     interpRAFRef.current = requestAnimationFrame(interpLoop)
   }, [])
 
-  const setMqttReplayActive = useCallback((active: boolean) => {
-    mqttReplayActiveRef.current = active
-    setMqttReplayActiveState(active)
-  }, [])
-
   const setInterpolation = useCallback((enabled: boolean) => {
+    smoothMotionRequestedRef.current = enabled
     const historicalReplay = isReplayModeRef.current && !mqttReplayActiveRef.current
     const trackCount = liveTracksRef.current.size
-    const shouldInterp = enabled && !historicalReplay && trackCount <= INTERP_MAX_TRACKS
+    const shouldInterp =
+      enabled &&
+      !historicalReplay &&
+      !mqttReplayActiveRef.current &&
+      trackCount <= INTERP_MAX_TRACKS
     if (DIAG) {
       console.log(
-        `[DIAG] setInterpolation  enabled=${enabled}  active=${shouldInterp}  historicalReplay=${historicalReplay}  tracks=${trackCount}  t=${Date.now()}`
+        `[DIAG] setInterpolation  enabled=${enabled}  active=${shouldInterp}  historicalReplay=${historicalReplay}  mqttReplay=${mqttReplayActiveRef.current}  tracks=${trackCount}  t=${Date.now()}`
       )
     }
     interpEnabledRef.current = shouldInterp
@@ -585,8 +587,15 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
       interpFrameRef.current = 0
     }
   }, [interpLoop, seedInterpolationTargets])
+  setInterpolationRef.current = setInterpolation
 
-  // Original smooth motion: 30fps interpolation for live + MQTT replay (not historical timeline).
+  const setMqttReplayActive = useCallback((active: boolean) => {
+    mqttReplayActiveRef.current = active
+    setMqttReplayActiveState(active)
+    setInterpolationRef.current(smoothMotionRequestedRef.current)
+  }, [])
+
+  // Smooth 30fps motion for live edge only (not MQTT file replay or historical timeline).
   useEffect(() => {
     setInterpolation(true)
     return () => setInterpolation(false)

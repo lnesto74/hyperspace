@@ -180,9 +180,8 @@ export default function ReplayPanel({ onClose }: ReplayPanelProps) {
     return () => {
       if (pollRef.current) clearInterval(pollRef.current)
       if (recordPollRef.current) clearInterval(recordPollRef.current)
-      setMqttReplayActive(false)
     }
-  }, [refreshFiles, refreshStatus, refreshRecordStatus, setMqttReplayActive])
+  }, [refreshFiles, refreshStatus, refreshRecordStatus])
 
   useEffect(() => {
     if (!selected) {
@@ -256,6 +255,7 @@ export default function ReplayPanel({ onClose }: ReplayPanelProps) {
     if (!fileToPlay) return
     const progress = startProgress ?? scrubPct / 100
     startingReplayRef.current = true
+    setMqttReplayActive(true)
     setError(null)
     try {
       await fetch(`${API_BASE}/api/replay/stop`, { method: 'POST' })
@@ -282,7 +282,7 @@ export default function ReplayPanel({ onClose }: ReplayPanelProps) {
     } finally {
       startingReplayRef.current = false
     }
-  }, [speed, refreshStatus, waitForReplayStopped, scrubPct])
+  }, [speed, refreshStatus, waitForReplayStopped, scrubPct, setMqttReplayActive])
 
   const seekTo = useCallback(async (pct: number) => {
     const fileToPlay = readSelectedFile() || status?.file
@@ -308,6 +308,7 @@ export default function ReplayPanel({ onClose }: ReplayPanelProps) {
   }, [speed, refreshStatus, status?.file])
 
   const stop = useCallback(async () => {
+    setMqttReplayActive(false)
     clearReplayTracks()
     try {
       await fetch(`${API_BASE}/api/replay/stop`, { method: 'POST' })
@@ -316,7 +317,7 @@ export default function ReplayPanel({ onClose }: ReplayPanelProps) {
     } catch (err) {
       console.error(err)
     }
-  }, [refreshStatus, clearReplayTracks])
+  }, [refreshStatus, clearReplayTracks, setMqttReplayActive])
 
   const running = !!status?.running
   const playingFile = status?.file || null
