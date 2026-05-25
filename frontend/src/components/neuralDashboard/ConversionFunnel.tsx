@@ -132,7 +132,7 @@ export default function ConversionFunnel({ batchFunnel, range: controlledRange, 
               <div
                 className="h-full rounded-sm relative"
                 style={{
-                  width: `${Math.max(animatedWidths[i] || 0, 2)}%`,
+                  width: `${Math.min(Math.max(animatedWidths[i] || 0, stage.count > 0 ? 2 : 0), 100)}%`,
                   background: STAGE_COLORS[i],
                   transition: 'width 0.8s cubic-bezier(0.4, 0, 0.2, 1)',
                   boxShadow: `0 0 8px ${STAGE_COLORS[i].replace('0.7', '0.3').replace('0.8', '0.3')}`,
@@ -149,10 +149,10 @@ export default function ConversionFunnel({ batchFunnel, range: controlledRange, 
             </div>
 
             <div className="w-[36px] text-right shrink-0">
-              {i > 0 && stage.dropPct > 0 ? (
-                <span className="text-red-400/70 text-[9px]">-{stage.dropPct}%</span>
-              ) : i === 0 ? (
-                <span className="text-white/45 text-[9px]">100%</span>
+              {stage.pctOfEntry > 0 || i === 0 ? (
+                <span className={`text-[9px] ${i === 0 ? 'text-white/45' : 'text-white/55'}`}>
+                  {stage.pctOfEntry}%
+                </span>
               ) : (
                 <span className="text-white/45 text-[9px]">—</span>
               )}
@@ -173,8 +173,8 @@ export default function ConversionFunnel({ batchFunnel, range: controlledRange, 
         </div>
       )}
 
-      {(!data || data.stages?.[0]?.count === 0) && (
-        <div className="flex-1 flex items-center justify-center">
+      {(!data || !data.stages?.some(s => s.count > 0)) && (
+        <div className="flex items-center justify-center py-2">
           <span className="text-white/20 text-[10px]">No funnel data for this period</span>
         </div>
       )}

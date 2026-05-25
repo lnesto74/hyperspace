@@ -621,6 +621,31 @@ function countDistinctFunnelTracks(db, venueId, roiIds, startTime, endTime, extr
   return row?.cnt || 0;
 }
 
+/** Dwell flag is sometimes stale; duration_ms is the reliable fallback. */
+const FUNNEL_DWELL_WHERE = 'AND (is_dwell = 1 OR duration_ms >= 3000)';
+
+function distinctFunnelTrackKeys(db, venueId, roiIds, startTime, endTime, extraWhere = '') {
+  if (!roiIds.length) return new Set();
+  const placeholders = roiIds.map(() => '?').join(',');
+  const rows = db.prepare(`
+    SELECT DISTINCT track_key
+    FROM zone_visits
+    WHERE venue_id = ? AND roi_id IN (${placeholders})
+      AND start_time >= ? AND start_time < ?
+      ${extraWhere}
+  `).all(venueId, ...roiIds, startTime, endTime);
+  return new Set(rows.map(r => r.track_key));
+}
+
+function intersectTrackSets(a, b) {
+  if (!a.size || !b.size) return new Set();
+  const out = new Set();
+  for (const key of a) {
+    if (b.has(key)) out.add(key);
+  }
+  return out;
+}
+
 function computeFunnel(db, venueId, range) {
   const { startTime, endTime } = resolveRange(range);
 
@@ -631,39 +656,53 @@ function computeFunnel(db, venueId, range) {
   const entryRoiIds = rois.filter(r => classifyFunnelRoi(r.name) === 'entry').map(r => r.id);
   const shelfRoiIds = rois.filter(r => classifyFunnelRoi(r.name) === 'shelf').map(r => r.id);
   const checkoutRoiIds = rois.filter(r => classifyFunnelRoi(r.name) === 'checkout').map(r => r.id);
+  const footfallRoiIds = rois.filter(r => classifyFunnelRoi(r.name) !== 'queue').map(r => r.id);
 
-  let entry = countDistinctFunnelTracks(db, venueId, entryRoiIds, startTime, endTime);
-  if (entry === 0 && entryRoiIds.length === 0) {
-    const footfallRoiIds = rois.filter(r => classifyFunnelRoi(r.name) !== 'queue').map(r => r.id);
-    entry = countDistinctFunnelTracks(db, venueId, footfallRoiIds, startTime, endTime);
+  let entrySet = distinctFunnelTrackKeys(db, venueId, entryRoiIds, startTime, endTime);
+  let entrySource = 'entrance';
+
+  if (entrySet.size === 0 && footfallRoiIds.length > 0) {
+    entrySet = distinctFunnelTrackKeys(db, venueId, footfallRoiIds, startTime, endTime);
+    entrySource = entryRoiIds.length > 0 ? 'footfall_fallback' : 'footfall';
   }
 
-  let shop = 0;
-  let engage = 0;
-  let basket = 0;
-  let checkout = 0;
+  const shopAll = distinctFunnelTrackKeys(db, venueId, shelfRoiIds, startTime, endTime);
+  const shopSet = entrySet.size > 0 ? intersectTrackSets(entrySet, shopAll) : shopAll;
 
+  const engageAll = distinctFunnelTrackKeys(
+    db, venueId, shelfRoiIds, startTime, endTime, FUNNEL_DWELL_WHERE
+  );
+  const engageSet = intersectTrackSets(shopSet, engageAll);
+
+  let basketSet = new Set();
   if (shelfRoiIds.length > 0) {
-    shop = countDistinctFunnelTracks(db, venueId, shelfRoiIds, startTime, endTime);
-    engage = countDistinctFunnelTracks(
-      db, venueId, shelfRoiIds, startTime, endTime, 'AND is_dwell = 1'
-    );
-
     const basketRows = db.prepare(`
       SELECT track_key, COUNT(DISTINCT roi_id) AS zone_count
       FROM zone_visits
       WHERE venue_id = ? AND roi_id IN (${shelfRoiIds.map(() => '?').join(',')})
-        AND is_dwell = 1
+        ${FUNNEL_DWELL_WHERE}
         AND start_time >= ? AND start_time < ?
       GROUP BY track_key
       HAVING zone_count >= 3
     `).all(venueId, ...shelfRoiIds, startTime, endTime);
-    basket = basketRows.length;
+    basketSet = intersectTrackSets(engageSet, new Set(basketRows.map(r => r.track_key)));
   }
 
-  if (checkoutRoiIds.length > 0) {
-    checkout = countDistinctFunnelTracks(db, venueId, checkoutRoiIds, startTime, endTime);
+  const checkoutAll = distinctFunnelTrackKeys(db, venueId, checkoutRoiIds, startTime, endTime);
+  const checkoutSet = entrySet.size > 0
+    ? intersectTrackSets(entrySet, checkoutAll)
+    : intersectTrackSets(shopSet, checkoutAll);
+
+  if (entrySet.size === 0 && shopSet.size > 0) {
+    entrySet = shopSet;
+    entrySource = 'shop_anchor';
   }
+
+  const entry = entrySet.size;
+  const shop = shopSet.size;
+  const engage = engageSet.size;
+  const basket = basketSet.size;
+  const checkout = checkoutSet.size;
 
   const stages = [
     { id: 'entry', label: 'ENTRY', count: entry },
@@ -673,29 +712,40 @@ function computeFunnel(db, venueId, range) {
     { id: 'checkout', label: 'CHECKOUT', count: checkout },
   ];
 
+  for (let i = 0; i < stages.length; i++) {
+    stages[i].pctOfEntry = entry > 0 ? Math.min(100, Math.round((stages[i].count / entry) * 100)) : 0;
+  }
+  if (entry > 0) stages[0].pctOfEntry = 100;
+
   for (let i = 1; i < stages.length; i++) {
     const prev = stages[i - 1].count;
-    stages[i].dropPct = prev > 0 ? Math.round((1 - stages[i].count / prev) * 100) : 0;
-    stages[i].pctOfEntry = entry > 0 ? Math.round((stages[i].count / entry) * 100) : 0;
+    const curr = stages[i].count;
+    stages[i].dropPct = (prev > 0 && curr <= prev)
+      ? Math.round((1 - curr / prev) * 100)
+      : 0;
   }
   stages[0].dropPct = 0;
-  stages[0].pctOfEntry = 100;
 
   let biggestLeak = null;
   let maxDrop = 0;
   for (let i = 1; i < stages.length; i++) {
-    if (stages[i].dropPct > maxDrop && stages[i - 1].count > 0) {
-      maxDrop = stages[i].dropPct;
-      biggestLeak = {
-        from: stages[i - 1].label,
-        to: stages[i].label,
-        dropPct: stages[i].dropPct,
-        lost: stages[i - 1].count - stages[i].count,
-      };
+    const prev = stages[i - 1].count;
+    const curr = stages[i].count;
+    if (prev > 0 && curr <= prev) {
+      const dropPct = Math.round((1 - curr / prev) * 100);
+      if (dropPct > maxDrop) {
+        maxDrop = dropPct;
+        biggestLeak = {
+          from: stages[i - 1].label,
+          to: stages[i].label,
+          dropPct,
+          lost: prev - curr,
+        };
+      }
     }
   }
 
-  return { stages, biggestLeak, range, venueId };
+  return { stages, biggestLeak, range, venueId, entrySource };
 }
 
 function computeAlerts(db, venueId, trackAggregator) {
@@ -1004,7 +1054,7 @@ function computeMediaSummaryForRange(db, venueId, startTime, endTime) {
       isActive: camp.enabled === 1,
       exposures: stats.exposures,
       conversions: stats.conversions,
-      conversionRate: Math.round(convRate),
+      conversionRate: parseFloat(convRate.toFixed(1)),
       avgDci: parseFloat((stats.avgDci || 0).toFixed(2)),
       avgConfidence: parseFloat((stats.avgConf || 0).toFixed(2)),
       liftRel: stats.liftRel != null ? parseFloat(stats.liftRel.toFixed(1)) : null,
@@ -1014,7 +1064,7 @@ function computeMediaSummaryForRange(db, venueId, startTime, endTime) {
 
   const activeCampaigns = results.filter(r => r.isActive);
   const avgConvRate = activeCampaigns.length > 0
-    ? Math.round(activeCampaigns.reduce((s, r) => s + r.conversionRate, 0) / activeCampaigns.length)
+    ? parseFloat((activeCampaigns.reduce((s, r) => s + r.conversionRate, 0) / activeCampaigns.length).toFixed(1))
     : 0;
 
   return {

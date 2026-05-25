@@ -1,6 +1,12 @@
 import { useEffect, useRef, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 import { useRoi } from '../../context/RoiContext'
+import { useVenue } from '../../context/VenueContext'
+import {
+  buildMapTransform,
+  computeFloorPlanBounds,
+  drawAlertZoneMap,
+} from '../../utils/venueFloorPlanMap'
 
 interface AlertData {
   id: string
@@ -37,7 +43,10 @@ interface Props {
 
 export default function AlertDetailModal({ alert, onClose }: Props) {
   const { regions } = useRoi()
+  const { objects, venue } = useVenue()
   const canvasRef = useRef<HTMLCanvasElement>(null)
+  const pulseRef = useRef(0)
+  const rafRef = useRef<number | null>(null)
 
   const highlightIds = new Set<string>()
   if (alert.zoneId) highlightIds.add(alert.zoneId)
@@ -46,10 +55,11 @@ export default function AlertDetailModal({ alert, onClose }: Props) {
   }
 
   const highlightKey = Array.from(highlightIds).sort().join(',')
+  const hasMapData = objects.length > 0 || regions.length > 0
 
   const drawMap = useCallback(() => {
     const canvas = canvasRef.current
-    if (!canvas || regions.length === 0) return
+    if (!canvas || !hasMapData) return
     const ctx = canvas.getContext('2d')
     if (!ctx) return
 
@@ -60,60 +70,43 @@ export default function AlertDetailModal({ alert, onClose }: Props) {
     const ch = canvas.clientHeight
     canvas.width = cw * dpr
     canvas.height = ch * dpr
-    ctx.scale(dpr, dpr)
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
     ctx.clearRect(0, 0, cw, ch)
 
-    let minX = Infinity, minZ = Infinity, maxX = -Infinity, maxZ = -Infinity
-    for (const r of regions) {
-      for (const v of r.vertices) {
-        if (v.x < minX) minX = v.x
-        if (v.x > maxX) maxX = v.x
-        if (v.z < minZ) minZ = v.z
-        if (v.z > maxZ) maxZ = v.z
-      }
-    }
+    const bounds = computeFloorPlanBounds(
+      objects,
+      regions,
+      venue ? { width: venue.width, depth: venue.depth } : undefined,
+    )
+    const transform = buildMapTransform(bounds, cw, ch)
 
-    const pad = 24
-    const sceneW = maxX - minX || 1
-    const sceneH = maxZ - minZ || 1
-    const scale = Math.min((cw - pad * 2) / sceneW, (ch - pad * 2) / sceneH)
-    const offX = (cw - sceneW * scale) / 2
-    const offZ = (ch - sceneH * scale) / 2
-    const tx = (x: number) => offX + (x - minX) * scale
-    const tz = (z: number) => offZ + (z - minZ) * scale
-
-    const meta = TYPE_META[alert.type] || TYPE_META.bottleneck
-
-    for (const r of regions) {
-      if (r.vertices.length < 3) continue
-      const highlighted = hIds.has(r.id)
-
-      ctx.beginPath()
-      ctx.moveTo(tx(r.vertices[0].x), tz(r.vertices[0].z))
-      for (let i = 1; i < r.vertices.length; i++) {
-        ctx.lineTo(tx(r.vertices[i].x), tz(r.vertices[i].z))
-      }
-      ctx.closePath()
-
-      if (highlighted) {
-        ctx.fillStyle = meta.accent
-        ctx.fill()
-        ctx.strokeStyle = meta.color
-        ctx.lineWidth = 2
-      } else {
-        ctx.strokeStyle = 'rgba(255,255,255,0.12)'
-        ctx.lineWidth = 0.5
-      }
-      ctx.stroke()
-    }
-
-  }, [regions, highlightKey, alert.type])
+    drawAlertZoneMap(ctx, {
+      objects,
+      regions,
+      highlightIds: hIds,
+      pulse: pulseRef.current,
+      transform,
+    })
+  }, [objects, regions, venue, highlightKey, hasMapData])
 
   useEffect(() => {
-    drawMap()
-    window.addEventListener('resize', drawMap)
-    return () => window.removeEventListener('resize', drawMap)
-  }, [drawMap])
+    if (!hasMapData) return
+
+    const tick = (ts: number) => {
+      pulseRef.current = (ts % 2000) / 2000
+      drawMap()
+      rafRef.current = requestAnimationFrame(tick)
+    }
+    rafRef.current = requestAnimationFrame(tick)
+
+    const onResize = () => drawMap()
+    window.addEventListener('resize', onResize)
+
+    return () => {
+      if (rafRef.current) cancelAnimationFrame(rafRef.current)
+      window.removeEventListener('resize', onResize)
+    }
+  }, [drawMap, hasMapData])
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
@@ -131,6 +124,8 @@ export default function AlertDetailModal({ alert, onClose }: Props) {
     return `${Math.floor(sec / 3600)}h ago`
   }
 
+  const highlightCount = highlightIds.size
+
   return createPortal(
     <div
       className="fixed inset-0 flex items-center justify-center"
@@ -147,7 +142,6 @@ export default function AlertDetailModal({ alert, onClose }: Props) {
         }}
         onClick={e => e.stopPropagation()}
       >
-        {/* Close button */}
         <button
           onClick={onClose}
           className="absolute top-3 right-3 w-8 h-8 flex items-center justify-center rounded text-white/30 hover:text-white/60 hover:bg-white/[0.06] transition-colors text-lg z-10"
@@ -155,8 +149,7 @@ export default function AlertDetailModal({ alert, onClose }: Props) {
           ×
         </button>
 
-        <div className="p-6">
-          {/* Header */}
+        <div className="p-6 overflow-y-auto" style={{ maxHeight: window.innerHeight - 60 }}>
           <div className="flex items-center gap-3 mb-4">
             <div
               className="w-10 h-10 rounded-lg flex items-center justify-center text-xl"
@@ -182,14 +175,12 @@ export default function AlertDetailModal({ alert, onClose }: Props) {
             </div>
           </div>
 
-          {/* Message */}
           <div className="rounded-md p-4 mb-4" style={{ background: 'rgba(255,255,255,0.03)', borderLeft: `3px solid ${meta.color}44` }}>
             <div className="text-[13px] text-white/85 leading-relaxed">
               {alert.message}
             </div>
           </div>
 
-          {/* Product categories */}
           {alert.categories && alert.categories.length > 0 && (
             <div className="rounded-md p-3 mb-4" style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.06)' }}>
               <div className="text-[9px] text-white/35 uppercase tracking-wider mb-2">
@@ -209,12 +200,10 @@ export default function AlertDetailModal({ alert, onClose }: Props) {
             </div>
           )}
 
-          {/* Description */}
           <div className="text-[11px] text-white/45 leading-relaxed mb-4">
             {meta.description}
           </div>
 
-          {/* Action */}
           <div className="flex items-center gap-2 mb-5">
             <span className="text-[11px] text-white/30">RECOMMENDED →</span>
             <span className="text-[12px] italic" style={{ color: `${meta.color}cc` }}>
@@ -222,18 +211,37 @@ export default function AlertDetailModal({ alert, onClose }: Props) {
             </span>
           </div>
 
-          {/* Wireframe mini-map */}
-          {regions.length > 0 && (
+          {hasMapData && (
             <div>
-              <div className="text-[9px] text-white/30 uppercase tracking-wider mb-2">Zone Map</div>
+              <div className="flex items-center justify-between mb-2">
+                <div className="text-[9px] text-white/30 uppercase tracking-wider">Zone Map</div>
+                <div className="text-[8px] text-white/25">
+                  {objects.length} fixtures · {regions.length} zones
+                  {highlightCount > 0 ? ` · ${highlightCount} highlighted` : ''}
+                </div>
+              </div>
               <div
                 className="rounded-md border overflow-hidden"
-                style={{ background: 'rgba(0,0,0,0.4)', borderColor: 'rgba(255,255,255,0.06)' }}
+                style={{ background: 'rgba(0,0,0,0.5)', borderColor: 'rgba(255,255,255,0.06)' }}
               >
                 <canvas
                   ref={canvasRef}
-                  style={{ width: '100%', height: 260, display: 'block' }}
+                  style={{ width: '100%', height: 320, display: 'block' }}
                 />
+              </div>
+              <div className="flex items-center gap-4 mt-2 text-[8px] text-white/30">
+                <span className="flex items-center gap-1">
+                  <span className="inline-block w-2 h-2 rounded-sm border border-cyan-400/50 bg-cyan-400/10" />
+                  DWG fixtures
+                </span>
+                <span className="flex items-center gap-1">
+                  <span className="inline-block w-2 h-2 rounded-sm border border-violet-400/40 bg-violet-400/10" />
+                  Zones
+                </span>
+                <span className="flex items-center gap-1">
+                  <span className="inline-block w-2 h-2 rounded-sm border border-red-400 bg-red-400/30" />
+                  Alert ROI (pulsing)
+                </span>
               </div>
             </div>
           )}
@@ -243,4 +251,3 @@ export default function AlertDetailModal({ alert, onClose }: Props) {
     document.body
   )
 }
-

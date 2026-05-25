@@ -159,7 +159,7 @@ export default function RetailMediaPanel({ batchMedia }: { batchMedia?: MediaDat
                   <span className="text-white/45 text-[8px]">{camp.screens}scr</span>
                 </div>
                 <span className={`text-[9px] ${roiCfg.text}`}>
-                  {roiCfg.label} {camp.conversionRate}%
+                  {roiCfg.label} {camp.conversionRate % 1 === 0 ? camp.conversionRate : camp.conversionRate.toFixed(1)}%
                 </span>
               </div>
               <div className="flex items-center justify-between text-[8px]">

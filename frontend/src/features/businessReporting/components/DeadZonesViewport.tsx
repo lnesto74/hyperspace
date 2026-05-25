@@ -1,7 +1,16 @@
 import { API_BASE } from '../../../config/api'
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import { MapPin } from 'lucide-react'
+import { useVenue } from '../../../context/VenueContext'
 import { ROI_CATEGORY_COLOR } from '../../../utils/roiCategoryUtils'
+import type { VenueObject } from '../../../types'
+import {
+  buildMapTransform,
+  computeFloorPlanBounds,
+  drawDeadZonesMap,
+  normalizeFloorVertex,
+  type MapRegion,
+} from '../../../utils/venueFloorPlanMap'
 
 interface DeadZone {
   id: string
@@ -13,7 +22,7 @@ interface DeadZone {
 interface ROI {
   id: string
   name: string
-  vertices: { x: number; z: number }[]
+  vertices: { x: number; z?: number; y?: number }[]
   color: string
 }
 
@@ -22,80 +31,119 @@ interface DeadZonesViewportProps {
   deadZones: DeadZone[]
 }
 
-/** Floor-plan depth axis — ROI vertices use x/z, not x/y (y is height). */
-function floorZ(v: { z?: number; y?: number }) {
-  return v.z ?? 0
-}
-
 export default function DeadZonesViewport({ venueId, deadZones }: DeadZonesViewportProps) {
+  const { objects: contextObjects, venue: contextVenue } = useVenue()
+  const canvasRef = useRef<HTMLCanvasElement>(null)
+  const pulseRef = useRef(0)
+  const rafRef = useRef<number | null>(null)
+
   const [allRois, setAllRois] = useState<ROI[]>([])
+  const [mapObjects, setMapObjects] = useState<VenueObject[]>([])
+  const [venueSize, setVenueSize] = useState<{ width: number; depth: number } | null>(null)
   const [hoveredZoneId, setHoveredZoneId] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    const fetchRois = async () => {
+    let cancelled = false
+    const loadLayout = async () => {
+      setLoading(true)
       try {
-        const res = await fetch(`${API_BASE}/api/venues/${venueId}/roi?all=true`)
-        if (res.ok) {
-          const data = await res.json()
-          setAllRois(data)
+        if (contextVenue?.id === venueId && contextObjects.length > 0) {
+          if (!cancelled) {
+            setMapObjects(contextObjects)
+            setVenueSize({ width: contextVenue.width, depth: contextVenue.depth })
+          }
+        } else {
+          const res = await fetch(`${API_BASE}/api/venues/${venueId}`)
+          if (res.ok) {
+            const data = await res.json()
+            if (!cancelled) {
+              setMapObjects(data.objects || [])
+              if (data.venue) {
+                setVenueSize({ width: data.venue.width, depth: data.venue.depth })
+              }
+            }
+          }
+        }
+
+        const roiRes = await fetch(`${API_BASE}/api/venues/${venueId}/roi?all=true`)
+        if (roiRes.ok) {
+          const roiData = await roiRes.json()
+          if (!cancelled) setAllRois(roiData)
         }
       } catch (err) {
-        console.error('Failed to fetch ROIs:', err)
+        console.error('Failed to load dead zone map layout:', err)
       } finally {
-        setLoading(false)
+        if (!cancelled) setLoading(false)
       }
     }
-    fetchRois()
-  }, [venueId])
+    loadLayout()
+    return () => { cancelled = true }
+  }, [venueId, contextVenue?.id, contextVenue?.width, contextVenue?.depth, contextObjects.length])
 
-  const categoryByRoiId = useMemo(() => {
-    const map = new Map<string, string>()
-    deadZones.forEach((z) => {
-      if (z.category) map.set(z.id, z.category)
-    })
-    return map
-  }, [deadZones])
-
-  const bounds = useMemo(() => {
-    if (allRois.length === 0) return { minX: 0, minZ: 0, maxX: 100, maxZ: 100 }
-
-    let minX = Infinity
-    let minZ = Infinity
-    let maxX = -Infinity
-    let maxZ = -Infinity
-    for (const roi of allRois) {
-      for (const v of roi.vertices) {
-        const z = floorZ(v)
-        minX = Math.min(minX, v.x)
-        minZ = Math.min(minZ, z)
-        maxX = Math.max(maxX, v.x)
-        maxZ = Math.max(maxZ, z)
-      }
-    }
-    const padX = (maxX - minX) * 0.08 || 2
-    const padZ = (maxZ - minZ) * 0.08 || 2
-    return {
-      minX: minX - padX,
-      minZ: minZ - padZ,
-      maxX: maxX + padX,
-      maxZ: maxZ + padZ,
-    }
-  }, [allRois])
+  const mapRegions: MapRegion[] = useMemo(
+    () => allRois.map(r => ({
+      id: r.id,
+      vertices: r.vertices.map(normalizeFloorVertex),
+    })),
+    [allRois],
+  )
 
   const deadZoneIds = useMemo(() => new Set(deadZones.map(z => z.id)), [deadZones])
+  const hasMapData = mapObjects.length > 0 || mapRegions.length > 0
 
-  const svgWidth = 400
-  const svgHeight = 280
+  const drawMap = useCallback(() => {
+    const canvas = canvasRef.current
+    if (!canvas || !hasMapData) return
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return
 
-  const toSvg = (x: number, z: number) => {
-    const width = bounds.maxX - bounds.minX || 1
-    const depth = bounds.maxZ - bounds.minZ || 1
-    return {
-      x: ((x - bounds.minX) / width) * svgWidth,
-      y: ((z - bounds.minZ) / depth) * svgHeight,
+    const dpr = window.devicePixelRatio || 1
+    const cw = canvas.clientWidth
+    const ch = canvas.clientHeight
+    canvas.width = cw * dpr
+    canvas.height = ch * dpr
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+    ctx.clearRect(0, 0, cw, ch)
+
+    const bounds = computeFloorPlanBounds(
+      mapObjects,
+      mapRegions,
+      venueSize ?? undefined,
+    )
+    const transform = buildMapTransform(bounds, cw, ch)
+
+    drawDeadZonesMap(ctx, {
+      objects: mapObjects,
+      regions: mapRegions,
+      deadZoneIds,
+      hoveredZoneId,
+      pulse: pulseRef.current,
+      transform,
+    })
+  }, [mapObjects, mapRegions, venueSize, deadZoneIds, hoveredZoneId, hasMapData])
+
+  useEffect(() => {
+    if (!hasMapData) return
+
+    const tick = (ts: number) => {
+      pulseRef.current = (ts % 2000) / 2000
+      drawMap()
+      rafRef.current = requestAnimationFrame(tick)
     }
-  }
+    rafRef.current = requestAnimationFrame(tick)
+
+    const onResize = () => drawMap()
+    window.addEventListener('resize', onResize)
+    return () => {
+      if (rafRef.current) cancelAnimationFrame(rafRef.current)
+      window.removeEventListener('resize', onResize)
+    }
+  }, [drawMap, hasMapData])
+
+  useEffect(() => {
+    drawMap()
+  }, [hoveredZoneId, drawMap])
 
   if (loading) {
     return (
@@ -105,10 +153,10 @@ export default function DeadZonesViewport({ venueId, deadZones }: DeadZonesViewp
     )
   }
 
-  if (allRois.length === 0) {
+  if (!hasMapData) {
     return (
       <div className="flex items-center justify-center h-48 text-gray-500">
-        No zones available
+        No venue layout available
       </div>
     )
   }
@@ -116,88 +164,36 @@ export default function DeadZonesViewport({ venueId, deadZones }: DeadZonesViewp
   return (
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
       <div className="bg-gray-900 rounded-lg border border-gray-700 p-4">
-        <h4 className="text-xs font-medium text-gray-400 mb-3 flex items-center gap-2">
-          <MapPin className="w-3 h-3" />
-          Store Layout — Dead Zones Highlighted
-        </h4>
-        <svg
-          viewBox={`0 0 ${svgWidth} ${svgHeight}`}
-          className="w-full h-auto rounded-md"
-          style={{ maxHeight: '280px', background: '#111827' }}
+        <div className="flex items-center justify-between mb-3">
+          <h4 className="text-xs font-medium text-gray-400 flex items-center gap-2">
+            <MapPin className="w-3 h-3" />
+            Store Layout — Dead Zones Highlighted
+          </h4>
+          <span className="text-[8px] text-gray-500">
+            {mapObjects.length} fixtures · {mapRegions.length} zones
+          </span>
+        </div>
+        <div
+          className="rounded-md border overflow-hidden"
+          style={{ background: '#050810', borderColor: 'rgba(255,255,255,0.06)' }}
         >
-          <rect x="0" y="0" width={svgWidth} height={svgHeight} fill="#111827" />
-
-          {allRois.map((roi) => {
-            const isDead = deadZoneIds.has(roi.id)
-            const isHovered = hoveredZoneId === roi.id
-            const category = categoryByRoiId.get(roi.id)
-            const points = roi.vertices
-              .map(v => {
-                const { x, y } = toSvg(v.x, floorZ(v))
-                return `${x},${y}`
-              })
-              .join(' ')
-
-            const centerX = roi.vertices.reduce((sum, v) => sum + v.x, 0) / roi.vertices.length
-            const centerZ = roi.vertices.reduce((sum, v) => sum + floorZ(v), 0) / roi.vertices.length
-            const { x: labelX, y: labelY } = toSvg(centerX, centerZ)
-
-            return (
-              <g
-                key={roi.id}
-                onMouseEnter={() => setHoveredZoneId(roi.id)}
-                onMouseLeave={() => setHoveredZoneId(null)}
-              >
-                <polygon
-                  points={points}
-                  fill={isDead
-                    ? isHovered ? 'rgba(239, 68, 68, 0.55)' : 'rgba(239, 68, 68, 0.28)'
-                    : isHovered ? 'rgba(34, 197, 94, 0.25)' : 'rgba(34, 197, 94, 0.12)'}
-                  stroke={isDead
-                    ? isHovered ? '#f87171' : '#dc2626'
-                    : isHovered ? '#4ade80' : '#374151'}
-                  strokeWidth={isHovered ? 2 : 1}
-                  className="transition-all duration-200"
-                />
-                {(isHovered || isDead) && (
-                  <>
-                    {category && (
-                      <text
-                        x={labelX}
-                        y={labelY - 8}
-                        textAnchor="middle"
-                        fill={ROI_CATEGORY_COLOR}
-                        fontSize="9"
-                        fontWeight="bold"
-                        className="pointer-events-none"
-                      >
-                        {category.length > 18 ? `${category.slice(0, 16)}…` : category}
-                      </text>
-                    )}
-                    <text
-                      x={labelX}
-                      y={labelY + (category ? 4 : 0)}
-                      textAnchor="middle"
-                      fill="#e5e7eb"
-                      fontSize="8"
-                      className="pointer-events-none"
-                    >
-                      {roi.name.length > 22 ? `${roi.name.slice(0, 20)}…` : roi.name}
-                    </text>
-                  </>
-                )}
-              </g>
-            )
-          })}
-        </svg>
+          <canvas
+            ref={canvasRef}
+            style={{ width: '100%', height: 320, display: 'block' }}
+          />
+        </div>
         <div className="flex items-center gap-4 mt-3 text-xs text-gray-500">
           <div className="flex items-center gap-1">
-            <div className="w-3 h-3 bg-red-500/30 border border-red-600 rounded-sm" />
-            Dead Zone
+            <div className="w-3 h-3 bg-cyan-400/10 border border-cyan-400/40 rounded-sm" />
+            DWG fixtures
+          </div>
+          <div className="flex items-center gap-1">
+            <div className="w-3 h-3 bg-red-500/30 border border-red-500 rounded-sm animate-pulse" />
+            Dead zone (pulsing)
           </div>
           <div className="flex items-center gap-1">
             <div className="w-3 h-3 bg-green-500/15 border border-gray-600 rounded-sm" />
-            Active Zone
+            Active zone
           </div>
         </div>
       </div>
