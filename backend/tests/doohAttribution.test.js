@@ -12,6 +12,7 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import Database from 'better-sqlite3';
 import { DoohAttributionEngine, DEFAULT_CAMPAIGN_PARAMS } from '../services/dooh_attribution/DoohAttributionEngine.js';
 import { ShelfAnalyticsAdapter } from '../services/dooh_attribution/ShelfAnalyticsAdapter.js';
+import { getMatchingProfile } from '../services/dooh_attribution/MatchingProfiles.js';
 
 // Test database setup
 let db;
@@ -337,6 +338,7 @@ describe('Target Matching Logic', () => {
   });
 
   it('should match zone visit by engagement ROI id when shelf target is linked', () => {
+    adapter = new ShelfAnalyticsAdapter(db, { matchingProfile: getMatchingProfile('overlap_alias_15m') });
     adapter.initTargetCache('venue-1', {
       type: 'shelf',
       ids: ['shelf-1'],
@@ -367,6 +369,7 @@ describe('Target Matching Logic', () => {
   });
 
   it('should match visit that overlaps action window even if it started before exposure end', () => {
+    adapter = new ShelfAnalyticsAdapter(db, { matchingProfile: getMatchingProfile('overlap_alias_15m') });
     adapter.initTargetCache('venue-1', {
       type: 'shelf',
       ids: ['shelf-1'],
@@ -396,6 +399,7 @@ describe('Target Matching Logic', () => {
   });
 
   it('should match zone visit when track key suffix matches reconciled id alias', () => {
+    adapter = new ShelfAnalyticsAdapter(db, { matchingProfile: getMatchingProfile('overlap_alias_15m') });
     adapter.initTargetCache('venue-1', {
       type: 'shelf',
       ids: ['shelf-1'],

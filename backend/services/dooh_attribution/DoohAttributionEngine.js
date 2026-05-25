@@ -11,7 +11,8 @@
 
 import { v4 as uuidv4 } from 'uuid';
 import { ShelfAnalyticsAdapter } from './ShelfAnalyticsAdapter.js';
-import { resolveCampaignTarget, clearCampaignAttribution } from './CampaignTargetResolver.js';
+import { clearCampaignAttribution, resolveCampaignTarget } from './CampaignTargetResolver.js';
+import { getDefaultMatchingProfile } from './MatchingProfiles.js';
 import { pointInPolygon, distance2D } from '../dooh/DoohKpiEngine.js';
 
 // Default campaign parameters
@@ -37,9 +38,11 @@ export const DEFAULT_CAMPAIGN_PARAMS = {
 };
 
 export class DoohAttributionEngine {
-  constructor(db) {
+  constructor(db, options = {}) {
     this.db = db;
-    this.shelfAdapter = new ShelfAnalyticsAdapter(db);
+    this.shelfAdapter = new ShelfAnalyticsAdapter(db, {
+      matchingProfile: options.matchingProfile || getDefaultMatchingProfile(),
+    });
     this.positionCache = new Map();
     this.screenCache = new Map();
   }

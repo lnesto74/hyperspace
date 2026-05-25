@@ -10,14 +10,13 @@
 
 import { shelfPlanogramQueries, skuItemQueries } from '../../database/schema.js';
 import { resolveShelfCategories } from '../ShelfCategoryResolver.js';
+import { getDefaultMatchingProfile } from './MatchingProfiles.js';
 
 const SHELF_ENGAGEMENT_TYPES = ['shelf', 'fridge', 'service_counter'];
 const SHELF_NAME_PATTERNS = [
   'shelf', 'display', 'gondola', 'rack', 'scaffale', 'regal', 'fridge', 'frigo',
   'banco', 'bancone', 'refriger', 'gastronomia', 'freezer', 'schematico',
 ];
-// Align with TrajectoryStorageService.MIN_VISIT_DURATION_MS — visits shorter than this are not stored.
-const SHELF_MIN_DWELL_MS = 1000;
 
 function parseJson(raw) {
   if (!raw) return null;
@@ -29,8 +28,9 @@ function parseJson(raw) {
 }
 
 export class ShelfAnalyticsAdapter {
-  constructor(db) {
+  constructor(db, options = {}) {
     this.db = db;
+    this.matchingProfile = options.matchingProfile || getDefaultMatchingProfile();
     // === Performance caches (reset per run via clearCaches()) ===
     this._planogramIdCache = new Map();    // venueId -> planogramId
     this._skuCache = new Map();            // skuItemId -> sku object
@@ -185,35 +185,46 @@ export class ShelfAnalyticsAdapter {
     return visit.start_time + (visit.duration_ms || 0);
   }
 
-  /** Visit overlaps the post-exposure action window (not just start-in-window). */
-  _visitOverlapsWindow(visit, windowStart, windowEnd) {
+  _visitInWindow(visit, windowStart, windowEnd) {
     const vEnd = this._visitEndTs(visit);
+    if (this.matchingProfile.windowMode === 'start_in') {
+      return visit.start_time >= windowStart && visit.start_time <= windowEnd;
+    }
     return visit.start_time <= windowEnd && vEnd >= windowStart;
   }
 
   _isQualifyingVisit(visit) {
+    const minMs = this.matchingProfile.minVisitDurationMs;
     return (
       Number(visit.is_dwell) === 1
       || Number(visit.is_engagement) === 1
-      || (visit.duration_ms || 0) >= SHELF_MIN_DWELL_MS
+      || (visit.duration_ms || 0) >= minMs
     );
   }
 
+  _trackKeysToTry(trackKey) {
+    const keys = new Set([trackKey]);
+    if (this.matchingProfile.trackKeyMode === 'suffix_alias') {
+      const suffix = this._trackKeySuffix(trackKey);
+      if (suffix) {
+        keys.add(suffix);
+        if (this._zoneVisitsIndex) {
+          for (const key of this._zoneVisitsIndex.keys()) {
+            if (key.endsWith(`:${suffix}`)) keys.add(key);
+          }
+        }
+      }
+    }
+    return keys;
+  }
+
   _getVisitsForTrack(venueId, trackKey, windowStart, windowEnd) {
-    const suffix = this._trackKeySuffix(trackKey);
-    const matchesWindow = (v) => this._visitOverlapsWindow(v, windowStart, windowEnd);
+    const matchesWindow = (v) => this._visitInWindow(v, windowStart, windowEnd);
+    const keysToTry = this._trackKeysToTry(trackKey);
 
     if (this._zoneVisitsIndex) {
       const seen = new Set();
       const merged = [];
-      const keysToTry = new Set([trackKey]);
-      if (suffix) {
-        for (const key of this._zoneVisitsIndex.keys()) {
-          if (key === trackKey || key.endsWith(`:${suffix}`) || key === suffix) {
-            keysToTry.add(key);
-          }
-        }
-      }
       for (const key of keysToTry) {
         for (const v of this._zoneVisitsIndex.get(key) || []) {
           if (seen.has(v.id)) continue;
@@ -226,6 +237,23 @@ export class ShelfAnalyticsAdapter {
       return merged;
     }
 
+    if (this.matchingProfile.trackKeyMode === 'suffix_alias') {
+      const suffix = this._trackKeySuffix(trackKey);
+      return this.db.prepare(`
+        SELECT 
+          zv.id, zv.roi_id, zv.track_key, zv.start_time, zv.end_time,
+          zv.duration_ms, zv.is_dwell, zv.is_engagement,
+          r.name as roi_name, r.metadata_json
+        FROM zone_visits zv
+        JOIN regions_of_interest r ON zv.roi_id = r.id
+        WHERE zv.venue_id = ?
+          AND (zv.track_key = ? OR zv.track_key LIKE ? OR zv.track_key = ?)
+          AND zv.start_time <= ?
+          AND COALESCE(zv.end_time, zv.start_time + COALESCE(zv.duration_ms, 0)) >= ?
+        ORDER BY zv.start_time ASC
+      `).all(venueId, trackKey, `%:${suffix}`, suffix, windowEnd, windowStart);
+    }
+
     return this.db.prepare(`
       SELECT 
         zv.id, zv.roi_id, zv.track_key, zv.start_time, zv.end_time,
@@ -233,62 +261,87 @@ export class ShelfAnalyticsAdapter {
         r.name as roi_name, r.metadata_json
       FROM zone_visits zv
       JOIN regions_of_interest r ON zv.roi_id = r.id
-      WHERE zv.venue_id = ?
-        AND (zv.track_key = ? OR zv.track_key LIKE ? OR zv.track_key = ?)
+      WHERE zv.venue_id = ? AND zv.track_key = ?
         AND zv.start_time <= ?
         AND COALESCE(zv.end_time, zv.start_time + COALESCE(zv.duration_ms, 0)) >= ?
       ORDER BY zv.start_time ASC
-    `).all(venueId, trackKey, `%:${suffix}`, suffix, windowEnd, windowStart);
+    `).all(venueId, trackKey, windowEnd, windowStart);
   }
 
-  queryEngagementsForTrack(venueId, trackKey, startTs, endTs, targetJson) {
+  _resolveTrackKeyMatch(exposureTrackKey, matchedVisitTrackKey) {
+    if (!matchedVisitTrackKey) return 'none';
+    if (matchedVisitTrackKey === exposureTrackKey) return 'exact';
+    const suffix = this._trackKeySuffix(exposureTrackKey);
+    if (suffix && (matchedVisitTrackKey === suffix || matchedVisitTrackKey.endsWith(`:${suffix}`))) {
+      return 'alias';
+    }
+    return 'other';
+  }
+
+  _annotateMatch(result, meta) {
+    if (!result || !meta) return result;
+    return { ...result, _matchSource: meta.source, _trackKeyMatch: meta.trackKeyMatch };
+  }
+
+  queryEngagementsForTrack(venueId, trackKey, startTs, endTs, targetJson, options = {}) {
     const { type, ids } = targetJson;
+    const { matchMeta = false } = options;
+    const profile = this.matchingProfile;
 
-    const visits = this._getVisitsForTrack(venueId, trackKey, startTs, endTs)
-      .filter(v => this._isQualifyingVisit(v));
+    if (profile.useZoneVisits) {
+      const visits = this._getVisitsForTrack(venueId, trackKey, startTs, endTs)
+        .filter(v => this._isQualifyingVisit(v));
 
-    for (const visit of visits) {
-      const metadata = parseJson(visit.metadata_json) || {};
+      for (const visit of visits) {
+        const metadata = parseJson(visit.metadata_json) || {};
 
-      // Direct match on calibrated engagement ROI (most reliable for shelf campaigns)
-      if (type === 'shelf' && this._targetEngagementRoiIds?.has(visit.roi_id)) {
-        return this.buildEngagementResult(visit, {
-          ...metadata,
-          shelfId: metadata.shelfId || ids[0],
-          template: metadata.template || 'shelf-engagement',
-        });
-      }
-      
-      // Check if this visit is a shelf engagement
-      if (metadata.template === 'shelf-engagement' && metadata.shelfId) {
-        const shelfMatch = this.checkTargetMatch(type, ids, metadata, venueId);
-        if (shelfMatch) {
-          return {
-            visitId: visit.id,
-            roiId: visit.roi_id,
-            roiName: visit.roi_name,
-            startTs: visit.start_time,
-            endTs: visit.end_time,
-            durationMs: visit.duration_ms,
-            dwellS: visit.duration_ms / 1000,
-            effectiveDwellS: (Number(visit.is_engagement) === 1 || visit.duration_ms >= 8000) ? visit.duration_ms / 1000 : (visit.duration_ms / 1000) * 0.7,
-            isDwell: Number(visit.is_dwell) === 1 || visit.duration_ms >= 3000,
-            isEngagement: Number(visit.is_engagement) === 1 || visit.duration_ms >= 8000,
-            engagementStrength: (Number(visit.is_engagement) === 1 || visit.duration_ms >= 10000) ? 'strong' : ((Number(visit.is_dwell) === 1 || visit.duration_ms >= 5000) ? 'moderate' : 'weak'),
-            shelfId: metadata.shelfId,
-            ...shelfMatch
-          };
+        if (type === 'shelf' && this._targetEngagementRoiIds?.has(visit.roi_id)) {
+          return this._annotateMatch(this.buildEngagementResult(visit, {
+            ...metadata,
+            shelfId: metadata.shelfId || ids[0],
+            template: metadata.template || 'shelf-engagement',
+          }), matchMeta ? {
+            source: 'roi_visit',
+            trackKeyMatch: this._resolveTrackKeyMatch(trackKey, visit.track_key),
+          } : null);
         }
-      }
-      
-      // Also check non-shelf ROIs for category/brand visits
-      if (type === 'shelf' && metadata.shelfId && ids.includes(metadata.shelfId)) {
-        return this.buildEngagementResult(visit, metadata);
+
+        if (metadata.template === 'shelf-engagement' && metadata.shelfId) {
+          const shelfMatch = this.checkTargetMatch(type, ids, metadata, venueId);
+          if (shelfMatch) {
+            return this._annotateMatch({
+              visitId: visit.id,
+              roiId: visit.roi_id,
+              roiName: visit.roi_name,
+              startTs: visit.start_time,
+              endTs: visit.end_time,
+              durationMs: visit.duration_ms,
+              dwellS: visit.duration_ms / 1000,
+              effectiveDwellS: (Number(visit.is_engagement) === 1 || visit.duration_ms >= 8000) ? visit.duration_ms / 1000 : (visit.duration_ms / 1000) * 0.7,
+              isDwell: Number(visit.is_dwell) === 1 || visit.duration_ms >= 3000,
+              isEngagement: Number(visit.is_engagement) === 1 || visit.duration_ms >= 8000,
+              engagementStrength: (Number(visit.is_engagement) === 1 || visit.duration_ms >= 10000) ? 'strong' : ((Number(visit.is_dwell) === 1 || visit.duration_ms >= 5000) ? 'moderate' : 'weak'),
+              shelfId: metadata.shelfId,
+              ...shelfMatch
+            }, matchMeta ? {
+              source: 'roi_visit',
+              trackKeyMatch: this._resolveTrackKeyMatch(trackKey, visit.track_key),
+            } : null);
+          }
+        }
+
+        if (type === 'shelf' && metadata.shelfId && ids.includes(metadata.shelfId)) {
+          return this._annotateMatch(this.buildEngagementResult(visit, metadata), matchMeta ? {
+            source: 'roi_visit',
+            trackKeyMatch: this._resolveTrackKeyMatch(trackKey, visit.track_key),
+          } : null);
+        }
       }
     }
 
-    // Fallback: Check track positions that intersect with shelf ROIs
-    return this.queryPositionBasedEngagement(venueId, trackKey, startTs, endTs, targetJson);
+    if (!profile.usePositionFallback) return null;
+
+    return this.queryPositionBasedEngagement(venueId, trackKey, startTs, endTs, targetJson, { matchMeta });
   }
 
   /**
@@ -426,8 +479,10 @@ export class ShelfAnalyticsAdapter {
   /**
    * Fallback: Query position-based engagement using track_positions
    */
-  queryPositionBasedEngagement(venueId, trackKey, startTs, endTs, targetJson) {
+  queryPositionBasedEngagement(venueId, trackKey, startTs, endTs, targetJson, options = {}) {
+    const { matchMeta = false } = options;
     const { type, ids } = targetJson;
+    const profile = this.matchingProfile;
 
     // Use cached shelf positions if available
     let shelves;
@@ -450,16 +505,24 @@ export class ShelfAnalyticsAdapter {
 
     if (!shelves || shelves.length === 0) return null;
 
-    // Get track positions in time window
-    const positions = this.db.prepare(`
-      SELECT timestamp, position_x, position_z, velocity_x, velocity_z
-      FROM track_positions
-      WHERE venue_id = ? AND track_key = ? AND timestamp >= ? AND timestamp <= ?
-      ORDER BY timestamp ASC
-    `).all(venueId, trackKey, startTs, endTs);
+    const suffix = this._trackKeySuffix(trackKey);
+    const trackFilter = profile.trackKeyMode === 'suffix_alias'
+      ? `(track_key = ? OR track_key LIKE ? OR track_key = ?)`
+      : `track_key = ?`;
+    const trackParams = profile.trackKeyMode === 'suffix_alias'
+      ? [trackKey, `%:${suffix}`, suffix]
+      : [trackKey];
 
-    const ENGAGEMENT_DISTANCE = 2.5; // meters — shelf engagement zones are wider than fixture center
-    const MIN_DWELL_MS = SHELF_MIN_DWELL_MS;
+    const positions = this.db.prepare(`
+      SELECT timestamp, position_x, position_z, velocity_x, velocity_z, track_key
+      FROM track_positions
+      WHERE venue_id = ? AND ${trackFilter} AND timestamp >= ? AND timestamp <= ?
+      ORDER BY timestamp ASC
+    `).all(venueId, ...trackParams, startTs, endTs);
+
+    const ENGAGEMENT_DISTANCE = profile.positionFallbackM;
+    const MIN_DWELL_MS = profile.positionMinDwellMs;
+    const posMeta = { source: 'position', trackKeyMatch: 'exact' };
 
     for (const shelf of shelves) {
       let dwellStart = null;
@@ -475,7 +538,7 @@ export class ShelfAnalyticsAdapter {
           totalDwell = pos.timestamp - dwellStart;
         } else {
           if (dwellStart && totalDwell >= MIN_DWELL_MS) {
-            return {
+            return this._annotateMatch({
               visitId: `pos-${dwellStart}`,
               roiId: null,
               roiName: `Shelf ${shelf.id.slice(0, 8)}`,
@@ -490,7 +553,7 @@ export class ShelfAnalyticsAdapter {
               shelfId: shelf.id,
               matchType: type,
               matchedId: ids[0]
-            };
+            }, matchMeta ? posMeta : null);
           }
           dwellStart = null;
           totalDwell = 0;
@@ -499,7 +562,7 @@ export class ShelfAnalyticsAdapter {
 
       // Check final segment
       if (dwellStart && totalDwell >= MIN_DWELL_MS) {
-        return {
+        return this._annotateMatch({
           visitId: `pos-${dwellStart}`,
           roiId: null,
           roiName: `Shelf ${shelf.id.slice(0, 8)}`,
@@ -514,7 +577,7 @@ export class ShelfAnalyticsAdapter {
           shelfId: shelf.id,
           matchType: type,
           matchedId: ids[0]
-        };
+        }, matchMeta ? posMeta : null);
       }
     }
 

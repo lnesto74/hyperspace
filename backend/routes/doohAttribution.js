@@ -17,8 +17,9 @@ import { v4 as uuidv4 } from 'uuid';
 import { Worker } from 'worker_threads';
 import { fileURLToPath } from 'url';
 import path from 'path';
-import { DoohAttributionEngine, DEFAULT_CAMPAIGN_PARAMS } from '../services/dooh_attribution/DoohAttributionEngine.js';
-import { ShelfAnalyticsAdapter } from '../services/dooh_attribution/ShelfAnalyticsAdapter.js';
+import { PebleParamSimulator } from '../services/dooh_attribution/PebleParamSimulator.js';
+import { MATCHING_PROFILES } from '../services/dooh_attribution/MatchingProfiles.js';
+import { DoohAttributionEngine } from '../services/dooh_attribution/DoohAttributionEngine.js';
 import { resolveCampaignTarget } from '../services/dooh_attribution/CampaignTargetResolver.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -564,6 +565,39 @@ router.get('/kpis/summary', (req, res) => {
   } catch (err) {
     console.error('❌ Failed to fetch DOOH attribution summary:', err.message);
     res.status(500).json({ error: 'Failed to fetch summary', message: err.message });
+  }
+});
+
+/**
+ * POST /api/dooh-attribution/simulate - Dry-run matching profiles (no DB writes)
+ */
+router.post('/simulate', (req, res) => {
+  try {
+    const db = req.app.get('db');
+    const { venueId, campaignId, startTs, endTs, profileIds, maxEvents = 5000 } = req.body;
+
+    if (!venueId || !campaignId || !startTs || !endTs) {
+      return res.status(400).json({
+        error: 'venueId, campaignId, startTs, and endTs are required',
+      });
+    }
+
+    const simulator = new PebleParamSimulator(db);
+    const report = simulator.simulate(
+      venueId,
+      campaignId,
+      parseInt(startTs, 10),
+      parseInt(endTs, 10),
+      { profileIds, maxEvents },
+    );
+
+    res.json({
+      profileCount: MATCHING_PROFILES.length,
+      ...report,
+    });
+  } catch (err) {
+    console.error('❌ PEBLE param simulation failed:', err.message);
+    res.status(500).json({ error: 'Simulation failed', message: err.message });
   }
 });
 
