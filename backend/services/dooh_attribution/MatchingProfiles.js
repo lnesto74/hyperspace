@@ -7,7 +7,7 @@
  */
 
 /** @typedef {'start_in' | 'overlap'} WindowMode */
-/** @typedef {'exact' | 'suffix_alias' | 'reid_chain'} TrackKeyMode */
+/** @typedef {'exact' | 'suffix_alias' | 'reid_chain' | 'journey_reachability'} TrackKeyMode */
 
 /**
  * @typedef {Object} MatchingProfile
@@ -24,6 +24,9 @@
  * @property {boolean} useZoneVisits
  * @property {number} [reidMaxGapMs]
  * @property {number} [reidMaxDistanceM]
+ * @property {number} [maxWalkMps]
+ * @property {number} [walkSlack]
+ * @property {number} [walkBaseSlackM]
  */
 
 /** @type {MatchingProfile[]} */
@@ -163,6 +166,38 @@ export const MATCHING_PROFILES = [
     useZoneVisits: true,
     reidMaxGapMs: 25_000,
     reidMaxDistanceM: 5,
+  },
+  {
+    id: 'frag_journey_25m',
+    label: 'Journey reachability 25m',
+    rationale: 'When track IDs diverge, link screen/exposure anchor to shelf visit by walkable distance + time (fragmented store).',
+    actionWindowMinutes: 25,
+    minVisitDurationMs: 1000,
+    windowMode: 'overlap',
+    trackKeyMode: 'journey_reachability',
+    positionFallbackM: 3.0,
+    positionMinDwellMs: 1500,
+    usePositionFallback: false,
+    useZoneVisits: true,
+    maxWalkMps: 1.35,
+    walkSlack: 1.2,
+    walkBaseSlackM: 5,
+  },
+  {
+    id: 'frag_journey_30m_tight',
+    label: 'Journey reachability 30m (tighter)',
+    rationale: '30m window with tighter walk slack — exploratory ceiling with less over-attribution.',
+    actionWindowMinutes: 30,
+    minVisitDurationMs: 1000,
+    windowMode: 'overlap',
+    trackKeyMode: 'journey_reachability',
+    positionFallbackM: 3.0,
+    positionMinDwellMs: 1500,
+    usePositionFallback: false,
+    useZoneVisits: true,
+    maxWalkMps: 1.25,
+    walkSlack: 1.1,
+    walkBaseSlackM: 3,
   },
 ];
 

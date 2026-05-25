@@ -32,8 +32,80 @@ export class PebleParamSimulator {
       id: row.id,
       name: row.name,
       venueId: row.venue_id,
+      screenIds: JSON.parse(row.screen_ids_json),
       target: JSON.parse(row.target_json),
       params: JSON.parse(row.params_json),
+    };
+  }
+
+  loadScreenPositions(screenIds) {
+    const map = new Map();
+    if (!screenIds?.length) return map;
+    const ph = screenIds.map(() => '?').join(',');
+    const rows = this.db.prepare(`
+      SELECT id, position_json FROM dooh_screens WHERE id IN (${ph})
+    `).all(...screenIds);
+    for (const row of rows) {
+      try {
+        map.set(row.id, JSON.parse(row.position_json));
+      } catch {
+        map.set(row.id, null);
+      }
+    }
+    return map;
+  }
+
+  loadExposureEvents(campaign, startTs, endTs) {
+    const { id: campaignId, screenIds } = campaign;
+    if (!screenIds?.length) return [];
+
+    const ph = screenIds.map(() => '?').join(',');
+    const fromExposure = this.db.prepare(`
+      SELECT id, track_key, end_ts as exposure_end_ts, screen_id,
+             end_position_x, end_position_z, aqs
+      FROM dooh_exposure_events
+      WHERE venue_id = ? AND screen_id IN (${ph})
+        AND end_ts >= ? AND end_ts <= ?
+      ORDER BY end_ts ASC
+    `).all(campaign.venueId, ...screenIds, startTs, endTs);
+
+    if (fromExposure.length) return fromExposure;
+
+    return this.db.prepare(`
+      SELECT id, track_key, exposure_end_ts, NULL as screen_id,
+             NULL as end_position_x, NULL as end_position_z, aqs, converted
+      FROM dooh_attribution_events
+      WHERE campaign_id = ? AND exposure_end_ts >= ? AND exposure_end_ts <= ?
+      ORDER BY exposure_end_ts ASC
+    `).all(campaignId, startTs, endTs);
+  }
+
+  computeAnchorDiagnostics(events, screenPositions) {
+    let storedEnd = 0;
+    let screenProxy = 0;
+    let noAnchor = 0;
+
+    for (const event of events) {
+      if (event.end_position_x != null && event.end_position_z != null) {
+        storedEnd++;
+        continue;
+      }
+      const screenPos = event.screen_id ? screenPositions.get(event.screen_id) : null;
+      if (screenPos?.x != null && screenPos?.z != null) {
+        screenProxy++;
+      } else {
+        noAnchor++;
+      }
+    }
+
+    return {
+      exposuresWithStoredEndPosition: storedEnd,
+      exposuresWithScreenProxyOnly: screenProxy,
+      exposuresWithNoAnchor: noAnchor,
+      pctWithStoredEnd: events.length ? +((storedEnd / events.length) * 100).toFixed(1) : 0,
+      pctWithAnyAnchor: events.length
+        ? +(((storedEnd + screenProxy) / events.length) * 100).toFixed(1)
+        : 0,
     };
   }
 
@@ -77,7 +149,7 @@ export class PebleParamSimulator {
       sampleExposureTrackKeys: sampleKeys,
       sampleZoneVisitTrackKeys: [...visitKeys].slice(0, 8),
       note: exactIntersection === 0
-        ? 'Zero track_key overlap — exposures and zone_visits use disjoint ID spaces; re-ID chain profiles required.'
+        ? 'Zero track_key overlap — exposures and zone_visits use disjoint ID spaces; use journey_reachability profiles (screen/end-position anchor → shelf visit).'
         : null,
     };
   }
@@ -136,7 +208,7 @@ export class PebleParamSimulator {
     };
   }
 
-  evaluateProfile(venueId, target, profile, events) {
+  evaluateProfile(venueId, target, profile, events, screenPositions) {
     const adapter = new ShelfAnalyticsAdapter(this.db, { matchingProfile: profile });
     adapter.initTargetCache(venueId, target);
 
@@ -147,18 +219,27 @@ export class PebleParamSimulator {
 
     let conversions = 0;
     const ttaSamples = [];
-    const matchSource = { roi_visit: 0, reid_chain: 0, position: 0, none: 0 };
-    const trackKeyMatch = { exact: 0, alias: 0, none: 0 };
+    const matchSource = { roi_visit: 0, reid_chain: 0, journey_reachability: 0, position: 0, none: 0 };
+    const trackKeyMatch = { exact: 0, alias: 0, journey: 0, none: 0 };
+    const anchorSources = { stored: 0, track_positions: 0, screen_proxy: 0 };
 
     for (const event of events) {
       const windowEnd = event.exposure_end_ts + actionWindowMs;
+      const screenPos = event.screen_id ? screenPositions.get(event.screen_id) : null;
       const engagement = adapter.queryEngagementsForTrack(
         venueId,
         event.track_key,
         event.exposure_end_ts,
         windowEnd,
         target,
-        { matchMeta: true },
+        {
+          matchMeta: true,
+          exposureContext: {
+            endPositionX: event.end_position_x,
+            endPositionZ: event.end_position_z,
+            screenPosition: screenPos,
+          },
+        },
       );
 
       if (!engagement) {
@@ -170,10 +251,16 @@ export class PebleParamSimulator {
       conversions++;
       if (engagement._matchSource === 'position') matchSource.position++;
       else if (engagement._matchSource === 'reid_chain') matchSource.reid_chain++;
+      else if (engagement._matchSource === 'journey_reachability') matchSource.journey_reachability++;
       else matchSource.roi_visit++;
 
       if (engagement._trackKeyMatch === 'alias') trackKeyMatch.alias++;
       else if (engagement._trackKeyMatch === 'exact') trackKeyMatch.exact++;
+      else if (engagement._trackKeyMatch === 'journey') trackKeyMatch.journey++;
+
+      if (engagement._anchorSource && anchorSources[engagement._anchorSource] != null) {
+        anchorSources[engagement._anchorSource]++;
+      }
 
       if (engagement.startTs != null && event.exposure_end_ts != null) {
         const tta = Math.max(0, (engagement.startTs - event.exposure_end_ts) / 1000);
@@ -202,6 +289,7 @@ export class PebleParamSimulator {
       conversionRatePct: n ? +((conversions / n) * 100).toFixed(2) : 0,
       matchSource,
       trackKeyMatch,
+      anchorSources,
       medianTtaSec: median(ttaSamples) != null ? +median(ttaSamples).toFixed(1) : null,
     };
   }
@@ -218,13 +306,12 @@ export class PebleParamSimulator {
     const campaign = this.getCampaign(campaignId);
     const target = resolveCampaignTarget(this.db, venueId, campaign.target);
     const baseActionWindowMs = (campaign.params.action_window_minutes || 15) * 60 * 1000;
+    const screenPositions = this.loadScreenPositions(campaign.screenIds);
 
-    let events = this.db.prepare(`
-      SELECT id, track_key, exposure_end_ts, aqs, converted
-      FROM dooh_attribution_events
-      WHERE campaign_id = ? AND exposure_end_ts >= ? AND exposure_end_ts <= ?
-      ORDER BY exposure_end_ts ASC
-    `).all(campaignId, startTs, endTs);
+    let events = this.loadExposureEvents(campaign, startTs, endTs);
+    const exposureSource = events.length && events[0].screen_id != null
+      ? 'dooh_exposure_events'
+      : 'dooh_attribution_events';
 
     const totalEvents = events.length;
     if (maxEvents && events.length > maxEvents) {
@@ -237,6 +324,7 @@ export class PebleParamSimulator {
 
     const fragmentation = this.computeFragmentationContext(venueId, events, baseActionWindowMs);
     const identity = this.computeIdentityDiagnostics(venueId, events, startTs, endTs);
+    const anchorDiagnostics = this.computeAnchorDiagnostics(events, screenPositions);
 
     const targetRoiVisits = this.db.prepare(`
       SELECT COUNT(*) as c FROM zone_visits zv
@@ -245,7 +333,9 @@ export class PebleParamSimulator {
         AND zv.start_time <= ? AND COALESCE(zv.end_time, zv.start_time + COALESCE(zv.duration_ms, 0)) >= ?
     `).get(venueId, endTs, startTs)?.c || 0;
 
-    const results = profiles.map(profile => this.evaluateProfile(venueId, target, profile, events));
+    const results = profiles.map(profile => this.evaluateProfile(
+      venueId, target, profile, events, screenPositions,
+    ));
 
     // Rank: prefer moderate conversion (1–40%), not zero, not ceiling (>60%)
     const ranked = [...results].sort((a, b) => {
@@ -266,10 +356,12 @@ export class PebleParamSimulator {
       timeRange: { startTs, endTs },
       sampledExposures: events.length,
       totalExposuresInDb: totalEvents,
+      exposureSource,
       targetShelfCount: target.ids?.length || 0,
       engagementRoiIds: resolveCampaignTarget(this.db, venueId, target).engagementRoiIds || [],
       shelfEngagementVisitsInRange: targetRoiVisits,
       identity,
+      anchorDiagnostics,
       fragmentation,
       profiles: results,
       recommendation: ranked[0] ? {

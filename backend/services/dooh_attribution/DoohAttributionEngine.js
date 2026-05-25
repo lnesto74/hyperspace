@@ -133,6 +133,8 @@ export class DoohAttributionEngine {
       aqs: row.aqs,
       tier: row.tier,
       context: row.context_json ? JSON.parse(row.context_json) : null,
+      endPositionX: row.end_position_x ?? null,
+      endPositionZ: row.end_position_z ?? null,
     }));
   }
 
@@ -791,7 +793,14 @@ export class DoohAttributionEngine {
         exposure.trackKey,
         exposure.endTs,
         actionWindowEnd,
-        target
+        target,
+        {
+          exposureContext: {
+            endPositionX: exposure.endPositionX,
+            endPositionZ: exposure.endPositionZ,
+            screenPosition: screen.position,
+          },
+        },
       );
 
       const converted = engagement !== null;

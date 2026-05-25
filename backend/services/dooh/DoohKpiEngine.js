@@ -395,6 +395,8 @@ export class DoohKpiEngine {
         trackKey,
         startTs: seg.startTs,
         endTs: seg.endTs,
+        endPositionX: seg.samples[seg.samples.length - 1]?.x ?? null,
+        endPositionZ: seg.samples[seg.samples.length - 1]?.z ?? null,
         durationS: duration,
         effectiveDwellS: effectiveDwell,
         minDistanceM: minDistance,
@@ -424,17 +426,19 @@ export class DoohKpiEngine {
     const insertStmt = this.db.prepare(`
       INSERT OR REPLACE INTO dooh_exposure_events (
         id, venue_id, screen_id, track_key, start_ts, end_ts,
+        end_position_x, end_position_z,
         duration_s, effective_dwell_s, min_distance_m, p10_distance_m,
         mean_speed_mps, min_speed_mps, entry_speed_mps,
         orientation_score, proximity_score, dwell_score, slowdown_score, stability_score,
         aqs, tier, context_json, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
     `);
 
     const insertMany = this.db.transaction((evts) => {
       for (const e of evts) {
         insertStmt.run(
           e.id, e.venueId, e.screenId, e.trackKey, e.startTs, e.endTs,
+          e.endPositionX ?? null, e.endPositionZ ?? null,
           e.durationS, e.effectiveDwellS, e.minDistanceM, e.p10DistanceM,
           e.meanSpeedMps, e.minSpeedMps, e.entrySpeedMps,
           e.orientationScore, e.proximityScore, e.dwellScore, e.slowdownScore, e.stabilityScore,

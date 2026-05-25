@@ -62,7 +62,7 @@ fs.writeFileSync(outPath, JSON.stringify(report, null, 2));
 console.log('\n=== PEBLE Parameter Simulation ===');
 console.log(`DB: ${dbPath}`);
 console.log(`Campaign: ${report.campaign}`);
-console.log(`Sampled: ${report.sampledExposures} / ${report.totalExposuresInDb} exposures`);
+console.log(`Sampled: ${report.sampledExposures} / ${report.totalExposuresInDb} exposures (${report.exposureSource})`);
 console.log(`Shelf engagement visits in range: ${report.shelfEngagementVisitsInRange}`);
 console.log('\nIdentity diagnostics:');
 console.log(`  Exposure unique track keys: ${report.identity.exposureUniqueTrackKeys}`);
@@ -71,6 +71,14 @@ console.log(`  Exact key overlap:          ${report.identity.exactTrackKeyOverla
 console.log(`  Suffix overlap:             ${report.identity.suffixOverlap} (${report.identity.pctSuffixOverlap}%)`);
 console.log(`  Position samples (sample):  ${report.identity.positionSamplesForSampleExposureKeys}`);
 if (report.identity.note) console.log(`  ⚠ ${report.identity.note}`);
+
+if (report.anchorDiagnostics) {
+  console.log('\nAnchor diagnostics (journey reachability):');
+  console.log(`  Stored end position: ${report.anchorDiagnostics.exposuresWithStoredEndPosition} (${report.anchorDiagnostics.pctWithStoredEnd}%)`);
+  console.log(`  Screen proxy only:   ${report.anchorDiagnostics.exposuresWithScreenProxyOnly}`);
+  console.log(`  No anchor:           ${report.anchorDiagnostics.exposuresWithNoAnchor}`);
+  console.log(`  Any anchor:          ${report.anchorDiagnostics.pctWithAnyAnchor}%`);
+}
 
 console.log('\nFragmentation context:');
 console.log(`  Any zone visit (15m): ${report.fragmentation.pctAnyZoneVisit.toFixed(1)}%`);
@@ -81,7 +89,7 @@ console.log('\nProfile results:');
 for (const p of report.profiles) {
   console.log(
     `  ${p.profileId.padEnd(22)} conv=${String(p.conversionRatePct).padStart(5)}%  ` +
-    `roi=${p.matchSource.roi_visit} reid=${p.matchSource.reid_chain || 0} pos=${p.matchSource.position} none=${p.matchSource.none}  ` +
+    `roi=${p.matchSource.roi_visit} reid=${p.matchSource.reid_chain || 0} journey=${p.matchSource.journey_reachability || 0} pos=${p.matchSource.position} none=${p.matchSource.none}  ` +
     `tta=${p.medianTtaSec ?? '—'}s`,
   );
 }

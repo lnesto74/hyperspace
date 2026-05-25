@@ -11,7 +11,7 @@
 import { shelfPlanogramQueries, skuItemQueries } from '../../database/schema.js';
 import { resolveShelfCategories } from '../ShelfCategoryResolver.js';
 import { getDefaultMatchingProfile } from './MatchingProfiles.js';
-import { tracksLinkedByReidFromDb } from './TrackIdentityMatcher.js';
+import { tracksLinkedByReidFromDb, resolveExposureAnchor, isJourneyReachable } from './TrackIdentityMatcher.js';
 
 const SHELF_ENGAGEMENT_TYPES = ['shelf', 'fridge', 'service_counter'];
 const SHELF_NAME_PATTERNS = [
@@ -64,6 +64,7 @@ export class ShelfAnalyticsAdapter {
       SELECT 
         zv.id, zv.track_key, zv.roi_id, zv.start_time, zv.end_time,
         zv.duration_ms, zv.is_dwell, zv.is_engagement,
+        zv.entry_position_x, zv.entry_position_z,
         r.name as roi_name, r.metadata_json
       FROM zone_visits zv
       JOIN regions_of_interest r ON zv.roi_id = r.id
@@ -281,13 +282,24 @@ export class ShelfAnalyticsAdapter {
 
   _annotateMatch(result, meta) {
     if (!result || !meta) return result;
-    return { ...result, _matchSource: meta.source, _trackKeyMatch: meta.trackKeyMatch };
+    return {
+      ...result,
+      _matchSource: meta.source,
+      _trackKeyMatch: meta.trackKeyMatch,
+      _anchorSource: meta.anchorSource ?? null,
+    };
   }
 
   queryEngagementsForTrack(venueId, trackKey, startTs, endTs, targetJson, options = {}) {
     const { type, ids } = targetJson;
-    const { matchMeta = false } = options;
+    const { matchMeta = false, exposureContext = null } = options;
     const profile = this.matchingProfile;
+
+    if (profile.trackKeyMode === 'journey_reachability') {
+      return this.queryEngagementsViaJourneyReachability(
+        venueId, trackKey, startTs, endTs, targetJson, { matchMeta, exposureContext },
+      );
+    }
 
     if (profile.useZoneVisits) {
       const visits = this._getVisitsForTrack(venueId, trackKey, startTs, endTs)
@@ -407,6 +419,54 @@ export class ShelfAnalyticsAdapter {
         shelfId: metadata.shelfId || targetJson.ids[0],
         template: metadata.template || 'shelf-engagement',
       }), matchMeta ? { source: 'reid_chain', trackKeyMatch: 'relink' } : null);
+    }
+
+    return null;
+  }
+
+  /** Target shelf visits reachable on foot from exposure anchor (bypasses track_key identity). */
+  queryEngagementsViaJourneyReachability(venueId, trackKey, startTs, endTs, targetJson, options = {}) {
+    const { matchMeta = false, exposureContext = null } = options;
+    const profile = this.matchingProfile;
+    if (!this._targetEngagementRoiIds?.size) return null;
+
+    const anchor = resolveExposureAnchor(this.db, venueId, trackKey, startTs, exposureContext, profile);
+    if (!anchor) return null;
+
+    const roiList = [...this._targetEngagementRoiIds];
+    const placeholders = roiList.map(() => '?').join(',');
+
+    const visits = this.db.prepare(`
+      SELECT 
+        zv.id, zv.roi_id, zv.track_key, zv.start_time, zv.end_time,
+        zv.duration_ms, zv.is_dwell, zv.is_engagement,
+        zv.entry_position_x, zv.entry_position_z,
+        r.name as roi_name, r.metadata_json
+      FROM zone_visits zv
+      JOIN regions_of_interest r ON zv.roi_id = r.id
+      WHERE zv.venue_id = ?
+        AND zv.roi_id IN (${placeholders})
+        AND zv.start_time <= ?
+        AND COALESCE(zv.end_time, zv.start_time + COALESCE(zv.duration_ms, 0)) >= ?
+      ORDER BY zv.start_time ASC
+    `).all(venueId, ...roiList, endTs, startTs);
+
+    for (const visit of visits) {
+      if (!this._isQualifyingVisit(visit)) continue;
+      if (!this._visitInWindow(visit, startTs, endTs)) continue;
+      if (!isJourneyReachable(anchor, visit, startTs, profile)) continue;
+
+      const metadata = parseJson(visit.metadata_json) || {};
+      const trackKeyMatch = this._resolveTrackKeyMatch(trackKey, visit.track_key);
+      return this._annotateMatch(this.buildEngagementResult(visit, {
+        ...metadata,
+        shelfId: metadata.shelfId || targetJson.ids[0],
+        template: metadata.template || 'shelf-engagement',
+      }), matchMeta ? {
+        source: 'journey_reachability',
+        trackKeyMatch: trackKeyMatch === 'none' ? 'journey' : trackKeyMatch,
+        anchorSource: anchor.source,
+      } : null);
     }
 
     return null;

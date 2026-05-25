@@ -925,6 +925,19 @@ export function initDatabase() {
     console.log('📦 Migration check completed (columns may already exist)');
   }
 
+  // Migration for dooh_exposure_events end position (PEBLE journey matching)
+  try {
+    const expCols = db.prepare("PRAGMA table_info(dooh_exposure_events)").all();
+    const expNames = expCols.map(c => c.name);
+    if (expNames.length > 0 && !expNames.includes('end_position_x')) {
+      db.exec("ALTER TABLE dooh_exposure_events ADD COLUMN end_position_x REAL DEFAULT NULL");
+      db.exec("ALTER TABLE dooh_exposure_events ADD COLUMN end_position_z REAL DEFAULT NULL");
+      console.log('📦 Migration: Added end_position_x/z to dooh_exposure_events');
+    }
+  } catch (migrationErr) {
+    // Table may not exist yet
+  }
+
   // Migration for dooh_screens double_sided column
   try {
     const doohColumns = db.prepare("PRAGMA table_info(dooh_screens)").all();

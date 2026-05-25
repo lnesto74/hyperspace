@@ -95,3 +95,42 @@ export function tracksLinkedByReidFromDb(
     maxDistanceM: profile.reidMaxDistanceM ?? 4,
   });
 }
+
+export function isJourneyReachable(anchor, visit, exposureEndTs, profile) {
+  if (!anchor || anchor.x == null || anchor.z == null) return false;
+  const walkMps = profile.maxWalkMps ?? 1.4;
+  const slack = profile.walkSlack ?? 1.25;
+  const baseM = profile.walkBaseSlackM ?? 6;
+  const windowS = (profile.actionWindowMinutes ?? 15) * 60;
+
+  const tGapS = (visit.start_time - exposureEndTs) / 1000;
+  if (tGapS <= 0 || tGapS > windowS) return false;
+
+  const vx = visit.entry_position_x;
+  const vz = visit.entry_position_z;
+  if (vx == null || vz == null) return false;
+
+  const dist = Math.hypot(vx - anchor.x, vz - anchor.z);
+  const maxReach = walkMps * tGapS * slack + baseM;
+  return dist <= maxReach;
+}
+
+export function resolveExposureAnchor(db, venueId, trackKey, exposureEndTs, exposureContext, profile) {
+  if (exposureContext?.endPositionX != null && exposureContext?.endPositionZ != null) {
+    return { x: exposureContext.endPositionX, z: exposureContext.endPositionZ, source: 'stored' };
+  }
+
+  const keyMode = profile.trackKeyMode === 'exact' ? 'exact' : 'suffix_alias';
+  const pos = loadTrackPositions(db, venueId, trackKey, keyMode, exposureEndTs - 120_000, exposureEndTs + 5000);
+  if (pos.length) {
+    const last = pos[pos.length - 1];
+    return { x: last.x, z: last.z, source: 'track_positions' };
+  }
+
+  const screenPos = exposureContext?.screenPosition;
+  if (screenPos?.x != null && screenPos?.z != null) {
+    return { x: screenPos.x, z: screenPos.z, source: 'screen_proxy' };
+  }
+
+  return null;
+}
