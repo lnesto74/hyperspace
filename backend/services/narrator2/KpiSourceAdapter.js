@@ -6,6 +6,7 @@
  */
 
 import Database from 'better-sqlite3';
+import { resolveShelfCategories } from '../ShelfCategoryResolver.js';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
@@ -387,11 +388,20 @@ export async function getReportingSummary(venueId, personaId, startTs, endTs) {
         const zoneUtilRate = (z.total_ms / totalTimeRange) * 100;
         if (zoneUtilRate < DEAD_ZONE_THRESHOLD) {
           deadZoneCount++;
-          deadZonesList.push({ id: z.id, name: z.name, utilization: Math.round(zoneUtilRate * 10) / 10 });
+          const category = resolveRoiCategoryLabel(venueId, z.id);
+          deadZonesList.push({
+            id: z.id,
+            name: z.name,
+            category,
+            utilization: Math.round(zoneUtilRate * 10) / 10,
+          });
         }
       }
       kpis.deadZones = deadZoneCount;
-      supporting.deadZones = deadZonesList.slice(0, 10); // Top 10 for supporting data
+      supporting.deadZones = deadZonesList
+        .sort((a, b) => a.utilization - b.utilization)
+        .slice(0, 10);
+      supporting.topCategories = getCategoryPerformanceRanking(venueId, startTs, endTs);
     }
 
     // Get comprehensive Queue Lane KPIs for store_manager (Operations Grade)
@@ -435,11 +445,22 @@ export async function getReportingSummary(venueId, personaId, startTs, endTs) {
         const zoneUtilRate = (z.total_ms / totalTimeRange) * 100;
         if (zoneUtilRate < DEAD_ZONE_THRESHOLD) {
           storeDeadZoneCount++;
-          storeDeadZonesList.push({ id: z.id, name: z.name, utilization: Math.round(zoneUtilRate * 10) / 10 });
+          const category = resolveRoiCategoryLabel(venueId, z.id);
+          storeDeadZonesList.push({
+            id: z.id,
+            name: z.name,
+            category,
+            utilization: Math.round(zoneUtilRate * 10) / 10,
+          });
         }
       }
       kpis.deadZonesCount = storeDeadZoneCount;
-      supporting.storeDeadZones = storeDeadZonesList.slice(0, 10);
+      supporting.storeDeadZones = storeDeadZonesList
+        .sort((a, b) => a.utilization - b.utilization)
+        .slice(0, 10);
+      if (!supporting.topCategories?.length) {
+        supporting.topCategories = getCategoryPerformanceRanking(venueId, startTs, endTs);
+      }
     }
 
     console.log(`[KpiSourceAdapter] Summary computed in ${Date.now() - start}ms`);
@@ -1127,61 +1148,110 @@ export async function getZoneEngagementRanking(venueId, startTs, endTs, limit = 
 }
 
 /**
- * Enrich zone name with category info from linked shelf → planogram → SKUs
- * Uses ROI metadata.shelfId to find the linked shelf and its planogram categories
- * Pattern: "Shelf N - Engagement (Left/Right)" → "Shelf N (Category) - Left"
+ * Resolve product category for an ROI (planogram SKUs or DWG object mapping).
  */
-function enrichZoneNameWithCategory(venueId, zoneName) {
-  if (!zoneName) return zoneName;
-  
-  // Parse zone name pattern: "ShelfName - Engagement (Left/Right)"
-  const match = zoneName.match(/^(.+?)\s*-\s*Engagement\s*\((Left|Right)\)$/i);
-  if (!match) return zoneName;
-  
-  const shelfName = match[1].trim();
-  const side = match[2];
-  
+function resolveRoiCategoryLabel(venueId, roiId) {
   try {
-    // First, find the ROI and get its shelfId from metadata
-    const roi = safeQuery(`
-      SELECT metadata_json FROM regions_of_interest 
-      WHERE venue_id = ? AND name = ?
-    `, [venueId, zoneName]);
-    
-    let shelfId = null;
-    if (roi?.metadata_json) {
-      try {
-        const metadata = JSON.parse(roi.metadata_json);
-        shelfId = metadata.shelfId;
-      } catch {}
-    }
-    
-    if (!shelfId) return zoneName;
-    
-    // Get top category from shelf's planogram using shelfId
-    const categoryResult = safeQuery(`
-      SELECT s.category, COUNT(*) as cnt
-      FROM shelf_planograms sp
-      JOIN json_each(sp.slots_json, '$.levels') as levels
-      JOIN json_each(levels.value, '$.slots') as slots
-      JOIN sku_items s ON s.id = json_extract(slots.value, '$.skuItemId')
-      WHERE sp.shelf_id = ?
-      GROUP BY s.category
-      ORDER BY cnt DESC
-      LIMIT 1
-    `, [shelfId]);
-    
-    if (categoryResult?.category) {
-      // Shorten long category names
-      let shortCategory = categoryResult.category;
-      if (shortCategory.length > 15) {
-        shortCategory = shortCategory.split(/[&,]/)[0].trim();
-      }
-      return `${shelfName} (${shortCategory}) - ${side}`;
+    const roi = safeQuery(
+      'SELECT metadata_json FROM regions_of_interest WHERE id = ? AND venue_id = ?',
+      [roiId, venueId],
+    );
+    if (!roi?.metadata_json) return null;
+
+    const metadata = JSON.parse(roi.metadata_json);
+    if (metadata.business_category_label) return metadata.business_category_label;
+    if (metadata.business_category) return metadata.business_category;
+
+    const shelfId = metadata.shelfId;
+    if (shelfId) {
+      const resolved = resolveShelfCategories(getDb(), shelfId);
+      if (resolved.categories[0]) return resolved.categories[0];
     }
   } catch (err) {
-    console.error('[KpiSourceAdapter] enrichZoneNameWithCategory error:', err.message);
+    console.warn('[KpiSourceAdapter] resolveRoiCategoryLabel failed:', err.message);
   }
-  
-  return zoneName;
+  return null;
+}
+
+/**
+ * Rank product categories by engagement and conversion proxies.
+ */
+function getCategoryPerformanceRanking(venueId, startTs, endTs) {
+  const rows = safeQueryAll(`
+    SELECT
+      r.id,
+      COUNT(*) as total_visits,
+      COUNT(CASE WHEN zv.is_dwell = 1 THEN 1 END) as dwell_count,
+      COUNT(CASE WHEN zv.is_engagement = 1 THEN 1 END) as engagement_count,
+      SUM(zv.duration_ms) as total_duration_ms,
+      COUNT(DISTINCT zv.track_key) as unique_visitors
+    FROM regions_of_interest r
+    LEFT JOIN zone_visits zv
+      ON zv.roi_id = r.id AND zv.start_time >= ? AND zv.start_time < ?
+    WHERE r.venue_id = ?
+      AND r.name NOT LIKE '%Queue%'
+      AND r.name NOT LIKE '%Service%'
+      AND r.name NOT LIKE '%Checkout%'
+      AND (r.name LIKE '%Engagement%' OR r.name LIKE '%Shelf%' OR r.name LIKE '%Category%')
+    GROUP BY r.id
+  `, [startTs, endTs, venueId]);
+
+  const byCategory = new Map();
+  for (const row of rows) {
+    const category = resolveRoiCategoryLabel(venueId, row.id) || 'Uncategorized';
+    const bucket = byCategory.get(category) || {
+      category,
+      totalVisits: 0,
+      dwellCount: 0,
+      engagementCount: 0,
+      totalDurationMs: 0,
+      uniqueVisitors: 0,
+      zoneCount: 0,
+    };
+    bucket.totalVisits += row.total_visits || 0;
+    bucket.dwellCount += row.dwell_count || 0;
+    bucket.engagementCount += row.engagement_count || 0;
+    bucket.totalDurationMs += row.total_duration_ms || 0;
+    bucket.uniqueVisitors += row.unique_visitors || 0;
+    bucket.zoneCount += 1;
+    byCategory.set(category, bucket);
+  }
+
+  return Array.from(byCategory.values())
+    .map((c) => ({
+      category: c.category,
+      zoneCount: c.zoneCount,
+      totalVisits: c.totalVisits,
+      browsingRate: c.totalVisits > 0
+        ? Math.round((c.dwellCount / c.totalVisits) * 1000) / 10
+        : 0,
+      engagementRate: c.totalVisits > 0
+        ? Math.round((c.engagementCount / c.totalVisits) * 1000) / 10
+        : 0,
+      conversionRate: c.totalVisits > 0
+        ? Math.round((c.engagementCount / c.totalVisits) * 40) / 10
+        : 0,
+      avgBrowseTimeMin: c.uniqueVisitors > 0
+        ? Math.round((c.totalDurationMs / c.uniqueVisitors) / 60000 * 10) / 10
+        : 0,
+    }))
+    .sort((a, b) => b.engagementRate - a.engagementRate || b.totalVisits - a.totalVisits);
+}
+
+/**
+ * Enrich zone name with category info from linked shelf → planogram → SKUs / object mapping
+ */
+function enrichZoneNameWithCategory(venueId, zoneName, roiId) {
+  if (!zoneName) return zoneName;
+
+  const category = roiId
+    ? resolveRoiCategoryLabel(venueId, roiId)
+    : null;
+  if (!category) return zoneName;
+
+  const match = zoneName.match(/^(.+?)\s*-\s*Engagement\s*\((Left|Right|Front|Back)\)$/i);
+  if (match) {
+    return `${match[1].trim()} (${category}) - ${match[2]}`;
+  }
+  return `${zoneName} (${category})`;
 }

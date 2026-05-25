@@ -228,17 +228,22 @@ export default function ZoneKPIIndicator({
 
   return (
     <div 
-      className={`backdrop-blur-xl rounded-xl p-2.5 cursor-pointer transition-all shadow-xl min-w-[160px] ${
+      className={`relative backdrop-blur-xl rounded-xl p-2.5 cursor-pointer transition-colors shadow-lg min-w-[160px] ${
         highlighted 
-          ? 'bg-white/15 border-2 scale-[1.03]' 
+          ? 'bg-gray-900/90' 
           : 'bg-black/40 border border-white/10 hover:bg-black/50 hover:border-white/20'
       }`}
       style={highlighted ? {
-        borderColor: roiColor,
-        boxShadow: `0 0 0 2px ${roiColor}44, 0 0 16px ${roiColor}66, 0 4px 24px rgba(0,0,0,0.4)`,
+        boxShadow: `inset 0 0 0 2px ${roiColor}`,
       } : undefined}
       onClick={onClick}
     >
+      {highlighted && (
+        <div
+          className="absolute left-0 top-2 bottom-2 w-1 rounded-full"
+          style={{ backgroundColor: roiColor }}
+        />
+      )}
       {/* Zone Name Header with subtle color indicator */}
       <div className="flex items-center gap-1.5 mb-1.5">
         <div 

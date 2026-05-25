@@ -13,6 +13,7 @@ import { Router } from 'express';
 import { KPICalculator } from '../services/KPICalculator.js';
 import { ShelfKPIEnricher } from '../services/ShelfKPIEnricher.js';
 import { getReportingSummary as getNarrator2Kpis } from '../services/narrator2/KpiSourceAdapter.js';
+import { resolveShelfCategories } from '../services/ShelfCategoryResolver.js';
 
 export default function createBusinessReportingRoutes(db, trajectoryStorage, trackAggregator) {
 const router = Router();
@@ -81,20 +82,65 @@ router.get('/categories', async (req, res) => {
       return res.status(400).json({ error: 'venueId is required' });
     }
 
-    // Get categories from SKU items (real product categories)
-    const categories = db.prepare(`
+    // SKU catalog categories + object/ROI mapped categories for this venue
+    const skuCategories = db.prepare(`
       SELECT DISTINCT category, COUNT(*) as sku_count
       FROM sku_items
       WHERE category IS NOT NULL AND category != ''
       GROUP BY category
-      ORDER BY sku_count DESC
     `).all();
 
-    res.json({ 
+    const byLabel = new Map();
+    const addCategory = (label, skuCount = 0, source = 'catalog') => {
+      if (!label || typeof label !== 'string') return;
+      const trimmed = label.trim();
+      if (!trimmed) return;
+      const existing = byLabel.get(trimmed);
+      if (existing) {
+        existing.skuCount = Math.max(existing.skuCount, skuCount);
+        if (!existing.sources.includes(source)) existing.sources.push(source);
+        return;
+      }
+      byLabel.set(trimmed, { id: trimmed, name: trimmed, skuCount, sources: [source] });
+    };
+
+    skuCategories.forEach((c) => addCategory(c.category, c.sku_count, 'planogram'));
+
+    const objects = db.prepare(`
+      SELECT id, metadata_json FROM venue_objects WHERE venue_id = ?
+    `).all(venueId);
+    for (const obj of objects) {
+      try {
+        const meta = obj.metadata_json ? JSON.parse(obj.metadata_json) : {};
+        addCategory(meta.business_category_label, 0, 'object');
+        addCategory(meta.business_category, 0, 'object');
+        const resolved = resolveShelfCategories(db, obj.id);
+        resolved.categories.forEach((cat) => addCategory(cat, 0, resolved.source));
+      } catch { /* ignore */ }
+    }
+
+    const rois = db.prepare(`
+      SELECT metadata_json FROM regions_of_interest WHERE venue_id = ?
+    `).all(venueId);
+    for (const roi of rois) {
+      try {
+        const meta = roi.metadata_json ? JSON.parse(roi.metadata_json) : {};
+        addCategory(meta.business_category_label, 0, 'roi');
+      } catch { /* ignore */ }
+    }
+
+    const categories = Array.from(byLabel.values())
+      .sort((a, b) => b.skuCount - a.skuCount || a.name.localeCompare(b.name));
+
+    res.json({
       categories: [
-        { id: 'all', name: 'All Categories', skuCount: categories.reduce((sum, c) => sum + c.sku_count, 0) },
-        ...categories.map(c => ({ id: c.category, name: c.category, skuCount: c.sku_count }))
-      ]
+        {
+          id: 'all',
+          name: 'All Categories',
+          skuCount: categories.reduce((sum, c) => sum + (c.skuCount || 0), 0),
+        },
+        ...categories,
+      ],
     });
   } catch (err) {
     console.error('[BusinessReporting] Categories error:', err);
@@ -207,6 +253,19 @@ function safeQueryAll(db, sql, params = []) {
   }
 }
 
+function resolveRoiCategoryForReporting(db, metadataJson) {
+  try {
+    const meta = metadataJson ? JSON.parse(metadataJson) : {};
+    if (meta.business_category_label) return meta.business_category_label;
+    if (meta.business_category) return meta.business_category;
+    if (meta.shelfId) {
+      const resolved = resolveShelfCategories(db, meta.shelfId);
+      if (resolved.categories[0]) return resolved.categories[0];
+    }
+  } catch { /* ignore */ }
+  return null;
+}
+
 /**
  * Store Manager KPIs: Operations Pulse
  * Uses KpiSourceAdapter (AI Narrator 2) as single source of truth for queue KPIs.
@@ -218,7 +277,10 @@ async function computeStoreManagerKpis(db, kpiCalculator, trajectoryStorage, tra
   
   // Start with Narrator2 KPIs as base
   const kpis = narrator2Data?.kpis ? { ...narrator2Data.kpis } : {};
-  const supporting = { deadZones: narrator2Data?.supporting?.storeDeadZones || [] };
+  const supporting = {
+    deadZones: narrator2Data?.supporting?.storeDeadZones || [],
+    topCategories: narrator2Data?.supporting?.topCategories || [],
+  };
 
   // Map Narrator2 KPI names to Business Reporting expected names
   kpis.avgWaitingTimeMin = kpis.avgQueueWaitTime || 0;
@@ -255,13 +317,28 @@ async function computeMerchandisingKpis(db, kpiCalculator, shelfKPIEnricher, ven
   if (narrator2Data?.supporting?.deadZones) {
     supporting.deadZones = narrator2Data.supporting.deadZones;
   }
+  if (narrator2Data?.supporting?.topCategories?.length) {
+    supporting.topCategories = narrator2Data.supporting.topCategories;
+  }
 
   // If category filter is applied, compute category-specific metrics
   if (categoryId && categoryId !== 'all') {
-    const categoryFilter = ` AND (r.name LIKE ? OR r.name = ?)`;
-    const params = [venueId, startTs, endTs, `${categoryId} - %`, categoryId];
+    const venueRois = safeQueryAll(db, `
+      SELECT id, metadata_json, name FROM regions_of_interest WHERE venue_id = ?
+    `, [venueId]);
 
-    // Category-filtered stats from zone_visits
+    const matchingRoiIds = venueRois
+      .filter((r) => {
+        const cat = resolveRoiCategoryForReporting(db, r.metadata_json);
+        return cat === categoryId || r.name.includes(categoryId);
+      })
+      .map((r) => r.id);
+
+    if (matchingRoiIds.length === 0) {
+      return { kpis, supporting };
+    }
+
+    const placeholders = matchingRoiIds.map(() => '?').join(',');
     const categoryStats = safeQuery(db, `
       SELECT 
         COUNT(DISTINCT track_key) as unique_visitors,
@@ -272,9 +349,8 @@ async function computeMerchandisingKpis(db, kpiCalculator, shelfKPIEnricher, ven
       FROM zone_visits zv
       JOIN regions_of_interest r ON zv.roi_id = r.id
       WHERE r.venue_id = ? AND zv.start_time >= ? AND zv.start_time < ?
-        AND r.name NOT LIKE '%Checkout%' AND r.name NOT LIKE '%Queue%' AND r.name NOT LIKE '%Service%'
-        ${categoryFilter}
-    `, params);
+        AND r.id IN (${placeholders})
+    `, [venueId, startTs, endTs, ...matchingRoiIds]);
 
     if (categoryStats && categoryStats.total_visits > 0) {
       // Override with category-specific metrics

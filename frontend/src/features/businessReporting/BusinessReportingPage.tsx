@@ -15,6 +15,7 @@ import { PERSONAS, getPersonaById, enforceKpiCap, PersonaConfig } from './person
 import ReportingKpiGrid from './components/ReportingKpiGrid';
 import ReportingInsightsPanel from './components/ReportingInsightsPanel';
 import DeadZonesViewport from './components/DeadZonesViewport';
+import CategoryRankingPanel, { CategoryRankingRow } from './components/CategoryRankingPanel';
 
 ;
 
@@ -217,7 +218,7 @@ export default function BusinessReportingPage({ onClose }: BusinessReportingPage
             </div>
           </div>
           
-          {/* Category Selector (only for merchandising) */}
+          {/* Category Selector (merchandising filter) */}
           {selectedPersonaId === 'merchandising' && categories.length > 0 && (
             <div className="flex items-center gap-2">
               <ShoppingBag className="w-4 h-4 text-gray-400" />
@@ -322,6 +323,38 @@ export default function BusinessReportingPage({ onClose }: BusinessReportingPage
                 kpiValues={kpiValues}
                 personaName={selectedPersona.name}
               />
+
+              {/* Category performance ranking */}
+              {Array.isArray(supporting.topCategories) && (supporting.topCategories as CategoryRankingRow[]).length > 0 && (
+                <div className="mt-6 bg-gray-800/50 rounded-xl border border-gray-700 p-5">
+                  <div className="flex items-center justify-between mb-4">
+                    <div>
+                      <h3 className="text-sm font-semibold text-white">Category Performance Ranking</h3>
+                      <p className="text-xs text-gray-500 mt-0.5">
+                        Ranked by engagement rate · click a row to filter merchandising KPIs
+                      </p>
+                    </div>
+                    {selectedPersonaId === 'merchandising' && selectedCategoryId !== 'all' && (
+                      <button
+                        type="button"
+                        onClick={() => setSelectedCategoryId('all')}
+                        className="text-xs text-amber-400 hover:text-amber-300"
+                      >
+                        Clear category filter
+                      </button>
+                    )}
+                  </div>
+                  <CategoryRankingPanel
+                    categories={supporting.topCategories as CategoryRankingRow[]}
+                    selectedCategoryId={selectedPersonaId === 'merchandising' ? selectedCategoryId : undefined}
+                    onSelectCategory={
+                      selectedPersonaId === 'merchandising'
+                        ? (categoryId) => setSelectedCategoryId(categoryId)
+                        : undefined
+                    }
+                  />
+                </div>
+              )}
               
               {/* Dead Zones with Interactive Viewport */}
               {supporting.deadZones && (supporting.deadZones as unknown[]).length > 0 && selectedVenueId && (
@@ -329,7 +362,7 @@ export default function BusinessReportingPage({ onClose }: BusinessReportingPage
                   <h3 className="text-sm font-semibold text-white mb-4">Dead Zones Analysis</h3>
                   <DeadZonesViewport
                     venueId={selectedVenueId}
-                    deadZones={supporting.deadZones as Array<{id: string; name: string; utilization: number}>}
+                    deadZones={supporting.deadZones as Array<{id: string; name: string; utilization: number; category?: string | null}>}
                   />
                 </div>
               )}

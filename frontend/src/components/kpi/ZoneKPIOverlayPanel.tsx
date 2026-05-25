@@ -237,7 +237,7 @@ export default function ZoneKPIOverlayPanel({ onZoneClick }: ZoneKPIOverlayPanel
 
       <div 
         ref={listContainerRef}
-        className="flex flex-col gap-2 max-h-[calc(100vh-200px)] overflow-y-auto pr-1 w-[168px]"
+        className="flex flex-col gap-2 max-h-[calc(100vh-200px)] overflow-y-auto p-1 w-[176px]"
       >
         {filteredRegions.map((roi) => (
           <ZoneKPIIndicator
