@@ -22,10 +22,6 @@ import {
   resolveRoiCategorySync,
   setRoiLabelHtml,
 } from '../../utils/roiCategoryUtils'
-import {
-  TrackInstancedRenderer,
-  isInstancedTrackMeshesEnabled,
-} from './trackInstancedSync'
 
 
 const COLORS = {
@@ -285,7 +281,6 @@ export default function MainViewport({
   const trackInstancedMeshRef = useRef<THREE.InstancedMesh | null>(null)
   const trackInstanceMapRef = useRef<Map<string, number>>(new Map()) // trackKey -> instanceIndex
   const trackInstanceColorsRef = useRef<THREE.InstancedBufferAttribute | null>(null)
-  const trackInstancedRendererRef = useRef(new TrackInstancedRenderer())
   const MAX_TRACK_INSTANCES = 500
   const roiMeshesRef = useRef<Map<string, THREE.Group>>(new Map())
   const roiVertexHandlesRef = useRef<Map<string, THREE.Mesh[]>>(new Map())
@@ -1318,7 +1313,6 @@ export default function MainViewport({
           if (zones && zones.length > 0) {
             // Hide live tracks during capture to avoid overlap
             trackMeshesRef.current.forEach(g => { g.visible = false })
-            trackInstancedRendererRef.current.setVisible(false)
           }
           const trackOpts = (zones && zones.length > 0) ? options.trackPositions : undefined
           if (trackOpts && trackOpts.length > 0) {
@@ -1361,7 +1355,6 @@ export default function MainViewport({
 
           // Restore live tracks visibility
           trackMeshesRef.current.forEach(g => { g.visible = true })
-          trackInstancedRendererRef.current.setVisible(true)
 
           // Restore everything
           renderer.setSize(savedSize.x, savedSize.y, false)
@@ -2467,9 +2460,6 @@ export default function MainViewport({
       trackMeshesRef.current.clear()
       trailLinesRef.current.clear()
       sezEntryTimesRef.current.clear()
-      if (sceneRef.current) {
-        trackInstancedRendererRef.current.clearAll(sceneRef.current)
-      }
       
       // Dispose loaded models cache
       loadedModelsRef.current.forEach(model => {
@@ -3852,123 +3842,33 @@ export default function MainViewport({
     let diagLastMeshCount = 0
     let diagSyncCount = 0
 
-    const resolveTrackColor = (
-      track: TrackWithTrail,
-      key: string,
-      currentDoohScreens: typeof doohScreensRef.current,
-      personPos: { x: number; z: number },
-      now: number,
-    ): number | string => {
-      let isInSez = false
-      for (const screen of currentDoohScreens) {
-        if (screen.enabled && screen.sezPolygon && screen.sezPolygon.length >= 3) {
-          if (pointInPolygon(personPos, screen.sezPolygon)) {
-            isInSez = true
-            break
-          }
-          if (screen.doubleSided) {
-            const backPolygon = screen.sezPolygon.map(p => ({
-              x: 2 * screen.position.x - p.x,
-              z: 2 * screen.position.z - p.z,
-            }))
-            if (pointInPolygon(personPos, backPolygon)) {
-              isInSez = true
-              break
-            }
-          }
-        }
-      }
-      if (isInSez && !sezEntryTimesRef.current.has(key)) {
-        sezEntryTimesRef.current.set(key, now)
-      }
-      return isInSez ? COLORS.sezInfluenced : (
-        track.color || (
-          track.objectType === 'person' ? COLORS.trackPerson
-          : track.objectType === 'cart' ? COLORS.trackCart
-          : COLORS.trackUnknown
-        )
-      )
-    }
-
-    const syncTrackTrails = (
-      tracksToRender: Map<string, TrackWithTrail>,
-      currentDoohScreens: typeof doohScreensRef.current,
-      now: number,
-    ) => {
-      tracksToRender.forEach((track, key) => {
-        const personPos = { x: track.venuePosition.x, z: track.venuePosition.z }
-        const color = resolveTrackColor(track, key, currentDoohScreens, personPos, now)
-        if (!track.trail || track.trail.length <= 1) return
-
-        let trailLine = trailLinesRef.current.get(key)
-        if (!trailLine) {
-          const MAX_TRAIL = 256
-          const posArray = new Float32Array(MAX_TRAIL * 3)
-          const geom = new THREE.BufferGeometry()
-          geom.setAttribute('position', new THREE.BufferAttribute(posArray, 3))
-          geom.setDrawRange(0, 0)
-          const mat = new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.8 })
-          trailLine = new THREE.Line(geom, mat)
-          trailLine.frustumCulled = false
-          trailLine.userData.isTrail = true
-          trailLine.userData.trackKey = key
-          trailLine.visible = showTracksRef.current
-          sceneRef.current!.add(trailLine)
-          trailLinesRef.current.set(key, trailLine)
-        }
-
-        const posAttr = trailLine.geometry.getAttribute('position') as THREE.BufferAttribute
-        const buf = posAttr.array as Float32Array
-        const maxPts = buf.length / 3
-        const count = Math.min(track.trail.length, maxPts)
-        for (let i = 0; i < count; i++) {
-          buf[i * 3] = track.trail[i].x
-          buf[i * 3 + 1] = 0.02
-          buf[i * 3 + 2] = track.trail[i].z
-        }
-        posAttr.needsUpdate = true
-        trailLine.geometry.setDrawRange(0, count)
-        ;(trailLine.material as THREE.LineBasicMaterial).color.set(color as any)
-        trailLine.visible = showTracksRef.current
-      })
-    }
-
     const syncTrackMeshes = () => {
       if (!sceneRef.current) return
       const scene = sceneRef.current
       const allTracks = tracksRef.current
       const refCount = allTracks.size
-      const currentTracking = trackingRef.current
-      const useInstancedMeshes = isInstancedTrackMeshesEnabled() && currentTracking.trackDisplayMode === 'cylinder'
       syncIntervalMs = refCount > 200 ? 200 : refCount > RENDER_EMERGENCY_THRESHOLD ? 66 : refCount > 40 ? 50 : 33
 
       // Sticky cap: prefer tracks that already have meshes so IDs don't swap every frame
       let tracksToRender = allTracks
       if (refCount > RENDER_EMERGENCY_THRESHOLD) {
-        const existingKeys = useInstancedMeshes
-          ? trackInstancedRendererRef.current.getInstanceKeys()
-          : trackMeshesRef.current.keys()
-        tracksToRender = capTracksForRender(allTracks, existingKeys)
+        tracksToRender = capTracksForRender(allTracks, trackMeshesRef.current.keys())
       }
       const allTrackKeys = new Set(allTracks.keys())
       const currentDoohScreens = doohScreensRef.current
+      const currentTracking = trackingRef.current
       const now = Date.now()
       const SEZ_LABEL_DURATION_MS = 60 * 1000
 
       diagSyncCount++
-      const meshCount = useInstancedMeshes
-        ? trackInstancedRendererRef.current.getInstanceCount()
-        : trackMeshesRef.current.size
+      const meshCount = trackMeshesRef.current.size
       const renderCount = tracksToRender.size
       if (MESH_DIAG && (Math.abs(meshCount - diagLastMeshCount) > 3 || (diagSyncCount % 300 === 0))) {
-        console.log(
-          `[DIAG] meshSync  mode=${useInstancedMeshes ? 'instanced' : 'groups'}  meshes=${meshCount}  refTracks=${refCount}  render=${renderCount}  grace=${trackGraceRef.current.size}  sync#=${diagSyncCount}  t=${now}`
-        )
+        console.log(`[DIAG] meshSync  meshes=${meshCount}  refTracks=${refCount}  render=${renderCount}  grace=${trackGraceRef.current.size}  sync#=${diagSyncCount}  t=${now}`)
         diagLastMeshCount = meshCount
       }
       // Bulk clear: when all tracks vanish at once (simulator stopped), skip grace period
-      const instancedCount = trackInstancedRendererRef.current.getInstanceCount()
-      if (refCount === 0 && (meshCount > 0 || instancedCount > 0)) {
+      if (refCount === 0 && meshCount > 0) {
         if (emptyTracksSinceRef.current == null) {
           emptyTracksSinceRef.current = now
         }
@@ -4005,55 +3905,9 @@ export default function MainViewport({
         trackMeshesRef.current.clear()
         trackGraceRef.current.clear()
         sezEntryTimesRef.current.clear()
-        trackInstancedRendererRef.current.clearAll(scene)
         return
       }
       emptyTracksSinceRef.current = null
-
-      if (useInstancedMeshes) {
-        const renderer = trackInstancedRendererRef.current
-        renderer.sync({
-          scene,
-          allTracks,
-          tracksToRender,
-          allTrackKeys,
-          showTracks: showTracksRef.current,
-          cylinderOpacity: currentTracking.cylinderOpacity,
-          trackGrace: trackGraceRef.current,
-          now,
-          trackHideDelayMs: TRACK_HIDE_DELAY_MS,
-          trackGraceMs: TRACK_GRACE_MS,
-          resolveColor: (track, key) => {
-            const personPos = { x: track.venuePosition.x, z: track.venuePosition.z }
-            return resolveTrackColor(track, key, currentDoohScreens, personPos, now)
-          },
-        }, MAX_TRACK_INSTANCES)
-
-        // Trail grace + dispose (instanced bodies handled inside renderer)
-        trailLinesRef.current.forEach((trail, key) => {
-          if (allTrackKeys.has(key)) {
-            if (trackGraceRef.current.has(key)) trackGraceRef.current.delete(key)
-            return
-          }
-          if (!trackGraceRef.current.has(key)) trackGraceRef.current.set(key, now)
-          const graceAge = now - (trackGraceRef.current.get(key) ?? now)
-          if (graceAge > TRACK_HIDE_DELAY_MS) trail.visible = false
-          if (graceAge > TRACK_GRACE_MS) {
-            trackGraceRef.current.delete(key)
-            scene.remove(trail)
-            trail.geometry.dispose()
-            ;(trail.material as THREE.Material).dispose()
-            trailLinesRef.current.delete(key)
-            sezEntryTimesRef.current.delete(key)
-          }
-        })
-
-        syncTrackTrails(tracksToRender, currentDoohScreens, now)
-        sezEntryTimesRef.current.forEach((_, key) => {
-          if (!allTrackKeys.has(key)) sezEntryTimesRef.current.delete(key)
-        })
-        return
-      }
 
       // Phase 1: hide only when track is truly gone from server snapshot (not just render-capped)
       trackMeshesRef.current.forEach((group, key) => {
@@ -4412,10 +4266,7 @@ export default function MainViewport({
       timer = setTimeout(scheduleSync, syncIntervalMs)
     }
     scheduleSync()
-    return () => {
-      if (timer) clearTimeout(timer)
-      if (sceneRef.current) trackInstancedRendererRef.current.dispose(sceneRef.current)
-    }
+    return () => { if (timer) clearTimeout(timer) }
   }, []) // Stable — reads everything via refs
 
   // Render ROIs (regions of interest) as polygons
@@ -4948,7 +4799,6 @@ export default function MainViewport({
     trackMeshesRef.current.forEach(group => {
       group.visible = showTracksLayer
     })
-    trackInstancedRendererRef.current.setVisible(showTracksLayer)
     trailLinesRef.current.forEach(trail => {
       trail.visible = showTracksLayer
     })
@@ -4977,7 +4827,6 @@ export default function MainViewport({
       setShowTracksLayer(false)
       // Immediately force-hide all existing tracks + trails (state is async)
       trackMeshesRef.current.forEach(g => { g.visible = false })
-      trackInstancedRendererRef.current.setVisible(false)
       trailLinesRef.current.forEach(t => { t.visible = false })
 
       // Hide ROI fill meshes (keep edges only via reduced opacity)
