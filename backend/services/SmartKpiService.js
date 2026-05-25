@@ -98,6 +98,8 @@ export class SmartKpiService {
             name: o.name,
             type: o.type,
             position: o.position,
+            rotation: o.rotation,
+            scale: o.scale,
           })),
           canGenerate: true,
         });
@@ -165,6 +167,102 @@ export class SmartKpiService {
       generatedRois: rois,
       kpis: template.kpis,
     };
+  }
+
+  // Fixture-local axes: along = counter edge, from = customer-facing direction
+  getCashierAxes(cashier, sorted, isHorizontalRow, isVerticalRow, defaultFacingX, defaultFacingZ) {
+    const { rotation, source } = cashier;
+    const isDwgFixture = source === 'dwg';
+    const hasExplicitRotation = rotation?.y && Math.abs(rotation.y) > 0.01;
+    let facingX;
+    let facingZ;
+    let rotY;
+
+    if (isDwgFixture && hasExplicitRotation) {
+      rotY = rotation.y;
+      const perpendicularRotY = rotY + Math.PI / 2;
+      facingZ = Math.cos(perpendicularRotY);
+      facingX = Math.sin(perpendicularRotY);
+      if (facingZ < 0) {
+        facingZ = -facingZ;
+        facingX = -facingX;
+      }
+    } else if (isHorizontalRow || isVerticalRow) {
+      facingX = defaultFacingX;
+      facingZ = defaultFacingZ;
+      rotY = isVerticalRow ? Math.PI / 2 : 0;
+    } else {
+      rotY = rotation?.y || 0;
+      facingZ = Math.cos(rotY);
+      facingX = Math.sin(rotY);
+    }
+
+    const alongX = facingZ;
+    const alongZ = -facingX;
+    const fromX = facingX;
+    const fromZ = facingZ;
+
+    return { rotY, facingX, facingZ, alongX, alongZ, fromX, fromZ };
+  }
+
+  generateCalibratedCashierQueueRois(sorted, config, options) {
+    const rois = [];
+    const cal = options.checkoutCalibration;
+    const xSpread = Math.max(...sorted.map(c => c.position.x)) - Math.min(...sorted.map(c => c.position.x));
+    const zSpread = Math.max(...sorted.map(c => c.position.z)) - Math.min(...sorted.map(c => c.position.z));
+    const isHorizontalRow = xSpread > zSpread * 2 && sorted.length > 1;
+    const isVerticalRow = zSpread > xSpread * 2 && sorted.length > 1;
+    let defaultFacingX = 0;
+    let defaultFacingZ = 1;
+    if (isVerticalRow) {
+      defaultFacingX = 1;
+      defaultFacingZ = 0;
+    }
+
+    sorted.forEach((cashier, index) => {
+      const axes = this.getCashierAxes(cashier, sorted, isHorizontalRow, isVerticalRow, defaultFacingX, defaultFacingZ);
+      const checkoutNumber = index + 1;
+
+      for (const zoneType of ['service', 'queue']) {
+        const zoneCal = cal[zoneType];
+        if (!zoneCal) continue;
+
+        const {
+          width,
+          depth,
+          alongCounter = 0,
+          fromCounter = 0,
+          rotationOffset = 0,
+        } = zoneCal;
+
+        const centerX = cashier.position.x + axes.alongX * alongCounter + axes.fromX * fromCounter;
+        const centerZ = cashier.position.z + axes.alongZ * alongCounter + axes.fromZ * fromCounter;
+        const rotation = Math.atan2(axes.fromX, axes.fromZ) + (rotationOffset * Math.PI / 180);
+        const label = zoneType.charAt(0).toUpperCase() + zoneType.slice(1);
+
+        rois.push(this.createRectangularRoi({
+          name: `Checkout ${checkoutNumber} - ${label}`,
+          centerX,
+          centerZ,
+          width,
+          depth,
+          rotation,
+          color: zoneType === 'service' ? config.serviceColor : config.color,
+          opacity: zoneType === 'service' ? 0.4 : 0.35,
+          metadata: {
+            type: 'smart-kpi',
+            template: 'cashier-queue',
+            zoneType,
+            cashierId: cashier.id,
+            cashierIndex: index,
+            calibrated: true,
+          },
+        }));
+      }
+    });
+
+    console.log(`[SmartKPI] Generated ${rois.length} calibrated checkout zones for ${sorted.length} fixtures`);
+    return rois;
   }
 
   // Generate queue zones for cashiers
@@ -239,44 +337,16 @@ export class SmartKpiService {
       defaultFacingZ = 0;
     }
 
+    if (options.checkoutCalibration) {
+      return this.generateCalibratedCashierQueueRois(sorted, config, options);
+    }
+
     sorted.forEach((cashier, index) => {
       const { position, scale, rotation, name, source } = cashier;
-      
-      // For aligned rows, use consistent direction; otherwise use individual rotation
-      let facingX, facingZ, rotY;
-      
-      // DWG fixtures have accurate rotation from CAD
-      // But rot_deg describes counter orientation, not customer flow direction
-      // Customer flow is perpendicular to the counter
+      const axes = this.getCashierAxes(cashier, sorted, isHorizontalRow, isVerticalRow, defaultFacingX, defaultFacingZ);
+      const { facingX, facingZ } = axes;
       const isDwgFixture = source === 'dwg';
       const hasExplicitRotation = rotation?.y && Math.abs(rotation.y) > 0.01;
-      
-      if (isDwgFixture && hasExplicitRotation) {
-        // DWG fixtures: rot_deg describes counter orientation
-        // Queue extends perpendicular to counter, toward +Z (store interior)
-        rotY = rotation.y;
-        
-        // Perpendicular to counter (add 90°)
-        const perpendicularRotY = rotY + Math.PI / 2;
-        facingZ = Math.cos(perpendicularRotY);
-        facingX = Math.sin(perpendicularRotY);
-        
-        // Flip to +Z direction (toward store interior, not exit)
-        if (facingZ < 0) {
-          facingZ = -facingZ;
-          facingX = -facingX;
-        }
-      } else if (isHorizontalRow || isVerticalRow) {
-        // Manual mode: use consistent facing for aligned cashiers
-        facingX = defaultFacingX;
-        facingZ = defaultFacingZ;
-        rotY = isVerticalRow ? Math.PI / 2 : 0;
-      } else {
-        // Fallback: use individual cashier rotation
-        rotY = rotation?.y || 0;
-        facingZ = Math.cos(rotY);
-        facingX = Math.sin(rotY);
-      }
       
       // Cashier dimensions - for DWG fixtures rotated 90°, swap width/depth
       let cashierWidth = scale?.x || 1.5;
@@ -863,6 +933,8 @@ export class SmartKpiService {
             name: f.name,
             type: f.type,
             position: f.position,
+            rotation: f.rotation,
+            scale: f.scale,
             maxDimension: f.scale ? Math.max(f.scale.x || 0, f.scale.z || 0) : null,
           })),
           sizeDistribution,
