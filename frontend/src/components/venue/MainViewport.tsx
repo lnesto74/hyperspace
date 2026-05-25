@@ -16,6 +16,12 @@ import { usePlanogram } from '../../context/PlanogramContext'
 import SkuDebugOverlay from './SkuDebugOverlay'
 import { BarChart3, X } from 'lucide-react'
 import { useXRay } from '../neuralDashboard/NeuralDashboard'
+import { API_BASE } from '../../config/api'
+import {
+  fetchRoiCategoryLabel,
+  resolveRoiCategorySync,
+  setRoiLabelHtml,
+} from '../../utils/roiCategoryUtils'
 
 
 const COLORS = {
@@ -470,6 +476,7 @@ export default function MainViewport({
   
   // Hovered ROI for tooltip
   const hoveredRoiIdRef = useRef<string | null>(null)
+  const roiCategoryCacheRef = useRef<Map<string, string>>(new Map())
   
   // ROI context
   const { 
@@ -1771,13 +1778,47 @@ export default function MainViewport({
               }
             }
           }
-          // Show new ROI label
+          // Show new ROI label (with category when available)
           if (newHoveredRoiId) {
+            setHoveredObjectTooltip(null)
+            hoveredObjectIdRef.current = null
+
+            const roi = regionsRef.current.find(r => r.id === newHoveredRoiId)
             const newGroup = roiMeshesRef.current.get(newHoveredRoiId)
             if (newGroup) {
               for (const child of newGroup.children) {
                 if (child instanceof CSS2DObject && child.userData.roiId) {
-                  (child.element as HTMLDivElement).style.opacity = '1'
+                  const labelDiv = child.element as HTMLDivElement
+                  labelDiv.style.opacity = '1'
+
+                  if (roi) {
+                    let category =
+                      roiCategoryCacheRef.current.get(newHoveredRoiId) ??
+                      resolveRoiCategorySync(roi, objectsRef.current)
+
+                    if (category) {
+                      roiCategoryCacheRef.current.set(newHoveredRoiId, category)
+                    }
+
+                    setRoiLabelHtml(labelDiv, roi.name, category, roi.color)
+
+                    if (!category) {
+                      const roiIdForFetch = newHoveredRoiId
+                      void fetchRoiCategoryLabel(roiIdForFetch, API_BASE).then(fetched => {
+                        if (!fetched || hoveredRoiIdRef.current !== roiIdForFetch) return
+                        roiCategoryCacheRef.current.set(roiIdForFetch, fetched)
+                        const currentRoi = regionsRef.current.find(r => r.id === roiIdForFetch)
+                        const group = roiMeshesRef.current.get(roiIdForFetch)
+                        if (!currentRoi || !group) return
+                        for (const c of group.children) {
+                          if (c instanceof CSS2DObject && c.userData.roiId) {
+                            setRoiLabelHtml(c.element as HTMLDivElement, currentRoi.name, fetched, currentRoi.color)
+                            break
+                          }
+                        }
+                      }).catch(() => {})
+                    }
+                  }
                   break
                 }
               }
@@ -1787,7 +1828,12 @@ export default function MainViewport({
           // Notify context of hovered ROI change for KPI panel highlighting
           setHoveredRoiIdRef.current(newHoveredRoiId)
         }
-        return
+
+        if (newHoveredRoiId && hoveredObjectIdRef.current) {
+          hoveredObjectIdRef.current = null
+          hoverObjectRef.current(null)
+          setHoveredObjectTooltip(null)
+        }
       }
 
       // Handle dragging
@@ -4363,7 +4409,7 @@ export default function MainViewport({
       })
       roiVertexHandlesRef.current.set(roi.id, handles)
 
-      // Label (hidden by default, shown on hover)
+      // Label (hidden by default, shown on hover; category in amber when known)
       const labelDiv = document.createElement('div')
       labelDiv.className = 'roi-label'
       labelDiv.style.cssText = `
@@ -4374,12 +4420,16 @@ export default function MainViewport({
         font-size: 12px;
         font-family: system-ui, sans-serif;
         white-space: nowrap;
-        border: 2px solid ${roi.color};
         pointer-events: none;
         opacity: 0;
         transition: opacity 0.2s ease;
       `
-      labelDiv.textContent = roi.name
+      const cachedCategory = roiCategoryCacheRef.current.get(roi.id)
+      const syncCategory = cachedCategory ?? resolveRoiCategorySync(roi, objects)
+      if (syncCategory) {
+        roiCategoryCacheRef.current.set(roi.id, syncCategory)
+      }
+      setRoiLabelHtml(labelDiv, roi.name, syncCategory, roi.color)
       labelDiv.dataset.roiId = roi.id
       const label = new CSS2DObject(labelDiv)
       // Position at display centroid
