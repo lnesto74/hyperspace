@@ -121,6 +121,21 @@ function generateKeyTakeaways(
   }
   
   // Add specific insights based on persona
+  if (personaName.includes('Executive') || personaName.includes('Summary')) {
+    const visitorsDelta = values['totalVisitors'];
+    if (visitorsDelta) {
+      takeaways.push('Review pillar cards for cross-domain health at a glance.');
+    }
+    const util = values['utilizationRate'];
+    if (util != null && util < 20) {
+      takeaways.push('Space utilization is low — merchandising and layout optimization may unlock traffic value.');
+    }
+    const ces = values['ces'];
+    if (ces != null && ces < 30) {
+      takeaways.push('Retail media attribution is weak — validate PEBLE pipeline and campaign controls.');
+    }
+  }
+
   if (personaName.includes('Operations')) {
     const waitTime = values['avgWaitingTimeMin'];
     const abandonRate = values['abandonRate'];

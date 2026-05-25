@@ -4,18 +4,26 @@ import {
   ArrowLeft,
   ShoppingBag,
   RefreshCw,
-  Clock,
   Building2,
   ChevronDown,
   ChevronRight,
+  MonitorPlay,
 } from 'lucide-react';
 import { useVenue } from '../../context/VenueContext';
 import { PERSONAS, getPersonaById, enforceKpiCap } from './personas';
 import ReportingKpiStrip from './components/ReportingKpiStrip';
 import ReportingInsightsPanel from './components/ReportingInsightsPanel';
 import ZonePerformanceViewport, { type ZonePerformanceItem } from './components/ZonePerformanceViewport';
+import PebleEffectivenessViewport, { type CampaignPerformanceItem } from './components/PebleEffectivenessViewport';
 import PersonaIconRail from './components/PersonaIconRail';
 import CategoryRankingPanel, { CategoryRankingRow } from './components/CategoryRankingPanel';
+import CampaignRankingPanel, { CampaignRankingRow } from './components/CampaignRankingPanel';
+import ExecutiveSummaryViewport, {
+  type ExecutivePillar,
+  type ExecutiveHighlights,
+  type PeriodDeltas,
+} from './components/ExecutiveSummaryViewport';
+import type { DoohScreenMarker } from '../../components/shared/FloorPlanMiniMap';
 
 type TimeRange = '1h' | '24h' | '7d' | 'custom';
 
@@ -53,6 +61,8 @@ const TIME_RANGES: TimeRangeOption[] = [
 ];
 
 const ZONE_MAP_PERSONAS = new Set(['store-manager', 'merchandising']);
+const PEBLE_MAP_PERSONAS = new Set(['retail-media']);
+const EXECUTIVE_PERSONAS = new Set(['executive']);
 
 interface BusinessReportingPageProps {
   onClose: () => void;
@@ -71,6 +81,7 @@ export default function BusinessReportingPage({ onClose }: BusinessReportingPage
   const [categories, setCategories] = useState<Array<{ id: string; name: string; skuCount?: number }>>([]);
   const [selectedCategoryId, setSelectedCategoryId] = useState<string>('all');
   const [categoriesExpanded, setCategoriesExpanded] = useState(false);
+  const [campaignsExpanded, setCampaignsExpanded] = useState(false);
 
   const selectedPersona = useMemo(
     () => getPersonaById(selectedPersonaId) || PERSONAS[0],
@@ -95,6 +106,46 @@ export default function BusinessReportingPage({ onClose }: BusinessReportingPage
   const showZoneMap = ZONE_MAP_PERSONAS.has(selectedPersonaId)
     && selectedVenueId
     && (deadZones.length > 0 || topZones.length > 0);
+
+  const executivePillars = useMemo(
+    () => (supporting.executivePillars as ExecutivePillar[]) || [],
+    [supporting.executivePillars],
+  );
+  const executiveHighlights = useMemo(
+    () => (supporting.highlights as ExecutiveHighlights) || {},
+    [supporting.highlights],
+  );
+  const periodDeltas = useMemo(
+    () => (supporting.periodDeltas as PeriodDeltas) || {},
+    [supporting.periodDeltas],
+  );
+
+  const showExecutiveSummary = EXECUTIVE_PERSONAS.has(selectedPersonaId)
+    && selectedVenueId
+    && executivePillars.length > 0;
+
+  const topCampaigns = useMemo(
+    () => (supporting.topCampaigns as CampaignPerformanceItem[]) || [],
+    [supporting.topCampaigns],
+  );
+  const underperformingCampaigns = useMemo(
+    () => (supporting.underperformingCampaigns as CampaignPerformanceItem[]) || [],
+    [supporting.underperformingCampaigns],
+  );
+  const doohScreens = useMemo(
+    () => (supporting.doohScreens as DoohScreenMarker[]) || [],
+    [supporting.doohScreens],
+  );
+  const campaignRanking = useMemo(
+    () => (supporting.campaignRanking as CampaignRankingRow[]) || [],
+    [supporting.campaignRanking],
+  );
+
+  const showPebleMap = PEBLE_MAP_PERSONAS.has(selectedPersonaId)
+    && selectedVenueId
+    && (topCampaigns.length > 0 || underperformingCampaigns.length > 0 || doohScreens.length > 0);
+
+  const zoneUtilThresholdPct = (supporting.zoneUtilThresholdPct as number | undefined) ?? 5;
 
   const fetchData = async () => {
     if (!selectedVenueId) return;
@@ -268,11 +319,40 @@ export default function BusinessReportingPage({ onClose }: BusinessReportingPage
                 kpiValues={kpiValues}
               />
 
+              {showExecutiveSummary && (
+                <ExecutiveSummaryViewport
+                  venueId={selectedVenueId!}
+                  pillars={executivePillars}
+                  highlights={executiveHighlights}
+                  periodDeltas={periodDeltas}
+                  deadZones={deadZones}
+                  topZones={topZones}
+                  zoneUtilThresholdPct={zoneUtilThresholdPct}
+                />
+              )}
+
               {showZoneMap && (
                 <ZonePerformanceViewport
                   venueId={selectedVenueId!}
                   deadZones={deadZones}
                   topZones={topZones}
+                  zoneUtilThresholdPct={zoneUtilThresholdPct}
+                  kpiNote={
+                    selectedPersonaId === 'store-manager'
+                      ? 'Dead Zones KPI counts all store ROIs below 1% util'
+                      : undefined
+                  }
+                />
+              )}
+
+              {showPebleMap && (
+                <PebleEffectivenessViewport
+                  venueId={selectedVenueId!}
+                  topCampaigns={topCampaigns}
+                  underperformingCampaigns={underperformingCampaigns}
+                  doohScreens={doohScreens}
+                  dataWindowStartTs={supporting.dataWindowStartTs as number | undefined}
+                  dataWindowEndTs={supporting.dataWindowEndTs as number | undefined}
                 />
               )}
 
@@ -283,7 +363,33 @@ export default function BusinessReportingPage({ onClose }: BusinessReportingPage
                 compact
               />
 
-              {Array.isArray(topCategories) && topCategories.length > 0 && (
+              {Array.isArray(campaignRanking) && campaignRanking.length > 0
+                && (selectedPersonaId === 'retail-media' || selectedPersonaId === 'executive') && (
+                <div className="rounded-lg border border-gray-700/80 bg-gray-800/40 overflow-hidden">
+                  <button
+                    type="button"
+                    onClick={() => setCampaignsExpanded(v => !v)}
+                    className="w-full flex items-center justify-between px-3 py-2 hover:bg-gray-800/60 transition-colors"
+                  >
+                    <div className="flex items-center gap-2 text-left">
+                      {campaignsExpanded
+                        ? <ChevronDown className="w-3.5 h-3.5 text-gray-500" />
+                        : <ChevronRight className="w-3.5 h-3.5 text-gray-500" />}
+                      <MonitorPlay className="w-3.5 h-3.5 text-purple-400" />
+                      <span className="text-xs font-medium text-white">Campaign Performance Ranking</span>
+                      <span className="text-[10px] text-gray-500">({campaignRanking.length})</span>
+                    </div>
+                  </button>
+                  {campaignsExpanded && (
+                    <div className="px-3 pb-3 border-t border-gray-700/60 pt-2">
+                      <CampaignRankingPanel campaigns={campaignRanking} />
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {Array.isArray(topCategories) && topCategories.length > 0
+                && selectedPersonaId !== 'retail-media' && (
                 <div className="rounded-lg border border-gray-700/80 bg-gray-800/40 overflow-hidden">
                   <button
                     type="button"
@@ -327,21 +433,6 @@ export default function BusinessReportingPage({ onClose }: BusinessReportingPage
                 </div>
               )}
 
-              {supporting.activeCampaigns && (supporting.activeCampaigns as unknown[]).length > 0 && (
-                <div className="rounded-lg border border-gray-700/80 bg-gray-800/40 px-3 py-2">
-                  <h3 className="text-xs font-medium text-gray-400 mb-2">Active Campaigns</h3>
-                  <div className="flex flex-wrap gap-1.5">
-                    {(supporting.activeCampaigns as Array<{ id: string; name: string }>).map(campaign => (
-                      <span
-                        key={campaign.id}
-                        className="px-2 py-0.5 bg-purple-500/10 border border-purple-500/30 rounded-full text-[10px] text-purple-300"
-                      >
-                        {campaign.name}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              )}
             </>
           )}
         </div>

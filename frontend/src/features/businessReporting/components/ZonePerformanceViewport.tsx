@@ -27,12 +27,18 @@ interface ZonePerformanceViewportProps {
   venueId: string
   deadZones: ZonePerformanceItem[]
   topZones: ZonePerformanceItem[]
+  zoneUtilThresholdPct?: number
+  kpiNote?: string
+  initialTab?: ZoneTab
 }
 
 export default function ZonePerformanceViewport({
   venueId,
   deadZones,
   topZones,
+  zoneUtilThresholdPct = 5,
+  kpiNote,
+  initialTab,
 }: ZonePerformanceViewportProps) {
   const { objects: contextObjects, venue: contextVenue } = useVenue()
   const pulseRef = useRef(0)
@@ -40,7 +46,7 @@ export default function ZonePerformanceViewport({
   const [, setPulseTick] = useState(0)
 
   const [tab, setTab] = useState<ZoneTab>(
-    deadZones.length > 0 ? 'underperforming' : 'topPerformers',
+    initialTab ?? (deadZones.length > 0 ? 'underperforming' : 'topPerformers'),
   )
   const [allRois, setAllRois] = useState<ROI[]>([])
   const [mapObjects, setMapObjects] = useState<VenueObject[]>([])
@@ -49,9 +55,13 @@ export default function ZonePerformanceViewport({
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
+    if (initialTab) {
+      setTab(initialTab)
+      return
+    }
     if (deadZones.length > 0) setTab('underperforming')
     else if (topZones.length > 0) setTab('topPerformers')
-  }, [deadZones.length, topZones.length])
+  }, [deadZones.length, topZones.length, initialTab])
 
   useEffect(() => {
     let cancelled = false
@@ -140,7 +150,13 @@ export default function ZonePerformanceViewport({
       <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 border-b border-gray-700/60">
         <div className="flex items-center gap-2">
           <MapPin className="w-3.5 h-3.5 text-gray-500" />
-          <span className="text-xs font-medium text-gray-300">Zone Performance Map</span>
+          <div>
+            <span className="text-xs font-medium text-gray-300">Zone Performance Map</span>
+            <p className="text-[10px] text-gray-500">
+              Shelf engagement ROIs · &lt;{zoneUtilThresholdPct}% util = underperforming
+              {kpiNote ? ` · ${kpiNote}` : ''}
+            </p>
+          </div>
         </div>
         <div className="flex bg-gray-800 rounded-md p-0.5 border border-gray-700">
           <button

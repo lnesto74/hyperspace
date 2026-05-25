@@ -278,9 +278,10 @@ async function computeStoreManagerKpis(db, kpiCalculator, trajectoryStorage, tra
   // Start with Narrator2 KPIs as base
   const kpis = narrator2Data?.kpis ? { ...narrator2Data.kpis } : {};
   const supporting = {
-    deadZones: narrator2Data?.supporting?.storeDeadZones || [],
-    topZones: narrator2Data?.supporting?.storeTopZones || [],
+    deadZones: narrator2Data?.supporting?.deadZones || [],
+    topZones: narrator2Data?.supporting?.topZones || [],
     topCategories: narrator2Data?.supporting?.topCategories || [],
+    zoneUtilThresholdPct: narrator2Data?.supporting?.zoneUtilThresholdPct ?? 5,
   };
 
   // Map Narrator2 KPI names to Business Reporting expected names
@@ -320,6 +321,20 @@ async function computeMerchandisingKpis(db, kpiCalculator, shelfKPIEnricher, ven
   }
   if (narrator2Data?.supporting?.topZones) {
     supporting.topZones = narrator2Data.supporting.topZones;
+  }
+  if (narrator2Data?.supporting?.zoneUtilThresholdPct != null) {
+    supporting.zoneUtilThresholdPct = narrator2Data.supporting.zoneUtilThresholdPct;
+  }
+
+  // Category filter: align zone map lists with filtered KPI scope
+  if (categoryId && categoryId !== 'all') {
+    const needle = String(categoryId).toLowerCase();
+    supporting.deadZones = (supporting.deadZones || []).filter(
+      z => (z.category || '').toLowerCase() === needle,
+    );
+    supporting.topZones = (supporting.topZones || []).filter(
+      z => (z.category || '').toLowerCase() === needle,
+    );
   }
   if (narrator2Data?.supporting?.topCategories?.length) {
     supporting.topCategories = narrator2Data.supporting.topCategories;
@@ -375,31 +390,192 @@ async function computeMerchandisingKpis(db, kpiCalculator, shelfKPIEnricher, ven
   return { kpis, supporting };
 }
 
+function resolveVenueUuid(db, venueId) {
+  if (venueId && venueId.includes('-')) return venueId;
+  const venue = safeQuery(db, 'SELECT id FROM venues LIMIT 1');
+  return venue?.id || venueId || '1f6c779c-5f09-445f-ae4b-1ce6abc20e9f';
+}
+
+function fetchPeriodDeltas(db, venueId, startTs, endTs) {
+  const duration = endTs - startTs;
+  const prevStart = startTs - duration;
+  const prevEnd = startTs;
+
+  const current = safeQuery(db, `
+    SELECT
+      COUNT(DISTINCT track_key) as visitors,
+      COUNT(*) as visits,
+      COUNT(CASE WHEN is_engagement = 1 THEN 1 END) as engagements
+    FROM zone_visits
+    WHERE venue_id = ? AND start_time >= ? AND start_time < ?
+  `, [venueId, startTs, endTs]) || { visitors: 0, visits: 0, engagements: 0 };
+
+  const previous = safeQuery(db, `
+    SELECT
+      COUNT(DISTINCT track_key) as visitors,
+      COUNT(*) as visits,
+      COUNT(CASE WHEN is_engagement = 1 THEN 1 END) as engagements
+    FROM zone_visits
+    WHERE venue_id = ? AND start_time >= ? AND start_time < ?
+  `, [venueId, prevStart, prevEnd]) || { visitors: 0, visits: 0, engagements: 0 };
+
+  const pctDelta = (curr, prev) => (prev > 0 ? Math.round(((curr - prev) / prev) * 1000) / 10 : null);
+
+  return {
+    visitorsDeltaPct: pctDelta(current.visitors || 0, previous.visitors || 0),
+    visitsDeltaPct: pctDelta(current.visits || 0, previous.visits || 0),
+    engagementDeltaPct: pctDelta(current.engagements || 0, previous.engagements || 0),
+    previousPeriodStartTs: prevStart,
+    previousPeriodEndTs: prevEnd,
+  };
+}
+
+function fetchCampaignRankingBrief(db, venueId, startTs, endTs) {
+  let effectiveStart = startTs;
+  const effectiveEnd = endTs;
+
+  let rows = safeQueryAll(db, `
+    SELECT c.id, c.name,
+      AVG(CASE WHEN k.controls_count > 0 THEN k.ces_score END) as ces,
+      AVG(k.lift_rel) * 100 as eal,
+      AVG(k.aar_score) as aar,
+      SUM(k.exposed_count) as exposures,
+      AVG(CASE WHEN k.controls_count > 0 THEN k.confidence_mean END) * 100 as confidence
+    FROM dooh_campaigns c
+    JOIN dooh_campaign_kpis k ON k.campaign_id = c.id
+    WHERE k.venue_id = ? AND k.bucket_start_ts >= ? AND k.bucket_start_ts <= ?
+    GROUP BY c.id, c.name
+    ORDER BY ces DESC, eal DESC
+  `, [venueId, effectiveStart, effectiveEnd]);
+
+  if (!rows.length) {
+    effectiveStart = endTs - (30 * 24 * 60 * 60 * 1000);
+    rows = safeQueryAll(db, `
+      SELECT c.id, c.name,
+        AVG(CASE WHEN k.controls_count > 0 THEN k.ces_score END) as ces,
+        AVG(k.lift_rel) * 100 as eal,
+        AVG(k.aar_score) as aar,
+        SUM(k.exposed_count) as exposures,
+        AVG(CASE WHEN k.controls_count > 0 THEN k.confidence_mean END) * 100 as confidence
+      FROM dooh_campaigns c
+      JOIN dooh_campaign_kpis k ON k.campaign_id = c.id
+      WHERE k.venue_id = ? AND k.bucket_start_ts >= ? AND k.bucket_start_ts <= ?
+      GROUP BY c.id, c.name
+      ORDER BY ces DESC, eal DESC
+    `, [venueId, effectiveStart, effectiveEnd]);
+  }
+
+  const campaignRanking = rows.map(row => ({
+    id: row.id,
+    name: row.name,
+    ces: Math.round((row.ces || 0) * 10) / 10,
+    eal: Math.round((row.eal || 0) * 10) / 10,
+    aar: Math.round((row.aar || 0) * 10) / 10,
+    exposures: row.exposures || 0,
+    confidence: Math.round((row.confidence || 0) * 10) / 10,
+  }));
+
+  return {
+    campaignRanking,
+    topCampaigns: campaignRanking.slice(0, 5),
+    dataWindowStartTs: effectiveStart,
+    dataWindowEndTs: effectiveEnd,
+  };
+}
+
+function rateStatus(value, { good, warn, direction = 'higher' }) {
+  if (value == null) return 'neutral';
+  if (direction === 'lower') {
+    if (value <= good) return 'good';
+    if (value <= warn) return 'warn';
+    return 'bad';
+  }
+  if (value >= good) return 'good';
+  if (value >= warn) return 'warn';
+  return 'bad';
+}
+
+function buildExecutivePillars(kpis, deltas, topCategories, topCampaigns) {
+  const topCategory = topCategories?.[0];
+  const topCampaign = topCampaigns?.[0];
+  return [
+    {
+      id: 'traffic',
+      label: 'Traffic',
+      metric: 'Total Visitors',
+      value: kpis.totalVisitors ?? 0,
+      format: 'int',
+      status: rateStatus(kpis.totalVisitors, { good: 500, warn: 100, direction: 'higher' }),
+      deltaPct: deltas.visitorsDeltaPct,
+      detail: kpis.engagementRate != null
+        ? `${Math.round(kpis.engagementRate * 10) / 10}% store engagement`
+        : undefined,
+    },
+    {
+      id: 'operations',
+      label: 'Operations',
+      metric: 'Avg Wait Time',
+      value: kpis.avgWaitingTimeMin ?? kpis.avgQueueWaitTime ?? 0,
+      format: 'minutes',
+      status: rateStatus(kpis.avgWaitingTimeMin ?? kpis.avgQueueWaitTime, { good: 2, warn: 5, direction: 'lower' }),
+      detail: kpis.abandonRate != null
+        ? `${Math.round(kpis.abandonRate * 10) / 10}% abandon rate`
+        : undefined,
+    },
+    {
+      id: 'merchandising',
+      label: 'Merchandising',
+      metric: topCategory ? `Top: ${topCategory.category}` : 'Engagement',
+      value: topCategory?.engagementRate ?? kpis.engagementRate ?? 0,
+      format: 'percent',
+      status: rateStatus(topCategory?.engagementRate ?? kpis.engagementRate, { good: 5, warn: 2, direction: 'higher' }),
+      detail: topCategory
+        ? `${topCategory.totalVisits?.toLocaleString?.() ?? topCategory.totalVisits} visits · ${topCategory.browsingRate}% browsing`
+        : undefined,
+    },
+    {
+      id: 'media',
+      label: 'Retail Media',
+      metric: topCampaign ? topCampaign.name : 'Campaign Score',
+      value: topCampaign?.ces ?? kpis.ces ?? 0,
+      format: topCampaign ? 'score' : 'score',
+      status: rateStatus(topCampaign?.ces ?? kpis.ces, { good: 50, warn: 30, direction: 'higher' }),
+      detail: kpis.eal != null
+        ? `EAL ${Math.round(kpis.eal * 10) / 10}% · ${topCampaign?.exposures?.toLocaleString?.() ?? 0} exposures`
+        : undefined,
+    },
+  ];
+}
+
 /**
  * Retail Media KPIs: PEBLE™ Effectiveness
  */
 async function computeRetailMediaKpis(db, venueId, startTs, endTs, campaignId) {
   const kpis = {};
-  const supporting = { activeCampaigns: [] };
+  const supporting = {
+    activeCampaigns: [],
+    campaignRanking: [],
+    topCampaigns: [],
+    underperformingCampaigns: [],
+    doohScreens: [],
+  };
 
-  // Resolve venue ID to UUID if needed
   let resolvedVenueId = venueId;
   if (!venueId.includes('-')) {
     const venue = safeQuery(db, 'SELECT id FROM venues LIMIT 1');
     resolvedVenueId = venue?.id || '1f6c779c-5f09-445f-ae4b-1ce6abc20e9f';
   }
 
-  // Get campaign KPIs from dooh_campaign_kpis
+  let effectiveStart = startTs;
+  const effectiveEnd = endTs;
   let campaignFilter = '';
-  let params = [resolvedVenueId, startTs, endTs];
-  
+  let params = [resolvedVenueId, effectiveStart, effectiveEnd];
   if (campaignId) {
     campaignFilter = ' AND campaign_id = ?';
     params.push(campaignId);
   }
 
-  // First try with requested time range
-  let campaignStats = safeQuery(db, `
+  const aggregateSql = `
     SELECT 
       AVG(lift_rel) * 100 as avg_eal,
       AVG(CASE WHEN controls_count > 0 THEN ces_score END) as avg_ces,
@@ -411,27 +587,15 @@ async function computeRetailMediaKpis(db, venueId, startTs, endTs, campaignId) {
       COUNT(DISTINCT campaign_id) as campaign_count
     FROM dooh_campaign_kpis
     WHERE venue_id = ? AND bucket_start_ts >= ? AND bucket_start_ts <= ?${campaignFilter}
-  `, params);
+  `;
 
-  // If no data in period, expand to last 30 days
+  let campaignStats = safeQuery(db, aggregateSql, params);
+
   if (!campaignStats?.campaign_count) {
-    const expandedStart = endTs - (30 * 24 * 60 * 60 * 1000);
-    params = [resolvedVenueId, expandedStart, endTs];
+    effectiveStart = endTs - (30 * 24 * 60 * 60 * 1000);
+    params = [resolvedVenueId, effectiveStart, effectiveEnd];
     if (campaignId) params.push(campaignId);
-    
-    campaignStats = safeQuery(db, `
-      SELECT 
-        AVG(lift_rel) * 100 as avg_eal,
-        AVG(CASE WHEN controls_count > 0 THEN ces_score END) as avg_ces,
-        AVG(mean_aqs_exposed) as avg_aqs,
-        AVG(aar_score) as avg_aar,
-        AVG(tta_accel) * 100 as avg_tta,
-        AVG(engagement_lift_s) as avg_dci,
-        AVG(CASE WHEN controls_count > 0 THEN confidence_mean END) * 100 as avg_confidence,
-        COUNT(DISTINCT campaign_id) as campaign_count
-      FROM dooh_campaign_kpis
-      WHERE venue_id = ? AND bucket_start_ts >= ? AND bucket_start_ts <= ?${campaignFilter}
-    `, params);
+    campaignStats = safeQuery(db, aggregateSql, params);
   }
 
   kpis.eal = Math.round((campaignStats?.avg_eal || 0) * 10) / 10;
@@ -442,16 +606,89 @@ async function computeRetailMediaKpis(db, venueId, startTs, endTs, campaignId) {
   kpis.dci = Math.round((campaignStats?.avg_dci || 0) * 100) / 100;
   kpis.confidencePct = Math.round((campaignStats?.avg_confidence || 0) * 10) / 10;
 
-  // Get active campaigns list (also with expanded range)
-  const expandedStart = endTs - (30 * 24 * 60 * 60 * 1000);
-  const campaigns = safeQueryAll(db, `
-    SELECT DISTINCT c.id, c.name
+  const rankingParams = [resolvedVenueId, effectiveStart, effectiveEnd];
+  let rankingFilter = '';
+  if (campaignId) {
+    rankingFilter = ' AND c.id = ?';
+    rankingParams.push(campaignId);
+  }
+
+  const campaignRows = safeQueryAll(db, `
+    SELECT c.id, c.name, c.screen_ids_json,
+      AVG(CASE WHEN k.controls_count > 0 THEN k.ces_score END) as ces,
+      AVG(k.lift_rel) * 100 as eal,
+      AVG(k.aar_score) as aar,
+      SUM(k.exposed_count) as exposures,
+      AVG(CASE WHEN k.controls_count > 0 THEN k.confidence_mean END) * 100 as confidence
     FROM dooh_campaigns c
     JOIN dooh_campaign_kpis k ON k.campaign_id = c.id
-    WHERE k.venue_id = ? AND k.bucket_start_ts >= ? AND k.bucket_start_ts <= ?
-  `, [resolvedVenueId, expandedStart, endTs]);
+    WHERE k.venue_id = ? AND k.bucket_start_ts >= ? AND k.bucket_start_ts <= ?${rankingFilter}
+    GROUP BY c.id, c.name, c.screen_ids_json
+  `, rankingParams);
 
-  supporting.activeCampaigns = campaigns;
+  const campaignRanking = campaignRows.map(row => {
+    let screenIds = [];
+    try { screenIds = JSON.parse(row.screen_ids_json || '[]'); } catch { /* ignore */ }
+    return {
+      id: row.id,
+      name: row.name,
+      screenIds,
+      ces: Math.round((row.ces || 0) * 10) / 10,
+      eal: Math.round((row.eal || 0) * 10) / 10,
+      aar: Math.round((row.aar || 0) * 10) / 10,
+      exposures: row.exposures || 0,
+      confidence: Math.round((row.confidence || 0) * 10) / 10,
+    };
+  }).sort((a, b) => (b.ces || b.eal) - (a.ces || a.eal));
+
+  const topCampaigns = campaignRanking
+    .filter(c => c.exposures > 0 && (c.ces >= 50 || c.eal >= 10))
+    .slice(0, 10);
+  const underperformingCampaigns = campaignRanking
+    .filter(c => c.exposures > 0 && (c.ces < 30 || c.eal <= 0))
+    .sort((a, b) => (a.ces || 0) - (b.ces || 0))
+    .slice(0, 10);
+
+  supporting.campaignRanking = campaignRanking;
+  supporting.topCampaigns = topCampaigns.length > 0
+    ? topCampaigns
+    : campaignRanking.slice(0, Math.min(10, campaignRanking.length));
+  supporting.underperformingCampaigns = underperformingCampaigns.length > 0
+    ? underperformingCampaigns
+    : [...campaignRanking].reverse().slice(0, Math.min(10, campaignRanking.length));
+  supporting.activeCampaigns = campaignRanking.map(c => ({ id: c.id, name: c.name }));
+
+  const screenRows = safeQueryAll(db, `
+    SELECT s.id, s.name, s.position_json, s.sez_polygon_json,
+      AVG(b.avg_aqs) as aqs,
+      SUM(b.impressions) as impressions,
+      SUM(b.qualified_impressions) as qualified
+    FROM dooh_screens s
+    LEFT JOIN dooh_kpi_buckets b ON b.screen_id = s.id
+      AND b.bucket_start_ts >= ? AND b.bucket_start_ts <= ?
+    WHERE s.venue_id = ? AND s.enabled = 1
+    GROUP BY s.id, s.name, s.position_json, s.sez_polygon_json
+  `, [effectiveStart, effectiveEnd, resolvedVenueId]);
+
+  supporting.doohScreens = screenRows.map(row => {
+    let position = { x: 0, y: 0, z: 0 };
+    let sezPolygon = [];
+    try { position = JSON.parse(row.position_json || '{}'); } catch { /* ignore */ }
+    try { sezPolygon = JSON.parse(row.sez_polygon_json || '[]'); } catch { /* ignore */ }
+    return {
+      id: row.id,
+      name: row.name,
+      x: position.x ?? 0,
+      z: position.z ?? 0,
+      sezPolygon: Array.isArray(sezPolygon) ? sezPolygon.map(p => ({ x: p.x, z: p.z ?? p.y ?? 0 })) : [],
+      aqs: Math.round((row.aqs || 0) * 10) / 10,
+      impressions: row.impressions || 0,
+      qualified: row.qualified || 0,
+    };
+  });
+
+  supporting.dataWindowStartTs = effectiveStart;
+  supporting.dataWindowEndTs = effectiveEnd;
 
   return { kpis, supporting };
 }
@@ -462,60 +699,59 @@ async function computeRetailMediaKpis(db, venueId, startTs, endTs, campaignId) {
  * Adds executive-specific campaign metrics on top.
  */
 async function computeExecutiveKpis(db, kpiCalculator, trajectoryStorage, venueId, startTs, endTs, campaignId) {
-  const supporting = {};
+  const resolvedVenueId = resolveVenueUuid(db, venueId);
 
-  // Resolve venue ID to UUID if needed
-  let resolvedVenueId = venueId;
-  if (!venueId.includes('-')) {
-    const venue = safeQuery(db, 'SELECT id FROM venues LIMIT 1');
-    resolvedVenueId = venue?.id || '1f6c779c-5f09-445f-ae4b-1ce6abc20e9f';
-  }
-
-  // Get base KPIs from AI Narrator 2 (single source of truth)
   const narrator2Data = await getNarrator2Kpis(resolvedVenueId, 'executive', startTs, endTs);
-  
-  // Start with Narrator2 KPIs as base
-  const kpis = narrator2Data?.kpis ? { ...narrator2Data.kpis } : {};
 
-  // Map Narrator2 KPI names to Business Reporting expected names
+  const kpis = narrator2Data?.kpis ? { ...narrator2Data.kpis } : {};
+  const supporting = {
+    deadZones: narrator2Data?.supporting?.deadZones || [],
+    topZones: narrator2Data?.supporting?.topZones || [],
+    topCategories: narrator2Data?.supporting?.topCategories || [],
+    zoneUtilThresholdPct: narrator2Data?.supporting?.zoneUtilThresholdPct ?? 5,
+    campaignRanking: [],
+    topCampaigns: [],
+    periodDeltas: {},
+    executivePillars: [],
+  };
+
   kpis.avgWaitingTimeMin = kpis.avgQueueWaitTime || 0;
   kpis.abandonRate = kpis.queueAbandonmentRate || 0;
 
-  // Campaign metrics (specific to executive view)
-  let campaignFilter = '';
-  let params = [resolvedVenueId, startTs, endTs];
-  
-  if (campaignId) {
-    campaignFilter = ' AND campaign_id = ?';
-    params.push(campaignId);
+  const campaignBrief = fetchCampaignRankingBrief(db, resolvedVenueId, startTs, endTs);
+  supporting.campaignRanking = campaignBrief.campaignRanking;
+  supporting.topCampaigns = campaignBrief.topCampaigns;
+  supporting.dataWindowStartTs = campaignBrief.dataWindowStartTs;
+  supporting.dataWindowEndTs = campaignBrief.dataWindowEndTs;
+
+  if (campaignBrief.campaignRanking.length > 0) {
+    const agg = campaignBrief.campaignRanking.reduce((acc, c) => {
+      acc.ces += c.ces || 0;
+      acc.eal += c.eal || 0;
+      acc.count += 1;
+      return acc;
+    }, { ces: 0, eal: 0, count: 0 });
+    kpis.ces = Math.round((agg.ces / agg.count) * 10) / 10;
+    kpis.eal = Math.round((agg.eal / agg.count) * 10) / 10;
+  } else {
+    kpis.ces = kpis.ces ?? 0;
+    kpis.eal = kpis.eal ?? 0;
   }
 
-  // First try with requested time range
-  let campaignStats = safeQuery(db, `
-    SELECT 
-      AVG(CASE WHEN controls_count > 0 THEN ces_score END) as avg_ces,
-      AVG(lift_rel) * 100 as avg_eal
-    FROM dooh_campaign_kpis
-    WHERE venue_id = ? AND bucket_start_ts >= ? AND bucket_start_ts <= ?${campaignFilter}
-  `, params);
+  supporting.periodDeltas = fetchPeriodDeltas(db, resolvedVenueId, startTs, endTs);
+  supporting.executivePillars = buildExecutivePillars(
+    kpis,
+    supporting.periodDeltas,
+    supporting.topCategories,
+    supporting.topCampaigns,
+  );
 
-  // If no data, expand to 30 days
-  if (!campaignStats?.avg_ces && !campaignStats?.avg_eal) {
-    const expandedStart = endTs - (30 * 24 * 60 * 60 * 1000);
-    params = [resolvedVenueId, expandedStart, endTs];
-    if (campaignId) params.push(campaignId);
-    
-    campaignStats = safeQuery(db, `
-      SELECT 
-        AVG(CASE WHEN controls_count > 0 THEN ces_score END) as avg_ces,
-        AVG(lift_rel) * 100 as avg_eal
-      FROM dooh_campaign_kpis
-      WHERE venue_id = ? AND bucket_start_ts >= ? AND bucket_start_ts <= ?${campaignFilter}
-    `, params);
-  }
-
-  kpis.ces = Math.round((campaignStats?.avg_ces || 0) * 10) / 10;
-  kpis.eal = Math.round((campaignStats?.avg_eal || 0) * 10) / 10;
+  supporting.highlights = {
+    topZone: supporting.topZones?.[0] || null,
+    worstZone: supporting.deadZones?.[0] || null,
+    topCategory: supporting.topCategories?.[0] || null,
+    topCampaign: supporting.topCampaigns?.[0] || null,
+  };
 
   return { kpis, supporting };
 }

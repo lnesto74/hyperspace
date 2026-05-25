@@ -36,6 +36,32 @@ function safeQuery(sql, params = []) {
   }
 }
 
+/** Shared shelf-engagement ROI filter — used by Operations Pulse + Merchandising maps. */
+const SHELF_ENGAGEMENT_ZONE_SQL = `
+  AND (r.name LIKE '%Shelf%' OR r.name LIKE '%Category%' OR r.name LIKE '%Aisle%')
+  AND r.name NOT LIKE '%Queue%'
+  AND r.name NOT LIKE '%Service%'
+  AND r.name NOT LIKE '%Checkout%'
+`;
+
+/** Default: zones below 5% occupied-time util = underperforming; at/above 5% eligible as top. */
+export const SHELF_ZONE_UTIL_THRESHOLD_PCT = 5;
+
+function getShelfEngagementZonePerformance(venueId, startTs, endTs, deadThreshold = SHELF_ZONE_UTIL_THRESHOLD_PCT) {
+  const totalTimeRange = endTs - startTs;
+  const rows = safeQueryAll(`
+    SELECT
+      r.id, r.name,
+      COALESCE(SUM(zv.duration_ms), 0) as total_ms
+    FROM regions_of_interest r
+    LEFT JOIN zone_visits zv ON zv.roi_id = r.id AND zv.start_time >= ? AND zv.start_time < ?
+    WHERE r.venue_id = ?
+    ${SHELF_ENGAGEMENT_ZONE_SQL}
+    GROUP BY r.id, r.name
+  `, [startTs, endTs, venueId]);
+  return buildZonePerformanceLists(rows, totalTimeRange, venueId, { deadThreshold });
+}
+
 function buildZonePerformanceLists(zoneRows, totalTimeRange, venueId, { deadThreshold, limit = 10 } = {}) {
   const all = zoneRows.map(z => {
     const zoneUtilRate = (z.total_ms / totalTimeRange) * 100;
@@ -389,29 +415,11 @@ export async function getReportingSummary(venueId, personaId, startTs, endTs) {
         kpis.brandEfficiency = Math.round((positionStats.avg_position_score / 50) * 100) / 100;
       }
 
-      // Dead zones: shelf zones with <5% utilization
-      const totalTimeRange = endTs - startTs;
-      const DEAD_ZONE_THRESHOLD = 5;
-      const shelfZoneUtils = safeQueryAll(`
-        SELECT 
-          r.id, r.name,
-          COALESCE(SUM(zv.duration_ms), 0) as total_ms
-        FROM regions_of_interest r
-        LEFT JOIN zone_visits zv ON zv.roi_id = r.id AND zv.start_time >= ? AND zv.start_time < ?
-        WHERE r.venue_id = ?
-          AND (r.name LIKE '%Shelf%' OR r.name LIKE '%Category%' OR r.name LIKE '%Aisle%')
-          AND r.name NOT LIKE '%Queue%'
-          AND r.name NOT LIKE '%Service%'
-          AND r.name NOT LIKE '%Checkout%'
-        GROUP BY r.id, r.name
-      `, [startTs, endTs, venueId]);
-
-      const shelfPerf = buildZonePerformanceLists(
-        shelfZoneUtils, totalTimeRange, venueId, { deadThreshold: DEAD_ZONE_THRESHOLD },
-      );
+      const shelfPerf = getShelfEngagementZonePerformance(venueId, startTs, endTs);
       kpis.deadZones = shelfPerf.deadZoneCount;
       supporting.deadZones = shelfPerf.deadZones;
       supporting.topZones = shelfPerf.topZones;
+      supporting.zoneUtilThresholdPct = SHELF_ZONE_UTIL_THRESHOLD_PCT;
       supporting.topCategories = getCategoryPerformanceRanking(venueId, startTs, endTs);
     }
 
@@ -436,10 +444,9 @@ export async function getReportingSummary(venueId, personaId, startTs, endTs) {
       const utilizationMs = utilStats?.total_occupied_ms || 0;
       kpis.utilizationRate = Math.min(100, Math.round((utilizationMs / (totalTimeRange * zoneCount)) * 100 * 10) / 10);
 
-      // Dead zones for store-manager: zones with <1% utilization
-      const DEAD_ZONE_THRESHOLD = 1;
-      const zoneUtils = safeQueryAll(`
-        SELECT 
+      // Store-wide low-util count (KPI) — all ROIs except queue/service
+      const allZoneUtils = safeQueryAll(`
+        SELECT
           r.id, r.name,
           COALESCE(SUM(zv.duration_ms), 0) as total_ms
         FROM regions_of_interest r
@@ -449,16 +456,43 @@ export async function getReportingSummary(venueId, personaId, startTs, endTs) {
           AND r.name NOT LIKE '%Service%'
         GROUP BY r.id, r.name
       `, [startTs, endTs, venueId]);
+      const storeWidePerf = buildZonePerformanceLists(allZoneUtils, totalTimeRange, venueId, { deadThreshold: 1 });
+      kpis.deadZonesCount = storeWidePerf.deadZoneCount;
 
-      const storePerf = buildZonePerformanceLists(
-        zoneUtils, totalTimeRange, venueId, { deadThreshold: DEAD_ZONE_THRESHOLD },
-      );
-      kpis.deadZonesCount = storePerf.deadZoneCount;
-      supporting.storeDeadZones = storePerf.deadZones;
-      supporting.storeTopZones = storePerf.topZones;
+      // Map uses same shelf-engagement ROIs as Merchandising (consistent top/dead lists)
+      const shelfPerf = getShelfEngagementZonePerformance(venueId, startTs, endTs);
+      supporting.deadZones = shelfPerf.deadZones;
+      supporting.topZones = shelfPerf.topZones;
+      supporting.zoneUtilThresholdPct = SHELF_ZONE_UTIL_THRESHOLD_PCT;
       if (!supporting.topCategories?.length) {
         supporting.topCategories = getCategoryPerformanceRanking(venueId, startTs, endTs);
       }
+    }
+
+    // Executive: holistic store view — queue + utilization + shelf map + categories
+    if (personaId === 'executive') {
+      const queueKpis = await getQueueLaneKpis(venueId, startTs, endTs);
+      Object.assign(kpis, queueKpis);
+
+      const totalTimeRange = endTs - startTs;
+      const utilStats = safeQuery(`
+        SELECT SUM(duration_ms) as total_occupied_ms
+        FROM zone_visits
+        WHERE venue_id = ? AND start_time >= ? AND start_time < ?
+      `, [venueId, startTs, endTs]);
+
+      const zoneCountResult = safeQuery(`
+        SELECT COUNT(*) as cnt FROM regions_of_interest WHERE venue_id = ?
+      `, [venueId]);
+      const zoneCount = zoneCountResult?.cnt || 1;
+      const utilizationMs = utilStats?.total_occupied_ms || 0;
+      kpis.utilizationRate = Math.min(100, Math.round((utilizationMs / (totalTimeRange * zoneCount)) * 100 * 10) / 10);
+
+      const shelfPerf = getShelfEngagementZonePerformance(venueId, startTs, endTs);
+      supporting.deadZones = shelfPerf.deadZones;
+      supporting.topZones = shelfPerf.topZones;
+      supporting.zoneUtilThresholdPct = SHELF_ZONE_UTIL_THRESHOLD_PCT;
+      supporting.topCategories = getCategoryPerformanceRanking(venueId, startTs, endTs);
     }
 
     console.log(`[KpiSourceAdapter] Summary computed in ${Date.now() - start}ms`);

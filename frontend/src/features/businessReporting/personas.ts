@@ -108,7 +108,7 @@ const storeManagerKpis: KpiTileDefinition[] = [
     format: 'int',
     meaning: 'Number of areas with very low shopper activity.',
     action: 'Relocate products or add signage to activate these areas.',
-    tooltip: 'Count of zones with utilization below 10% in selected range.',
+    tooltip: 'Count of all store ROIs (except queue/service) with utilization below 1% in selected range.',
     thresholds: { good: 0, warn: 2, bad: 5, direction: 'lower' },
   },
 ];
