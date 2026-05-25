@@ -285,3 +285,71 @@ canvas {
   font-size: 6px;
   padding: 0px 4px;
 }
+
+/* X-Ray anchors — minimal map markers (detail on hover) */
+.xray-anchor {
+  pointer-events: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transform: translate(-50%, -50%);
+  animation: xrayAnchorPulse 2.4s ease-in-out infinite;
+}
+
+.xray-anchor-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  box-shadow: 0 0 6px currentColor;
+}
+
+.xray-anchor-shelf .xray-anchor-dot {
+  background: rgba(0, 255, 255, 0.85);
+  color: rgba(0, 255, 255, 0.9);
+  border: 1px solid rgba(0, 255, 255, 0.5);
+}
+
+.xray-anchor-queue .xray-anchor-dot {
+  background: rgba(34, 197, 94, 0.9);
+  color: rgba(34, 197, 94, 0.9);
+  border: 1px solid rgba(34, 197, 94, 0.45);
+}
+
+.xray-anchor-queue-moderate .xray-anchor-dot {
+  background: rgba(245, 158, 11, 0.95);
+  color: rgba(245, 158, 11, 0.95);
+  border-color: rgba(245, 158, 11, 0.5);
+}
+
+.xray-anchor-queue-busy .xray-anchor-dot {
+  background: rgba(239, 68, 68, 0.95);
+  color: rgba(239, 68, 68, 0.95);
+  border-color: rgba(239, 68, 68, 0.5);
+}
+
+.xray-anchor-screen .xray-anchor-pin {
+  font-size: 11px;
+  line-height: 1;
+  filter: drop-shadow(0 0 4px rgba(168, 85, 247, 0.6));
+  opacity: 0.75;
+}
+
+.xray-anchor-zone .xray-anchor-dot {
+  background: rgba(139, 92, 246, 0.85);
+  color: rgba(139, 92, 246, 0.9);
+  border: 1px solid rgba(139, 92, 246, 0.45);
+}
+
+.xray-halo-detail {
+  animation: xrayDetailIn 0.22s ease-out;
+}
+
+@keyframes xrayAnchorPulse {
+  0%, 100% { opacity: 0.55; transform: translate(-50%, -50%) scale(1); }
+  50% { opacity: 1; transform: translate(-50%, -50%) scale(1.12); }
+}
+
+@keyframes xrayDetailIn {
+  from { opacity: 0; transform: translateY(-90%); }
+  to { opacity: 1; transform: translateY(-100%); }
+}

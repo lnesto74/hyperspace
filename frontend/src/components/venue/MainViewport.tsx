@@ -16,6 +16,7 @@ import { usePlanogram } from '../../context/PlanogramContext'
 import SkuDebugOverlay from './SkuDebugOverlay'
 import { BarChart3, X } from 'lucide-react'
 import { useXRay } from '../neuralDashboard/NeuralDashboard'
+import { XRayModeSystem } from './xrayModeSystem'
 import { API_BASE } from '../../config/api'
 import {
   fetchRoiCategoryLabel,
@@ -347,8 +348,10 @@ export default function MainViewport({
   
   // X-Ray mode
   const { xrayMode, xrayData, xrayFilters, setXrayFilters } = useXRay()
-  const xrayHalosRef = useRef<Map<string, CSS2DObject>>(new Map())
-  const xrayHaloTiersRef = useRef<Map<string, number>>(new Map())
+  const xraySystemRef = useRef<XRayModeSystem | null>(null)
+  const xrayModeRef = useRef(false)
+  const xrayDataRef = useRef(xrayData)
+  const xrayFiltersRef = useRef(xrayFilters)
   const xrayPrevMaterialsRef = useRef<Map<string, { color: number; opacity: number; transparent: boolean; wireframe: boolean; emissiveHex: number; emissiveIntensity: number }>>(new Map())
   const preXrayTracksRef = useRef<boolean>(true)
   
@@ -887,6 +890,10 @@ export default function MainViewport({
   const doohScreensRef = useRef(doohScreens)
   const fetchDoohScreensRef = useRef(fetchDoohScreens)
   
+  useEffect(() => { xrayModeRef.current = xrayMode }, [xrayMode])
+  useEffect(() => { xrayDataRef.current = xrayData }, [xrayData])
+  useEffect(() => { xrayFiltersRef.current = xrayFilters }, [xrayFilters])
+
   useEffect(() => {
     venueRef.current = venue
     objectsRef.current = objects
@@ -947,6 +954,11 @@ export default function MainViewport({
     const scene = new THREE.Scene()
     scene.background = new THREE.Color(0x0f0f14)
     sceneRef.current = scene
+
+    if (!xraySystemRef.current) {
+      xraySystemRef.current = new XRayModeSystem()
+    }
+    xraySystemRef.current.attach(scene)
 
     // Camera
     const camera = new THREE.PerspectiveCamera(60, width / height, 0.1, 10000)
@@ -1198,6 +1210,11 @@ export default function MainViewport({
       }
       animationFrameId = requestAnimationFrame(animate)
       controls.update()
+
+      if (xrayModeRef.current && xraySystemRef.current && cameraRef.current && controlsRef.current) {
+        const dist = camera.position.distanceTo(controls.target)
+        xraySystemRef.current.updateZoomTier(dist)
+      }
 
       // Animate point clouds at throttled rate for living shimmer (10fps instead of 60fps)
       const now = performance.now()
@@ -1632,6 +1649,51 @@ export default function MainViewport({
 
       // Handle hover tooltip when not dragging
       if (!isDraggingRef.current) {
+        // Neural X-Ray: hover-to-reveal KPI cards on clean map
+        if (xrayModeRef.current && xraySystemRef.current) {
+          if (hoveredObjectIdRef.current) {
+            hoveredObjectIdRef.current = null
+            hoverObjectRef.current(null)
+            setHoveredObjectTooltip(null)
+          }
+          if (hoveredRoiIdRef.current) {
+            const prevGroup = roiMeshesRef.current.get(hoveredRoiIdRef.current)
+            if (prevGroup) {
+              for (const child of prevGroup.children) {
+                if (child instanceof CSS2DObject && child.userData.roiId) {
+                  (child.element as HTMLDivElement).style.opacity = '0'
+                  break
+                }
+              }
+            }
+            hoveredRoiIdRef.current = null
+            setHoveredRoiIdRef.current(null)
+          }
+          if (hoveredLidarId) {
+            const prevGroup = lidarMeshesRef.current.get(hoveredLidarId)
+            if (prevGroup?.children[5]) prevGroup.children[5].visible = false
+            hoveredLidarId = null
+          }
+
+          const objectMeshes = Array.from(objectMeshesRef.current.values())
+          const allObjMeshes: THREE.Object3D[] = []
+          objectMeshes.forEach(obj => {
+            if (obj instanceof THREE.Group) {
+              obj.traverse(child => { if (child instanceof THREE.Mesh) allObjMeshes.push(child) })
+            } else {
+              allObjMeshes.push(obj)
+            }
+          })
+          const pick = xraySystemRef.current.pickAt(
+            mouse,
+            camera,
+            raycasterRef.current,
+            allObjMeshes,
+          )
+          xraySystemRef.current.handleHover(pick)
+          return
+        }
+
         // Check if hovering over a LiDAR
         const lidarGroups = Array.from(lidarMeshesRef.current.values())
         const lidarMeshes = lidarGroups.flatMap(g => g.children.filter(c => c.userData.isLidar))
@@ -2004,36 +2066,59 @@ export default function MainViewport({
       hoveredObjectIdRef.current = null
       hoverObjectRef.current(null)
       setHoveredObjectTooltip(null)
-      // Handle click selection (no drag occurred - threshold not crossed)
-      if (pendingDragRef.current && !isDraggingRef.current) {
-        const pending = pendingDragRef.current
-        // Select the object on click
-        if (pending.type === 'object') {
-          selectObjectRef.current(pending.id)
-          selectPlacementRef.current(null)
-          selectRegionRef.current(null)
-          
-          // If planogram layer is active and this is a shelf, select it for planogram display
-          if (showPlanogramLayerRef.current) {
-            const obj = objectsRef.current.find(o => o.id === pending.id)
-            if (obj?.type === 'shelf') {
-              setPlanogramSelectedShelfIdRef.current(pending.id)
-            }
+
+      const xrayClick = xrayModeRef.current && xraySystemRef.current && !isDraggingRef.current && mouseDownPosRef.current && !hasDragMovedRef.current
+
+      if (xrayClick && xraySystemRef.current) {
+        const mouse = getMouseNDC(event)
+        const objectMeshes = Array.from(objectMeshesRef.current.values())
+        const allObjMeshes: THREE.Object3D[] = []
+        objectMeshes.forEach(obj => {
+          if (obj instanceof THREE.Group) {
+            obj.traverse(child => { if (child instanceof THREE.Mesh) allObjMeshes.push(child) })
+          } else {
+            allObjMeshes.push(obj)
           }
-        } else if (pending.type === 'lidar') {
-          selectPlacementRef.current(pending.id)
-          selectObjectRef.current(null)
-          selectRegionRef.current(null)
-        } else if (pending.type === 'roi' || pending.type === 'roi-vertex') {
-          selectRegionRef.current(pending.id)
+        })
+        const pick = xraySystemRef.current.pickAt(
+          mouse,
+          camera,
+          raycasterRef.current,
+          allObjMeshes,
+        )
+        xraySystemRef.current.togglePin(pick)
+      } else if (!xrayModeRef.current) {
+        // Handle click selection (no drag occurred - threshold not crossed)
+        if (pendingDragRef.current && !isDraggingRef.current) {
+          const pending = pendingDragRef.current
+          // Select the object on click
+          if (pending.type === 'object') {
+            selectObjectRef.current(pending.id)
+            selectPlacementRef.current(null)
+            selectRegionRef.current(null)
+            
+            // If planogram layer is active and this is a shelf, select it for planogram display
+            if (showPlanogramLayerRef.current) {
+              const obj = objectsRef.current.find(o => o.id === pending.id)
+              if (obj?.type === 'shelf') {
+                setPlanogramSelectedShelfIdRef.current(pending.id)
+              }
+            }
+          } else if (pending.type === 'lidar') {
+            selectPlacementRef.current(pending.id)
+            selectObjectRef.current(null)
+            selectRegionRef.current(null)
+          } else if (pending.type === 'roi' || pending.type === 'roi-vertex') {
+            selectRegionRef.current(pending.id)
+            selectObjectRef.current(null)
+            selectPlacementRef.current(null)
+          }
+        } else if (!pendingDragRef.current && !isDraggingRef.current && mouseDownPosRef.current) {
+          // Clicked on empty space - deselect all
           selectObjectRef.current(null)
           selectPlacementRef.current(null)
+          selectRegionRef.current(null)
         }
-      } else if (!pendingDragRef.current && !isDraggingRef.current && mouseDownPosRef.current) {
-        // Clicked on empty space - deselect all
-        selectObjectRef.current(null)
-        selectPlacementRef.current(null)
-        selectRegionRef.current(null)
       }
       
       // Clear pending drag state
@@ -2361,8 +2446,9 @@ export default function MainViewport({
         }
       }
       
-      // Escape to deselect
+      // Escape to deselect / clear X-Ray pin
       if (event.key === 'Escape') {
+        if (xrayModeRef.current) xraySystemRef.current?.clearPin()
         selectObjectRef.current(null)
         selectPlacementRef.current(null)
         selectRegionRef.current(null)
@@ -2397,11 +2483,16 @@ export default function MainViewport({
       }
     }
 
+    const handleContainerLeave = () => {
+      handleMouseUp({ button: 0 } as MouseEvent)
+      xraySystemRef.current?.onMouseLeave()
+    }
+
     container.addEventListener('mousedown', handleMouseDown)
     container.addEventListener('dblclick', handleDoubleClick)
     container.addEventListener('mousemove', handleMouseMove)
     container.addEventListener('mouseup', handleMouseUp)
-    container.addEventListener('mouseleave', handleMouseUp)
+    container.addEventListener('mouseleave', handleContainerLeave)
     container.addEventListener('contextmenu', handleContextMenu)
     window.addEventListener('keydown', handleKeyDown)
 
@@ -2424,7 +2515,7 @@ export default function MainViewport({
       container.removeEventListener('dblclick', handleDoubleClick)
       container.removeEventListener('mousemove', handleMouseMove)
       container.removeEventListener('mouseup', handleMouseUp)
-      container.removeEventListener('mouseleave', handleMouseUp)
+      container.removeEventListener('mouseleave', handleContainerLeave)
       container.removeEventListener('contextmenu', handleContextMenu)
       resizeObserver.disconnect()
       
@@ -2486,6 +2577,8 @@ export default function MainViewport({
       }
       
       // Dispose renderer and remove DOM elements
+      xraySystemRef.current?.dispose()
+      xraySystemRef.current = null
       renderer.dispose()
       renderer.forceContextLoss()
       container.removeChild(renderer.domElement)
@@ -4873,6 +4966,7 @@ export default function MainViewport({
       if (gridRef.current) gridRef.current.visible = false
     } else {
       // --- Restore from X-Ray ---
+      xraySystemRef.current?.clearPin()
       scene.background = new THREE.Color(0x0f0f14)
 
       if (ambientLightRef.current) ambientLightRef.current.intensity = lighting.ambientIntensity
@@ -4916,324 +5010,19 @@ export default function MainViewport({
     }
   }, [xrayMode])
 
-  // ═══════════ X-RAY KPI HALOS (A: category consolidation, B: filter, D: threshold) ═══════════
-  const XRAY_MIN_VISITS = 2        // Strategy D: minimum activity to show a halo
-  const XRAY_MAX_CATEGORIES = 12   // Strategy A: cap total category halos
-
+  // ═══════════ X-RAY anchors + hover-to-reveal KPI cards ═══════════
   useEffect(() => {
-    const scene = sceneRef.current
-    if (!scene) return
+    const system = xraySystemRef.current
+    if (!system) return
 
-    // Remove old halos
-    xrayHalosRef.current.forEach(halo => {
-      scene.remove(halo)
-      halo.element.remove()
-    })
-    xrayHalosRef.current.clear()
-    xrayHaloTiersRef.current.clear()
-
-    if (!xrayMode || !xrayData) return
-
-    // ─── Shelf halos: category consolidation + per-shelf for categorized shelves ───
-    if (xrayFilters.shelves) {
-      // Step 1: Category-level summary halos (one per product category)
-      const categoryMap = new Map<string, { visits: number; dwells: number; engagements: number; avgDwellWeighted: number; peakOccupancy: number; cx: number; cz: number; count: number }>()
-      // Step 2: Per-shelf halos for shelves WITH categories (merged L/R)
-      const shelfMap = new Map<string, { name: string; cat: string; visits: number; dwells: number; engagements: number; avgDwellW: number; peakOcc: number; cx: number; cz: number; count: number }>()
-
-      for (const zone of xrayData.zones) {
-        if (zone.template !== 'shelf-engagement' || !zone.position) continue
-        const hasCat = zone.categories && zone.categories.length > 0
-        const cat = hasCat ? zone.categories![0] : null
-
-        // Only aggregate into category map if zone has a real category
-        if (cat) {
-          const existing = categoryMap.get(cat)
-          if (existing) {
-            existing.visits += zone.visits; existing.dwells += zone.dwells; existing.engagements += zone.engagements
-            existing.avgDwellWeighted += zone.avgDwellSec * zone.visits
-            existing.peakOccupancy = Math.max(existing.peakOccupancy, zone.peakOccupancy)
-            existing.cx += zone.position.x; existing.cz += zone.position.z; existing.count += 1
-          } else {
-            categoryMap.set(cat, { visits: zone.visits, dwells: zone.dwells, engagements: zone.engagements, avgDwellWeighted: zone.avgDwellSec * zone.visits, peakOccupancy: zone.peakOccupancy, cx: zone.position.x, cz: zone.position.z, count: 1 })
-          }
-        }
-
-        // Per-shelf merged L/R (only for categorized shelves)
-        if (cat && zone.shelfId) {
-          const existing = shelfMap.get(zone.shelfId)
-          if (existing) {
-            existing.visits += zone.visits; existing.dwells += zone.dwells; existing.engagements += zone.engagements
-            existing.avgDwellW += zone.avgDwellSec * zone.visits; existing.peakOcc = Math.max(existing.peakOcc, zone.peakOccupancy)
-            existing.cx += zone.position.x; existing.cz += zone.position.z; existing.count += 1
-          } else {
-            const shelfLabel = zone.name.replace(/\s*-\s*Engagement.*$/i, '')
-            shelfMap.set(zone.shelfId, { name: shelfLabel, cat, visits: zone.visits, dwells: zone.dwells, engagements: zone.engagements, avgDwellW: zone.avgDwellSec * zone.visits, peakOcc: zone.peakOccupancy, cx: zone.position.x, cz: zone.position.z, count: 1 })
-          }
-        }
-      }
-
-      // Create category summary halos (tier 2 — visible at medium+ zoom)
-      for (const [catName, agg] of categoryMap) {
-        const avgDwell = agg.visits > 0 ? agg.avgDwellWeighted / agg.visits : 0
-        const convRate = agg.engagements > 0 && agg.visits > 0 ? ((agg.engagements / agg.visits) * 100).toFixed(0) : '0'
-        const cx = agg.cx / agg.count, cz = agg.cz / agg.count
-
-        const el = document.createElement('div')
-        el.className = 'xray-halo'
-        el.dataset.tier = '2'
-        el.innerHTML = `
-          <div class="xray-halo-tag">${catName}</div>
-          <div class="xray-halo-body">
-            <div class="xray-halo-row"><span class="xray-halo-val">${agg.visits}</span> <span class="xray-halo-lbl">visits</span> <span class="xray-halo-val">${avgDwell.toFixed(1)}s</span> <span class="xray-halo-lbl">dwell</span></div>
-            <div class="xray-halo-row"><span class="xray-halo-val">${convRate}%</span> <span class="xray-halo-lbl">engage</span> <span class="xray-halo-val">${agg.peakOccupancy}</span> <span class="xray-halo-lbl">peak</span></div>
-          </div>
-        `
-        const haloId = `cat:${catName}`
-        const label = new CSS2DObject(el)
-        label.position.set(cx, 3.5, cz)
-        scene.add(label)
-        xrayHalosRef.current.set(haloId, label)
-        xrayHaloTiersRef.current.set(haloId, 2)
-      }
-
-      // Create per-shelf halos (tier 3 — close zoom only)
-      for (const [shelfId, s] of shelfMap) {
-        const avgDwell = s.visits > 0 ? s.avgDwellW / s.visits : 0
-        const cx = s.cx / s.count, cz = s.cz / s.count
-
-        const el = document.createElement('div')
-        el.className = 'xray-halo'
-        el.dataset.tier = '3'
-        el.innerHTML = `
-          <div class="xray-halo-tag">${s.name} <span style="opacity:.5;font-size:8px">${s.cat}</span></div>
-          <div class="xray-halo-body">
-            <div class="xray-halo-row"><span class="xray-halo-val">${s.visits}</span> <span class="xray-halo-lbl">visits</span> <span class="xray-halo-val">${avgDwell.toFixed(1)}s</span> <span class="xray-halo-lbl">dwell</span></div>
-          </div>
-        `
-        const haloId = `shelf:${shelfId}`
-        const label = new CSS2DObject(el)
-        label.position.set(cx, 2.8, cz)
-        scene.add(label)
-        xrayHalosRef.current.set(haloId, label)
-        xrayHaloTiersRef.current.set(haloId, 3)
-      }
+    if (!xrayMode || !xrayData) {
+      system.rebuild(null, xrayFilters, 50)
+      return
     }
 
-    // ─── Queue / checkout zones: individual halos with Y-stagger to avoid overlap ───
-    if (xrayFilters.queues) {
-      const queueZones = xrayData.zones.filter(z =>
-        z.template === 'cashier-queue' && z.position
-      )
-      // Merge Service+Queue per checkout name
-      const checkoutMap = new Map<string, { visits: number; avgWaitMs: number; queueDepth: number; cx: number; cz: number; count: number }>()
-      for (const z of queueZones) {
-        const cName = z.name.replace(/\s*-\s*(Queue|Service)\s*/i, '')
-        const existing = checkoutMap.get(cName)
-        const wait = (z as any).avgWaitMs || 0
-        const depth = (z as any).queueDepth || z.peakOccupancy
-        if (existing) {
-          existing.visits += z.visits; existing.avgWaitMs = Math.max(existing.avgWaitMs, wait)
-          existing.queueDepth = Math.max(existing.queueDepth, depth)
-          existing.cx += z.position.x; existing.cz += z.position.z; existing.count += 1
-        } else {
-          checkoutMap.set(cName, { visits: z.visits, avgWaitMs: wait, queueDepth: depth, cx: z.position.x, cz: z.position.z, count: 1 })
-        }
-      }
-
-      // Sort by position (x then z) for consistent stagger order
-      const checkouts = [...checkoutMap.entries()]
-        .map(([name, d]) => ({ name, ...d, cx: d.cx / d.count, cz: d.cz / d.count }))
-        .sort((a, b) => a.cx - b.cx || a.cz - b.cz)
-
-      // Y-stagger: cycle through 3 heights so adjacent checkouts don't overlap
-      const Y_LEVELS = [2.5, 4.5, 6.5]
-
-      for (let i = 0; i < checkouts.length; i++) {
-        const c = checkouts[i]
-        const avgWaitSec = c.avgWaitMs > 0 ? (c.avgWaitMs / 1000).toFixed(0) : '—'
-        const status = c.queueDepth > 6 ? 'BUSY' : c.queueDepth > 3 ? 'MODERATE' : 'OK'
-        const statusClass = c.queueDepth > 6 ? 'xray-status-red' : c.queueDepth > 3 ? 'xray-status-amber' : 'xray-status-green'
-        const shortName = c.name.replace('Checkout ', '#')
-
-        const el = document.createElement('div')
-        el.className = 'xray-halo xray-halo-compact'
-        el.innerHTML = `
-          <div class="xray-halo-tag xray-tag-queue">${shortName}</div>
-          <div class="xray-halo-body">
-            <div class="xray-halo-row"><span class="xray-halo-val">${avgWaitSec}s</span> <span class="xray-halo-lbl">w</span> <span class="xray-halo-val">${c.queueDepth}</span> <span class="xray-halo-lbl">q</span> <span class="xray-halo-badge ${statusClass}">${status}</span></div>
-          </div>
-        `
-
-        const haloId = `checkout:${c.name}`
-        const label = new CSS2DObject(el)
-        const yLevel = Y_LEVELS[i % Y_LEVELS.length]
-        label.position.set(c.cx, yLevel, c.cz)
-        scene.add(label)
-        xrayHalosRef.current.set(haloId, label)
-      }
-    }
-
-    // ─── Other non-shelf, non-queue zones (tier 3) ───
-    const miscZones = xrayData.zones.filter(z =>
-      z.template !== 'shelf-engagement' && z.template !== 'cashier-queue' &&
-      z.position && z.visits >= XRAY_MIN_VISITS
-    )
-    for (const zone of miscZones) {
-      const el = document.createElement('div')
-      el.className = 'xray-halo'
-      el.dataset.tier = '3'
-      el.innerHTML = `
-        <div class="xray-halo-tag xray-tag-zone">${zone.name}</div>
-        <div class="xray-halo-body">
-          <div class="xray-halo-row"><span class="xray-halo-val">${zone.visits}</span> <span class="xray-halo-lbl">visits</span> <span class="xray-halo-val">${zone.avgDwellSec.toFixed(1)}s</span> <span class="xray-halo-lbl">dwell</span></div>
-        </div>
-      `
-
-      const label = new CSS2DObject(el)
-      label.position.set(zone.position.x, 3.5, zone.position.z)
-      scene.add(label)
-      xrayHalosRef.current.set(zone.roiId, label)
-      xrayHaloTiersRef.current.set(zone.roiId, 3)
-    }
-
-    // ─── DOOH Screen halos (tier 1 — always visible) ───
-    if (xrayFilters.screens) {
-      for (const screen of xrayData.doohScreens) {
-        if (!screen.position) continue
-
-        const el = document.createElement('div')
-        el.className = 'xray-halo xray-halo-dooh'
-        el.dataset.tier = '1'
-
-        const liftStr = screen.liftRel !== null && screen.liftRel !== undefined
-          ? `${screen.liftRel >= 0 ? '▲' : '▼'} ${(Math.abs(screen.liftRel) * 100).toFixed(0)}%`
-          : '—'
-        const liftClass = screen.liftRel >= 0 ? 'xray-lift-pos' : 'xray-lift-neg'
-
-        el.innerHTML = `
-          <div class="xray-halo-tag xray-tag-dooh">📺 ${screen.name.replace('Digital_display ', 'DS-')}</div>
-          <div class="xray-halo-body">
-            <div class="xray-halo-row"><span class="xray-halo-val">${screen.exposures}</span> <span class="xray-halo-lbl">exp</span> <span class="xray-halo-val">${screen.avgAqs.toFixed(0)}</span> <span class="xray-halo-lbl">AQS</span></div>
-            <div class="xray-halo-row"><span class="xray-halo-val">${screen.conversionRate.toFixed(1)}%</span> <span class="xray-halo-lbl">conv</span> <span class="${liftClass}">${liftStr}</span> <span class="xray-halo-lbl">lift</span></div>
-            ${screen.campaignName ? `<div class="xray-halo-campaign">${screen.campaignName}</div>` : ''}
-          </div>
-        `
-
-        const label = new CSS2DObject(el)
-        label.position.set(screen.position.x, 4.5, screen.position.z)
-        scene.add(label)
-        xrayHalosRef.current.set(screen.screenId, label)
-        xrayHaloTiersRef.current.set(screen.screenId, 1)
-      }
-    }
-
-    // ─── Hover-to-explode: spiral fan-out of overlapping halos ───
-    const OVERLAP_PX = 60
-    let collapseTimer: ReturnType<typeof setTimeout> | null = null
-    let activeGroupInners: HTMLElement[] = []
-
-    // Wrap each halo's DOM children in an inner div for independent translation
-    const allHaloEls: HTMLElement[] = []
-    xrayHalosRef.current.forEach(cssObj => {
-      const el = cssObj.element as HTMLElement
-      const inner = document.createElement('div')
-      inner.className = 'xray-halo-inner'
-      while (el.firstChild) inner.appendChild(el.firstChild)
-      el.appendChild(inner)
-      allHaloEls.push(el)
-    })
-
-    // Archimedean spiral positions: r = a + b*θ
-    const spiralPositions = (count: number, cardW: number, cardH: number): { x: number; y: number }[] => {
-      if (count <= 1) return [{ x: 0, y: 0 }]
-      const positions: { x: number; y: number }[] = [{ x: 0, y: 0 }] // center stays
-      const minGap = Math.max(cardW, cardH) + 8 // minimum distance between card centers
-      const angleStep = 0.85 // radians per step — controls tightness
-      const radiusGrowth = minGap / (2 * Math.PI) * angleStep // grow enough each revolution to not overlap
-      let angle = 0
-      let radius = minGap * 0.7 // start first ring at ~card-width away
-      for (let i = 1; i < count; i++) {
-        angle += angleStep
-        radius += radiusGrowth
-        positions.push({
-          x: Math.cos(angle) * radius,
-          y: Math.sin(angle) * radius,
-        })
-      }
-      return positions
-    }
-
-    const collapseGroup = () => {
-      for (const inner of activeGroupInners) {
-        inner.style.transform = ''
-        inner.style.zIndex = ''
-      }
-      activeGroupInners = []
-    }
-
-    const handleEnter = (e: Event) => {
-      if (collapseTimer) { clearTimeout(collapseTimer); collapseTimer = null }
-      const target = e.currentTarget as HTMLElement
-      const inner = target.querySelector('.xray-halo-inner') as HTMLElement | null
-      if (!inner) return
-
-      if (activeGroupInners.includes(inner) && activeGroupInners.length > 1) return
-
-      collapseGroup()
-
-      const tRect = target.getBoundingClientRect()
-      const tCx = tRect.left + tRect.width / 2
-      const tCy = tRect.top + tRect.height / 2
-
-      const group: { el: HTMLElement; inner: HTMLElement; cx: number; cy: number }[] = []
-      for (const el of allHaloEls) {
-        if (el.offsetParent === null) continue
-        const r = el.getBoundingClientRect()
-        const cx = r.left + r.width / 2
-        const cy = r.top + r.height / 2
-        if (Math.hypot(cx - tCx, cy - tCy) < OVERLAP_PX) {
-          const inn = el.querySelector('.xray-halo-inner') as HTMLElement
-          if (inn) group.push({ el, inner: inn, cx, cy })
-        }
-      }
-
-      if (group.length <= 1) return
-
-      activeGroupInners = group.map(g => g.inner)
-
-      // Measure a representative card to size the spiral
-      const sampleRect = group[0].inner.getBoundingClientRect()
-      const cardW = sampleRect.width || 90
-      const cardH = sampleRect.height || 40
-      const positions = spiralPositions(group.length, cardW, cardH)
-
-      // Stagger animation delay for a blossoming effect
-      group.forEach((g, i) => {
-        const p = positions[i]
-        const delay = i * 30 // ms stagger
-        g.inner.style.transition = `transform 0.35s cubic-bezier(0.34, 1.56, 0.64, 1) ${delay}ms`
-        g.inner.style.transform = `translate(${p.x.toFixed(0)}px, ${p.y.toFixed(0)}px)`
-        g.inner.style.zIndex = `${200 + i}`
-      })
-    }
-
-    const handleLeave = () => {
-      if (collapseTimer) clearTimeout(collapseTimer)
-      collapseTimer = setTimeout(() => {
-        activeGroupInners.forEach((inner, i) => {
-          inner.style.transition = `transform 0.25s cubic-bezier(0.5, 0, 0.75, 0) ${i * 15}ms`
-        })
-        requestAnimationFrame(collapseGroup)
-      }, 300)
-    }
-
-    for (const el of allHaloEls) {
-      el.addEventListener('mouseenter', handleEnter)
-      el.addEventListener('mouseleave', handleLeave)
-    }
-
-  }, [xrayMode, xrayData, xrayFilters])
+    const span = Math.max(venue?.width ?? 50, venue?.depth ?? 50)
+    system.rebuild(xrayData, xrayFilters, span)
+  }, [xrayMode, xrayData, xrayFilters, venue?.width, venue?.depth])
 
   
   // Load shelf planogram when planogramSelectedShelfId changes
@@ -5914,8 +5703,9 @@ export default function MainViewport({
       <div className="h-10 border-b border-border-dark flex items-center px-3 gap-2 bg-panel-bg flex-shrink-0">
         <span className="text-sm font-medium text-white">3D Venue</span>
         {xrayMode && (
-          <div className="flex gap-1 ml-3">
-            {(['shelves', 'queues', 'screens'] as const).map(key => (
+          <div className="flex items-center gap-2 ml-3">
+            <div className="flex gap-1">
+            {(['shelves', 'queues', 'screens', 'zones'] as const).map(key => (
               <button
                 key={key}
                 onClick={() => setXrayFilters(f => ({ ...f, [key]: !f[key] }))}
@@ -5925,9 +5715,13 @@ export default function MainViewport({
                     : 'border-white/10 text-white/30 hover:text-white/50'
                 }`}
               >
-                {key === 'shelves' ? '🛒' : key === 'queues' ? '🚶' : '📺'} {key}
+                {key === 'shelves' ? '🛒' : key === 'queues' ? '🚶' : key === 'screens' ? '📺' : '📍'} {key}
               </button>
             ))}
+            </div>
+            <span className="text-[9px] text-white/25 tracking-wide hidden lg:inline">
+              hover · click pin · esc clear
+            </span>
           </div>
         )}
         <div className="flex-1" />

@@ -34,8 +34,8 @@ const LEFT_W = 240
 const RIGHT_W = 260
 const BOTTOM_H = 280
 
-export interface XRayFilters { shelves: boolean; queues: boolean; screens: boolean }
-const defaultFilters: XRayFilters = { shelves: true, queues: true, screens: true }
+export interface XRayFilters { shelves: boolean; queues: boolean; screens: boolean; zones: boolean }
+const defaultFilters: XRayFilters = { shelves: true, queues: true, screens: true, zones: false }
 
 interface XRayContextValue {
   xrayMode: boolean
