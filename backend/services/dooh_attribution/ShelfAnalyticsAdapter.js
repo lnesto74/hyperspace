@@ -47,6 +47,7 @@ export class ShelfAnalyticsAdapter {
     this._shelfTargetCache.clear();
     this._targetShelfPositions = null;
     this._zoneVisitsIndex = null;
+    this._targetEngagementRoiIds = new Set();
     this._shelfMatchCache.clear();
   }
 
@@ -88,6 +89,24 @@ export class ShelfAnalyticsAdapter {
       this._shelfTargetCache.set(cacheKey, this._findShelvesForTargetUncached(venueId, type, ids));
     }
     const targetShelfIds = this._shelfTargetCache.get(cacheKey);
+
+    // Engagement ROI ids linked to shelf targets (from campaign target_json or DB lookup)
+    this._targetEngagementRoiIds = new Set();
+    if (type === 'shelf' && ids?.length) {
+      if (Array.isArray(targetJson.engagementRoiIds) && targetJson.engagementRoiIds.length) {
+        targetJson.engagementRoiIds.forEach(id => this._targetEngagementRoiIds.add(id));
+      } else {
+        const rows = this.db.prepare(`
+          SELECT id, metadata_json FROM regions_of_interest WHERE venue_id = ?
+        `).all(venueId);
+        for (const row of rows) {
+          const meta = parseJson(row.metadata_json) || {};
+          if (meta.template === 'shelf-engagement' && meta.shelfId && ids.includes(meta.shelfId)) {
+            this._targetEngagementRoiIds.add(row.id);
+          }
+        }
+      }
+    }
 
     // Cache shelf positions for position-based fallback
     if (targetShelfIds.length > 0 && !this._targetShelfPositions) {
@@ -156,14 +175,16 @@ export class ShelfAnalyticsAdapter {
     const { type, ids } = targetJson;
     
     const SHELF_MIN_DWELL_MS = 3000;
+    const isQualifyingVisit = (v) => (
+      Number(v.is_dwell) === 1 || Number(v.is_engagement) === 1 || (v.duration_ms || 0) >= SHELF_MIN_DWELL_MS
+    );
 
     // Use pre-loaded zone visits if available (batch mode)
     let visits;
     if (this._zoneVisitsIndex) {
       const allVisits = this._zoneVisitsIndex.get(trackKey) || [];
       visits = allVisits.filter(v =>
-        v.start_time >= startTs && v.start_time <= endTs &&
-        (v.is_dwell === 1 || v.is_engagement === 1 || v.duration_ms >= SHELF_MIN_DWELL_MS)
+        v.start_time >= startTs && v.start_time <= endTs && isQualifyingVisit(v)
       );
     } else {
       // Fallback: individual query
@@ -184,7 +205,16 @@ export class ShelfAnalyticsAdapter {
     }
 
     for (const visit of visits) {
-      const metadata = visit.metadata_json ? JSON.parse(visit.metadata_json) : {};
+      const metadata = parseJson(visit.metadata_json) || {};
+
+      // Direct match on calibrated engagement ROI (most reliable for shelf campaigns)
+      if (type === 'shelf' && this._targetEngagementRoiIds?.has(visit.roi_id)) {
+        return this.buildEngagementResult(visit, {
+          ...metadata,
+          shelfId: metadata.shelfId || ids[0],
+          template: metadata.template || 'shelf-engagement',
+        });
+      }
       
       // Check if this visit is a shelf engagement
       if (metadata.template === 'shelf-engagement' && metadata.shelfId) {
@@ -198,10 +228,10 @@ export class ShelfAnalyticsAdapter {
             endTs: visit.end_time,
             durationMs: visit.duration_ms,
             dwellS: visit.duration_ms / 1000,
-            effectiveDwellS: (visit.is_engagement === 1 || visit.duration_ms >= 8000) ? visit.duration_ms / 1000 : (visit.duration_ms / 1000) * 0.7,
-            isDwell: visit.is_dwell === 1 || visit.duration_ms >= 3000,
-            isEngagement: visit.is_engagement === 1 || visit.duration_ms >= 8000,
-            engagementStrength: (visit.is_engagement === 1 || visit.duration_ms >= 10000) ? 'strong' : ((visit.is_dwell === 1 || visit.duration_ms >= 5000) ? 'moderate' : 'weak'),
+            effectiveDwellS: (Number(visit.is_engagement) === 1 || visit.duration_ms >= 8000) ? visit.duration_ms / 1000 : (visit.duration_ms / 1000) * 0.7,
+            isDwell: Number(visit.is_dwell) === 1 || visit.duration_ms >= 3000,
+            isEngagement: Number(visit.is_engagement) === 1 || visit.duration_ms >= 8000,
+            engagementStrength: (Number(visit.is_engagement) === 1 || visit.duration_ms >= 10000) ? 'strong' : ((Number(visit.is_dwell) === 1 || visit.duration_ms >= 5000) ? 'moderate' : 'weak'),
             shelfId: metadata.shelfId,
             ...shelfMatch
           };
@@ -209,7 +239,7 @@ export class ShelfAnalyticsAdapter {
       }
       
       // Also check non-shelf ROIs for category/brand visits
-      if (type === 'shelf' && ids.includes(metadata.shelfId)) {
+      if (type === 'shelf' && metadata.shelfId && ids.includes(metadata.shelfId)) {
         return this.buildEngagementResult(visit, metadata);
       }
     }

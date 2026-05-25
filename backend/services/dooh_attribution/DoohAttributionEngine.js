@@ -11,6 +11,7 @@
 
 import { v4 as uuidv4 } from 'uuid';
 import { ShelfAnalyticsAdapter } from './ShelfAnalyticsAdapter.js';
+import { clearCampaignAttribution } from './CampaignTargetResolver.js';
 import { pointInPolygon, distance2D } from '../dooh/DoohKpiEngine.js';
 
 // Default campaign parameters
@@ -653,7 +654,8 @@ export class DoohAttributionEngine {
   /**
    * Run attribution analysis for a campaign (OPTIMIZED)
    */
-  async run(venueId, campaignId, startTs, endTs, onProgress = null) {
+  async run(venueId, campaignId, startTs, endTs, onProgress = null, options = {}) {
+    const { forceRecompute = false } = options;
     const runStart = Date.now();
     console.log(`\n🚀 [PEBLE] Starting attribution analysis...`);
     console.log(`📅 Time range: ${new Date(startTs).toISOString()} - ${new Date(endTs).toISOString()}`);
@@ -687,6 +689,12 @@ export class DoohAttributionEngine {
 
     // Pre-compute and cache target shelf IDs + positions (done once)
     this.shelfAdapter.initTargetCache(venueId, target);
+    console.log(`📍 Engagement ROIs linked to target: ${this.shelfAdapter._targetEngagementRoiIds?.size || 0}`);
+
+    if (forceRecompute) {
+      const cleared = clearCampaignAttribution(this.db, campaignId, startTs, endTs);
+      console.log(`🔄 [PEBLE] Force recompute: cleared ${cleared.clearedEvents} prior attribution events`);
+    }
 
     // INCREMENTAL: find already-processed exposure event IDs for this campaign/range
     const existingAttrIds = new Set(

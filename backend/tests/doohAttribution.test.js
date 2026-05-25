@@ -335,6 +335,36 @@ describe('Target Matching Logic', () => {
     
     expect(result).toBeNull();
   });
+
+  it('should match zone visit by engagement ROI id when shelf target is linked', () => {
+    adapter.initTargetCache('venue-1', {
+      type: 'shelf',
+      ids: ['shelf-1'],
+      engagementRoiIds: ['roi-shelf-1'],
+    });
+
+    db.exec(`
+      INSERT OR REPLACE INTO zone_visits (
+        id, venue_id, roi_id, track_key, start_time, end_time, duration_ms,
+        is_dwell, is_engagement
+      ) VALUES (
+        'visit-1', 'venue-1', 'roi-shelf-1', 'edge:person-1',
+        100000, 105000, 5000, 1, 0
+      );
+    `);
+
+    const result = adapter.queryEngagementsForTrack(
+      'venue-1',
+      'edge:person-1',
+      99000,
+      120000,
+      { type: 'shelf', ids: ['shelf-1'], engagementRoiIds: ['roi-shelf-1'] },
+    );
+
+    expect(result).not.toBeNull();
+    expect(result.roiId).toBe('roi-shelf-1');
+    expect(result.shelfId).toBe('shelf-1');
+  });
 });
 
 // ============================================

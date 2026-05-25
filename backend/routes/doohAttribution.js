@@ -19,6 +19,7 @@ import { fileURLToPath } from 'url';
 import path from 'path';
 import { DoohAttributionEngine, DEFAULT_CAMPAIGN_PARAMS } from '../services/dooh_attribution/DoohAttributionEngine.js';
 import { ShelfAnalyticsAdapter } from '../services/dooh_attribution/ShelfAnalyticsAdapter.js';
+import { resolveCampaignTarget } from '../services/dooh_attribution/CampaignTargetResolver.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -152,6 +153,7 @@ router.post('/campaigns', (req, res) => {
     const id = uuidv4();
     const now = new Date().toISOString();
     const mergedParams = { ...DEFAULT_CAMPAIGN_PARAMS, ...params };
+    const resolvedTarget = resolveCampaignTarget(db, venueId, target);
 
     db.prepare(`
       INSERT INTO dooh_campaigns (
@@ -161,7 +163,7 @@ router.post('/campaigns', (req, res) => {
     `).run(
       id, venueId, name,
       JSON.stringify(screenIds),
-      JSON.stringify(target),
+      JSON.stringify(resolvedTarget),
       JSON.stringify(mergedParams),
       enabled ? 1 : 0, now, now
     );
@@ -173,7 +175,7 @@ router.post('/campaigns', (req, res) => {
         venueId,
         name,
         screenIds,
-        target,
+        target: resolvedTarget,
         params: mergedParams,
         enabled,
         createdAt: now,
@@ -218,8 +220,9 @@ router.put('/campaigns/:id', (req, res) => {
       values.push(JSON.stringify(screenIds));
     }
     if (target !== undefined) {
+      const resolvedTarget = resolveCampaignTarget(db, existing.venue_id, target);
       updates.push('target_json = ?');
-      values.push(JSON.stringify(target));
+      values.push(JSON.stringify(resolvedTarget));
     }
     if (params !== undefined) {
       const existingParams = JSON.parse(existing.params_json);
@@ -282,7 +285,7 @@ router.delete('/campaigns/:id', (req, res) => {
  */
 router.post('/run', (req, res) => {
   try {
-    const { venueId, campaignId, startTs, endTs, bucketMinutes = 15 } = req.body;
+    const { venueId, campaignId, startTs, endTs, bucketMinutes = 15, forceRecompute = false } = req.body;
 
     if (!venueId || !campaignId || !startTs || !endTs) {
       return res.status(400).json({ 
@@ -305,7 +308,7 @@ router.post('/run', (req, res) => {
     runJobs.set(runId, job);
 
     const worker = new Worker(workerPath, {
-      workerData: { dbPath: DB_PATH, venueId, campaignId, startTs, endTs, bucketMinutes },
+      workerData: { dbPath: DB_PATH, venueId, campaignId, startTs, endTs, bucketMinutes, forceRecompute },
     });
 
     worker.on('message', (msg) => {

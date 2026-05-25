@@ -11,7 +11,7 @@ import { parentPort, workerData } from 'worker_threads';
 import Database from 'better-sqlite3';
 import { DoohAttributionEngine } from './DoohAttributionEngine.js';
 
-const { dbPath, venueId, campaignId, startTs, endTs, bucketMinutes } = workerData;
+const { dbPath, venueId, campaignId, startTs, endTs, bucketMinutes, forceRecompute = false } = workerData;
 
 try {
   // Open our own DB connection (worker threads can't share better-sqlite3 instances)
@@ -24,7 +24,7 @@ try {
   // Run with progress callback
   const result = engine.run(venueId, campaignId, startTs, endTs, (progress) => {
     parentPort.postMessage({ type: 'progress', ...progress });
-  }).then((result) => {
+  }, { forceRecompute }).then((result) => {
     // Aggregate KPIs (must happen on same DB connection)
     const kpis = engine.aggregateKPIs(venueId, campaignId, startTs, endTs, bucketMinutes || 15);
     const summary = engine.getSummaryKPIs(venueId, campaignId, startTs, endTs);

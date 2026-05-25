@@ -374,12 +374,10 @@ export default function DoohEffectivenessPage({ onClose }: DoohEffectivenessPage
     
     try {
       const now = Date.now()
-      // Always compute the full 7-day range so switching tabs never re-triggers computation.
-      // The backend uses incremental mode — already-processed exposures are skipped instantly.
+      // Re-evaluate conversions with current zone_visits (not incremental skip)
       const startTs = now - 7 * 24 * 60 * 60 * 1000
       
-      // Step 1: Start the run (returns immediately with runId)
-      console.log('[PEBLE] Starting run (full 7d range, incremental)...', { venueId: venue.id, campaignId: selectedCampaign.id, startTs, endTs: now })
+      console.log('[PEBLE] Starting run (7d range, force recompute)...', { venueId: venue.id, campaignId: selectedCampaign.id, startTs, endTs: now })
       const startRes = await fetch(`${API_BASE}/api/dooh-attribution/run`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -389,6 +387,7 @@ export default function DoohEffectivenessPage({ onClose }: DoohEffectivenessPage
           startTs,
           endTs: now,
           bucketMinutes: 15,
+          forceRecompute: true,
         }),
       })
       
