@@ -773,11 +773,13 @@ export class SmartKpiService {
     
     let deletedCount = 0;
     const deleteStmt = this.db.prepare('DELETE FROM regions_of_interest WHERE id = ?');
+    const deleteZoneSettingsStmt = this.db.prepare('DELETE FROM zone_settings WHERE roi_id = ?');
     
     for (const row of rows) {
       // Check if this ROI name contains any of the template's patterns
       const isSmartKpiZone = patterns.some(pattern => row.name.includes(pattern));
       if (isSmartKpiZone) {
+        deleteZoneSettingsStmt.run(row.id);
         deleteStmt.run(row.id);
         deletedCount++;
       }

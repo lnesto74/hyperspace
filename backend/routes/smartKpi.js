@@ -137,6 +137,26 @@ export default function createSmartKpiRoutes(db) {
       }
       
       // Save to database (this will delete existing zones for this template first)
+      if (options.shelfCustomZones && Array.isArray(options.shelfCustomZones) && templateId === 'shelf-engagement') {
+        for (const cz of options.shelfCustomZones) {
+          allRois.push({
+            id: cz.id || `custom-shelf-${Date.now()}`,
+            name: cz.name,
+            vertices: cz.vertices,
+            color: cz.color || '#14b8a6',
+            opacity: cz.opacity ?? 0.42,
+            metadata: cz.metadata || {
+              type: 'smart-kpi',
+              template: 'shelf-engagement',
+              zoneType: 'custom',
+              business_category_id: cz.business_category_id,
+              business_category: cz.business_category,
+              business_category_label: cz.business_category_label,
+            },
+          });
+        }
+      }
+
       const savedRois = smartKpiService.saveRois(venueId, allRois, templateId);
       
       res.status(201).json({
@@ -202,14 +222,13 @@ export default function createSmartKpiRoutes(db) {
       // Generate ROIs
       const result = smartKpiService.generateRoisForDwgTemplate(layoutId, venueId, templateId, options);
       
-      if (result.error) {
+      if (result.error && !(options.shelfCustomZones && options.shelfCustomZones.length > 0)) {
         return res.status(400).json({ error: result.error });
       }
       
       // Combine generated ROIs with custom zones if provided
-      // Custom zones need to be PROPAGATED to all fixtures of the same type
-      let allRois = [...result.generatedRois];
-      if (options.customZones && Array.isArray(options.customZones) && options.customZones.length > 0) {
+      let allRois = [...(result.generatedRois || [])];
+      if (options.customZones && Array.isArray(options.customZones) && options.customZones.length > 0 && result.generatedRois?.length) {
         // Group generated ROIs by fixture (e.g., "Cashier 1", "Cashier 2")
         // ROI names follow pattern: "Cashier 1 - Service", "Cashier 1 - Queue"
         const fixtureGroups = {};
@@ -285,6 +304,27 @@ export default function createSmartKpiRoutes(db) {
       }
       
       // Save to database with DWG layout ID for mode separation
+      if (options.shelfCustomZones && Array.isArray(options.shelfCustomZones) && templateId === 'shelf-engagement') {
+        for (const cz of options.shelfCustomZones) {
+          allRois.push({
+            id: cz.id || `custom-shelf-${Date.now()}`,
+            name: cz.name,
+            vertices: cz.vertices,
+            color: cz.color || '#14b8a6',
+            opacity: cz.opacity ?? 0.42,
+            metadata: cz.metadata || {
+              type: 'smart-kpi',
+              template: 'shelf-engagement',
+              zoneType: 'custom',
+              business_category_id: cz.business_category_id,
+              business_category: cz.business_category,
+              business_category_label: cz.business_category_label,
+            },
+          });
+        }
+        console.log(`[SmartKPI DWG] Added ${options.shelfCustomZones.length} absolute custom shelf zones`);
+      }
+
       const savedRois = smartKpiService.saveRois(venueId, allRois, templateId, layoutId);
       
       res.status(201).json({
@@ -299,6 +339,30 @@ export default function createSmartKpiRoutes(db) {
     } catch (err) {
       console.error('Failed to generate DWG ROIs:', err);
       res.status(500).json({ error: 'Failed to generate DWG ROIs' });
+    }
+  });
+
+  // Delete all smart-kpi zones for a template (manual mode)
+  router.delete('/venues/:venueId/template/:templateId', (req, res) => {
+    try {
+      const { venueId, templateId } = req.params;
+      const deletedCount = smartKpiService.deleteExistingSmartKpiZones(venueId, templateId, null);
+      res.json({ success: true, deletedCount, templateId });
+    } catch (err) {
+      console.error('Failed to delete smart KPI zones:', err);
+      res.status(500).json({ error: 'Failed to delete smart KPI zones' });
+    }
+  });
+
+  // Delete all smart-kpi zones for a DWG template
+  router.delete('/dwg/:layoutId/venues/:venueId/template/:templateId', (req, res) => {
+    try {
+      const { layoutId, venueId, templateId } = req.params;
+      const deletedCount = smartKpiService.deleteExistingSmartKpiZones(venueId, templateId, layoutId);
+      res.json({ success: true, deletedCount, templateId, dwgLayoutId: layoutId });
+    } catch (err) {
+      console.error('Failed to delete DWG smart KPI zones:', err);
+      res.status(500).json({ error: 'Failed to delete DWG smart KPI zones' });
     }
   });
 

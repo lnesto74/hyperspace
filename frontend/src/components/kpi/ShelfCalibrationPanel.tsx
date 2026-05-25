@@ -3,13 +3,24 @@ import {
   Check,
   Eye,
   Loader2,
+  MousePointer2,
   Move,
+  PenSquare,
   RefreshCw,
   RotateCw,
+  Tag,
   Target,
+  Trash2,
   ZoomIn,
   ZoomOut,
 } from 'lucide-react'
+import {
+  applyResizeDelta,
+  generateCalibratedShelfPreviewRois,
+  getFixtureAtPoint,
+  getZoneHandlePositions,
+  ResizeHandle,
+} from './calibrationPreviewUtils'
 import {
   computeMapBounds,
   focusBoundsAroundFixture,
@@ -17,6 +28,16 @@ import {
   getFixtureFootprintBounds,
   getFixtureOutlinePoints,
 } from './checkoutCalibrationUtils'
+import {
+  createShelfCustomZone,
+  getRectHandlePositions,
+  rectVerticesFromDrag,
+  resizeRectVertices,
+  RetailCategoryOption,
+  ShelfCustomZone,
+  shelfCustomZoneToPreviewRoi,
+  translateRectVertices,
+} from './shelfCustomZoneUtils'
 import {
   FixtureInfo,
   PreviewRoiLike,
@@ -30,25 +51,33 @@ interface ShelfCalibrationPanelProps {
   fixtures: FixtureInfo[]
   previewRois: PreviewRoiLike[]
   calibration: ShelfCalibration
+  customZones: ShelfCustomZone[]
+  retailCategories: RetailCategoryOption[]
   referenceFixtureId: string
   validated: boolean
   appliedToAll: boolean
   isEditingExisting?: boolean
   loading: boolean
+  deleting?: boolean
   onReferenceChange: (fixtureId: string) => void
   onCalibrationChange: (calibration: ShelfCalibration) => void
+  onCustomZonesChange: (zones: ShelfCustomZone[]) => void
   onResetToAuto: () => void
   onValidate: () => void
   onApplyToAll: () => void
+  onDeleteAll: () => void
 }
 
 type ZoneType = 'left' | 'right'
 type ViewMode = 'focus' | 'all'
+type MapTool = 'select' | 'pan' | 'draw'
 
 const ZONE_META: Record<ZoneType, { label: string; color: string }> = {
   left: { label: 'Left', color: '#a855f7' },
   right: { label: 'Right', color: '#f59e0b' },
 }
+
+const ZONE_COLORS = { left: '#a855f7', right: '#f59e0b' }
 
 function CalibrationSlider({
   label,
@@ -59,7 +88,6 @@ function CalibrationSlider({
   unit,
   accentClass,
   onChange,
-  onCommit,
 }: {
   label: string
   value: number
@@ -69,7 +97,6 @@ function CalibrationSlider({
   unit: string
   accentClass: string
   onChange: (v: number) => void
-  onCommit: () => void
 }) {
   return (
     <div>
@@ -86,8 +113,6 @@ function CalibrationSlider({
         step={step}
         value={value}
         onChange={(e) => onChange(parseFloat(e.target.value))}
-        onMouseUp={onCommit}
-        onTouchEnd={onCommit}
         className="w-full h-1.5 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-purple-500"
       />
     </div>
@@ -98,10 +123,12 @@ function FixtureFootprint({
   fixture,
   highlighted,
   dimmed,
+  onSelect,
 }: {
   fixture: FixtureInfo
   highlighted?: boolean
   dimmed?: boolean
+  onSelect?: () => void
 }) {
   const outline = getFixtureOutlinePoints(fixture)
   const bounds = getFixtureFootprintBounds(fixture)
@@ -111,7 +138,7 @@ function FixtureFootprint({
   const hasPolygon = (fixture.footprintPoints?.length ?? 0) >= 3
 
   return (
-    <g opacity={dimmed ? 0.35 : 1}>
+    <g opacity={dimmed ? 0.35 : 1} onClick={(e) => { e.stopPropagation(); onSelect?.() }} style={{ cursor: onSelect ? 'pointer' : undefined }}>
       <polygon
         points={pointsStr}
         fill={highlighted ? '#3b0764' : '#1e293b'}
@@ -120,25 +147,13 @@ function FixtureFootprint({
         strokeWidth={highlighted ? 0.07 : 0.05}
         strokeLinejoin="round"
       />
-      {highlighted && (
-        <text
-          x={labelX}
-          y={labelY}
-          textAnchor="middle"
-          fontSize={0.35}
-          fill="#e9d5ff"
-        >
+      {(highlighted || !dimmed) && (
+        <text x={labelX} y={labelY} textAnchor="middle" fontSize={0.32} fill={highlighted ? '#e9d5ff' : '#94a3b8'} pointerEvents="none">
           {fixture.name}
         </text>
       )}
       {!hasPolygon && highlighted && (
-        <text
-          x={labelX}
-          y={labelY - 0.45}
-          textAnchor="middle"
-          fontSize={0.28}
-          fill="#64748b"
-        >
+        <text x={labelX} y={labelY - 0.45} textAnchor="middle" fontSize={0.28} fill="#64748b" pointerEvents="none">
           (no DWG polygon — using box fallback)
         </text>
       )}
@@ -150,320 +165,538 @@ export default function ShelfCalibrationPanel({
   fixtures,
   previewRois,
   calibration,
+  customZones,
+  retailCategories,
   referenceFixtureId,
   validated,
   appliedToAll,
   isEditingExisting,
   loading,
+  deleting,
   onReferenceChange,
   onCalibrationChange,
+  onCustomZonesChange,
   onResetToAuto,
   onValidate,
   onApplyToAll,
+  onDeleteAll,
 }: ShelfCalibrationPanelProps) {
   const [selectedZone, setSelectedZone] = useState<ZoneType>('left')
-  const [viewMode, setViewMode] = useState<ViewMode>('focus')
-  const [panning, setPanning] = useState(false)
+  const [selectedCustomZoneId, setSelectedCustomZoneId] = useState<string | null>(null)
+  const [drawCategoryId, setDrawCategoryId] = useState('')
+  const [viewMode, setViewMode] = useState<ViewMode>('all')
+  const [mapTool, setMapTool] = useState<MapTool>('select')
+  const [zoom, setZoom] = useState(1)
   const [panOffset, setPanOffset] = useState({ x: 0, z: 0 })
+  const [drawPreview, setDrawPreview] = useState<{ x: number; z: number }[] | null>(null)
+
   const dragRef = useRef<{
-    mode: 'pan' | 'move'
+    kind: 'pan' | 'template-move' | 'template-resize' | 'custom-move' | 'custom-resize' | 'draw'
+    zoneType?: ZoneType
+    customZoneId?: string
+    resizeHandle?: ResizeHandle
     startX: number
     startY: number
     startPanX: number
     startPanZ: number
     startAlong: number
     startFrom: number
-    svgRect: DOMRect
+    startZoneCal?: ZoneCalibration
+    startCustomVertices?: { x: number; z: number }[]
+    drawStart?: { x: number; z: number }
     bounds: { minX: number; maxX: number; minZ: number; maxZ: number }
   } | null>(null)
 
   const sortedFixtures = useMemo(() => sortFixtures(fixtures), [fixtures])
   const referenceFixture = sortedFixtures.find(f => f.id === referenceFixtureId) ?? sortedFixtures[0]
   const zoneConfig = calibration[selectedZone]
+  const selectedCustomZone = customZones.find(z => z.id === selectedCustomZoneId) ?? null
+
+  const effectiveDrawCategoryId = drawCategoryId || retailCategories[0]?.id || ''
+
+  const liveRois = useMemo(() => {
+    if (sortedFixtures.length === 0) return previewRois
+    return generateCalibratedShelfPreviewRois(sortedFixtures, calibration, ZONE_COLORS)
+  }, [sortedFixtures, calibration, previewRois])
+
+  const customPreviewRois = useMemo(
+    () => customZones.map(shelfCustomZoneToPreviewRoi),
+    [customZones],
+  )
 
   const displayRois = useMemo(() => {
-    if (viewMode === 'all') return previewRois
-    if (!referenceFixture) return previewRois
-    const left = findRoiForShelf(previewRois, fixtures, referenceFixture.id, 'left')
-    const right = findRoiForShelf(previewRois, fixtures, referenceFixture.id, 'right')
-    return previewRois.filter(roi => roi.id === left?.id || roi.id === right?.id)
-  }, [viewMode, previewRois, referenceFixture, fixtures])
+    if (viewMode === 'all') return liveRois
+    if (!referenceFixture) return liveRois
+    const left = findRoiForShelf(liveRois, fixtures, referenceFixture.id, 'left')
+    const right = findRoiForShelf(liveRois, fixtures, referenceFixture.id, 'right')
+    return liveRois.filter(roi => roi.id === left?.id || roi.id === right?.id)
+  }, [viewMode, liveRois, referenceFixture, fixtures])
 
   const bounds = useMemo(() => {
     const footprintPts = fixtures.flatMap(f => getFixtureOutlinePoints(f))
     const points = [
-      ...displayRois.flatMap(r => r.vertices),
+      ...liveRois.flatMap(r => r.vertices),
+      ...customZones.flatMap(z => z.vertices),
+      ...(drawPreview ?? []),
       ...footprintPts,
     ]
-    const base = viewMode === 'focus' && referenceFixture
-      ? focusBoundsAroundFixture(referenceFixture, 7)
-      : computeMapBounds(points)
+    const base = viewMode === 'focus' && referenceFixture && !selectedCustomZoneId
+      ? focusBoundsAroundFixture(referenceFixture, 8 / zoom)
+      : computeMapBounds(points, 0.08 / zoom)
+    const cx = (base.minX + base.maxX) / 2
+    const cz = (base.minZ + base.maxZ) / 2
+    const halfW = ((base.maxX - base.minX) / 2) / zoom
+    const halfD = ((base.maxZ - base.minZ) / 2) / zoom
     return {
-      minX: base.minX + panOffset.x,
-      maxX: base.maxX + panOffset.x,
-      minZ: base.minZ + panOffset.z,
-      maxZ: base.maxZ + panOffset.z,
+      minX: cx - halfW + panOffset.x,
+      maxX: cx + halfW + panOffset.x,
+      minZ: cz - halfD + panOffset.z,
+      maxZ: cz + halfD + panOffset.z,
     }
-  }, [displayRois, fixtures, viewMode, referenceFixture, panOffset])
+  }, [liveRois, customZones, drawPreview, fixtures, viewMode, referenceFixture, selectedCustomZoneId, panOffset, zoom])
 
   const viewBox = `${bounds.minX} ${bounds.minZ} ${bounds.maxX - bounds.minX} ${bounds.maxZ - bounds.minZ}`
 
   const updateZone = useCallback((field: keyof ZoneCalibration, value: number) => {
+    setSelectedCustomZoneId(null)
     onCalibrationChange({
       ...calibration,
       [selectedZone]: { ...calibration[selectedZone], [field]: value },
     })
   }, [calibration, onCalibrationChange, selectedZone])
 
-  const handleCommit = useCallback(() => {
-    onApplyToAll()
-  }, [onApplyToAll])
+  const updateCustomZoneCategory = useCallback((zoneId: string, categoryId: string) => {
+    const category = retailCategories.find(c => c.id === categoryId)
+    if (!category) return
+    onCustomZonesChange(customZones.map(z => (
+      z.id === zoneId
+        ? {
+            ...z,
+            name: `${category.name} - Custom Engagement`,
+            color: category.color || z.color,
+            business_category_id: category.id,
+            business_category: category.slug,
+            business_category_label: category.name,
+          }
+        : z
+    )))
+  }, [customZones, onCustomZonesChange, retailCategories])
+
+  const removeCustomZone = useCallback((zoneId: string) => {
+    onCustomZonesChange(customZones.filter(z => z.id !== zoneId))
+    if (selectedCustomZoneId === zoneId) setSelectedCustomZoneId(null)
+  }, [customZones, onCustomZonesChange, selectedCustomZoneId])
 
   const screenToWorld = useCallback((clientX: number, clientY: number, svg: SVGSVGElement) => {
     const rect = svg.getBoundingClientRect()
     const relX = (clientX - rect.left) / rect.width
     const relY = (clientY - rect.top) / rect.height
     const b = dragRef.current?.bounds ?? bounds
-    const worldX = b.minX + relX * (b.maxX - b.minX)
-    const worldZ = b.minZ + relY * (b.maxZ - b.minZ)
-    return { worldX, worldZ }
+    return {
+      worldX: b.minX + relX * (b.maxX - b.minX),
+      worldZ: b.minZ + relY * (b.maxZ - b.minZ),
+    }
   }, [bounds])
+
+  const handleWheel = useCallback((e: React.WheelEvent<SVGSVGElement>) => {
+    e.preventDefault()
+    setZoom(z => Math.min(4, Math.max(0.35, z * (e.deltaY > 0 ? 0.9 : 1.1))))
+  }, [])
 
   const handleSvgMouseDown = useCallback((e: React.MouseEvent<SVGSVGElement>) => {
     const svg = e.currentTarget
-    if (panning) {
+
+    if (mapTool === 'pan') {
       dragRef.current = {
-        mode: 'pan',
+        kind: 'pan',
         startX: e.clientX,
         startY: e.clientY,
         startPanX: panOffset.x,
         startPanZ: panOffset.z,
         startAlong: 0,
         startFrom: 0,
-        svgRect: svg.getBoundingClientRect(),
         bounds,
       }
       return
     }
 
-    if (viewMode !== 'focus' || !referenceFixture) return
-    const target = (e.target as SVGElement).closest('[data-zone-type]')
-    if (!target) return
-    const zoneType = target.getAttribute('data-zone-type') as ZoneType
-    if (zoneType) setSelectedZone(zoneType)
-
-    dragRef.current = {
-      mode: 'move',
-      startX: e.clientX,
-      startY: e.clientY,
-      startPanX: panOffset.x,
-      startPanZ: panOffset.z,
-      startAlong: calibration[zoneType || selectedZone].alongCounter,
-      startFrom: calibration[zoneType || selectedZone].fromCounter,
-      svgRect: svg.getBoundingClientRect(),
-      bounds,
+    if (mapTool === 'draw') {
+      const category = retailCategories.find(c => c.id === effectiveDrawCategoryId)
+      if (!category) return
+      const world = screenToWorld(e.clientX, e.clientY, svg)
+      dragRef.current = {
+        kind: 'draw',
+        startX: e.clientX,
+        startY: e.clientY,
+        startPanX: panOffset.x,
+        startPanZ: panOffset.z,
+        startAlong: 0,
+        startFrom: 0,
+        drawStart: { x: world.worldX, z: world.worldZ },
+        bounds,
+      }
+      setDrawPreview(rectVerticesFromDrag(world.worldX, world.worldZ, world.worldX, world.worldZ))
+      return
     }
-  }, [panning, panOffset, bounds, viewMode, referenceFixture, calibration, selectedZone])
+
+    const handleEl = (e.target as SVGElement).closest('[data-resize-handle]')
+    if (handleEl) {
+      const handle = handleEl.getAttribute('data-resize-handle') as ResizeHandle
+      const customId = handleEl.getAttribute('data-custom-id')
+      const zoneType = handleEl.getAttribute('data-zone-type') as ZoneType | null
+
+      if (customId) {
+        const zone = customZones.find(z => z.id === customId)
+        if (!zone) return
+        setSelectedCustomZoneId(customId)
+        dragRef.current = {
+          kind: 'custom-resize',
+          customZoneId: customId,
+          resizeHandle: handle,
+          startX: e.clientX,
+          startY: e.clientY,
+          startPanX: panOffset.x,
+          startPanZ: panOffset.z,
+          startAlong: 0,
+          startFrom: 0,
+          startCustomVertices: zone.vertices,
+          bounds,
+        }
+        e.stopPropagation()
+        return
+      }
+
+      if (zoneType && referenceFixture && viewMode === 'focus') {
+        setSelectedCustomZoneId(null)
+        setSelectedZone(zoneType)
+        dragRef.current = {
+          kind: 'template-resize',
+          zoneType,
+          resizeHandle: handle,
+          startX: e.clientX,
+          startY: e.clientY,
+          startPanX: panOffset.x,
+          startPanZ: panOffset.z,
+          startAlong: 0,
+          startFrom: 0,
+          startZoneCal: { ...calibration[zoneType] },
+          bounds,
+        }
+        e.stopPropagation()
+      }
+      return
+    }
+
+    const customEl = (e.target as SVGElement).closest('[data-custom-zone-id]')
+    if (customEl) {
+      const customId = customEl.getAttribute('data-custom-zone-id')
+      if (!customId) return
+      const zone = customZones.find(z => z.id === customId)
+      if (!zone) return
+      setSelectedCustomZoneId(customId)
+      dragRef.current = {
+        kind: 'custom-move',
+        customZoneId: customId,
+        startX: e.clientX,
+        startY: e.clientY,
+        startPanX: panOffset.x,
+        startPanZ: panOffset.z,
+        startAlong: 0,
+        startFrom: 0,
+        startCustomVertices: zone.vertices,
+        bounds,
+      }
+      return
+    }
+
+    const zoneEl = (e.target as SVGElement).closest('[data-zone-type]')
+    if (zoneEl) {
+      setSelectedCustomZoneId(null)
+      const zoneType = zoneEl.getAttribute('data-zone-type') as ZoneType
+      const roiId = zoneEl.getAttribute('data-roi-id')
+      if (roiId) {
+        const fixtureId = roiId.replace(/::(left|right)$/, '')
+        if (fixtureId && fixtureId !== referenceFixtureId) onReferenceChange(fixtureId)
+        if (viewMode === 'all') setViewMode('focus')
+      }
+      if (zoneType) setSelectedZone(zoneType)
+      if (referenceFixture || roiId) {
+        dragRef.current = {
+          kind: 'template-move',
+          zoneType: zoneType || selectedZone,
+          startX: e.clientX,
+          startY: e.clientY,
+          startPanX: panOffset.x,
+          startPanZ: panOffset.z,
+          startAlong: calibration[zoneType || selectedZone].alongCounter,
+          startFrom: calibration[zoneType || selectedZone].fromCounter,
+          startZoneCal: calibration[zoneType || selectedZone],
+          bounds,
+        }
+      }
+      return
+    }
+
+    const world = screenToWorld(e.clientX, e.clientY, svg)
+    const clickedFixture = getFixtureAtPoint(sortedFixtures, world.worldX, world.worldZ)
+    if (clickedFixture) {
+      setSelectedCustomZoneId(null)
+      onReferenceChange(clickedFixture.id)
+      setViewMode('focus')
+    } else {
+      setSelectedCustomZoneId(null)
+    }
+  }, [
+    mapTool, panOffset, bounds, retailCategories, effectiveDrawCategoryId, screenToWorld,
+    customZones, referenceFixture, viewMode, calibration, selectedZone, referenceFixtureId,
+    onReferenceChange, sortedFixtures,
+  ])
 
   const handleSvgMouseMove = useCallback((e: React.MouseEvent<SVGSVGElement>) => {
     if (!dragRef.current) return
     const svg = e.currentTarget
+    const drag = dragRef.current
 
-    if (dragRef.current.mode === 'pan') {
+    if (drag.kind === 'pan') {
       const rect = svg.getBoundingClientRect()
-      const b = dragRef.current.bounds
-      const dx = ((e.clientX - dragRef.current.startX) / rect.width) * (b.maxX - b.minX)
-      const dz = ((e.clientY - dragRef.current.startY) / rect.height) * (b.maxZ - b.minZ)
-      setPanOffset({
-        x: dragRef.current.startPanX - dx,
-        z: dragRef.current.startPanZ - dz,
-      })
+      const b = drag.bounds
+      const dx = ((e.clientX - drag.startX) / rect.width) * (b.maxX - b.minX)
+      const dz = ((e.clientY - drag.startY) / rect.height) * (b.maxZ - b.minZ)
+      setPanOffset({ x: drag.startPanX - dx, z: drag.startPanZ - dz })
+      return
+    }
+
+    if (drag.kind === 'draw' && drag.drawStart) {
+      const world = screenToWorld(e.clientX, e.clientY, svg)
+      setDrawPreview(rectVerticesFromDrag(drag.drawStart.x, drag.drawStart.z, world.worldX, world.worldZ))
+      return
+    }
+
+    const start = screenToWorld(drag.startX, drag.startY, svg)
+    const current = screenToWorld(e.clientX, e.clientY, svg)
+    const dx = current.worldX - start.worldX
+    const dz = current.worldZ - start.worldZ
+
+    if (drag.kind === 'custom-move' && drag.customZoneId && drag.startCustomVertices) {
+      onCustomZonesChange(customZones.map(z => (
+        z.id === drag.customZoneId
+          ? { ...z, vertices: translateRectVertices(drag.startCustomVertices!, dx, dz) }
+          : z
+      )))
+      return
+    }
+
+    if (drag.kind === 'custom-resize' && drag.customZoneId && drag.resizeHandle && drag.startCustomVertices) {
+      onCustomZonesChange(customZones.map(z => (
+        z.id === drag.customZoneId
+          ? { ...z, vertices: resizeRectVertices(drag.startCustomVertices!, drag.resizeHandle!, current.worldX, current.worldZ) }
+          : z
+      )))
       return
     }
 
     if (!referenceFixture) return
-    const start = screenToWorld(dragRef.current.startX, dragRef.current.startY, svg)
-    const current = screenToWorld(e.clientX, e.clientY, svg)
     const { alongX, alongZ, fromX, fromZ } = getFixtureAxes(referenceFixture, fixtures)
-    const dx = current.worldX - start.worldX
-    const dz = current.worldZ - start.worldZ
     const deltaAlong = dx * alongX + dz * alongZ
     const deltaFrom = dx * fromX + dz * fromZ
+    const zoneType = drag.zoneType || selectedZone
 
-    onCalibrationChange({
-      ...calibration,
-      [selectedZone]: {
-        ...calibration[selectedZone],
-        alongCounter: dragRef.current.startAlong + deltaAlong,
-        fromCounter: dragRef.current.startFrom + deltaFrom,
-      },
-    })
-  }, [referenceFixture, fixtures, screenToWorld, calibration, selectedZone, onCalibrationChange])
+    if (drag.kind === 'template-move') {
+      onCalibrationChange({
+        ...calibration,
+        [zoneType]: {
+          ...calibration[zoneType],
+          alongCounter: drag.startAlong + deltaAlong,
+          fromCounter: drag.startFrom + deltaFrom,
+        },
+      })
+      return
+    }
+
+    if (drag.kind === 'template-resize' && drag.resizeHandle && drag.startZoneCal) {
+      const resized = applyResizeDelta(
+        calibration[zoneType],
+        drag.resizeHandle,
+        deltaAlong,
+        deltaFrom,
+        drag.startZoneCal,
+      )
+      onCalibrationChange({ ...calibration, [zoneType]: resized })
+    }
+  }, [referenceFixture, fixtures, screenToWorld, calibration, selectedZone, onCalibrationChange, customZones, onCustomZonesChange])
 
   const handleSvgMouseUp = useCallback(() => {
-    if (dragRef.current?.mode === 'move') {
-      handleCommit()
+    if (dragRef.current?.kind === 'draw' && drawPreview && drawPreview.length === 4) {
+      const category = retailCategories.find(c => c.id === effectiveDrawCategoryId)
+      if (category) {
+        onCustomZonesChange([...customZones, createShelfCustomZone(drawPreview, category, customZones.length)])
+        setSelectedCustomZoneId(null)
+      }
     }
     dragRef.current = null
-  }, [handleCommit])
+    setDrawPreview(null)
+  }, [drawPreview, retailCategories, effectiveDrawCategoryId, customZones, onCustomZonesChange])
 
-  const referenceLeft = referenceFixture
-    ? findRoiForShelf(previewRois, fixtures, referenceFixture.id, 'left')
-    : undefined
-  const referenceRight = referenceFixture
-    ? findRoiForShelf(previewRois, fixtures, referenceFixture.id, 'right')
-    : undefined
+  const referenceLeft = referenceFixture ? findRoiForShelf(liveRois, fixtures, referenceFixture.id, 'left') : undefined
+  const referenceRight = referenceFixture ? findRoiForShelf(liveRois, fixtures, referenceFixture.id, 'right') : undefined
+  const selectedRoi = selectedZone === 'left' ? referenceLeft : referenceRight
+  const templateHandles = referenceFixture && viewMode === 'focus' && !selectedCustomZoneId
+    ? getZoneHandlePositions(referenceFixture, fixtures, calibration[selectedZone])
+    : null
+  const customHandles = selectedCustomZone && mapTool === 'select'
+    ? getRectHandlePositions(selectedCustomZone.vertices)
+    : null
 
   return (
     <div className="grid grid-cols-5 gap-5">
-      <div className="col-span-2 space-y-4">
+      <div className="col-span-2 space-y-4 max-h-[640px] overflow-y-auto pr-1">
         {isEditingExisting && (
           <div className="bg-purple-900/20 border border-purple-700/50 rounded-lg px-3 py-2 text-xs text-purple-200">
-            Editing saved shelf engagement zones. Adjust sliders or drag zones on the map, then validate and click Update zones.
+            Edit template zones or draw custom category rectangles on the map.
           </div>
         )}
+
         <div className="bg-gray-800/50 border border-gray-700 rounded-lg p-3">
-          <label className="text-xs text-gray-400 block mb-1.5">Reference shelf</label>
+          <label className="text-xs text-gray-400 block mb-1.5">Reference shelf (template zones)</label>
           <select
             value={referenceFixtureId}
-            onChange={(e) => onReferenceChange(e.target.value)}
+            onChange={(e) => { onReferenceChange(e.target.value); setViewMode('focus'); setSelectedCustomZoneId(null) }}
             className="w-full bg-gray-900 border border-gray-600 rounded px-2 py-1.5 text-sm text-white"
           >
             {sortedFixtures.map(f => (
               <option key={f.id} value={f.id}>{f.name}</option>
             ))}
           </select>
-          <p className="text-[10px] text-gray-500 mt-1.5">
-            Adjust zones on this shelf, then apply the template to all shelves.
-          </p>
         </div>
 
-        <div className="flex gap-1 p-1 bg-gray-800/50 border border-gray-700 rounded-lg">
-          {(['left', 'right'] as ZoneType[]).map(type => (
-            <button
-              key={type}
-              onClick={() => setSelectedZone(type)}
-              className={`flex-1 px-2 py-1.5 text-xs font-medium rounded transition-colors flex items-center justify-center gap-1.5 ${
-                selectedZone === type
-                  ? 'bg-gray-700 text-white'
-                  : 'text-gray-400 hover:text-gray-200'
-              }`}
-            >
-              <span className="w-2 h-2 rounded-full" style={{ backgroundColor: ZONE_META[type].color }} />
-              {ZONE_META[type].label}
-            </button>
-          ))}
-        </div>
-
-        <div className="bg-gray-800/50 border border-gray-700 rounded-lg p-3 space-y-3">
-          <div className="flex items-center gap-2 mb-1">
-            <RotateCw className="w-3.5 h-3.5 text-purple-400" />
-            <span className="text-sm font-medium text-white">
-              {ZONE_META[selectedZone].label} — fixture-local
-            </span>
+        <div className="bg-teal-900/20 border border-teal-700/40 rounded-lg p-3 space-y-2">
+          <div className="flex items-center gap-2">
+            <Tag className="w-3.5 h-3.5 text-teal-400" />
+            <span className="text-sm font-medium text-teal-100">Custom category zones</span>
           </div>
-
-          <CalibrationSlider
-            label="Width (along shelf)"
-            value={zoneConfig.width}
-            min={0.5}
-            max={6}
-            step={0.1}
-            unit="m"
-            accentClass="text-purple-400"
-            onChange={(v) => updateZone('width', v)}
-            onCommit={handleCommit}
-          />
-          <CalibrationSlider
-            label="Depth (into aisle)"
-            value={zoneConfig.depth}
-            min={0.5}
-            max={10}
-            step={0.1}
-            unit="m"
-            accentClass="text-purple-400"
-            onChange={(v) => updateZone('depth', v)}
-            onCommit={handleCommit}
-          />
-          <CalibrationSlider
-            label="Along shelf"
-            value={zoneConfig.alongCounter}
-            min={-5}
-            max={5}
-            step={0.1}
-            unit="m"
-            accentClass="text-green-400"
-            onChange={(v) => updateZone('alongCounter', v)}
-            onCommit={handleCommit}
-          />
-          <CalibrationSlider
-            label="From shelf"
-            value={zoneConfig.fromCounter}
-            min={-5}
-            max={10}
-            step={0.1}
-            unit="m"
-            accentClass="text-green-400"
-            onChange={(v) => updateZone('fromCounter', v)}
-            onCommit={handleCommit}
-          />
-          <CalibrationSlider
-            label="Rotation"
-            value={zoneConfig.rotationOffset}
-            min={-180}
-            max={180}
-            step={1}
-            unit="°"
-            accentClass="text-amber-400"
-            onChange={(v) => updateZone('rotationOffset', v)}
-            onCommit={handleCommit}
-          />
+          <label className="text-xs text-gray-400 block">Grocery category (from mapping config)</label>
+          <select
+            value={effectiveDrawCategoryId}
+            onChange={(e) => setDrawCategoryId(e.target.value)}
+            className="w-full bg-gray-900 border border-gray-600 rounded px-2 py-1.5 text-sm text-white"
+          >
+            {retailCategories.length === 0 && <option value="">No categories loaded</option>}
+            {retailCategories.map(c => (
+              <option key={c.id} value={c.id}>{c.name}</option>
+            ))}
+          </select>
+          <button
+            onClick={() => setMapTool(mapTool === 'draw' ? 'select' : 'draw')}
+            disabled={!effectiveDrawCategoryId}
+            className={`w-full text-xs px-3 py-2 rounded flex items-center justify-center gap-1.5 ${
+              mapTool === 'draw'
+                ? 'bg-teal-600 text-white'
+                : 'bg-gray-700 hover:bg-gray-600 text-gray-200'
+            } disabled:opacity-50`}
+          >
+            <PenSquare className="w-3.5 h-3.5" />
+            {mapTool === 'draw' ? 'Drawing rectangle… drag on map' : 'Draw custom rectangle'}
+          </button>
+          {customZones.length > 0 && (
+            <div className="space-y-1.5 pt-1 border-t border-teal-800/40">
+              {customZones.map((zone, idx) => (
+                <div
+                  key={zone.id}
+                  className={`rounded px-2 py-1.5 text-xs border ${
+                    selectedCustomZoneId === zone.id
+                      ? 'border-teal-500 bg-teal-900/30'
+                      : 'border-gray-700 bg-gray-900/40'
+                  }`}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <button
+                      className="text-left text-gray-200 truncate flex-1"
+                      onClick={() => { setSelectedCustomZoneId(zone.id); setMapTool('select') }}
+                    >
+                      {zone.business_category_label || zone.name}
+                    </button>
+                    <button
+                      onClick={() => removeCustomZone(zone.id)}
+                      className="text-red-400 hover:text-red-300 shrink-0"
+                      title="Remove zone"
+                    >
+                      <Trash2 className="w-3 h-3" />
+                    </button>
+                  </div>
+                  <select
+                    value={zone.business_category_id}
+                    onChange={(e) => updateCustomZoneCategory(zone.id, e.target.value)}
+                    className="mt-1 w-full bg-gray-900 border border-gray-700 rounded px-1.5 py-1 text-[11px] text-white"
+                  >
+                    {retailCategories.map(c => (
+                      <option key={c.id} value={c.id}>{c.name}</option>
+                    ))}
+                  </select>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
+
+        {!selectedCustomZoneId && (
+          <>
+            <div className="flex gap-1 p-1 bg-gray-800/50 border border-gray-700 rounded-lg">
+              {(['left', 'right'] as ZoneType[]).map(type => (
+                <button
+                  key={type}
+                  onClick={() => setSelectedZone(type)}
+                  className={`flex-1 px-2 py-1.5 text-xs font-medium rounded flex items-center justify-center gap-1.5 ${
+                    selectedZone === type ? 'bg-gray-700 text-white' : 'text-gray-400 hover:text-gray-200'
+                  }`}
+                >
+                  <span className="w-2 h-2 rounded-full" style={{ backgroundColor: ZONE_META[type].color }} />
+                  {ZONE_META[type].label}
+                </button>
+              ))}
+            </div>
+            <div className="bg-gray-800/50 border border-gray-700 rounded-lg p-3 space-y-3">
+              <div className="flex items-center gap-2 mb-1">
+                <RotateCw className="w-3.5 h-3.5 text-purple-400" />
+                <span className="text-sm font-medium text-white">{ZONE_META[selectedZone].label} template</span>
+              </div>
+              <CalibrationSlider label="Width (along shelf)" value={zoneConfig.width} min={0.5} max={8} step={0.1} unit="m" accentClass="text-purple-400" onChange={(v) => updateZone('width', v)} />
+              <CalibrationSlider label="Depth (into aisle)" value={zoneConfig.depth} min={0.5} max={12} step={0.1} unit="m" accentClass="text-purple-400" onChange={(v) => updateZone('depth', v)} />
+              <CalibrationSlider label="Along shelf" value={zoneConfig.alongCounter} min={-6} max={6} step={0.1} unit="m" accentClass="text-green-400" onChange={(v) => updateZone('alongCounter', v)} />
+              <CalibrationSlider label="From shelf" value={zoneConfig.fromCounter} min={-6} max={12} step={0.1} unit="m" accentClass="text-green-400" onChange={(v) => updateZone('fromCounter', v)} />
+              <CalibrationSlider label="Rotation" value={zoneConfig.rotationOffset} min={-180} max={180} step={1} unit="°" accentClass="text-amber-400" onChange={(v) => updateZone('rotationOffset', v)} />
+            </div>
+          </>
+        )}
+
+        {selectedCustomZone && (
+          <div className="bg-teal-900/20 border border-teal-700/50 rounded-lg p-3 text-xs text-teal-100 space-y-1">
+            <p className="font-medium">{selectedCustomZone.business_category_label}</p>
+            <p className="text-teal-200/70">Drag to move · edge handles to resize · change category above</p>
+          </div>
+        )}
 
         <div className="flex flex-wrap gap-2">
-          <button
-            onClick={onResetToAuto}
-            disabled={loading}
-            className="text-xs px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-gray-200 rounded flex items-center gap-1 disabled:opacity-50"
-          >
-            <RefreshCw className={`w-3 h-3 ${loading ? 'animate-spin' : ''}`} />
-            Reset to auto
+          <button onClick={onResetToAuto} disabled={loading} className="text-xs px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-gray-200 rounded flex items-center gap-1 disabled:opacity-50">
+            <RefreshCw className={`w-3 h-3 ${loading ? 'animate-spin' : ''}`} /> Reset template
           </button>
-          <button
-            onClick={onValidate}
-            className={`text-xs px-3 py-1.5 rounded flex items-center gap-1 ${
-              validated
-                ? 'bg-green-900/50 text-green-400 border border-green-700'
-                : 'bg-amber-700 hover:bg-amber-600 text-white'
-            }`}
-          >
-            <Check className="w-3 h-3" />
-            {validated ? 'Template validated' : 'Validate template'}
+          <button onClick={onApplyToAll} disabled={loading} className="text-xs px-3 py-1.5 bg-purple-600 hover:bg-purple-500 text-white rounded flex items-center gap-1 disabled:opacity-50">
+            <Target className="w-3 h-3" /> Apply template
           </button>
-          <button
-            onClick={onApplyToAll}
-            disabled={loading}
-            className="text-xs px-3 py-1.5 bg-purple-600 hover:bg-purple-500 text-white rounded flex items-center gap-1 disabled:opacity-50"
-          >
-            <Target className="w-3 h-3" />
-            {isEditingExisting ? 'Preview update' : 'Apply to all'}
+          <button onClick={onValidate} className={`text-xs px-3 py-1.5 rounded flex items-center gap-1 ${validated ? 'bg-green-900/50 text-green-400 border border-green-700' : 'bg-amber-700 hover:bg-amber-600 text-white'}`}>
+            <Check className="w-3 h-3" /> {validated ? 'Validated' : 'Validate'}
           </button>
         </div>
 
+        {(isEditingExisting || liveRois.length > 0 || customZones.length > 0) && (
+          <button onClick={onDeleteAll} disabled={deleting || loading} className="w-full text-xs px-3 py-2 bg-red-900/40 hover:bg-red-900/60 border border-red-800 text-red-300 rounded flex items-center justify-center gap-1.5 disabled:opacity-50">
+            {deleting ? <Loader2 className="w-3 h-3 animate-spin" /> : <Trash2 className="w-3 h-3" />}
+            Delete all shelf zones (template + custom)
+          </button>
+        )}
+
         <div className="text-[10px] text-gray-500 space-y-1">
-          {validated && appliedToAll && (
-            <p className="text-green-400 flex items-center gap-1">
-              <Check className="w-3 h-3" />
-              Calibrated template applied to {sortedFixtures.length} shelves
-            </p>
-          )}
-          {validated && !appliedToAll && (
-            <p className="text-amber-400">Validated — click Apply to all to refresh every shelf preview</p>
-          )}
-          {!validated && (
-            <p>Drag zones on the map or use sliders, then validate before generating.</p>
-          )}
-          <p>Focus view: drag zone to move · Pan mode: drag map · Shift not required</p>
+          {validated && appliedToAll && <p className="text-green-400">Template applied to {sortedFixtures.length} shelves</p>}
+          <p>Teal zones = custom category rectangles · purple/amber = per-shelf template</p>
         </div>
       </div>
 
@@ -472,74 +705,47 @@ export default function ShelfCalibrationPanel({
           <h3 className="text-sm font-medium text-gray-300 flex items-center gap-2">
             <Eye className="w-4 h-4 text-purple-400" />
             Shelf zone map
-            {loading && <Loader2 className="w-3.5 h-3.5 animate-spin text-purple-400" />}
+            <span className="text-[10px] text-gray-500 font-normal">
+              ({liveRois.length} template · {customZones.length} custom)
+            </span>
           </h3>
           <div className="flex items-center gap-1">
-            <button
-              onClick={() => setViewMode('focus')}
-              className={`text-[10px] px-2 py-1 rounded ${viewMode === 'focus' ? 'bg-purple-600 text-white' : 'bg-gray-700 text-gray-400'}`}
-            >
-              Focus
-            </button>
-            <button
-              onClick={() => { setViewMode('all'); setPanOffset({ x: 0, z: 0 }) }}
-              className={`text-[10px] px-2 py-1 rounded ${viewMode === 'all' ? 'bg-purple-600 text-white' : 'bg-gray-700 text-gray-400'}`}
-            >
-              All shelves
-            </button>
-            <button
-              onClick={() => setPanning(p => !p)}
-              className={`p-1 rounded ${panning ? 'bg-purple-600 text-white' : 'bg-gray-700 text-gray-400'}`}
-              title="Pan map"
-            >
-              <Move className="w-3.5 h-3.5" />
-            </button>
-            <button
-              onClick={() => { setPanOffset({ x: 0, z: 0 }); setViewMode('focus') }}
-              className="p-1 rounded bg-gray-700 text-gray-400 hover:text-white"
-              title="Reset view"
-            >
-              <ZoomIn className="w-3.5 h-3.5" />
-            </button>
-            <button
-              onClick={() => { setViewMode('all'); setPanOffset({ x: 0, z: 0 }) }}
-              className="p-1 rounded bg-gray-700 text-gray-400 hover:text-white"
-              title="Show all"
-            >
-              <ZoomOut className="w-3.5 h-3.5" />
-            </button>
+            <button onClick={() => setMapTool('select')} className={`p-1 rounded ${mapTool === 'select' ? 'bg-purple-600 text-white' : 'bg-gray-700 text-gray-400'}`} title="Select"><MousePointer2 className="w-3.5 h-3.5" /></button>
+            <button onClick={() => setMapTool('draw')} disabled={!effectiveDrawCategoryId} className={`p-1 rounded ${mapTool === 'draw' ? 'bg-teal-600 text-white' : 'bg-gray-700 text-gray-400'} disabled:opacity-40`} title="Draw rectangle"><PenSquare className="w-3.5 h-3.5" /></button>
+            <button onClick={() => setMapTool('pan')} className={`p-1 rounded ${mapTool === 'pan' ? 'bg-purple-600 text-white' : 'bg-gray-700 text-gray-400'}`} title="Pan"><Move className="w-3.5 h-3.5" /></button>
+            <button onClick={() => setViewMode('focus')} className={`text-[10px] px-2 py-1 rounded ${viewMode === 'focus' ? 'bg-purple-600 text-white' : 'bg-gray-700 text-gray-400'}`}>Focus</button>
+            <button onClick={() => { setViewMode('all'); setPanOffset({ x: 0, z: 0 }); setZoom(1) }} className={`text-[10px] px-2 py-1 rounded ${viewMode === 'all' ? 'bg-purple-600 text-white' : 'bg-gray-700 text-gray-400'}`}>All</button>
+            <button onClick={() => setZoom(z => Math.min(4, z * 1.2))} className="p-1 rounded bg-gray-700 text-gray-400 hover:text-white"><ZoomIn className="w-3.5 h-3.5" /></button>
+            <button onClick={() => setZoom(z => Math.max(0.35, z / 1.2))} className="p-1 rounded bg-gray-700 text-gray-400 hover:text-white"><ZoomOut className="w-3.5 h-3.5" /></button>
+            <button onClick={() => { setPanOffset({ x: 0, z: 0 }); setZoom(1) }} className="text-[10px] px-2 py-1 rounded bg-gray-700 text-gray-400 hover:text-white">Reset</button>
           </div>
         </div>
 
-        <div className="bg-gray-800 border border-gray-700 rounded-lg overflow-hidden relative" style={{ height: 420 }}>
+        <div className="bg-gray-800 border border-gray-700 rounded-lg overflow-hidden relative" style={{ height: 560 }}>
           <svg
             viewBox={viewBox}
             preserveAspectRatio="xMidYMid meet"
-            className={`w-full h-full ${panning ? 'cursor-grab active:cursor-grabbing' : 'cursor-crosshair'}`}
+            className={`w-full h-full ${mapTool === 'pan' ? 'cursor-grab active:cursor-grabbing' : mapTool === 'draw' ? 'cursor-crosshair' : 'cursor-default'}`}
             onMouseDown={handleSvgMouseDown}
             onMouseMove={handleSvgMouseMove}
             onMouseUp={handleSvgMouseUp}
             onMouseLeave={handleSvgMouseUp}
+            onWheel={handleWheel}
           >
             <defs>
               <pattern id="shelfCalGrid" width="1" height="1" patternUnits="userSpaceOnUse">
                 <path d="M 1 0 L 0 0 0 1" fill="none" stroke="#374151" strokeWidth="0.03" />
               </pattern>
             </defs>
-            <rect
-              x={bounds.minX}
-              y={bounds.minZ}
-              width={bounds.maxX - bounds.minX}
-              height={bounds.maxZ - bounds.minZ}
-              fill="url(#shelfCalGrid)"
-            />
+            <rect x={bounds.minX} y={bounds.minZ} width={bounds.maxX - bounds.minX} height={bounds.maxZ - bounds.minZ} fill="url(#shelfCalGrid)" />
 
             {fixtures.map(fixture => (
               <FixtureFootprint
                 key={fixture.id}
                 fixture={fixture}
-                highlighted={fixture.id === referenceFixtureId}
-                dimmed={viewMode === 'focus' && fixture.id !== referenceFixtureId}
+                highlighted={fixture.id === referenceFixtureId && !selectedCustomZoneId}
+                dimmed={viewMode === 'focus' && fixture.id !== referenceFixtureId && !selectedCustomZoneId}
+                onSelect={() => { onReferenceChange(fixture.id); setViewMode('focus'); setSelectedCustomZoneId(null) }}
               />
             ))}
 
@@ -547,36 +753,91 @@ export default function ShelfCalibrationPanel({
               if (roi.vertices.length < 3) return null
               const isLeft = roi.name.includes('(Left)')
               const zoneType: ZoneType = isLeft ? 'left' : 'right'
-              const isSelected = viewMode === 'focus' && zoneType === selectedZone
-              const isReference = roi.id === referenceLeft?.id || roi.id === referenceRight?.id
+              const isSelected = !selectedCustomZoneId && zoneType === selectedZone && (viewMode === 'all' || roi.id === selectedRoi?.id)
               const pathD = `M ${roi.vertices.map(v => `${v.x},${v.z}`).join(' L ')} Z`
-
               return (
-                <g key={roi.id} data-zone-type={zoneType}>
-                  <path
-                    d={pathD}
-                    fill={roi.color}
-                    fillOpacity={isSelected ? 0.55 : 0.35}
-                    stroke={roi.color}
-                    strokeWidth={isSelected ? 0.08 : isReference ? 0.06 : 0.04}
-                    strokeDasharray={viewMode === 'all' && !isReference ? '0.15 0.1' : undefined}
-                    style={{ cursor: viewMode === 'focus' && !panning ? 'move' : undefined }}
-                  />
+                <g key={roi.id} data-zone-type={zoneType} data-roi-id={roi.id}>
+                  <path d={pathD} fill={roi.color} fillOpacity={isSelected ? 0.55 : 0.28} stroke={roi.color} strokeWidth={isSelected ? 0.09 : 0.04} style={{ cursor: mapTool === 'select' ? 'move' : undefined }} />
                 </g>
               )
             })}
+
+            {(viewMode === 'all' ? customPreviewRois : customPreviewRois).map(roi => {
+              const zone = customZones.find(z => z.id === roi.id)
+              if (!zone) return null
+              const isSelected = selectedCustomZoneId === zone.id
+              const pathD = `M ${roi.vertices.map(v => `${v.x},${v.z}`).join(' L ')} Z`
+              const cx = roi.vertices.reduce((s, v) => s + v.x, 0) / roi.vertices.length
+              const cz = roi.vertices.reduce((s, v) => s + v.z, 0) / roi.vertices.length
+              return (
+                <g key={roi.id} data-custom-zone-id={zone.id}>
+                  <path
+                    d={pathD}
+                    fill={roi.color}
+                    fillOpacity={isSelected ? 0.62 : 0.4}
+                    stroke={isSelected ? '#5eead4' : roi.color}
+                    strokeWidth={isSelected ? 0.1 : 0.06}
+                    style={{ cursor: mapTool === 'select' ? 'move' : undefined }}
+                  />
+                  <text x={cx} y={cz} textAnchor="middle" dominantBaseline="middle" fontSize={0.32} fill="#ecfdf5" pointerEvents="none">
+                    {zone.business_category_label}
+                  </text>
+                </g>
+              )
+            })}
+
+            {drawPreview && (
+              <path
+                d={`M ${drawPreview.map(v => `${v.x},${v.z}`).join(' L ')} Z`}
+                fill="#14b8a6"
+                fillOpacity={0.25}
+                stroke="#5eead4"
+                strokeWidth={0.06}
+                strokeDasharray="0.15 0.1"
+                pointerEvents="none"
+              />
+            )}
+
+            {templateHandles && mapTool === 'select' && !selectedCustomZoneId && (
+              (Object.entries(templateHandles) as [ResizeHandle, { x: number; z: number }][]).map(([handle, pos]) => (
+                <rect
+                  key={`tpl-${handle}`}
+                  data-resize-handle={handle}
+                  data-zone-type={selectedZone}
+                  x={pos.x - 0.12}
+                  y={pos.z - 0.12}
+                  width={0.24}
+                  height={0.24}
+                  fill="#fff"
+                  stroke={ZONE_META[selectedZone].color}
+                  strokeWidth={0.04}
+                />
+              ))
+            )}
+
+            {customHandles && selectedCustomZoneId && (
+              (Object.entries(customHandles) as [ResizeHandle, { x: number; z: number }][]).map(([handle, pos]) => (
+                <rect
+                  key={`cst-${handle}`}
+                  data-resize-handle={handle}
+                  data-custom-id={selectedCustomZoneId}
+                  x={pos.x - 0.12}
+                  y={pos.z - 0.12}
+                  width={0.24}
+                  height={0.24}
+                  fill="#fff"
+                  stroke="#14b8a6"
+                  strokeWidth={0.04}
+                />
+              ))
+            )}
           </svg>
 
-          <div className="absolute bottom-2 left-2 flex gap-3 text-[10px] text-gray-400 bg-gray-900/80 px-2 py-1 rounded">
-            <span className="flex items-center gap-1">
-              <span className="w-2 h-2 rounded-sm bg-purple-500/60 border border-purple-500" /> Left
-            </span>
-            <span className="flex items-center gap-1">
-              <span className="w-2 h-2 rounded-sm bg-amber-500/60 border border-amber-500" /> Right
-            </span>
-            <span className="flex items-center gap-1">
-              <span className="w-3 h-2 rounded-sm border border-purple-400 bg-purple-900/40" /> Shelf (DWG shape)
-            </span>
+          <div className="absolute bottom-2 left-2 flex flex-wrap gap-2 text-[10px] text-gray-400 bg-gray-900/90 px-2 py-1 rounded max-w-[95%]">
+            <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-sm bg-purple-500/60 border border-purple-500" /> Left</span>
+            <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-sm bg-amber-500/60 border border-amber-500" /> Right</span>
+            <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-sm bg-teal-500/60 border border-teal-500" /> Custom category</span>
+            <span className="text-gray-500">Zoom {(zoom * 100).toFixed(0)}%</span>
           </div>
         </div>
       </div>
