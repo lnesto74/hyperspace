@@ -36,7 +36,8 @@ import { ProfitRadarPage } from './features/profitRadar'
 import { ProfitRadarProvider } from './context/ProfitRadarContext'
 import { LaunchPadPanel, isLaunchPadEnabled, loadSession } from './launchpad'
 
-import { BarChart3, Bell, Thermometer, Zap, ShoppingCart, Monitor, Activity, PieChart, Clapperboard, Crosshair, Building2, LogOut, User, Rocket, FlaskConical } from 'lucide-react'
+import { BarChart3, Bell, Thermometer, Zap, ShoppingCart, Monitor, Activity, PieChart, Clapperboard, Crosshair, Building2, LogOut, User, Rocket, FlaskConical, Settings } from 'lucide-react'
+import { CanvasToolbarButton, CanvasToolbarDivider, CanvasToolbarFlyout } from './components/layout/CanvasToolbar'
 import { useState, useEffect, useRef, createContext, useContext } from 'react'
 import { Routes, Route, useNavigate } from 'react-router-dom'
 import { useAuth } from './context/AuthContext'
@@ -93,7 +94,7 @@ function KPIPopupWrapper() {
 function KPIOverlayToggle() {
   const { showKPIOverlays, toggleKPIOverlays, startDrawing: startRoiDrawing } = useRoi()
   const { venue } = useVenue()
-  const { setMode, neuralDashboardEnabled } = useViewMode()
+  const { setMode, mode, neuralDashboardEnabled } = useViewMode()
   const { dwgLayoutId } = useDwg()
   const { openStoryGrid, explainKpi, selectEpisode, selectedEpisode } = useReplayInsight()
   const { openNarrator, askQuestion } = useNarrator2()
@@ -234,120 +235,109 @@ function KPIOverlayToggle() {
       {/* Button Group above Footer - hidden in Neural Dashboard mode */}
       {!neuralDashboardEnabled && (
       <div className="fixed bottom-16 right-4 z-30 flex items-center gap-2">
-        {/* Smart KPI Button */}
-        <button
-          onClick={() => setShowSmartKpiModal(true)}
-          className={`flex items-center justify-center w-10 h-10 rounded-lg shadow-lg transition-all ${
-            showSmartKpiModal 
-              ? 'bg-purple-600 hover:bg-purple-700 text-white' 
-              : 'bg-gray-800 hover:bg-gray-700 text-gray-300 border border-gray-600'
-          }`}
-          title="Smart KPI Mode - Auto-generate zones"
-        >
-          <Zap className="w-4 h-4" />
-        </button>
-        
-        {/* Heatmap Viewer Button */}
-        <button
-          onClick={() => setShowHeatmapModal(true)}
-          className={`flex items-center justify-center w-10 h-10 rounded-lg shadow-lg transition-all ${
-            showHeatmapModal 
-              ? 'bg-orange-600 hover:bg-orange-700 text-white' 
-              : 'bg-gray-800 hover:bg-gray-700 text-gray-300 border border-gray-600'
-          }`}
-          title="Open Heatmap Viewer"
-        >
-          <Thermometer className="w-4 h-4" />
-        </button>
-        
-        {/* Checkout Manager Button */}
-        <button
-          onClick={() => setShowCheckoutManager(true)}
-          className={`flex items-center justify-center w-10 h-10 rounded-lg shadow-lg transition-all ${
-            showCheckoutManager 
-              ? 'bg-green-600 hover:bg-green-700 text-white' 
-              : 'bg-gray-800 hover:bg-gray-700 text-gray-300 border border-gray-600'
-          }`}
-          title="Checkout Manager"
-        >
-          <ShoppingCart className="w-4 h-4" />
-        </button>
-        
-        {/* DOOH Analytics Button */}
-        <button
-          onClick={() => setMode('doohAnalytics')}
-          className="flex items-center justify-center w-10 h-10 rounded-lg shadow-lg transition-all bg-gray-800 hover:bg-purple-600 text-gray-300 hover:text-white border border-gray-600 hover:border-purple-500"
-          title="DOOH Analytics - Digital Display Metrics"
-        >
-          <Monitor className="w-4 h-4" />
-        </button>
-        
-        {/* PEBLE™ DOOH Attribution Button */}
-        <button
-          onClick={() => setMode('doohEffectiveness')}
-          className="flex items-center justify-center w-10 h-10 rounded-lg shadow-lg transition-all bg-gray-800 hover:bg-purple-600 text-gray-300 hover:text-white border border-gray-600 hover:border-purple-500"
-          title="PEBLE™ Attribution - DOOH Effectiveness"
-        >
-          <Activity className="w-4 h-4" />
-        </button>
-        
-        {/* Business Reporting Button (feature-flagged) */}
-        <button
-          onClick={() => setMode('businessReporting')}
-          className="flex items-center justify-center w-10 h-10 rounded-lg shadow-lg transition-all bg-gray-800 hover:bg-blue-600 text-gray-300 hover:text-white border border-gray-600 hover:border-blue-500"
-          title="Business Reporting - Executive Dashboards"
-        >
-          <PieChart className="w-4 h-4" />
-        </button>
-        
-        {/* Profit Radar Button */}
-        <button
-          onClick={() => setMode('profitRadar')}
-          className="flex items-center justify-center w-10 h-10 rounded-lg shadow-lg transition-all bg-gray-800 hover:bg-emerald-600 text-gray-300 hover:text-white border border-gray-600 hover:border-emerald-500"
-          title="Profit Radar - Shopper Intent Insights"
-        >
-          <Crosshair className="w-4 h-4" />
-        </button>
+        <CanvasToolbarFlyout
+          icon={Settings}
+          title="Setup & tools"
+          accent="purple"
+          active={showSmartKpiModal || mode === 'benchmark'}
+          onPrimaryClick={() => setShowSmartKpiModal(true)}
+          items={[
+            {
+              id: 'smart-kpi',
+              icon: Zap,
+              title: 'Smart KPI Mode — auto-generate zones',
+              active: showSmartKpiModal,
+              accent: 'purple',
+              onClick: () => setShowSmartKpiModal(true),
+            },
+            {
+              id: 'benchmark',
+              icon: FlaskConical,
+              title: 'Trajectory Benchmark — perception & reconciler scorecards',
+              active: mode === 'benchmark',
+              accent: 'amber',
+              onClick: () => setMode('benchmark'),
+            },
+          ]}
+        />
 
-        {/* Trajectory Benchmark Button */}
-        <button
-          onClick={() => setMode('benchmark')}
-          className="flex items-center justify-center w-10 h-10 rounded-lg shadow-lg transition-all bg-gray-800 hover:bg-amber-600 text-gray-300 hover:text-white border border-gray-600 hover:border-amber-500"
-          title="Trajectory Benchmark — perception & reconciler scorecards"
-        >
-          <FlaskConical className="w-4 h-4" />
-        </button>
-        
-        {/* Replay Insights Button */}
-        <button
+        <CanvasToolbarButton
+          icon={ShoppingCart}
+          title="Checkout Manager"
+          accent="green"
+          active={showCheckoutManager}
+          onClick={() => setShowCheckoutManager(true)}
+        />
+
+        <CanvasToolbarFlyout
+          icon={Monitor}
+          title="DOOH Analytics — digital display metrics"
+          accent="purple"
+          active={mode === 'doohAnalytics' || mode === 'doohEffectiveness'}
+          onPrimaryClick={() => setMode('doohAnalytics')}
+          items={[
+            {
+              id: 'peble',
+              icon: Activity,
+              title: 'PEBLE™ Attribution — DOOH effectiveness',
+              active: mode === 'doohEffectiveness',
+              accent: 'purple',
+              onClick: () => setMode('doohEffectiveness'),
+            },
+          ]}
+        />
+
+        <CanvasToolbarFlyout
+          icon={PieChart}
+          title="Business Reporting — executive dashboards"
+          accent="blue"
+          active={mode === 'businessReporting' || mode === 'profitRadar' || showHeatmapModal}
+          onPrimaryClick={() => setMode('businessReporting')}
+          items={[
+            {
+              id: 'profit-radar',
+              icon: Crosshair,
+              title: 'Profit Radar — shopper intent insights',
+              active: mode === 'profitRadar',
+              accent: 'emerald',
+              onClick: () => setMode('profitRadar'),
+            },
+            {
+              id: 'heatmap',
+              icon: Thermometer,
+              title: 'Heatmap Viewer',
+              active: showHeatmapModal,
+              accent: 'orange',
+              onClick: () => setShowHeatmapModal(true),
+            },
+          ]}
+        />
+
+        <CanvasToolbarDivider />
+
+        <CanvasToolbarButton
+          icon={Clapperboard}
+          title="Replay Insights — behavior episodes"
+          accent="indigo"
           onClick={openStoryGrid}
-          className="flex items-center justify-center w-10 h-10 rounded-lg shadow-lg transition-all bg-gray-800 hover:bg-indigo-600 text-gray-300 hover:text-white border border-gray-600 hover:border-indigo-500"
-          title="Replay Insights - Behavior Episodes"
-        >
-          <Clapperboard className="w-4 h-4" />
-        </button>
-        
-        {/* AI Narrator2 Button (Copilot) */}
+        />
+
         <Narrator2Toggle />
-        
-        {/* Activity Ledger Button */}
-        <button
-          onClick={() => setShowLedger(!showLedger)}
-          className={`relative flex items-center justify-center w-10 h-10 rounded-lg shadow-lg transition-all ${
-            showLedger 
-              ? 'bg-amber-600 hover:bg-amber-700 text-white' 
-              : 'bg-gray-800 hover:bg-gray-700 text-gray-300 border border-gray-600'
-          }`}
+
+        <CanvasToolbarButton
+          icon={Bell}
           title="Activity Ledger"
+          accent="amber"
+          active={showLedger}
+          onClick={() => setShowLedger(!showLedger)}
         >
-          <Bell className="w-4 h-4" />
           {unreadCount > 0 && (
             <span className="absolute -top-1 -right-1 w-4 h-4 bg-red-500 text-white text-[10px] font-bold rounded-full flex items-center justify-center">
               {unreadCount > 9 ? '9+' : unreadCount}
             </span>
           )}
-        </button>
-        
+        </CanvasToolbarButton>
+
         {/* KPI Toggle Button */}
         <button
           onClick={toggleKPIOverlays}
