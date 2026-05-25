@@ -274,8 +274,8 @@ export default function MainViewport({
   // Grace period: tracks hidden but not disposed, keyed by trackKey -> hide timestamp
   const trackGraceRef = useRef<Map<string, number>>(new Map())
   const emptyTracksSinceRef = useRef<number | null>(null)
-  const TRACK_GRACE_MS = 2000
-  const TRACK_HIDE_DELAY_MS = 350 // hide quickly when gone — no frozen ghosts
+  const TRACK_GRACE_MS = 8000
+  const TRACK_HIDE_DELAY_MS = 2000 // wait before hide — edge re-IDs same person frequently
   const EMPTY_TRACKS_CLEAR_MS = 500 // Avoid nuking all meshes on a single empty frame
   // Instanced rendering for tracks - single draw call for all 200+ tracks
   const trackInstancedMeshRef = useRef<THREE.InstancedMesh | null>(null)
@@ -1204,7 +1204,7 @@ export default function MainViewport({
       if (now - lastJitterTime > JITTER_INTERVAL) {
         lastJitterTime = now
         trackMeshesRef.current.forEach((group) => {
-          const pc = group.children[4]
+          const pc = group.children.find(c => c.userData?.isPointCloud)
           if (pc && pc.visible && pc instanceof THREE.Points) {
             jitterPointCloud(pc)
           }
@@ -3847,7 +3847,7 @@ export default function MainViewport({
       const scene = sceneRef.current
       const allTracks = tracksRef.current
       const refCount = allTracks.size
-      syncIntervalMs = refCount > 200 ? 200 : refCount > RENDER_EMERGENCY_THRESHOLD ? 66 : 33
+      syncIntervalMs = refCount > 200 ? 200 : refCount > RENDER_EMERGENCY_THRESHOLD ? 66 : refCount > 40 ? 50 : 33
 
       // Sticky cap: prefer tracks that already have meshes so IDs don't swap every frame
       let tracksToRender = allTracks
@@ -4079,32 +4079,31 @@ export default function MainViewport({
           labelSprite.userData.isSezLabel = true
           group.add(labelSprite)
 
-          const pcPositions = generateCapsulePoints(cylinderRadius, cylinderHeight, 150)
-          const pcGeometry = new THREE.BufferGeometry()
-          pcGeometry.setAttribute('position', new THREE.BufferAttribute(pcPositions, 3))
-          const pcMaterial = new THREE.PointsMaterial({
-            color, size: 0.04, transparent: true, opacity: 0.9,
-            sizeAttenuation: true, depthWrite: false,
-          })
-          const pointCloud = new THREE.Points(pcGeometry, pcMaterial)
-          pointCloud.userData.isPointCloud = true
-          pointCloud.userData.basePositions = new Float32Array(pcPositions)
-          pointCloud.visible = currentTracking.trackDisplayMode === 'pointcloud'
-          group.add(pointCloud)
+          const usePointCloud = currentTracking.trackDisplayMode === 'pointcloud'
+          if (usePointCloud) {
+            const pcPositions = generateCapsulePoints(cylinderRadius, cylinderHeight, 150)
+            const pcGeometry = new THREE.BufferGeometry()
+            pcGeometry.setAttribute('position', new THREE.BufferAttribute(pcPositions, 3))
+            const pcMaterial = new THREE.PointsMaterial({
+              color, size: 0.04, transparent: true, opacity: 0.9,
+              sizeAttenuation: true, depthWrite: false,
+            })
+            const pointCloud = new THREE.Points(pcGeometry, pcMaterial)
+            pointCloud.userData.isPointCloud = true
+            pointCloud.userData.basePositions = new Float32Array(pcPositions)
+            group.add(pointCloud)
 
-          const wfBoxGeo = new THREE.BoxGeometry(cylinderRadius * 2, cylinderHeight, cylinderRadius * 2)
-          const wfEdgesGeo = new THREE.EdgesGeometry(wfBoxGeo)
-          wfBoxGeo.dispose()
-          const wfMaterial = new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.7 })
-          const wireframe = new THREE.LineSegments(wfEdgesGeo, wfMaterial)
-          wireframe.userData.isWireframe = true
-          wireframe.visible = currentTracking.trackDisplayMode === 'pointcloud'
-          group.add(wireframe)
+            const wfBoxGeo = new THREE.BoxGeometry(cylinderRadius * 2, cylinderHeight, cylinderRadius * 2)
+            const wfEdgesGeo = new THREE.EdgesGeometry(wfBoxGeo)
+            wfBoxGeo.dispose()
+            const wfMaterial = new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.7 })
+            const wireframe = new THREE.LineSegments(wfEdgesGeo, wfMaterial)
+            wireframe.userData.isWireframe = true
+            group.add(wireframe)
 
-          if (currentTracking.trackDisplayMode === 'pointcloud') {
-            (group.children[0] as THREE.Mesh).visible = false;
-            (group.children[1] as THREE.Mesh).visible = false;
-            (group.children[2] as THREE.Mesh).visible = false
+            cylinder.visible = false
+            topCap.visible = false
+            bottomCap.visible = false
           }
 
           // Track-ID sprite — same approach as the SEZ label. WebGL handles
@@ -4220,8 +4219,8 @@ export default function MainViewport({
         topCap.visible = isCylinderMode
         bottomCap.visible = isCylinderMode
 
-        const pointCloud = group.children[4] as THREE.Points | undefined
-        const wireframe = group.children[5] as THREE.LineSegments | undefined
+        const pointCloud = group.children.find(c => c.userData?.isPointCloud) as THREE.Points | undefined
+        const wireframe = group.children.find(c => c.userData?.isWireframe) as THREE.LineSegments | undefined
         if (pointCloud) pointCloud.visible = !isCylinderMode
         if (wireframe) wireframe.visible = !isCylinderMode
 

@@ -9,6 +9,7 @@ import { useVenue } from '../../context/VenueContext';
 import { useLidar } from '../../context/LidarContext';
 import type { LidarPlacement } from '../../types';
 import { useReplayInsight, NarrationPack } from '../../context/ReplayInsightContext';
+import { useTracksRef } from '../../context/TrackingContext';
 import type { CaptureScreenshotFn } from '../venue/MainViewport';
 import HistogramTimeline from './HistogramTimeline';
 import LandingNarrator from './LandingNarrator';
@@ -134,6 +135,7 @@ export default function LandingExperience({ onDismiss, captureScreenshot }: Land
   const { venue, venueList, fetchVenueList, loadVenue } = useVenue();
   const { episodes, fetchEpisodes, selectEpisode } = useReplayInsight();
   const { setPlacements } = useLidar();
+  const tracksRef = useTracksRef();
   const [stage, setStage] = useState<Stage>('black');
   const [phase, setPhase] = useState<'welcome' | 'briefing'>('welcome');
   const [isExiting, setIsExiting] = useState(false);
@@ -169,35 +171,41 @@ export default function LandingExperience({ onDismiss, captureScreenshot }: Land
     return () => { stageTimerRef.current.forEach(clearTimeout); };
   }, []);
 
-  // Capture contextual 3D screenshots — each episode gets its own framing and zone highlights
+  // Capture contextual 3D screenshots — staggered to avoid blocking the main thread.
+  // Skip entirely while live LiDAR tracks are active (competes with mesh sync + GPU).
   const [captureAttempt, setCaptureAttempt] = useState(0);
   useEffect(() => {
     if (!captureScreenshot || episodes.length === 0 || screenshots.size > 0) return;
     if (captureAttempt >= 5) return;
+    if (tracksRef.current.size > 0) {
+      console.log('[Landing] Skipping screenshots — live tracks active (', tracksRef.current.size, ')');
+      return;
+    }
     const delay = captureAttempt === 0 ? 3000 : 2000;
     console.log('[Landing] Screenshot attempt', captureAttempt + 1, '- delay', delay);
-    const timer = setTimeout(() => {
+    let cancelled = false;
+    const timer = setTimeout(async () => {
+      if (cancelled || tracksRef.current.size > 0) return;
       const m = new Map<string, string>();
       const vcx = venue ? (venue.width || 10) / 2 : 5;
       const vcz = venue ? (venue.depth || 10) / 2 : 5;
-      episodes.slice(0, 10).forEach((ep, idx) => {
-        // Build zone data for this episode's highlights
+      const batch = episodes.slice(0, 10);
+      for (let idx = 0; idx < batch.length; idx++) {
+        if (cancelled || tracksRef.current.size > 0) break;
+        await new Promise<void>(r => requestAnimationFrame(() => requestAnimationFrame(() => r())));
+        const ep = batch[idx];
         const zones = (ep.highlight_zones || [])
           .filter(z => z.vertices && z.vertices.length >= 3)
           .map(z => ({ vertices: z.vertices, color: z.color || ep.color }));
-        // Fallback centroid if no zones
         const c = zoneCentroid(ep.highlight_zones);
         const tX = (c.x === 0 && c.z === 0) ? vcx : c.x;
         const tZ = (c.x === 0 && c.z === 0) ? vcz : c.z;
-        // Unique angle per episode for visual variety
-        const angle = (idx / Math.max(episodes.length, 1)) * Math.PI * 2;
-        // Extract frozen-moment track positions from episode data
+        const angle = (idx / Math.max(batch.length, 1)) * Math.PI * 2;
         const trackPositions: Array<{ x: number; z: number; color?: number }> = [];
         if (ep.track_positions) {
           const epMidTs = ((ep.replay_window?.start || 0) + (ep.replay_window?.end || 0)) / 2;
           Object.values(ep.track_positions).forEach(positions => {
             if (positions.length === 0) return;
-            // Find position closest to the episode midpoint
             let closest = positions[0];
             let minDist = Math.abs(positions[0].timestamp - epMidTs);
             for (const p of positions) {
@@ -219,7 +227,7 @@ export default function LandingExperience({ onDismiss, captureScreenshot }: Land
           trackPositions: trackPositions.length > 0 ? trackPositions : undefined,
         });
         if (url && url.length > 5000) m.set(ep.episode_id, url);
-      });
+      }
       console.log('[Landing] Captured', m.size, 'screenshots (attempt', captureAttempt + 1, ')');
       if (m.size > 0) {
         setScreenshots(m);
@@ -227,8 +235,8 @@ export default function LandingExperience({ onDismiss, captureScreenshot }: Land
         setCaptureAttempt(prev => prev + 1);
       }
     }, delay);
-    return () => clearTimeout(timer);
-  }, [captureScreenshot, episodes, screenshots.size, venue, captureAttempt]);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [captureScreenshot, episodes, screenshots.size, venue, captureAttempt, tracksRef]);
 
   // Auto-advance slideshow
   useEffect(() => {

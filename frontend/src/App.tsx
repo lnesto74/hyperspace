@@ -1,6 +1,6 @@
 import { VenueProvider } from './context/VenueContext'
 import { LidarProvider } from './context/LidarContext'
-import { TrackingProvider } from './context/TrackingContext'
+import { TrackingProvider, useTracking } from './context/TrackingContext'
 import { ToastProvider } from './context/ToastContext'
 import { RoiProvider, useRoi } from './context/RoiContext'
 import { HeatmapProvider } from './context/HeatmapContext'
@@ -416,10 +416,16 @@ function KPIOverlayToggle() {
 
 function MainApp() {
   const { venue, loadVenue } = useVenue()
+  const { setInterpolation } = useTracking()
   const [viewMode, setViewModeInternal] = useState<ViewMode>('main')
   const [showLanding, setShowLanding] = useState(true)
   const [launchPadOpen, setLaunchPadOpen] = useState(false)
   const [neuralDashboardEnabled, setNeuralDashboardEnabled] = useState(false)
+
+  // Landing overlay runs heavy screenshot captures — defer 30fps interp until dismissed.
+  useEffect(() => {
+    setInterpolation(!showLanding)
+  }, [showLanding, setInterpolation])
   
   // FLOW-DEBUG: Wrap setViewMode to log navigation
   const setViewMode = (newMode: ViewMode) => {

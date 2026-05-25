@@ -697,12 +697,6 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
     }
   }, [])
 
-  // Smooth 30fps motion for live edge only (not MQTT file replay or historical timeline).
-  useEffect(() => {
-    setInterpolation(true)
-    return () => setInterpolation(false)
-  }, [setInterpolation])
-
   const setTrackVisibility = useCallback((visible: boolean) => {
     socketRef.current?.emit('track_visibility', { visible })
   }, [])
