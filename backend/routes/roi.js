@@ -73,7 +73,7 @@ export default function createRoiRoutes(db) {
   // Create a new ROI (manual mode - no dwgLayoutId)
   router.post('/venues/:venueId/roi', (req, res) => {
     try {
-      const { name, vertices, color, opacity } = req.body;
+      const { name, vertices, color, opacity, metadata } = req.body;
       
       if (!name || !vertices || vertices.length < 3) {
         return res.status(400).json({ error: 'Name and at least 3 vertices required' });
@@ -88,6 +88,7 @@ export default function createRoiRoutes(db) {
         vertices,
         color: color || '#f59e0b',
         opacity: opacity ?? 0.5,
+        metadata: metadata ?? null,
         createdAt: now,
         updatedAt: now,
       };
@@ -103,7 +104,7 @@ export default function createRoiRoutes(db) {
   // Create a new ROI for DWG layout
   router.post('/venues/:venueId/dwg/:dwgLayoutId/roi', (req, res) => {
     try {
-      const { name, vertices, color, opacity } = req.body;
+      const { name, vertices, color, opacity, metadata } = req.body;
       const { dwgLayoutId } = req.params;
       
       if (!name || !vertices || vertices.length < 3) {
@@ -119,6 +120,7 @@ export default function createRoiRoutes(db) {
         vertices,
         color: color || '#f59e0b',
         opacity: opacity ?? 0.5,
+        metadata: metadata ?? null,
         createdAt: now,
         updatedAt: now,
       };
@@ -181,13 +183,14 @@ export default function createRoiRoutes(db) {
         return res.status(404).json({ error: 'ROI not found' });
       }
 
-      const { name, vertices, color, opacity } = req.body;
+      const { name, vertices, color, opacity, metadata } = req.body;
       
       const updated = {
         name: name ?? existing.name,
         vertices: vertices ?? existing.vertices,
         color: color ?? existing.color,
         opacity: opacity ?? existing.opacity,
+        metadata: metadata !== undefined ? metadata : existing.metadata,
       };
 
       if (updated.vertices.length < 3) {

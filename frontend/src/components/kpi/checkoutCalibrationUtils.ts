@@ -28,6 +28,7 @@ export interface PreviewRoiLike {
   vertices: { x: number; z: number }[]
   color: string
   opacity?: number
+  metadata?: Record<string, unknown>
 }
 
 export const DEFAULT_ZONE_CALIBRATION: ZoneCalibration = {

@@ -12,6 +12,7 @@ import {
   extractCheckoutCalibration,
   sortFixtures,
   regionsToPreviewRois,
+  PreviewRoiLike,
 } from './checkoutCalibrationUtils'
 import {
   ShelfCalibration,
@@ -20,6 +21,16 @@ import {
   extractShelfCalibration,
   regionsToPreviewShelfRois,
 } from './shelfCalibrationUtils'
+import {
+  buildShelfRoiMetadata,
+  copyZoneCalibrationToSimilarRois,
+  countUnsavedShelfRois,
+  isPersistedShelfRoiId,
+  parseShelfRoiFixtureId,
+  parseShelfRoiZoneType,
+  resolveFixtureForShelfRoi,
+  ShelfRoiSaveStatus,
+} from './shelfZoneEditorUtils'
 import { generateCalibratedShelfPreviewRois, computeExcludedShelfTemplateRois, filterExcludedShelfTemplateRois } from './calibrationPreviewUtils'
 import {
   RetailCategoryOption,
@@ -75,8 +86,9 @@ interface PreviewRoi {
   name: string
   vertices: { x: number; z: number }[]
   color: string
-  opacity: number
+  opacity?: number
   roiType?: string // e.g., 'service', 'queue', 'browse', 'engagement'
+  metadata?: Record<string, unknown>
 }
 
 interface RoiDimensionConfig {
@@ -234,7 +246,7 @@ function MiniRoiPreview({ rois, fixtures, zoomed, isPanning, panOffset, onPanSta
 
 export default function SmartKpiModal({ isOpen, onClose, dwgLayoutId: propDwgLayoutId }: SmartKpiModalProps) {
   const { venue } = useVenue()
-  const { loadRegions, regions } = useRoi()
+  const { loadRegions, regions, createRegion, updateRegion, deleteRegion } = useRoi()
   
   const [loading, setLoading] = useState(false)
   const [analyzing, setAnalyzing] = useState(false)
@@ -260,6 +272,8 @@ export default function SmartKpiModal({ isOpen, onClose, dwgLayoutId: propDwgLay
   const [hasExistingCheckoutZones, setHasExistingCheckoutZones] = useState(false)
   const [hasExistingShelfZones, setHasExistingShelfZones] = useState(false)
   const [deletingShelfZones, setDeletingShelfZones] = useState(false)
+  const [creatingAllShelfZones, setCreatingAllShelfZones] = useState(false)
+  const [roiSaveStatus, setRoiSaveStatus] = useState<Record<string, ShelfRoiSaveStatus>>({})
   const [shelfCustomZones, setShelfCustomZones] = useState<ShelfCustomZone[]>([])
   const [excludedShelfTemplateRoiIds, setExcludedShelfTemplateRoiIds] = useState<string[]>([])
   const [retailCategories, setRetailCategories] = useState<RetailCategoryOption[]>([])
@@ -571,14 +585,130 @@ export default function SmartKpiModal({ isOpen, onClose, dwgLayoutId: propDwgLay
     return sortFixtures(Array.from(byId.values()))
   }, [availableTemplates, shelfFixtures])
 
-  const activeShelfTemplateRoiCount = useMemo(() => {
-    if (selectedTemplate !== 'shelf-engagement') return 0
-    const colors = { left: '#a855f7', right: '#f59e0b' }
-    const all = shelfFixtures.length > 0
-      ? generateCalibratedShelfPreviewRois(shelfFixtures, shelfCalibration, colors)
-      : previewRois
-    return filterExcludedShelfTemplateRois(all, excludedShelfTemplateRoiIds).length
-  }, [selectedTemplate, shelfFixtures, shelfCalibration, previewRois, excludedShelfTemplateRoiIds])
+  const activeShelfTemplateRoiCount = previewRois.length
+
+  const unsavedShelfRoiCount = useMemo(
+    () => countUnsavedShelfRois(previewRois),
+    [previewRois],
+  )
+
+  const persistShelfTemplateRoi = useCallback(async (roiId: string, roisSnapshot?: PreviewRoi[]) => {
+    if (!venue?.id) return
+    const rois = roisSnapshot ?? previewRois
+    const roi = rois.find(r => r.id === roiId)
+    if (!roi) return
+
+    setRoiSaveStatus(s => ({ ...s, [roiId]: 'saving' }))
+    try {
+      if (isPersistedShelfRoiId(roiId)) {
+        await updateRegion(roiId, { vertices: roi.vertices })
+        setRoiSaveStatus(s => ({ ...s, [roiId]: 'saved' }))
+        return
+      }
+
+      const fixture = resolveFixtureForShelfRoi(roi, shelfFixtures)
+      if (!fixture) throw new Error('Missing fixture for zone')
+      const zoneType = parseShelfRoiZoneType(roi)
+      const metadata = buildShelfRoiMetadata(fixture, shelfFixtures, zoneType)
+      const created = await createRegion(
+        venue.id,
+        roi.name,
+        roi.vertices,
+        roi.color,
+        dwgLayoutId,
+        { opacity: roi.opacity ?? 0.3, metadata },
+      )
+      if (!created) throw new Error('Failed to create zone')
+
+      setPreviewRois(prev => prev.map(r => (
+        r.id === roiId ? { ...r, id: created.id, metadata } : r
+      )))
+      setRoiSaveStatus(s => {
+        const next = { ...s, [created.id]: 'saved' as const }
+        delete next[roiId]
+        return next
+      })
+      setHasExistingShelfZones(true)
+    } catch {
+      setRoiSaveStatus(s => ({ ...s, [roiId]: 'error' }))
+    }
+  }, [venue?.id, previewRois, shelfFixtures, dwgLayoutId, updateRegion, createRegion])
+
+  const handlePreviewRoisChange = useCallback((rois: PreviewRoiLike[]) => {
+    setPreviewRois(rois as PreviewRoi[])
+  }, [])
+
+  const handleSaveTemplateRoi = useCallback((roiId: string) => {
+    void persistShelfTemplateRoi(roiId)
+  }, [persistShelfTemplateRoi])
+
+  const handleDeleteTemplateRois = useCallback(async (roiIds: string[]) => {
+    for (const id of roiIds) {
+      if (isPersistedShelfRoiId(id)) {
+        await deleteRegion(id)
+      }
+    }
+    setPreviewRois(prev => prev.filter(r => !roiIds.includes(r.id)))
+    setRoiSaveStatus(prev => {
+      const next = { ...prev }
+      for (const id of roiIds) delete next[id]
+      return next
+    })
+  }, [deleteRegion])
+
+  const handleCopyZoneToAllSimilar = useCallback(async (sourceRoiId: string) => {
+    const sourceRoi = previewRois.find(r => r.id === sourceRoiId)
+    if (!sourceRoi) return
+    const updated = copyZoneCalibrationToSimilarRois(sourceRoi, previewRois, shelfFixtures)
+    setPreviewRois(updated)
+    const zoneType = parseShelfRoiZoneType(sourceRoi)
+    for (const roi of updated) {
+      if (parseShelfRoiZoneType(roi) === zoneType) {
+        await persistShelfTemplateRoi(roi.id, updated)
+      }
+    }
+  }, [previewRois, shelfFixtures, persistShelfTemplateRoi])
+
+  const createAllShelfZonesInLayout = useCallback(async () => {
+    if (!venue?.id) return
+    setCreatingAllShelfZones(true)
+    setError(null)
+    try {
+      let working = [...previewRois]
+      const toSave = working.filter(r => !isPersistedShelfRoiId(r.id))
+      for (const roi of toSave) {
+        setRoiSaveStatus(s => ({ ...s, [roi.id]: 'saving' }))
+        const fixture = resolveFixtureForShelfRoi(roi, shelfFixtures)
+        if (!fixture) throw new Error(`Missing fixture for ${roi.name}`)
+        const zoneType = parseShelfRoiZoneType(roi)
+        const metadata = buildShelfRoiMetadata(fixture, shelfFixtures, zoneType)
+        const created = await createRegion(
+          venue.id,
+          roi.name,
+          roi.vertices,
+          roi.color,
+          dwgLayoutId,
+          { opacity: roi.opacity ?? 0.3, metadata },
+        )
+        if (!created) throw new Error(`Failed to save ${roi.name}`)
+        working = working.map(r => (r.id === roi.id ? { ...r, id: created.id, metadata } : r))
+        setPreviewRois(working)
+        setRoiSaveStatus(s => {
+          const next = { ...s, [created.id]: 'saved' as const }
+          delete next[roi.id]
+          return next
+        })
+      }
+      setHasExistingShelfZones(true)
+      await loadRegions(venue.id, dwgLayoutId)
+      setSuccess(`Saved ${toSave.length} shelf zone${toSave.length === 1 ? '' : 's'}`)
+      setTimeout(() => setSuccess(null), 2500)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to save all zones')
+    } finally {
+      setCreatingAllShelfZones(false)
+    }
+  }, [venue?.id, previewRois, shelfFixtures, dwgLayoutId, createRegion, loadRegions])
 
   const syncCalibrationFromPreview = useCallback((fixtureId: string, rois: PreviewRoi[]) => {
     if (!fixtureId || rois.length === 0) return
@@ -620,12 +750,27 @@ export default function SmartKpiModal({ isOpen, onClose, dwgLayoutId: propDwgLay
     calibrationInitializedRef.current = false
 
     if (selectedTemplate === 'shelf-engagement' && shelfFixtures.length > 0) {
+      if (previewRois.some(r => isPersistedShelfRoiId(r.id)) && !window.confirm('Reset all zones to auto-generated sizes? Saved zones will be updated in the layout.')) {
+        return
+      }
       const ref = shelfFixtures.find(f => f.id === referenceFixtureId) ?? shelfFixtures[0]
       const autoCal = computeAutoShelfCalibration(ref, shelfFixtures, engagementDepth)
       setShelfCalibration(autoCal)
       setExcludedShelfTemplateRoiIds([])
-      setPreviewRois(generateCalibratedShelfPreviewRois(shelfFixtures, autoCal, { left: '#a855f7', right: '#f59e0b' }))
+      const autoRois = generateCalibratedShelfPreviewRois(shelfFixtures, autoCal, { left: '#a855f7', right: '#f59e0b' })
+      const merged = autoRois.map(auto => {
+        const fixtureId = parseShelfRoiFixtureId(auto, shelfFixtures)
+        const zoneType = parseShelfRoiZoneType(auto)
+        const existing = previewRois.find(r => (
+          parseShelfRoiFixtureId(r, shelfFixtures) === fixtureId && parseShelfRoiZoneType(r) === zoneType
+        ))
+        return existing ? { ...auto, id: existing.id, metadata: existing.metadata } : auto
+      })
+      setPreviewRois(merged)
       calibrationInitializedRef.current = true
+      for (const roi of merged.filter(r => isPersistedShelfRoiId(r.id))) {
+        await persistShelfTemplateRoi(roi.id, merged)
+      }
       return
     }
 
@@ -886,9 +1031,10 @@ export default function SmartKpiModal({ isOpen, onClose, dwgLayoutId: propDwgLay
   const shelfZoneCount = isShelfEngagement
     ? activeShelfTemplateRoiCount + shelfCustomZones.length
     : previewRois.length + customZones.length
-  const shelfCalibrationReady = calibrationValidated || calibrationAppliedToAll
+  const shelfCalibrationReady = calibrationValidated || calibrationAppliedToAll || (isShelfEngagement && unsavedShelfRoiCount === 0 && previewRois.length > 0)
   const canGenerateShelf = isShelfEngagement && (
     shelfCustomZones.length > 0
+    || (unsavedShelfRoiCount > 0 && previewRois.length > 0)
     || (activeShelfTemplateRoiCount > 0 && (!requiresCalibration || shelfCalibrationReady))
   )
   const canGenerate = isShelfEngagement
@@ -1025,23 +1171,23 @@ export default function SmartKpiModal({ isOpen, onClose, dwgLayoutId: propDwgLay
               fixtures={shelfFixtures}
               mapFixtures={shelfMapFixtures}
               previewRois={previewRois}
-              excludedTemplateRoiIds={excludedShelfTemplateRoiIds}
-              calibration={shelfCalibration}
               customZones={shelfCustomZones}
               retailCategories={retailCategories}
               referenceFixtureId={referenceFixtureId || shelfFixtures[0]?.id || ''}
-              validated={calibrationValidated}
-              appliedToAll={calibrationAppliedToAll}
               isEditingExisting={hasExistingShelfZones}
               loading={loading}
               deleting={deletingShelfZones}
+              creatingAll={creatingAllShelfZones}
+              unsavedCount={unsavedShelfRoiCount}
+              roiSaveStatus={roiSaveStatus}
               onReferenceChange={handleReferenceFixtureChange}
-              onCalibrationChange={handleCalibrationChange}
-              onExcludedTemplateRoiIdsChange={setExcludedShelfTemplateRoiIds}
+              onPreviewRoisChange={handlePreviewRoisChange}
+              onSaveTemplateRoi={handleSaveTemplateRoi}
+              onDeleteTemplateRois={handleDeleteTemplateRois}
+              onCopyZoneToAllSimilar={handleCopyZoneToAllSimilar}
+              onCreateAllZones={createAllShelfZonesInLayout}
               onCustomZonesChange={setShelfCustomZones}
               onResetToAuto={handleResetToAuto}
-              onValidate={handleValidateCalibration}
-              onApplyToAll={handleApplyCalibrationToAll}
               onDeleteAll={deleteAllShelfZones}
             />
           ) : activeTab === 'adjust' ? (
@@ -1762,16 +1908,18 @@ export default function SmartKpiModal({ isOpen, onClose, dwgLayoutId: propDwgLay
             {error && availableTemplates.length > 0 && (
               <p className="text-sm text-red-400">{error}</p>
             )}
-            {requiresCalibration && previewRois.length > 0 && !calibrationValidated && !success && (
+            {requiresCalibration && previewRois.length > 0 && !calibrationValidated && !success && !isShelfEngagement && (
               <p className="text-xs text-amber-400">
                 {hasExistingZones
                   ? `Adjust parameters, apply preview, then validate to update ${isCashierQueue ? 'checkout' : 'shelf engagement'} zones`
                   : `Calibrate and validate ${isCashierQueue ? 'checkout' : 'shelf engagement'} zones before generating`}
               </p>
             )}
-            {requiresCalibration && hasExistingZones && calibrationValidated && !success && (
+            {isShelfEngagement && previewRois.length > 0 && !success && (
               <p className="text-xs text-green-400/80">
-                Editing existing {isCashierQueue ? 'checkout' : 'shelf engagement'} zones — Update will refresh all {isCashierQueue ? 'lanes' : 'shelves'}
+                {unsavedShelfRoiCount > 0
+                  ? `${unsavedShelfRoiCount} zone${unsavedShelfRoiCount === 1 ? '' : 's'} not saved yet — edit on the map to autosave each one`
+                  : 'All shelf zones saved — edit any zone on the map to update it instantly'}
               </p>
             )}
             {success && (
@@ -1790,27 +1938,51 @@ export default function SmartKpiModal({ isOpen, onClose, dwgLayoutId: propDwgLay
               Cancel
             </button>
             <button
-              onClick={generateRois}
+              onClick={() => {
+                if (isShelfEngagement && unsavedShelfRoiCount === 0 && shelfCustomZones.length === 0) {
+                  onClose()
+                } else if (isShelfEngagement && unsavedShelfRoiCount > 0 && shelfCustomZones.length === 0) {
+                  void createAllShelfZonesInLayout()
+                } else {
+                  void generateRois()
+                }
+              }}
               disabled={
                 !selectedTemplate
                 || generating
-                || !canGenerate
+                || creatingAllShelfZones
+                || (isShelfEngagement
+                  ? (unsavedShelfRoiCount === 0 && shelfCustomZones.length === 0 ? false : !canGenerateShelf)
+                  : !canGenerate)
               }
-              title={requiresCalibration && !shelfCalibrationReady && isShelfEngagement && activeShelfTemplateRoiCount > 0 && shelfCustomZones.length === 0
-                ? 'Apply or validate template on the Calibrate Shelves tab first'
+              title={requiresCalibration && !shelfCalibrationReady && isShelfEngagement && unsavedShelfRoiCount > 0 && shelfCustomZones.length === 0
+                ? 'Use Calibrate tab to save zones individually or create all at once'
                 : requiresCalibration && !calibrationValidated && isCashierQueue && previewRois.length > 0
                   ? 'Validate calibration on the Calibrate Checkout tab first'
                   : undefined}
               className={`px-4 py-2 text-sm font-medium rounded-lg flex items-center gap-2 transition-all ${
-                !selectedTemplate || generating || !canGenerate
+                !selectedTemplate || generating || creatingAllShelfZones
+                || (isShelfEngagement
+                  ? (unsavedShelfRoiCount === 0 && shelfCustomZones.length === 0 ? false : !canGenerateShelf)
+                  : !canGenerate)
                   ? 'bg-gray-700 text-gray-500 cursor-not-allowed'
                   : 'bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-500 hover:to-blue-500 text-white'
               }`}
             >
-              {generating ? (
+              {generating || creatingAllShelfZones ? (
                 <>
                   <Loader2 className="w-4 h-4 animate-spin" />
-                  Generating...
+                  {creatingAllShelfZones ? 'Saving zones...' : 'Generating...'}
+                </>
+              ) : isShelfEngagement && unsavedShelfRoiCount === 0 && shelfCustomZones.length === 0 ? (
+                <>
+                  <Check className="w-4 h-4" />
+                  Done
+                </>
+              ) : isShelfEngagement && unsavedShelfRoiCount > 0 ? (
+                <>
+                  <Zap className="w-4 h-4" />
+                  Create all {unsavedShelfRoiCount} zones
                 </>
               ) : (
                 <>

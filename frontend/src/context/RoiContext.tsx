@@ -19,7 +19,7 @@ interface RoiContextType {
   setHoveredRoiId: (roiId: string | null) => void
   toggleRoiVisibility: (roiId: string) => void
   isRoiVisible: (roiId: string) => boolean
-  createRegion: (venueId: string, name: string, vertices: Vector2[], color?: string, dwgLayoutId?: string | null) => Promise<RegionOfInterest | null>
+  createRegion: (venueId: string, name: string, vertices: Vector2[], color?: string, dwgLayoutId?: string | null, options?: { opacity?: number; metadata?: Record<string, unknown> }) => Promise<RegionOfInterest | null>
   updateRegion: (id: string, updates: Partial<RegionOfInterest>) => Promise<void>
   updateRegionVerticesLocal: (id: string, vertices: Vector2[]) => void
   deleteRegion: (id: string) => Promise<void>
@@ -133,10 +133,10 @@ export function RoiProvider({ children }: { children: ReactNode }) {
     name: string, 
     vertices: Vector2[], 
     color?: string,
-    dwgLayoutId?: string | null
+    dwgLayoutId?: string | null,
+    options?: { opacity?: number; metadata?: Record<string, unknown> },
   ): Promise<RegionOfInterest | null> => {
     try {
-      // Use different endpoint for DWG vs manual mode
       const url = dwgLayoutId
         ? `${API_BASE}/api/venues/${venueId}/dwg/${dwgLayoutId}/roi`
         : `${API_BASE}/api/venues/${venueId}/roi`
@@ -148,7 +148,8 @@ export function RoiProvider({ children }: { children: ReactNode }) {
           name,
           vertices,
           color: color || ROI_COLORS[regions.length % ROI_COLORS.length],
-          opacity: 0.5,
+          opacity: options?.opacity ?? 0.5,
+          metadata: options?.metadata,
         }),
       })
       if (!res.ok) throw new Error('Failed to create region')

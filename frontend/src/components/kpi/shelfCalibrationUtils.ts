@@ -142,16 +142,4 @@ export function isShelfZoneRoiName(name: string): boolean {
   return / - Engagement \((Left|Right|Front)\)$/.test(name)
 }
 
-export function regionsToPreviewShelfRois(
-  regions: { id: string; name: string; vertices: { x: number; z: number }[]; color: string; opacity?: number }[],
-): PreviewRoiLike[] {
-  return regions
-    .filter(r => isShelfZoneRoiName(r.name))
-    .map(r => ({
-      id: r.id,
-      name: r.name,
-      vertices: r.vertices,
-      color: r.color,
-      opacity: r.opacity ?? 0.3,
-    }))
-}
+export { regionsToPreviewShelfRois } from './shelfZoneEditorUtils'
