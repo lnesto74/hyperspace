@@ -131,41 +131,43 @@ function computeAxesFromFootprint(
   }
 }
 
-export function getFixtureFootprintBounds(fixture: FixtureInfo) {
+export function getFixtureFootprintPoints(fixture: FixtureInfo): { x: number; z: number }[] {
   if (fixture.footprintPoints && fixture.footprintPoints.length >= 3) {
-    const xs = fixture.footprintPoints.map(p => p.x)
-    const zs = fixture.footprintPoints.map(p => p.z)
-    return {
-      minX: Math.min(...xs),
-      maxX: Math.max(...xs),
-      minZ: Math.min(...zs),
-      maxZ: Math.max(...zs),
-    }
+    return fixture.footprintPoints
   }
-  const hw = (fixture.scale?.x ?? 1.5) / 2
-  const hd = (fixture.scale?.z ?? 0.8) / 2
+  const cx = fixture.position.x
+  const cz = fixture.position.z
+  const hw = (fixture.scale?.x ?? 2) / 2
+  const hd = (fixture.scale?.z ?? 0.5) / 2
+  const rotY = fixture.rotation?.y ?? 0
+  const cos = Math.cos(rotY)
+  const sin = Math.sin(rotY)
+  const local = [
+    { x: -hw, z: -hd },
+    { x: hw, z: -hd },
+    { x: hw, z: hd },
+    { x: -hw, z: hd },
+  ]
+  return local.map(c => ({
+    x: cx + c.x * cos - c.z * sin,
+    z: cz + c.x * sin + c.z * cos,
+  }))
+}
+
+export function getFixtureFootprintBounds(fixture: FixtureInfo) {
+  const points = getFixtureFootprintPoints(fixture)
+  const xs = points.map(p => p.x)
+  const zs = points.map(p => p.z)
   return {
-    minX: fixture.position.x - hw,
-    maxX: fixture.position.x + hw,
-    minZ: fixture.position.z - hd,
-    maxZ: fixture.position.z + hd,
+    minX: Math.min(...xs),
+    maxX: Math.max(...xs),
+    minZ: Math.min(...zs),
+    maxZ: Math.max(...zs),
   }
 }
 
 export function getFixtureOutlinePoints(fixture: FixtureInfo): { x: number; z: number }[] {
-  if (fixture.footprintPoints && fixture.footprintPoints.length >= 3) {
-    return fixture.footprintPoints
-  }
-  const hw = (fixture.scale?.x ?? 1.5) / 2
-  const hd = (fixture.scale?.z ?? 0.8) / 2
-  const cx = fixture.position.x
-  const cz = fixture.position.z
-  return [
-    { x: cx - hw, z: cz - hd },
-    { x: cx + hw, z: cz - hd },
-    { x: cx + hw, z: cz + hd },
-    { x: cx - hw, z: cz + hd },
-  ]
+  return getFixtureFootprintPoints(fixture)
 }
 
 function getRowFacingDefaults(allFixtures?: FixtureInfo[]) {
@@ -191,6 +193,11 @@ export function getFixtureAxes(fixture: FixtureInfo, allFixtures?: FixtureInfo[]
 
   if (fixture.footprintPoints && fixture.footprintPoints.length >= 3) {
     return computeAxesFromFootprint(fixture.footprintPoints, fixture.position, defaultFacingX, defaultFacingZ)
+  }
+
+  const orientedPoints = getFixtureFootprintPoints(fixture)
+  if (orientedPoints.length >= 3) {
+    return computeAxesFromFootprint(orientedPoints, fixture.position, defaultFacingX, defaultFacingZ)
   }
 
   const rotY = fixture.rotation?.y ?? 0
@@ -260,23 +267,23 @@ export function getShelfZoneRotation(axes: { alongX: number; alongZ: number }, r
   return Math.atan2(axes.alongZ, axes.alongX) + (rotationOffsetDeg * Math.PI / 180)
 }
 
-export function getFootprintExtents(fixture: FixtureInfo, axes: ReturnType<typeof getFixtureAxes>) {
-  const cx = fixture.position.x
-  const cz = fixture.position.z
-  let points: { x: number; z: number }[]
-  if (fixture.footprintPoints && fixture.footprintPoints.length >= 3) {
-    points = fixture.footprintPoints
-  } else {
-    const hw = (fixture.scale?.x ?? 2) / 2
-    const hd = (fixture.scale?.z ?? 0.5) / 2
-    points = [
-      { x: cx - hw, z: cz - hd },
-      { x: cx + hw, z: cz - hd },
-      { x: cx + hw, z: cz + hd },
-      { x: cx - hw, z: cz + hd },
-    ]
+function swapShelfAxes(axes: ReturnType<typeof getFixtureAxes>) {
+  return {
+    ...axes,
+    alongX: axes.fromX,
+    alongZ: axes.fromZ,
+    fromX: -axes.alongX,
+    fromZ: -axes.alongZ,
   }
+}
 
+function projectFootprintExtents(
+  points: { x: number; z: number }[],
+  origin: { x: number; z: number },
+  axes: ReturnType<typeof getFixtureAxes>,
+) {
+  const cx = origin.x
+  const cz = origin.z
   let minAlong = Infinity
   let maxAlong = -Infinity
   let minFrom = Infinity
@@ -289,7 +296,6 @@ export function getFootprintExtents(fixture: FixtureInfo, axes: ReturnType<typeo
     minFrom = Math.min(minFrom, from)
     maxFrom = Math.max(maxFrom, from)
   }
-
   return {
     alongLen: Math.max(0.5, maxAlong - minAlong),
     fromLen: Math.max(0.3, maxFrom - minFrom),
@@ -299,6 +305,22 @@ export function getFootprintExtents(fixture: FixtureInfo, axes: ReturnType<typeo
     maxFrom,
     centerAlong: (minAlong + maxAlong) / 2,
   }
+}
+
+export function getShelfAxesAndExtents(fixture: FixtureInfo, allFixtures?: FixtureInfo[]) {
+  const points = getFixtureFootprintPoints(fixture)
+  let axes = getFixtureAxes(fixture, allFixtures)
+  let ext = projectFootprintExtents(points, fixture.position, axes)
+  if (ext.fromLen > ext.alongLen + 0.05) {
+    axes = swapShelfAxes(axes)
+    ext = projectFootprintExtents(points, fixture.position, axes)
+  }
+  return { axes, ext }
+}
+
+export function getFootprintExtents(fixture: FixtureInfo, axes: ReturnType<typeof getFixtureAxes>) {
+  const points = getFixtureFootprintPoints(fixture)
+  return projectFootprintExtents(points, fixture.position, axes)
 }
 
 export function extractZoneCalibration(

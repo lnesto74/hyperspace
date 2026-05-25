@@ -3,12 +3,13 @@ import {
   PreviewRoiLike,
   ZoneCalibration,
   extractZoneCalibration,
-  getFixtureAxes,
-  getFootprintExtents,
+  getShelfAxesAndExtents,
   sortFixtures,
 } from './checkoutCalibrationUtils'
 
 export type { FixtureInfo, PreviewRoiLike, ZoneCalibration }
+
+export type ShelfEngagementZoneType = 'left' | 'right' | 'front'
 
 export interface ShelfCalibration {
   left: ZoneCalibration
@@ -22,13 +23,52 @@ export const DEFAULT_SHELF_CALIBRATION: ShelfCalibration = {
   right: { width: 4, depth: DEFAULT_SHELF_ENGAGEMENT_DEPTH, alongCounter: 0, fromCounter: 1.25, rotationOffset: 0 },
 }
 
+export function isSingleFrontEngagementFixture(fixture: FixtureInfo): boolean {
+  const type = (fixture.type || '').toLowerCase()
+  const name = (fixture.name || '').toLowerCase()
+  if (type === 'fridge' || type === 'freezer') return true
+  return ['frigo', 'fridge', 'freezer', 'refriger', 'congel'].some(
+    hint => name.includes(hint) || type.includes(hint),
+  )
+}
+
+export function getFixtureEngagementZoneTypes(fixture: FixtureInfo): ShelfEngagementZoneType[] {
+  if (isSingleFrontEngagementFixture(fixture)) return ['front']
+  return ['left', 'right']
+}
+
+export function getAutoZoneCalibrationForType(
+  ext: ReturnType<typeof getShelfAxesAndExtents>['ext'],
+  zoneType: ShelfEngagementZoneType,
+  engagementDepth = DEFAULT_SHELF_ENGAGEMENT_DEPTH,
+): ZoneCalibration {
+  if (zoneType === 'front') {
+    return {
+      width: ext.alongLen,
+      depth: engagementDepth,
+      alongCounter: ext.centerAlong,
+      fromCounter: ext.maxFrom + engagementDepth / 2,
+      rotationOffset: 0,
+    }
+  }
+  const fromCounter = zoneType === 'left'
+    ? ext.minFrom - engagementDepth / 2
+    : ext.maxFrom + engagementDepth / 2
+  return {
+    width: ext.alongLen,
+    depth: engagementDepth,
+    alongCounter: ext.centerAlong,
+    fromCounter,
+    rotationOffset: 0,
+  }
+}
+
 export function computeAutoShelfCalibration(
   fixture: FixtureInfo,
   fixtures: FixtureInfo[],
   engagementDepth = DEFAULT_SHELF_ENGAGEMENT_DEPTH,
 ): ShelfCalibration {
-  const axes = getFixtureAxes(fixture, fixtures)
-  const ext = getFootprintExtents(fixture, axes)
+  const { ext } = getShelfAxesAndExtents(fixture, fixtures)
   const leftFrom = ext.minFrom - engagementDepth / 2
   const rightFrom = ext.maxFrom + engagementDepth / 2
   const base = {
@@ -51,7 +91,8 @@ export function getShelfNumber(fixtureId: string, fixtures: FixtureInfo[]): numb
   return idx >= 0 ? idx + 1 : 1
 }
 
-export function getShelfEngagementLabel(zoneType: 'left' | 'right'): string {
+export function getShelfEngagementLabel(zoneType: ShelfEngagementZoneType): string {
+  if (zoneType === 'front') return 'Front'
   return zoneType === 'left' ? 'Left' : 'Right'
 }
 
@@ -59,8 +100,11 @@ export function findRoiForShelf(
   previewRois: PreviewRoiLike[],
   fixtures: FixtureInfo[],
   fixtureId: string,
-  zoneType: 'left' | 'right',
+  zoneType: ShelfEngagementZoneType,
 ): PreviewRoiLike | undefined {
+  const byId = previewRois.find(r => r.id === `${fixtureId}::${zoneType}`)
+  if (byId) return byId
+
   const shelfNumber = getShelfNumber(fixtureId, fixtures)
   const label = getShelfEngagementLabel(zoneType)
   const byNum = previewRois.find(r => r.name === `Shelf ${shelfNumber} - Engagement (${label})`)
@@ -95,7 +139,7 @@ export function extractShelfCalibration(
 }
 
 export function isShelfZoneRoiName(name: string): boolean {
-  return / - Engagement \((Left|Right)\)$/.test(name)
+  return / - Engagement \((Left|Right|Front)\)$/.test(name)
 }
 
 export function regionsToPreviewShelfRois(

@@ -1,6 +1,21 @@
 import { Router } from 'express';
 import SmartKpiService from '../services/SmartKpiService.js';
 
+function applyExcludedShelfTemplateZones(rois, excludedIds, templateId) {
+  if (templateId !== 'shelf-engagement' || !Array.isArray(excludedIds) || excludedIds.length === 0) {
+    return rois;
+  }
+  const excluded = new Set(excludedIds);
+  return rois.filter(roi => {
+    const meta = roi.metadata || {};
+    if (meta.zoneType === 'custom') return true;
+    if (meta.template && meta.template !== 'shelf-engagement') return true;
+    const key = meta.shelfId && meta.zoneType ? `${meta.shelfId}::${meta.zoneType}` : null;
+    if (key && excluded.has(key)) return false;
+    return true;
+  });
+}
+
 export default function createSmartKpiRoutes(db) {
   const router = Router();
   const smartKpiService = new SmartKpiService(db);
@@ -70,6 +85,7 @@ export default function createSmartKpiRoutes(db) {
       // Combine generated ROIs with custom zones if provided
       // Custom zones need to be PROPAGATED to all fixtures of the same type
       let allRois = [...result.generatedRois];
+      allRois = applyExcludedShelfTemplateZones(allRois, options.excludedShelfTemplateZones, templateId);
       if (options.customZones && Array.isArray(options.customZones) && options.customZones.length > 0) {
         // Group generated ROIs by fixture (e.g., "Cashier 1", "Cashier 2")
         const fixtureGroups = {};
@@ -228,6 +244,7 @@ export default function createSmartKpiRoutes(db) {
       
       // Combine generated ROIs with custom zones if provided
       let allRois = [...(result.generatedRois || [])];
+      allRois = applyExcludedShelfTemplateZones(allRois, options.excludedShelfTemplateZones, templateId);
       if (options.customZones && Array.isArray(options.customZones) && options.customZones.length > 0 && result.generatedRois?.length) {
         // Group generated ROIs by fixture (e.g., "Cashier 1", "Cashier 2")
         // ROI names follow pattern: "Cashier 1 - Service", "Cashier 1 - Queue"

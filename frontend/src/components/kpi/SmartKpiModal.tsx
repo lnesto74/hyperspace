@@ -20,7 +20,7 @@ import {
   extractShelfCalibration,
   regionsToPreviewShelfRois,
 } from './shelfCalibrationUtils'
-import { generateCalibratedShelfPreviewRois } from './calibrationPreviewUtils'
+import { generateCalibratedShelfPreviewRois, computeExcludedShelfTemplateRois, filterExcludedShelfTemplateRois } from './calibrationPreviewUtils'
 import {
   RetailCategoryOption,
   regionsToShelfCustomZones,
@@ -261,6 +261,7 @@ export default function SmartKpiModal({ isOpen, onClose, dwgLayoutId: propDwgLay
   const [hasExistingShelfZones, setHasExistingShelfZones] = useState(false)
   const [deletingShelfZones, setDeletingShelfZones] = useState(false)
   const [shelfCustomZones, setShelfCustomZones] = useState<ShelfCustomZone[]>([])
+  const [excludedShelfTemplateRoiIds, setExcludedShelfTemplateRoiIds] = useState<string[]>([])
   const [retailCategories, setRetailCategories] = useState<RetailCategoryOption[]>([])
   const calibrationInitializedRef = useRef(false)
   const existingCheckoutLoadedRef = useRef(false)
@@ -367,6 +368,7 @@ export default function SmartKpiModal({ isOpen, onClose, dwgLayoutId: propDwgLay
       setHasExistingShelfZones(false)
       setShelfCalibration(DEFAULT_SHELF_CALIBRATION)
       setShelfCustomZones([])
+      setExcludedShelfTemplateRoiIds([])
       calibrationInitializedRef.current = false
       existingCheckoutLoadedRef.current = false
       existingShelfLoadedRef.current = false
@@ -491,7 +493,13 @@ export default function SmartKpiModal({ isOpen, onClose, dwgLayoutId: propDwgLay
   const handleDepthChange = (newDepth: number) => {
     setEngagementDepth(newDepth)
     if (selectedTemplate === 'shelf-engagement') {
-      previewTemplate(selectedTemplate, newDepth, roiDimensions, null, null)
+      previewTemplate(
+        selectedTemplate,
+        newDepth,
+        roiDimensions,
+        null,
+        calibrationAppliedToAll ? shelfCalibration : null,
+      )
     }
   }
   
@@ -513,8 +521,8 @@ export default function SmartKpiModal({ isOpen, onClose, dwgLayoutId: propDwgLay
         selectedTemplate,
         selectedTemplate === 'shelf-engagement' ? engagementDepth : undefined,
         roiDimensions,
-        null,
-        null,
+        selectedTemplate === 'cashier-queue' && calibrationAppliedToAll ? checkoutCalibration : null,
+        selectedTemplate === 'shelf-engagement' && calibrationAppliedToAll ? shelfCalibration : null,
       )
     }
   }
@@ -563,6 +571,15 @@ export default function SmartKpiModal({ isOpen, onClose, dwgLayoutId: propDwgLay
     return sortFixtures(Array.from(byId.values()))
   }, [availableTemplates, shelfFixtures])
 
+  const activeShelfTemplateRoiCount = useMemo(() => {
+    if (selectedTemplate !== 'shelf-engagement') return 0
+    const colors = { left: '#a855f7', right: '#f59e0b' }
+    const all = shelfFixtures.length > 0
+      ? generateCalibratedShelfPreviewRois(shelfFixtures, shelfCalibration, colors)
+      : previewRois
+    return filterExcludedShelfTemplateRois(all, excludedShelfTemplateRoiIds).length
+  }, [selectedTemplate, shelfFixtures, shelfCalibration, previewRois, excludedShelfTemplateRoiIds])
+
   const syncCalibrationFromPreview = useCallback((fixtureId: string, rois: PreviewRoi[]) => {
     if (!fixtureId || rois.length === 0) return
     if (selectedTemplate === 'cashier-queue' && cashierFixtures.length > 0) {
@@ -606,6 +623,7 @@ export default function SmartKpiModal({ isOpen, onClose, dwgLayoutId: propDwgLay
       const ref = shelfFixtures.find(f => f.id === referenceFixtureId) ?? shelfFixtures[0]
       const autoCal = computeAutoShelfCalibration(ref, shelfFixtures, engagementDepth)
       setShelfCalibration(autoCal)
+      setExcludedShelfTemplateRoiIds([])
       setPreviewRois(generateCalibratedShelfPreviewRois(shelfFixtures, autoCal, { left: '#a855f7', right: '#f59e0b' }))
       calibrationInitializedRef.current = true
       return
@@ -623,9 +641,11 @@ export default function SmartKpiModal({ isOpen, onClose, dwgLayoutId: propDwgLay
       await previewWithCalibration(checkoutCalibration, null)
     } else if (selectedTemplate === 'shelf-engagement') {
       if (shelfFixtures.length > 0) {
-        setPreviewRois(generateCalibratedShelfPreviewRois(shelfFixtures, shelfCalibration, { left: '#a855f7', right: '#f59e0b' }))
+        setPreviewRois(filterExcludedShelfTemplateRois(
+          generateCalibratedShelfPreviewRois(shelfFixtures, shelfCalibration, { left: '#a855f7', right: '#f59e0b' }),
+          excludedShelfTemplateRoiIds,
+        ))
       }
-      await previewWithCalibration(null, shelfCalibration)
     }
     setCalibrationAppliedToAll(true)
     setCalibrationValidated(true)
@@ -633,9 +653,12 @@ export default function SmartKpiModal({ isOpen, onClose, dwgLayoutId: propDwgLay
 
   const handleApplyCalibrationToAll = async () => {
     setCalibrationAppliedToAll(true)
+    setCalibrationValidated(true)
     if (selectedTemplate === 'shelf-engagement' && shelfFixtures.length > 0) {
-      setPreviewRois(generateCalibratedShelfPreviewRois(shelfFixtures, shelfCalibration, { left: '#a855f7', right: '#f59e0b' }))
-      await previewWithCalibration(null, shelfCalibration)
+      setPreviewRois(filterExcludedShelfTemplateRois(
+        generateCalibratedShelfPreviewRois(shelfFixtures, shelfCalibration, { left: '#a855f7', right: '#f59e0b' }),
+        excludedShelfTemplateRoiIds,
+      ))
     } else if (selectedTemplate === 'cashier-queue') {
       await previewWithCalibration(checkoutCalibration, null)
     }
@@ -660,6 +683,7 @@ export default function SmartKpiModal({ isOpen, onClose, dwgLayoutId: propDwgLay
       await loadRegions(venue.id, dwgLayoutId)
       setPreviewRois([])
       setShelfCustomZones([])
+      setExcludedShelfTemplateRoiIds([])
       setHasExistingShelfZones(false)
       setCalibrationValidated(false)
       setCalibrationAppliedToAll(false)
@@ -681,6 +705,7 @@ export default function SmartKpiModal({ isOpen, onClose, dwgLayoutId: propDwgLay
       setShelfCalibration(calibration as ShelfCalibration)
     }
     setCalibrationValidated(false)
+    setCalibrationAppliedToAll(false)
   }
 
   useEffect(() => {
@@ -749,7 +774,11 @@ export default function SmartKpiModal({ isOpen, onClose, dwgLayoutId: propDwgLay
     setHasExistingShelfZones(true)
     setReferenceFixtureId(prev => prev || sorted[0]?.id || '')
     if (sorted[0]?.id && existingTemplate.length > 0) {
-      setShelfCalibration(extractShelfCalibration(existingTemplate, fixtures, sorted[0].id))
+      const cal = extractShelfCalibration(existingTemplate, fixtures, sorted[0].id)
+      setShelfCalibration(cal)
+      setExcludedShelfTemplateRoiIds(
+        computeExcludedShelfTemplateRois(fixtures, cal, existingTemplate, { left: '#a855f7', right: '#f59e0b' }),
+      )
       setCalibrationValidated(true)
       setCalibrationAppliedToAll(true)
       calibrationInitializedRef.current = true
@@ -792,11 +821,14 @@ export default function SmartKpiModal({ isOpen, onClose, dwgLayoutId: propDwgLay
       if (selectedTemplate === 'cashier-queue' && calibrationValidated) {
         options.checkoutCalibration = checkoutCalibration
       }
-      if (selectedTemplate === 'shelf-engagement' && calibrationValidated && isDwgMode) {
+      if (selectedTemplate === 'shelf-engagement' && (calibrationValidated || calibrationAppliedToAll)) {
         options.shelfCalibration = shelfCalibration
       }
       if (selectedTemplate === 'shelf-engagement' && shelfCustomZones.length > 0) {
         options.shelfCustomZones = shelfCustomZones.map(shelfCustomZoneToSavePayload)
+      }
+      if (selectedTemplate === 'shelf-engagement' && excludedShelfTemplateRoiIds.length > 0) {
+        options.excludedShelfTemplateZones = excludedShelfTemplateRoiIds
       }
       // Pass custom zones to be saved along with generated zones
       if (customZones.length > 0) {
@@ -852,11 +884,12 @@ export default function SmartKpiModal({ isOpen, onClose, dwgLayoutId: propDwgLay
   const requiresCalibration = isCalibratable
   const hasExistingZones = hasExistingCheckoutZones || hasExistingShelfZones
   const shelfZoneCount = isShelfEngagement
-    ? previewRois.length + shelfCustomZones.length
+    ? activeShelfTemplateRoiCount + shelfCustomZones.length
     : previewRois.length + customZones.length
+  const shelfCalibrationReady = calibrationValidated || calibrationAppliedToAll
   const canGenerateShelf = isShelfEngagement && (
     shelfCustomZones.length > 0
-    || (previewRois.length > 0 && (!requiresCalibration || calibrationValidated))
+    || (activeShelfTemplateRoiCount > 0 && (!requiresCalibration || shelfCalibrationReady))
   )
   const canGenerate = isShelfEngagement
     ? canGenerateShelf
@@ -992,6 +1025,7 @@ export default function SmartKpiModal({ isOpen, onClose, dwgLayoutId: propDwgLay
               fixtures={shelfFixtures}
               mapFixtures={shelfMapFixtures}
               previewRois={previewRois}
+              excludedTemplateRoiIds={excludedShelfTemplateRoiIds}
               calibration={shelfCalibration}
               customZones={shelfCustomZones}
               retailCategories={retailCategories}
@@ -1003,6 +1037,7 @@ export default function SmartKpiModal({ isOpen, onClose, dwgLayoutId: propDwgLay
               deleting={deletingShelfZones}
               onReferenceChange={handleReferenceFixtureChange}
               onCalibrationChange={handleCalibrationChange}
+              onExcludedTemplateRoiIdsChange={setExcludedShelfTemplateRoiIds}
               onCustomZonesChange={setShelfCustomZones}
               onResetToAuto={handleResetToAuto}
               onValidate={handleValidateCalibration}
@@ -1619,12 +1654,24 @@ export default function SmartKpiModal({ isOpen, onClose, dwgLayoutId: propDwgLay
                           }}
                           onMouseUp={() => {
                             if (selectedTemplate === 'shelf-engagement') {
-                              previewTemplate(selectedTemplate, engagementDepth, roiDimensions, null, null)
+                              previewTemplate(
+                                selectedTemplate,
+                                engagementDepth,
+                                roiDimensions,
+                                null,
+                                calibrationAppliedToAll ? shelfCalibration : null,
+                              )
                             }
                           }}
                           onTouchEnd={() => {
                             if (selectedTemplate === 'shelf-engagement') {
-                              previewTemplate(selectedTemplate, engagementDepth, roiDimensions, null, null)
+                              previewTemplate(
+                                selectedTemplate,
+                                engagementDepth,
+                                roiDimensions,
+                                null,
+                                calibrationAppliedToAll ? shelfCalibration : null,
+                              )
                             }
                           }}
                           className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-amber-500"
@@ -1749,9 +1796,11 @@ export default function SmartKpiModal({ isOpen, onClose, dwgLayoutId: propDwgLay
                 || generating
                 || !canGenerate
               }
-              title={requiresCalibration && !calibrationValidated && previewRois.length > 0 && shelfCustomZones.length === 0
-                ? `Validate calibration on the ${isCashierQueue ? 'Calibrate Checkout' : 'Calibrate Shelves'} tab first`
-                : undefined}
+              title={requiresCalibration && !shelfCalibrationReady && isShelfEngagement && activeShelfTemplateRoiCount > 0 && shelfCustomZones.length === 0
+                ? 'Apply or validate template on the Calibrate Shelves tab first'
+                : requiresCalibration && !calibrationValidated && isCashierQueue && previewRois.length > 0
+                  ? 'Validate calibration on the Calibrate Checkout tab first'
+                  : undefined}
               className={`px-4 py-2 text-sm font-medium rounded-lg flex items-center gap-2 transition-all ${
                 !selectedTemplate || generating || !canGenerate
                   ? 'bg-gray-700 text-gray-500 cursor-not-allowed'

@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Check,
   Eye,
@@ -16,6 +16,7 @@ import {
 } from 'lucide-react'
 import {
   applyResizeDelta,
+  filterExcludedShelfTemplateRois,
   generateCalibratedShelfPreviewRois,
   getFixtureAtPoint,
   getZoneHandlePositions,
@@ -51,6 +52,7 @@ interface ShelfCalibrationPanelProps {
   fixtures: FixtureInfo[]
   mapFixtures?: FixtureInfo[]
   previewRois: PreviewRoiLike[]
+  excludedTemplateRoiIds: string[]
   calibration: ShelfCalibration
   customZones: ShelfCustomZone[]
   retailCategories: RetailCategoryOption[]
@@ -62,6 +64,7 @@ interface ShelfCalibrationPanelProps {
   deleting?: boolean
   onReferenceChange: (fixtureId: string) => void
   onCalibrationChange: (calibration: ShelfCalibration) => void
+  onExcludedTemplateRoiIdsChange: (ids: string[]) => void
   onCustomZonesChange: (zones: ShelfCustomZone[]) => void
   onResetToAuto: () => void
   onValidate: () => void
@@ -69,16 +72,27 @@ interface ShelfCalibrationPanelProps {
   onDeleteAll: () => void
 }
 
-type ZoneType = 'left' | 'right'
-type ViewMode = 'focus' | 'all'
-type MapTool = 'select' | 'pan' | 'draw'
+type ZoneType = 'left' | 'right' | 'front'
 
 const ZONE_META: Record<ZoneType, { label: string; color: string }> = {
   left: { label: 'Left', color: '#a855f7' },
   right: { label: 'Right', color: '#f59e0b' },
+  front: { label: 'Front', color: '#a855f7' },
 }
 
+function parseTemplateRoiZoneType(roi: PreviewRoiLike): ZoneType {
+  if (roi.id.endsWith('::front') || roi.name.includes('(Front)')) return 'front'
+  if (roi.id.endsWith('::left') || roi.name.includes('(Left)')) return 'left'
+  return 'right'
+}
+
+function calibrationZoneForType(zoneType: ZoneType): 'left' | 'right' {
+  return zoneType === 'right' ? 'right' : 'left'
+}
 const ZONE_COLORS = { left: '#a855f7', right: '#f59e0b' }
+
+type ViewMode = 'focus' | 'all'
+type MapTool = 'select' | 'pan' | 'draw'
 
 type FixtureDisplayKind = 'shelf' | 'fridge' | 'banco' | 'other'
 
@@ -204,6 +218,7 @@ export default function ShelfCalibrationPanel({
   fixtures,
   mapFixtures,
   previewRois,
+  excludedTemplateRoiIds,
   calibration,
   customZones,
   retailCategories,
@@ -215,6 +230,7 @@ export default function ShelfCalibrationPanel({
   deleting,
   onReferenceChange,
   onCalibrationChange,
+  onExcludedTemplateRoiIdsChange,
   onCustomZonesChange,
   onResetToAuto,
   onValidate,
@@ -222,6 +238,7 @@ export default function ShelfCalibrationPanel({
   onDeleteAll,
 }: ShelfCalibrationPanelProps) {
   const [selectedZone, setSelectedZone] = useState<ZoneType>('left')
+  const [selectedTemplateRoiIds, setSelectedTemplateRoiIds] = useState<Set<string>>(new Set())
   const [selectedCustomZoneId, setSelectedCustomZoneId] = useState<string | null>(null)
   const [drawCategoryId, setDrawCategoryId] = useState('')
   const [viewMode, setViewMode] = useState<ViewMode>('all')
@@ -262,9 +279,31 @@ export default function ShelfCalibrationPanel({
   const effectiveDrawCategoryId = drawCategoryId || retailCategories[0]?.id || ''
 
   const liveRois = useMemo(() => {
-    if (sortedFixtures.length === 0) return previewRois
-    return generateCalibratedShelfPreviewRois(sortedFixtures, calibration, ZONE_COLORS)
-  }, [sortedFixtures, calibration, previewRois])
+    const all = sortedFixtures.length === 0
+      ? previewRois
+      : generateCalibratedShelfPreviewRois(sortedFixtures, calibration, ZONE_COLORS)
+    return filterExcludedShelfTemplateRois(all, excludedTemplateRoiIds)
+  }, [sortedFixtures, calibration, previewRois, excludedTemplateRoiIds])
+
+  const deleteSelectedTemplateRois = useCallback(() => {
+    if (selectedTemplateRoiIds.size === 0) return
+    const next = new Set([...excludedTemplateRoiIds, ...selectedTemplateRoiIds])
+    onExcludedTemplateRoiIdsChange(Array.from(next))
+    setSelectedTemplateRoiIds(new Set())
+  }, [selectedTemplateRoiIds, excludedTemplateRoiIds, onExcludedTemplateRoiIdsChange])
+
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== 'Delete' && e.key !== 'Backspace') return
+      const tag = (e.target as HTMLElement)?.tagName
+      if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return
+      if (selectedCustomZoneId || selectedTemplateRoiIds.size === 0) return
+      e.preventDefault()
+      deleteSelectedTemplateRois()
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [selectedCustomZoneId, selectedTemplateRoiIds, deleteSelectedTemplateRois])
 
   const customPreviewRois = useMemo(
     () => customZones.map(shelfCustomZoneToPreviewRoi),
@@ -276,7 +315,8 @@ export default function ShelfCalibrationPanel({
     if (!referenceFixture) return liveRois
     const left = findRoiForShelf(liveRois, fixtures, referenceFixture.id, 'left')
     const right = findRoiForShelf(liveRois, fixtures, referenceFixture.id, 'right')
-    return liveRois.filter(roi => roi.id === left?.id || roi.id === right?.id)
+    const front = findRoiForShelf(liveRois, fixtures, referenceFixture.id, 'front')
+    return liveRois.filter(roi => roi.id === left?.id || roi.id === right?.id || roi.id === front?.id)
   }, [viewMode, liveRois, referenceFixture, fixtures])
 
   const bounds = useMemo(() => {
@@ -461,22 +501,37 @@ export default function ShelfCalibrationPanel({
       setSelectedCustomZoneId(null)
       const zoneType = zoneEl.getAttribute('data-zone-type') as ZoneType
       const roiId = zoneEl.getAttribute('data-roi-id')
-      if (roiId) {
-        const fixtureId = roiId.replace(/::(left|right)$/, '')
+      if (!roiId) return
+
+      if (e.metaKey || e.ctrlKey) {
+        setSelectedTemplateRoiIds(prev => {
+          const next = new Set(prev)
+          if (next.has(roiId)) next.delete(roiId)
+          else next.add(roiId)
+          return next
+        })
+        setSelectedZone(calibrationZoneForType(zoneType))
+        const fixtureId = roiId.replace(/::(left|right|front)$/, '')
         if (fixtureId && fixtureId !== referenceFixtureId) onReferenceChange(fixtureId)
+        return
       }
-      if (zoneType) setSelectedZone(zoneType)
+
+      setSelectedTemplateRoiIds(new Set([roiId]))
+      const fixtureId = roiId.replace(/::(left|right|front)$/, '')
+      if (fixtureId && fixtureId !== referenceFixtureId) onReferenceChange(fixtureId)
+      setSelectedZone(calibrationZoneForType(zoneType))
+      const calKey = calibrationZoneForType(zoneType)
       if (referenceFixture || roiId) {
         dragRef.current = {
           kind: 'template-move',
-          zoneType: zoneType || selectedZone,
+          zoneType: calKey,
           startX: e.clientX,
           startY: e.clientY,
           startPanX: panOffset.x,
           startPanZ: panOffset.z,
-          startAlong: calibration[zoneType || selectedZone].alongCounter,
-          startFrom: calibration[zoneType || selectedZone].fromCounter,
-          startZoneCal: calibration[zoneType || selectedZone],
+          startAlong: calibration[calKey].alongCounter,
+          startFrom: calibration[calKey].fromCounter,
+          startZoneCal: calibration[calKey],
           bounds,
         }
       }
@@ -487,9 +542,11 @@ export default function ShelfCalibrationPanel({
     const clickedFixture = getFixtureAtPoint(displayFixtures, world.worldX, world.worldZ)
     if (clickedFixture) {
       setSelectedCustomZoneId(null)
+      setSelectedTemplateRoiIds(new Set())
       onReferenceChange(clickedFixture.id)
     } else {
       setSelectedCustomZoneId(null)
+      setSelectedTemplateRoiIds(new Set())
     }
   }, [
     mapTool, panOffset, bounds, retailCategories, effectiveDrawCategoryId, screenToWorld,
@@ -585,7 +642,8 @@ export default function ShelfCalibrationPanel({
   const referenceLeft = referenceFixture ? findRoiForShelf(liveRois, fixtures, referenceFixture.id, 'left') : undefined
   const referenceRight = referenceFixture ? findRoiForShelf(liveRois, fixtures, referenceFixture.id, 'right') : undefined
   const selectedRoi = selectedZone === 'left' ? referenceLeft : referenceRight
-  const templateHandles = referenceFixture && !selectedCustomZoneId && selectedRoi
+  const soleSelectedTemplateRoiId = selectedTemplateRoiIds.size === 1 ? [...selectedTemplateRoiIds][0] : null
+  const templateHandles = referenceFixture && !selectedCustomZoneId && soleSelectedTemplateRoiId && soleSelectedTemplateRoiId === selectedRoi?.id
     ? getZoneHandlePositions(referenceFixture, fixtures, calibration[selectedZone])
     : null
   const customHandles = selectedCustomZone && mapTool === 'select'
@@ -740,8 +798,10 @@ export default function ShelfCalibrationPanel({
         )}
 
         <div className="text-[10px] text-gray-500 space-y-1">
-          {validated && appliedToAll && <p className="text-green-400">Template applied to {sortedFixtures.length} shelves</p>}
+          {validated && appliedToAll && <p className="text-green-400">Template applied — use Generate to save zones to the layout</p>}
+          {validated && !appliedToAll && <p className="text-green-400">Template validated — use Generate to save zones to the layout</p>}
           <p>Teal zones = custom category rectangles · purple/amber = per-shelf template</p>
+          <p className="text-gray-500">⌘+click to multi-select template zones · Delete to remove selected</p>
         </div>
       </div>
 
@@ -760,6 +820,15 @@ export default function ShelfCalibrationPanel({
             <button onClick={() => setMapTool('pan')} className={`p-1 rounded ${mapTool === 'pan' ? 'bg-purple-600 text-white' : 'bg-gray-700 text-gray-400'}`} title="Pan"><Move className="w-3.5 h-3.5" /></button>
             <button onClick={() => setViewMode('focus')} className={`text-[10px] px-2 py-1 rounded ${viewMode === 'focus' ? 'bg-purple-600 text-white' : 'bg-gray-700 text-gray-400'}`}>Focus</button>
             <button onClick={() => { setViewMode('all'); setPanOffset({ x: 0, z: 0 }); setZoom(1) }} className={`text-[10px] px-2 py-1 rounded ${viewMode === 'all' ? 'bg-purple-600 text-white' : 'bg-gray-700 text-gray-400'}`}>All</button>
+            <button
+              onClick={deleteSelectedTemplateRois}
+              disabled={selectedTemplateRoiIds.size === 0 || mapTool !== 'select'}
+              className="text-[10px] px-2 py-1 rounded bg-red-900/50 hover:bg-red-900/70 border border-red-800 text-red-300 disabled:opacity-40 flex items-center gap-1"
+              title="Delete selected template zones (Delete key)"
+            >
+              <Trash2 className="w-3 h-3" />
+              Delete{selectedTemplateRoiIds.size > 0 ? ` (${selectedTemplateRoiIds.size})` : ''}
+            </button>
             <button onClick={() => setZoom(z => Math.min(4, z * 1.2))} className="p-1 rounded bg-gray-700 text-gray-400 hover:text-white"><ZoomIn className="w-3.5 h-3.5" /></button>
             <button onClick={() => setZoom(z => Math.max(0.35, z / 1.2))} className="p-1 rounded bg-gray-700 text-gray-400 hover:text-white"><ZoomOut className="w-3.5 h-3.5" /></button>
             <button onClick={() => { setPanOffset({ x: 0, z: 0 }); setZoom(1) }} className="text-[10px] px-2 py-1 rounded bg-gray-700 text-gray-400 hover:text-white">Reset</button>
@@ -797,13 +866,19 @@ export default function ShelfCalibrationPanel({
 
             {displayRois.map(roi => {
               if (roi.vertices.length < 3) return null
-              const isLeft = roi.name.includes('(Left)')
-              const zoneType: ZoneType = isLeft ? 'left' : 'right'
-              const isSelected = !selectedCustomZoneId && zoneType === selectedZone && (viewMode === 'all' || roi.id === selectedRoi?.id)
+              const zoneType = parseTemplateRoiZoneType(roi)
+              const isSelected = selectedTemplateRoiIds.has(roi.id)
               const pathD = `M ${roi.vertices.map(v => `${v.x},${v.z}`).join(' L ')} Z`
               return (
                 <g key={roi.id} data-zone-type={zoneType} data-roi-id={roi.id}>
-                  <path d={pathD} fill={roi.color} fillOpacity={isSelected ? 0.55 : 0.28} stroke={roi.color} strokeWidth={isSelected ? 0.09 : 0.04} style={{ cursor: mapTool === 'select' ? 'move' : undefined }} />
+                  <path
+                    d={pathD}
+                    fill={roi.color}
+                    fillOpacity={isSelected ? 0.55 : 0.28}
+                    stroke={isSelected ? '#ffffff' : roi.color}
+                    strokeWidth={isSelected ? 0.11 : 0.04}
+                    style={{ cursor: mapTool === 'select' ? 'move' : undefined }}
+                  />
                 </g>
               )
             })}
@@ -883,7 +958,7 @@ export default function ShelfCalibrationPanel({
             <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm bg-purple-900/80 border-2 border-purple-400" /> Shelf</span>
             <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm bg-cyan-950/80 border-2 border-cyan-400" /> Fridge</span>
             <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm bg-amber-950/80 border-2 border-amber-400" /> Banco</span>
-            <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-sm bg-purple-500/60 border border-purple-500" /> Left zone</span>
+            <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-sm bg-purple-500/60 border border-purple-500" /> Left / Front</span>
             <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-sm bg-amber-500/60 border border-amber-500" /> Right zone</span>
             <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-sm bg-teal-500/60 border border-teal-500" /> Custom</span>
             <span className="text-gray-500">Zoom {(zoom * 100).toFixed(0)}%</span>

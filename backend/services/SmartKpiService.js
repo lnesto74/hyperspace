@@ -550,32 +550,44 @@ export class SmartKpiService {
     return rois;
   }
 
-  getShelfAxes(shelf, sorted, isHorizontalRow, isVerticalRow, defaultFacingX, defaultFacingZ) {
-    const footprint = shelf.footprintPoints || shelf.metadata?.dwg_footprint_points;
-    if (footprint && footprint.length >= 3) {
-      return this.computeAxesFromFootprint(footprint, shelf.position, defaultFacingX, defaultFacingZ);
-    }
-    return this.getCashierAxes(shelf, sorted, isHorizontalRow, isVerticalRow, defaultFacingX, defaultFacingZ);
-  }
-
-  getFootprintExtents(fixture, axes) {
+  getFixtureFootprintPoints(fixture) {
     const footprint = fixture.footprintPoints || fixture.metadata?.dwg_footprint_points;
+    if (footprint && footprint.length >= 3) {
+      return footprint;
+    }
+
     const cx = fixture.position.x;
     const cz = fixture.position.z;
-    let points;
-    if (footprint && footprint.length >= 3) {
-      points = footprint;
-    } else {
-      const hw = (fixture.scale?.x || 2) / 2;
-      const hd = (fixture.scale?.z || 0.5) / 2;
-      points = [
-        { x: cx - hw, z: cz - hd },
-        { x: cx + hw, z: cz - hd },
-        { x: cx + hw, z: cz + hd },
-        { x: cx - hw, z: cz + hd },
-      ];
-    }
+    const hw = (fixture.scale?.x || 2) / 2;
+    const hd = (fixture.scale?.z || 0.5) / 2;
+    const rotY = fixture.rotation?.y || 0;
+    const cos = Math.cos(rotY);
+    const sin = Math.sin(rotY);
+    const local = [
+      { x: -hw, z: -hd },
+      { x: hw, z: -hd },
+      { x: hw, z: hd },
+      { x: -hw, z: hd },
+    ];
+    return local.map(c => ({
+      x: cx + c.x * cos - c.z * sin,
+      z: cz + c.x * sin + c.z * cos,
+    }));
+  }
 
+  swapShelfAxes(axes) {
+    return {
+      ...axes,
+      alongX: axes.fromX,
+      alongZ: axes.fromZ,
+      fromX: -axes.alongX,
+      fromZ: -axes.alongZ,
+    };
+  }
+
+  projectFootprintExtents(points, origin, axes) {
+    const cx = origin.x;
+    const cz = origin.z;
     let minAlong = Infinity;
     let maxAlong = -Infinity;
     let minFrom = Infinity;
@@ -588,7 +600,6 @@ export class SmartKpiService {
       minFrom = Math.min(minFrom, from);
       maxFrom = Math.max(maxFrom, from);
     }
-
     return {
       alongLen: Math.max(0.5, maxAlong - minAlong),
       fromLen: Math.max(0.3, maxFrom - minFrom),
@@ -600,8 +611,55 @@ export class SmartKpiService {
     };
   }
 
+  getShelfAxes(shelf, sorted, isHorizontalRow, isVerticalRow, defaultFacingX, defaultFacingZ) {
+    const points = this.getFixtureFootprintPoints(shelf);
+    if (points.length >= 3) {
+      return this.computeAxesFromFootprint(points, shelf.position, defaultFacingX, defaultFacingZ);
+    }
+    return this.getCashierAxes(shelf, sorted, isHorizontalRow, isVerticalRow, defaultFacingX, defaultFacingZ);
+  }
+
+  getShelfAxesAndExtents(shelf, sorted, isHorizontalRow, isVerticalRow, defaultFacingX, defaultFacingZ) {
+    const points = this.getFixtureFootprintPoints(shelf);
+    let axes = this.getShelfAxes(shelf, sorted, isHorizontalRow, isVerticalRow, defaultFacingX, defaultFacingZ);
+    let ext = this.projectFootprintExtents(points, shelf.position, axes);
+    if (ext.fromLen > ext.alongLen + 0.05) {
+      axes = this.swapShelfAxes(axes);
+      ext = this.projectFootprintExtents(points, shelf.position, axes);
+    }
+    return { axes, ext };
+  }
+
+  getFootprintExtents(fixture, axes) {
+    const points = this.getFixtureFootprintPoints(fixture);
+    return this.projectFootprintExtents(points, fixture.position, axes);
+  }
+
+  isSingleFrontEngagementFixture(fixture) {
+    const type = (fixture.type || '').toLowerCase();
+    const name = (fixture.name || '').toLowerCase();
+    if (type === 'fridge' || type === 'freezer') return true;
+    return ['frigo', 'fridge', 'freezer', 'refriger', 'congel'].some(
+      hint => name.includes(hint) || type.includes(hint),
+    );
+  }
+
+  getFixtureEngagementZoneTypes(fixture) {
+    if (this.isSingleFrontEngagementFixture(fixture)) return ['front'];
+    return ['left', 'right'];
+  }
+
   getAutoShelfZoneCalibration(ext, zoneType, engagementDepth) {
     const depth = engagementDepth;
+    if (zoneType === 'front') {
+      return {
+        width: ext.alongLen,
+        depth,
+        alongCounter: ext.centerAlong,
+        fromCounter: ext.maxFrom + depth / 2,
+        rotationOffset: 0,
+      };
+    }
     const fromCounter = zoneType === 'left'
       ? ext.minFrom - depth / 2
       : ext.maxFrom + depth / 2;
@@ -630,8 +688,8 @@ export class SmartKpiService {
     const centerX = shelf.position.x + axes.alongX * alongCounter + axes.fromX * fromCounter;
     const centerZ = shelf.position.z + axes.alongZ * alongCounter + axes.fromZ * fromCounter;
     const rotation = this.getShelfZoneRotation(axes, rotationOffset);
-    const label = zoneType === 'left' ? 'Left' : 'Right';
-    const color = zoneType === 'left' ? config.color : (config.colorBack || config.color);
+    const label = zoneType === 'front' ? 'Front' : zoneType === 'left' ? 'Left' : 'Right';
+    const color = zoneType === 'right' ? (config.colorBack || config.color) : config.color;
 
     return this.createRectangularRoi({
       name: `${uniqueName} - Engagement (${label})`,
@@ -678,14 +736,12 @@ export class SmartKpiService {
     }
 
     sorted.forEach((shelf, index) => {
-      const axes = this.getShelfAxes(shelf, sorted, isHorizontalRow, isVerticalRow, defaultFacingX, defaultFacingZ);
+      const { axes } = this.getShelfAxesAndExtents(shelf, sorted, isHorizontalRow, isVerticalRow, defaultFacingX, defaultFacingZ);
       const shelfNumber = index + 1;
       const uniqueName = this.isNameUnique(shelf.name, sorted) ? shelf.name : `Shelf ${shelfNumber}`;
 
-      for (const { zoneType, zoneCal, color } of [
-        { zoneType: 'left', zoneCal: cal.left },
-        { zoneType: 'right', zoneCal: cal.right },
-      ]) {
+      for (const zoneType of this.getFixtureEngagementZoneTypes(shelf)) {
+        const zoneCal = zoneType === 'front' ? cal.left : cal[zoneType];
         if (!zoneCal) continue;
         rois.push(this.createShelfEngagementRoiFromCal(
           shelf,
@@ -740,10 +796,11 @@ export class SmartKpiService {
       const shelfNumber = index + 1;
       const uniqueName = this.isNameUnique(name, shelves) ? name : `Shelf ${shelfNumber}`;
 
-      const axes = this.getShelfAxes(shelf, sortedShelves, isHorizontalRow, isVerticalRow, defaultFacingX, defaultFacingZ);
-      const ext = this.getFootprintExtents(shelf, axes);
+      const { axes, ext } = this.getShelfAxesAndExtents(
+        shelf, sortedShelves, isHorizontalRow, isVerticalRow, defaultFacingX, defaultFacingZ,
+      );
 
-      for (const zoneType of ['left', 'right']) {
+      for (const zoneType of this.getFixtureEngagementZoneTypes(shelf)) {
         const zoneCal = this.getAutoShelfZoneCalibration(ext, zoneType, engagementDepth);
         rois.push(this.createShelfEngagementRoiFromCal(
           shelf,

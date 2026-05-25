@@ -1,5 +1,10 @@
-import { getFixtureAxes, getShelfZoneRotation, sortFixtures, FixtureInfo, PreviewRoiLike, ZoneCalibration } from './checkoutCalibrationUtils'
-import { ShelfCalibration, getShelfEngagementLabel } from './shelfCalibrationUtils'
+import { getFixtureAxes, getFixtureFootprintPoints, getShelfZoneRotation, sortFixtures, FixtureInfo, PreviewRoiLike, ZoneCalibration } from './checkoutCalibrationUtils'
+import {
+  ShelfCalibration,
+  ShelfEngagementZoneType,
+  getFixtureEngagementZoneTypes,
+  getShelfEngagementLabel,
+} from './shelfCalibrationUtils'
 
 export function createRectangularRoiVertices(
   centerX: number,
@@ -44,7 +49,7 @@ export function generateShelfZoneRoi(
   fixture: FixtureInfo,
   fixtures: FixtureInfo[],
   shelfNumber: number,
-  zoneType: 'left' | 'right',
+  zoneType: ShelfEngagementZoneType,
   zoneCal: ZoneCalibration,
   color: string,
 ): PreviewRoiLike {
@@ -68,10 +73,33 @@ export function generateCalibratedShelfPreviewRois(
   const sorted = sortFixtures(fixtures)
   const rois: PreviewRoiLike[] = []
   sorted.forEach((fixture, index) => {
-    rois.push(generateShelfZoneRoi(fixture, sorted, index + 1, 'left', calibration.left, colors.left))
-    rois.push(generateShelfZoneRoi(fixture, sorted, index + 1, 'right', calibration.right, colors.right))
+    for (const zoneType of getFixtureEngagementZoneTypes(fixture)) {
+      const zoneCal = zoneType === 'front' ? calibration.left : calibration[zoneType]
+      const color = zoneType === 'right' ? colors.right : colors.left
+      rois.push(generateShelfZoneRoi(fixture, sorted, index + 1, zoneType, zoneCal, color))
+    }
   })
   return rois
+}
+
+export function filterExcludedShelfTemplateRois(
+  rois: PreviewRoiLike[],
+  excludedIds: string[],
+): PreviewRoiLike[] {
+  if (!excludedIds.length) return rois
+  const excluded = new Set(excludedIds)
+  return rois.filter(r => !excluded.has(r.id))
+}
+
+export function computeExcludedShelfTemplateRois(
+  fixtures: FixtureInfo[],
+  calibration: ShelfCalibration,
+  existingTemplateRois: PreviewRoiLike[],
+  colors: { left: string; right: string } = { left: '#a855f7', right: '#f59e0b' },
+): string[] {
+  const generated = generateCalibratedShelfPreviewRois(fixtures, calibration, colors)
+  const existingNames = new Set(existingTemplateRois.map(r => r.name))
+  return generated.filter(g => !existingNames.has(g.name)).map(g => g.id)
 }
 
 export type ResizeHandle = 'along-min' | 'along-max' | 'from-min' | 'from-max'
@@ -145,22 +173,13 @@ export function getFixtureAtPoint(
 }
 
 function getFixtureBounds(fixture: FixtureInfo) {
-  if (fixture.footprintPoints && fixture.footprintPoints.length >= 3) {
-    const xs = fixture.footprintPoints.map(p => p.x)
-    const zs = fixture.footprintPoints.map(p => p.z)
-    return {
-      minX: Math.min(...xs),
-      maxX: Math.max(...xs),
-      minZ: Math.min(...zs),
-      maxZ: Math.max(...zs),
-    }
-  }
-  const hw = (fixture.scale?.x ?? 1.5) / 2
-  const hd = (fixture.scale?.z ?? 0.8) / 2
+  const points = getFixtureFootprintPoints(fixture)
+  const xs = points.map(p => p.x)
+  const zs = points.map(p => p.z)
   return {
-    minX: fixture.position.x - hw,
-    maxX: fixture.position.x + hw,
-    minZ: fixture.position.z - hd,
-    maxZ: fixture.position.z + hd,
+    minX: Math.min(...xs),
+    maxX: Math.max(...xs),
+    minZ: Math.min(...zs),
+    maxZ: Math.max(...zs),
   }
 }
