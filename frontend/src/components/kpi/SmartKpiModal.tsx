@@ -10,6 +10,7 @@ import {
   FixtureInfo,
   extractCheckoutCalibration,
   sortFixtures,
+  regionsToPreviewRois,
 } from './checkoutCalibrationUtils'
 
 
@@ -204,7 +205,7 @@ function MiniRoiPreview({ rois, fixtures, zoomed, isPanning, panOffset, onPanSta
 
 export default function SmartKpiModal({ isOpen, onClose, dwgLayoutId: propDwgLayoutId }: SmartKpiModalProps) {
   const { venue } = useVenue()
-  const { loadRegions } = useRoi()
+  const { loadRegions, regions } = useRoi()
   
   const [loading, setLoading] = useState(false)
   const [analyzing, setAnalyzing] = useState(false)
@@ -226,7 +227,9 @@ export default function SmartKpiModal({ isOpen, onClose, dwgLayoutId: propDwgLay
   const [referenceFixtureId, setReferenceFixtureId] = useState<string>('')
   const [calibrationValidated, setCalibrationValidated] = useState(false)
   const [calibrationAppliedToAll, setCalibrationAppliedToAll] = useState(false)
+  const [hasExistingCheckoutZones, setHasExistingCheckoutZones] = useState(false)
   const calibrationInitializedRef = useRef(false)
+  const existingCheckoutLoadedRef = useRef(false)
   
   // Custom zone drawing state
   const [customZones, setCustomZones] = useState<PreviewRoi[]>([])
@@ -318,16 +321,19 @@ export default function SmartKpiModal({ isOpen, onClose, dwgLayoutId: propDwgLay
   useEffect(() => {
     if (isOpen && venue?.id) {
       analyzeVenue()
+      loadRegions(venue.id, dwgLayoutId)
       setSelectedTemplate(null)
       setPreviewRois([])
       setSuccess(null)
       setActiveTab('generate')
       setCalibrationValidated(false)
       setCalibrationAppliedToAll(false)
+      setHasExistingCheckoutZones(false)
       calibrationInitializedRef.current = false
+      existingCheckoutLoadedRef.current = false
       setReferenceFixtureId('')
     }
-  }, [isOpen, venue?.id, analyzeVenue])
+  }, [isOpen, venue?.id, analyzeVenue, loadRegions, dwgLayoutId])
 
   // Preview ROIs for selected template
   const previewTemplate = useCallback(async (
@@ -541,6 +547,47 @@ export default function SmartKpiModal({ isOpen, onClose, dwgLayoutId: propDwgLay
     calibrationInitializedRef.current = true
   }, [selectedTemplate, previewRois, referenceFixtureId, syncCalibrationFromPreview])
 
+  const restoreExistingCheckoutZones = useCallback(() => {
+    const existingPreview = regionsToPreviewRois(regions)
+    if (existingPreview.length === 0) return false
+
+    const template = availableTemplates.find(t => t.id === 'cashier-queue')
+    if (!template?.detectedObjects?.length) return false
+
+    const fixtures = template.detectedObjects.map(obj => ({
+      id: obj.id,
+      name: obj.name,
+      position: obj.position,
+      rotation: obj.rotation,
+      scale: obj.scale,
+      source: obj.source,
+      footprintPoints: obj.footprintPoints,
+    }))
+    const sorted = sortFixtures(fixtures)
+
+    setSelectedTemplate('cashier-queue')
+    setPreviewRois(existingPreview)
+    setHasExistingCheckoutZones(true)
+    setReferenceFixtureId(prev => prev || sorted[0]?.id || '')
+    setCheckoutCalibration(extractCheckoutCalibration(existingPreview, fixtures, sorted[0]?.id || ''))
+    setCalibrationValidated(true)
+    setCalibrationAppliedToAll(true)
+    calibrationInitializedRef.current = true
+    setActiveTab('calibrate')
+    return true
+  }, [regions, availableTemplates])
+
+  useEffect(() => {
+    if (!isOpen) {
+      existingCheckoutLoadedRef.current = false
+      return
+    }
+    if (analyzing || availableTemplates.length === 0 || existingCheckoutLoadedRef.current) return
+    if (restoreExistingCheckoutZones()) {
+      existingCheckoutLoadedRef.current = true
+    }
+  }, [isOpen, analyzing, availableTemplates, regions, restoreExistingCheckoutZones])
+
   // Generate and save ROIs
   const generateRois = async () => {
     if (!venue?.id || !selectedTemplate) return
@@ -586,8 +633,8 @@ export default function SmartKpiModal({ isOpen, onClose, dwgLayoutId: propDwgLay
       // Reload ROIs in context (pass dwgLayoutId for DWG mode)
       await loadRegions(venue.id, dwgLayoutId)
       
-      setSuccess(`Created ${data.savedRois?.length || 0} zones for ${data.templateName}`)
-      setPreviewRois([])
+      setSuccess(`${hasExistingCheckoutZones ? 'Updated' : 'Created'} ${data.savedRois?.length || 0} zones for ${data.templateName}`)
+      setHasExistingCheckoutZones(true)
       
       // Close after success
       setTimeout(() => {
@@ -718,6 +765,7 @@ export default function SmartKpiModal({ isOpen, onClose, dwgLayoutId: propDwgLay
               referenceFixtureId={referenceFixtureId || cashierFixtures[0]?.id || ''}
               validated={calibrationValidated}
               appliedToAll={calibrationAppliedToAll}
+              isEditingExisting={hasExistingCheckoutZones}
               loading={loading}
               onReferenceChange={handleReferenceFixtureChange}
               onCalibrationChange={handleCalibrationChange}
@@ -1432,7 +1480,14 @@ export default function SmartKpiModal({ isOpen, onClose, dwgLayoutId: propDwgLay
               <p className="text-sm text-red-400">{error}</p>
             )}
             {isCashierQueue && previewRois.length > 0 && !calibrationValidated && !success && (
-              <p className="text-xs text-amber-400">Calibrate and validate checkout zones before generating</p>
+              <p className="text-xs text-amber-400">
+                {hasExistingCheckoutZones
+                  ? 'Adjust parameters, apply preview, then validate to update checkout zones'
+                  : 'Calibrate and validate checkout zones before generating'}
+              </p>
+            )}
+            {isCashierQueue && hasExistingCheckoutZones && calibrationValidated && !success && (
+              <p className="text-xs text-green-400/80">Editing existing checkout zones — Update will refresh all lanes</p>
             )}
             {success && (
               <p className="text-sm text-green-400 flex items-center gap-2">
@@ -1472,7 +1527,7 @@ export default function SmartKpiModal({ isOpen, onClose, dwgLayoutId: propDwgLay
               ) : (
                 <>
                   <Zap className="w-4 h-4" />
-                  Generate {previewRois.length + customZones.length} Zones
+                  {hasExistingCheckoutZones ? 'Update' : 'Generate'} {previewRois.length + customZones.length} Zones
                 </>
               )}
             </button>

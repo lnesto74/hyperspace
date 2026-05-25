@@ -21,6 +21,7 @@ interface RoiContextType {
   isRoiVisible: (roiId: string) => boolean
   createRegion: (venueId: string, name: string, vertices: Vector2[], color?: string, dwgLayoutId?: string | null) => Promise<RegionOfInterest | null>
   updateRegion: (id: string, updates: Partial<RegionOfInterest>) => Promise<void>
+  updateRegionVerticesLocal: (id: string, vertices: Vector2[]) => void
   deleteRegion: (id: string) => Promise<void>
   selectRegion: (id: string | null) => void
   
@@ -176,6 +177,10 @@ export function RoiProvider({ children }: { children: ReactNode }) {
     }
   }, [addToast])
 
+  const updateRegionVerticesLocal = useCallback((id: string, vertices: Vector2[]) => {
+    setRegions(prev => prev.map(r => (r.id === id ? { ...r, vertices } : r)))
+  }, [])
+
   const deleteRegion = useCallback(async (id: string) => {
     try {
       const res = await fetch(`${API_BASE}/api/roi/${id}`, { method: 'DELETE' })
@@ -278,6 +283,7 @@ export function RoiProvider({ children }: { children: ReactNode }) {
       isRoiVisible,
       createRegion,
       updateRegion,
+      updateRegionVerticesLocal,
       deleteRegion,
       selectRegion,
       startDrawing,

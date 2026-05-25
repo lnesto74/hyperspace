@@ -32,6 +32,7 @@ interface CheckoutCalibrationPanelProps {
   referenceFixtureId: string
   validated: boolean
   appliedToAll: boolean
+  isEditingExisting?: boolean
   loading: boolean
   onReferenceChange: (fixtureId: string) => void
   onCalibrationChange: (calibration: CheckoutCalibration) => void
@@ -151,6 +152,7 @@ export default function CheckoutCalibrationPanel({
   referenceFixtureId,
   validated,
   appliedToAll,
+  isEditingExisting,
   loading,
   onReferenceChange,
   onCalibrationChange,
@@ -316,6 +318,11 @@ export default function CheckoutCalibrationPanel({
   return (
     <div className="grid grid-cols-5 gap-5">
       <div className="col-span-2 space-y-4">
+        {isEditingExisting && (
+          <div className="bg-blue-900/20 border border-blue-700/50 rounded-lg px-3 py-2 text-xs text-blue-200">
+            Editing saved checkout zones. Adjust sliders or drag zones on the map, then validate and click Update zones.
+          </div>
+        )}
         <div className="bg-gray-800/50 border border-gray-700 rounded-lg p-3">
           <label className="text-xs text-gray-400 block mb-1.5">Reference checkout</label>
           <select
@@ -440,7 +447,7 @@ export default function CheckoutCalibrationPanel({
             className="text-xs px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded flex items-center gap-1 disabled:opacity-50"
           >
             <Target className="w-3 h-3" />
-            Apply to all
+            {isEditingExisting ? 'Preview update' : 'Apply to all'}
           </button>
         </div>
 

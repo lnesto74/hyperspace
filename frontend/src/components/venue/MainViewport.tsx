@@ -49,6 +49,40 @@ const getObjectColorHex = (obj: { type: string; color?: string | null }, fallbac
   return (COLORS as Record<string, number>)[obj.type] || fallback
 }
 
+function applyRoiGizmoTransform(
+  initialVertices: { x: number; z: number }[],
+  centroid: { x: number; z: number },
+  dx: number,
+  dz: number,
+  dRotY: number,
+) {
+  const cos = Math.cos(dRotY)
+  const sin = Math.sin(dRotY)
+  return initialVertices.map(v => {
+    const rx = v.x - centroid.x
+    const rz = v.z - centroid.z
+    return {
+      x: centroid.x + rx * cos - rz * sin + dx,
+      z: centroid.z + rx * sin + rz * cos + dz,
+    }
+  })
+}
+
+function configureTransformControlsMode(tc: TransformControls, mode: 'translate' | 'rotate') {
+  tc.setMode(mode)
+  if (mode === 'translate') {
+    tc.showX = true
+    tc.showY = false
+    tc.showZ = true
+    tc.setSize(0.5)
+  } else {
+    tc.showX = false
+    tc.showY = true
+    tc.showZ = false
+    tc.setSize(1.0)
+  }
+}
+
 // Point-in-polygon test using ray casting algorithm
 const pointInPolygon = (point: { x: number; z: number }, polygon: { x: number; z: number }[]): boolean => {
   let inside = false
@@ -206,7 +240,9 @@ export default function MainViewport({
   const trailLinesRef = useRef<Map<string, THREE.Line>>(new Map())
   // Grace period: tracks hidden but not disposed, keyed by trackKey -> hide timestamp
   const trackGraceRef = useRef<Map<string, number>>(new Map())
+  const emptyTracksSinceRef = useRef<number | null>(null)
   const TRACK_GRACE_MS = 3000 // Keep meshes alive 3s after track disappears
+  const EMPTY_TRACKS_CLEAR_MS = 500 // Avoid nuking all meshes on a single empty frame
   // Instanced rendering for tracks - single draw call for all 200+ tracks
   const trackInstancedMeshRef = useRef<THREE.InstancedMesh | null>(null)
   const trackInstanceMapRef = useRef<Map<string, number>>(new Map()) // trackKey -> instanceIndex
@@ -239,6 +275,14 @@ export default function MainViewport({
   
   // Transform controls state (translate/rotate gizmo)
   const transformControlsRef = useRef<TransformControls | null>(null)
+  const roiTransformPivotRef = useRef<THREE.Object3D | null>(null)
+  const roiGizmoSnapshotRef = useRef<{
+    roiId: string
+    vertices: { x: number; z: number }[]
+    centroid: { x: number; z: number }
+    startPos: THREE.Vector3
+    startRotY: number
+  } | null>(null)
   const [transformMode, setTransformMode] = useState<'translate' | 'rotate'>('translate')
   
   // Layers panel state
@@ -409,6 +453,7 @@ export default function MainViewport({
     addDrawingVertex, 
     selectRegion,
     updateRegion,
+    updateRegionVerticesLocal,
     deleteRegion,
     updateVertexPosition,
     openKPIPopup,
@@ -790,6 +835,7 @@ export default function MainViewport({
   const selectRegionRef = useRef(selectRegion)
   const addDrawingVertexRef = useRef(addDrawingVertex)
   const updateRegionRef = useRef(updateRegion)
+  const updateRegionVerticesLocalRef = useRef(updateRegionVerticesLocal)
   const deleteRegionRef = useRef(deleteRegion)
   const updateVertexPositionRef = useRef(updateVertexPosition)
   const openKPIPopupRef = useRef(openKPIPopup)
@@ -828,6 +874,7 @@ export default function MainViewport({
     selectRegionRef.current = selectRegion
     addDrawingVertexRef.current = addDrawingVertex
     updateRegionRef.current = updateRegion
+    updateRegionVerticesLocalRef.current = updateRegionVerticesLocal
     deleteRegionRef.current = deleteRegion
     updateVertexPositionRef.current = updateVertexPosition
     openKPIPopupRef.current = openKPIPopup
@@ -962,6 +1009,11 @@ export default function MainViewport({
     transformControls.showY = false
     scene.add(transformControls)
     transformControlsRef.current = transformControls
+
+    const roiPivot = new THREE.Object3D()
+    roiPivot.userData.isRoiPivot = true
+    scene.add(roiPivot)
+    roiTransformPivotRef.current = roiPivot
     
     // Disable orbit controls while interacting with transform gizmo
     transformControls.addEventListener('mouseDown', () => {
@@ -990,9 +1042,28 @@ export default function MainViewport({
         controls.enabled = true
       }, 100)
       
-      // Sync DOOH screen to backend when transform gizmo drag ends
+      // Persist ROI / sync object when transform gizmo drag ends
       const obj3d = transformControls.object
-      if (obj3d?.userData?.objectId) {
+      if (obj3d?.userData?.isRoiPivot) {
+        const snap = roiGizmoSnapshotRef.current
+        if (snap) {
+          const roi = regionsRef.current.find(r => r.id === snap.roiId)
+          if (roi) {
+            updateRegionRef.current(snap.roiId, { vertices: roi.vertices })
+            const cx = roi.vertices.reduce((s, v) => s + v.x, 0) / roi.vertices.length
+            const cz = roi.vertices.reduce((s, v) => s + v.z, 0) / roi.vertices.length
+            obj3d.position.set(cx, 0, cz)
+            obj3d.rotation.set(0, 0, 0)
+            roiGizmoSnapshotRef.current = {
+              roiId: snap.roiId,
+              vertices: roi.vertices.map(v => ({ ...v })),
+              centroid: { x: cx, z: cz },
+              startPos: new THREE.Vector3(cx, 0, cz),
+              startRotY: 0,
+            }
+          }
+        }
+      } else if (obj3d?.userData?.objectId) {
         const objId = obj3d.userData.objectId
         const venueObj = objectsRef.current.find(o => o.id === objId)
         if (venueObj?.type === 'digital_display' && venueRef.current?.id) {
@@ -1016,10 +1087,23 @@ export default function MainViewport({
       }
     })
     
-    // Update object position/rotation when transform gizmo changes
+    // Update object/ROI position when transform gizmo changes
     transformControls.addEventListener('objectChange', () => {
       const obj3d = transformControls.object
-      if (!obj3d || !obj3d.userData.objectId) return
+      if (!obj3d) return
+
+      if (obj3d.userData.isRoiPivot) {
+        const snap = roiGizmoSnapshotRef.current
+        if (!snap) return
+        const dx = obj3d.position.x - snap.startPos.x
+        const dz = obj3d.position.z - snap.startPos.z
+        const dRotY = obj3d.rotation.y - snap.startRotY
+        const newVertices = applyRoiGizmoTransform(snap.vertices, snap.centroid, dx, dz, dRotY)
+        updateRegionVerticesLocalRef.current(snap.roiId, newVertices)
+        return
+      }
+
+      if (!obj3d.userData.objectId) return
       
       const objId = obj3d.userData.objectId
       // Keep Y at 0 for floor objects
@@ -2181,21 +2265,16 @@ export default function MainViewport({
         }
       }
       
-      // Transform mode shortcuts (when object is selected)
-      if (selectedObjectIdRef.current && transformControlsRef.current) {
+      // Transform mode shortcuts (when object or ROI is selected)
+      if ((selectedObjectIdRef.current || selectedRoiIdRef.current) && transformControlsRef.current) {
         if (event.key === 'g' || event.key === 'G') {
           event.preventDefault()
           event.stopPropagation()
           setTransformMode('translate')
-          transformControlsRef.current.setMode('translate')
-          transformControlsRef.current.showX = true
-          transformControlsRef.current.showY = false
-          transformControlsRef.current.showZ = true
+          configureTransformControlsMode(transformControlsRef.current, 'translate')
         } else if (event.key === 'r') {
-          // Use lowercase 'r' only - uppercase R can be used for other things
           event.preventDefault()
           event.stopPropagation()
-          // Temporarily disable orbit controls to prevent viewport rotation
           if (controlsRef.current) {
             controlsRef.current.enabled = false
             setTimeout(() => {
@@ -2203,10 +2282,7 @@ export default function MainViewport({
             }, 100)
           }
           setTransformMode('rotate')
-          transformControlsRef.current.setMode('rotate')
-          transformControlsRef.current.showX = false
-          transformControlsRef.current.showY = true
-          transformControlsRef.current.showZ = false
+          configureTransformControlsMode(transformControlsRef.current, 'rotate')
         }
       }
       
@@ -2342,53 +2418,57 @@ export default function MainViewport({
     }
   }, [])
 
-  // Attach/detach transform controls when selected object changes
+  // Attach/detach transform controls when selected object or ROI changes
   useEffect(() => {
     const tc = transformControlsRef.current
-    if (!tc) return
+    const pivot = roiTransformPivotRef.current
+    if (!tc || !pivot) return
     
     if (selectedObjectId) {
       const mesh = objectMeshesRef.current.get(selectedObjectId)
       if (mesh) {
         tc.attach(mesh)
         tc.visible = true
-        tc.setMode(transformMode)
-        // Configure axes and size based on mode
-        if (transformMode === 'translate') {
-          tc.showX = true
-          tc.showY = false
-          tc.showZ = true
-          tc.setSize(0.5)
-        } else if (transformMode === 'rotate') {
-          tc.showX = false
-          tc.showY = true
-          tc.showZ = false
-          tc.setSize(1.0) // Larger ring for easier rotation
+        configureTransformControlsMode(tc, transformMode)
+      } else {
+        tc.detach()
+        tc.visible = false
+      }
+      roiGizmoSnapshotRef.current = null
+    } else if (selectedRoiId) {
+      const roi = regionsRef.current.find(r => r.id === selectedRoiId)
+      if (roi && roi.vertices.length >= 3) {
+        const cx = roi.vertices.reduce((s, v) => s + v.x, 0) / roi.vertices.length
+        const cz = roi.vertices.reduce((s, v) => s + v.z, 0) / roi.vertices.length
+        pivot.position.set(cx, 0, cz)
+        pivot.rotation.set(0, 0, 0)
+        roiGizmoSnapshotRef.current = {
+          roiId: selectedRoiId,
+          vertices: roi.vertices.map(v => ({ ...v })),
+          centroid: { x: cx, z: cz },
+          startPos: new THREE.Vector3(cx, 0, cz),
+          startRotY: 0,
         }
+        tc.attach(pivot)
+        tc.visible = true
+        configureTransformControlsMode(tc, transformMode)
+      } else {
+        tc.detach()
+        tc.visible = false
+        roiGizmoSnapshotRef.current = null
       }
     } else {
       tc.detach()
       tc.visible = false
+      roiGizmoSnapshotRef.current = null
     }
-  }, [selectedObjectId, transformMode])
+  }, [selectedObjectId, selectedRoiId, transformMode])
   
   // Update transform mode when it changes
   useEffect(() => {
     const tc = transformControlsRef.current
     if (tc && tc.object) {
-      tc.setMode(transformMode)
-      // Configure axes based on mode
-      if (transformMode === 'translate') {
-        tc.showX = true
-        tc.showY = false  // No vertical movement for floor objects
-        tc.showZ = true
-        tc.setSize(0.5)   // Smaller for translate
-      } else if (transformMode === 'rotate') {
-        tc.showX = false  // Only Y rotation (around vertical axis)
-        tc.showY = true
-        tc.showZ = false
-        tc.setSize(1.0)   // Larger ring for easier rotation
-      }
+      configureTransformControlsMode(tc, transformMode)
     }
   }, [transformMode])
   
@@ -3705,6 +3785,13 @@ export default function MainViewport({
       }
       // Bulk clear: when all tracks vanish at once (simulator stopped), skip grace period
       if (refCount === 0 && meshCount > 0) {
+        if (emptyTracksSinceRef.current == null) {
+          emptyTracksSinceRef.current = now
+        }
+        if (now - emptyTracksSinceRef.current < EMPTY_TRACKS_CLEAR_MS) {
+          return
+        }
+        emptyTracksSinceRef.current = null
         trackMeshesRef.current.forEach((group, key) => {
           scene.remove(group)
           group.traverse(child => {
@@ -3736,6 +3823,7 @@ export default function MainViewport({
         sezEntryTimesRef.current.clear()
         return
       }
+      emptyTracksSinceRef.current = null
 
       // Phase 1: Handle disappeared tracks with grace period
       trackMeshesRef.current.forEach((group, key) => {
@@ -5785,10 +5873,12 @@ export default function MainViewport({
           )}
         </div>
         
-        {/* Transform Controls (when object selected) */}
-        {selectedObjectId && (
+        {/* Transform Controls (when object or ROI selected) */}
+        {(selectedObjectId || selectedRoiId) && (
           <div className="flex items-center gap-1 border-l border-gray-700 pl-2 ml-2">
-            <span className="text-[10px] text-gray-500 mr-1">Gizmo:</span>
+            <span className="text-[10px] text-gray-500 mr-1">
+              {selectedRoiId && !selectedObjectId ? 'Zone gizmo:' : 'Gizmo:'}
+            </span>
             <button
               onClick={() => setTransformMode('translate')}
               className={`p-1.5 rounded transition-colors ${transformMode === 'translate' ? 'bg-green-900/50 text-green-400' : 'text-gray-400 hover:text-white hover:bg-gray-700'}`}

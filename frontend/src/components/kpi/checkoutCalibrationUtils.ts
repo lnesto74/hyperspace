@@ -363,3 +363,21 @@ export function focusBoundsAroundFixture(
     maxZ: cz + halfD,
   }
 }
+
+export function isCheckoutZoneRoiName(name: string): boolean {
+  return /^Checkout \d+ - (Service|Queue)$/.test(name)
+}
+
+export function regionsToPreviewRois(
+  regions: { id: string; name: string; vertices: { x: number; z: number }[]; color: string; opacity?: number }[],
+): PreviewRoiLike[] {
+  return regions
+    .filter(r => isCheckoutZoneRoiName(r.name))
+    .map(r => ({
+      id: r.id,
+      name: r.name,
+      vertices: r.vertices,
+      color: r.color,
+      opacity: r.opacity ?? 0.4,
+    }))
+}
