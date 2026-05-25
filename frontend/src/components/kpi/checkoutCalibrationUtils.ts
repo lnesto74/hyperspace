@@ -323,7 +323,10 @@ export function extractZoneCalibration(
   const v1 = roi.vertices[1]
   const edgeX = v1.x - v0.x
   const edgeZ = v1.z - v0.z
-  const edgeAngle = Math.atan2(edgeX, edgeZ)
+  // Shelf width runs along local +X → world (cos r, sin r); match getShelfZoneRotation convention.
+  const edgeAngle = options?.shelfMode
+    ? Math.atan2(edgeZ, edgeX)
+    : Math.atan2(edgeX, edgeZ)
   const rotationOffset = normalizeDegrees((edgeAngle - baseRotation) * (180 / Math.PI))
 
   return {

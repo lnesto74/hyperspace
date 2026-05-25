@@ -587,19 +587,11 @@ export default function SmartKpiModal({ isOpen, onClose, dwgLayoutId: propDwgLay
   }, [selectedTemplate, engagementDepth, roiDimensions, previewTemplate])
 
   const handleReferenceFixtureChange = (fixtureId: string) => {
+    if (!fixtureId || fixtureId === referenceFixtureId) return
     setReferenceFixtureId(fixtureId)
     setCalibrationValidated(false)
     setCalibrationAppliedToAll(false)
-    if (selectedTemplate === 'shelf-engagement' && shelfFixtures.length > 0 && fixtureId) {
-      const rois = generateCalibratedShelfPreviewRois(
-        shelfFixtures,
-        shelfCalibration,
-        { left: '#a855f7', right: '#f59e0b' },
-      )
-      if (rois.length > 0) {
-        setShelfCalibration(extractShelfCalibration(rois, shelfFixtures, fixtureId))
-      }
-    } else if (previewRois.length > 0) {
+    if (selectedTemplate === 'cashier-queue' && previewRois.length > 0) {
       syncCalibrationFromPreview(fixtureId, previewRois)
     }
   }
