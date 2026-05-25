@@ -42,13 +42,15 @@ const COLORS = {
   sezInfluenced: 0xff3333, // Red for people influenced by digital displays
 }
 
-const MAX_RENDER_TRACKS_CAP = 80
+const MAX_RENDER_TRACKS_CAP = 120
+const RENDER_EMERGENCY_THRESHOLD = 150
 
 function capTracksForRender<T extends { timestamp?: number }>(
   source: Map<string, T>,
   existingMeshKeys: Iterable<string>,
   max = MAX_RENDER_TRACKS_CAP,
 ): Map<string, T> {
+  if (source.size <= RENDER_EMERGENCY_THRESHOLD) return source
   if (source.size <= max) return source
   const result = new Map<string, T>()
   for (const key of existingMeshKeys) {
@@ -266,8 +268,8 @@ export default function MainViewport({
   // Grace period: tracks hidden but not disposed, keyed by trackKey -> hide timestamp
   const trackGraceRef = useRef<Map<string, number>>(new Map())
   const emptyTracksSinceRef = useRef<number | null>(null)
-  const TRACK_GRACE_MS = 5000 // Keep meshes alive through re-ID gaps — avoids blink
-  const MESH_LERP = 0.35 // Smooth position updates instead of snapping
+  const TRACK_GRACE_MS = 2000
+  const TRACK_HIDE_DELAY_MS = 350 // hide quickly when gone — no frozen ghosts
   const EMPTY_TRACKS_CLEAR_MS = 500 // Avoid nuking all meshes on a single empty frame
   // Instanced rendering for tracks - single draw call for all 200+ tracks
   const trackInstancedMeshRef = useRef<THREE.InstancedMesh | null>(null)
@@ -3788,7 +3790,6 @@ export default function MainViewport({
 
   useEffect(() => {
     const MESH_DIAG = import.meta.env.DEV || localStorage.getItem('hyperspace-diag') === '1'
-    const MAX_RENDER_TRACKS = 80
     let syncIntervalMs = 33
     let timer: ReturnType<typeof setTimeout> | null = null
 
@@ -3800,11 +3801,11 @@ export default function MainViewport({
       const scene = sceneRef.current
       const allTracks = tracksRef.current
       const refCount = allTracks.size
-      syncIntervalMs = refCount > 120 ? 200 : refCount > MAX_RENDER_TRACKS ? 100 : 33
+      syncIntervalMs = refCount > 200 ? 200 : refCount > RENDER_EMERGENCY_THRESHOLD ? 66 : 33
 
       // Sticky cap: prefer tracks that already have meshes so IDs don't swap every frame
       let tracksToRender = allTracks
-      if (refCount > MAX_RENDER_TRACKS) {
+      if (refCount > RENDER_EMERGENCY_THRESHOLD) {
         tracksToRender = capTracksForRender(allTracks, trackMeshesRef.current.keys())
       }
       const allTrackKeys = new Set(allTracks.keys())
@@ -3867,7 +3868,14 @@ export default function MainViewport({
         if (!allTrackKeys.has(key)) {
           if (!trackGraceRef.current.has(key)) {
             trackGraceRef.current.set(key, now)
-          } else if (now - trackGraceRef.current.get(key)! > TRACK_GRACE_MS) {
+          }
+          const graceAge = now - (trackGraceRef.current.get(key) ?? now)
+          if (graceAge > TRACK_HIDE_DELAY_MS) {
+            group.visible = false
+            const trail = trailLinesRef.current.get(key)
+            if (trail) trail.visible = false
+          }
+          if (graceAge > TRACK_GRACE_MS) {
             // Grace period expired — dispose
             trackGraceRef.current.delete(key)
             scene.remove(group)
@@ -4101,11 +4109,7 @@ export default function MainViewport({
         }
 
         const targetY = cylinderHeight / 2
-        const tx = track.venuePosition.x
-        const tz = track.venuePosition.z
-        group.position.x += (tx - group.position.x) * MESH_LERP
-        group.position.y += (targetY - group.position.y) * MESH_LERP
-        group.position.z += (tz - group.position.z) * MESH_LERP
+        group.position.set(track.venuePosition.x, targetY, track.venuePosition.z)
 
         // Track-ID label — update text (when re-ID flips the perception id) and visibility.
         const perceptionId = (track as unknown as { originalPerceptionId?: string }).originalPerceptionId || track.id || ''

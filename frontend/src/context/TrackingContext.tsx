@@ -6,10 +6,11 @@ import { API_BASE } from '../config/api'
 
 const MAX_TRAIL_LENGTH = 50 // ~5 seconds at 10Hz (reduced from 100 to save memory)
 const TRACK_TTL_MS = 20000 // 20s — generous margin to survive backend event-loop stalls without removing tracks
-const SNAPSHOT_GRACE_MS = 2000 // keep tracks through re-ID gaps and capped-frame misses
+const SNAPSHOT_GRACE_MS = 1000 // brief re-ID gap; don't hold stale positions
 const CLEANUP_INTERVAL_MS = 1000 // Cleanup stale tracks every 1 second
-const INTERP_MAX_TRACKS = 80 // Disable interpolation above this — replay ID churn freezes the UI
-const MAX_CLIENT_TRACKS = 100 // Hard cap on client track map — prevents 400+ mesh explosion
+const INTERP_MAX_TRACKS = 120 // Emergency off above this — reconciler keeps ~40 live
+const MAX_CLIENT_TRACKS = 150 // Emergency cap only — reconciler keeps count low
+const EMERGENCY_CAP_THRESHOLD = 150 // Only sticky-cap above this
 
 function capTrackMap<T extends { timestamp?: number }>(source: Map<string, T>): Map<string, T> {
   if (source.size <= MAX_CLIENT_TRACKS) return source
@@ -29,6 +30,7 @@ function stickyCapTrackMap<T extends { timestamp?: number }>(
   prev: Map<string, unknown>,
   max = MAX_CLIENT_TRACKS,
 ): Map<string, T> {
+  if (incoming.size <= EMERGENCY_CAP_THRESHOLD) return incoming
   if (incoming.size <= max) return incoming
   const result = new Map<string, T>()
   for (const key of prev.keys()) {
@@ -181,10 +183,10 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
       if (DIAG) console.warn(`[DIAG] Socket RECONNECT attempt #${attempt}  t=${Date.now()}`)
     })
 
-    // Throttle track updates to reduce memory pressure (target ~15fps instead of 30fps)
+    // When interpolation is on, socket updates only feed targets — keep flush fast as fallback.
     let pendingBatches: Track[][] = []
     let lastFlushTime = 0
-    const MIN_FLUSH_INTERVAL = 66 // ~15fps max update rate (was ~30fps)
+    const MIN_FLUSH_INTERVAL = 33 // ~30fps — matches original MainViewport sync
     
     const flushTrackUpdates = () => {
       if (pendingBatches.length === 0) return
@@ -443,14 +445,8 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
 
     const targets = targetTracksRef.current
     if (targets.size > INTERP_MAX_TRACKS) {
-      interpEnabledRef.current = false
-      if (interpRAFRef.current) {
-        cancelAnimationFrame(interpRAFRef.current)
-        interpRAFRef.current = null
-      }
-      if (DIAG) {
-        console.warn(`[DIAG] Interp auto-disabled  targets=${targets.size}  max=${INTERP_MAX_TRACKS}  t=${Date.now()}`)
-      }
+      // Emergency: skip frames but keep loop alive so motion recovers when count drops
+      interpRAFRef.current = requestAnimationFrame(interpLoop)
       return
     }
     
@@ -589,6 +585,12 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
       interpFrameRef.current = 0
     }
   }, [interpLoop, seedInterpolationTargets])
+
+  // Original smooth motion: 30fps interpolation for live + MQTT replay (not historical timeline).
+  useEffect(() => {
+    setInterpolation(true)
+    return () => setInterpolation(false)
+  }, [setInterpolation])
 
   const setTrackVisibility = useCallback((visible: boolean) => {
     socketRef.current?.emit('track_visibility', { visible })

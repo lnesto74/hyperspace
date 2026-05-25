@@ -65,13 +65,13 @@ export default function NeuralDashboard({ children, enabled = true, leftOffset =
   const [xrayFilters, setXrayFilters] = useState<XRayFilters>(defaultFilters)
   const xrayData = useXRayData(enabled && xrayMode)
   
-  // Toggle track interpolation when Neural Dashboard is enabled/disabled
+  // Toggle track interpolation — base smooth motion is always on via TrackingProvider.
+  // Re-seed targets when Neural Dashboard opens so motion picks up immediately.
   useEffect(() => {
-    const trackCount = tracksRef.current.size
-    const tooManyTracks = trackCount > 80
-    setInterpolation(enabled && !isReplayMode && !tooManyTracks)
-    return () => setInterpolation(false)
-  }, [enabled, isReplayMode, setInterpolation, tracksRef])
+    if (enabled && !isReplayMode) {
+      setInterpolation(true)
+    }
+  }, [enabled, isReplayMode, setInterpolation])
   
   // Throttled metrics — recompute at most once per second to avoid lag
   const [metrics, setMetrics] = useState({
