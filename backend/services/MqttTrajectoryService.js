@@ -42,13 +42,14 @@ class MqttTrajectoryService {
       const events = this.reconciler.sweep()
       for (const { venueId, trackKey, reason } of events) {
         if (!trackKey) continue
-        // Remove from TrackAggregator immediately so its 100ms re-emit cycle
-        // doesn't keep re-broadcasting the stale track until the 6s TTL fires.
-        if (this.trackAggregator && this.trackAggregator.tracks) {
-          this.trackAggregator.tracks.delete(trackKey)
+        // Keep newly_lost tracks in the aggregator so they stay visible during re-ID gaps.
+        // Only purge from the live snapshot on permanent removal.
+        if (reason === 'expired' || reason === 'static_fixture') {
+          if (this.trackAggregator && this.trackAggregator.tracks) {
+            this.trackAggregator.tracks.delete(trackKey)
+          }
+          this.tracks.delete(trackKey)
         }
-        // Also drop from our own per-service cache
-        this.tracks.delete(trackKey)
         // newly_lost is often temporary (perception gap → re-ID within seconds).
         // Emitting track_removed here causes visible flicker; the next full snapshot
         // (100ms) already drops the track. Only push immediate removal for permanent drops.

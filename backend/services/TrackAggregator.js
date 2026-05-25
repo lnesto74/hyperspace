@@ -115,6 +115,8 @@ export class TrackAggregator extends EventEmitter {
 
   /** Drop oldest replay IDs first so live edge tracks stay visible under load. */
   evictExcessTracks() {
+    const now = Date.now();
+    const STALE_MS = 3000;
     const entries = [...this.tracks.entries()];
     entries.sort((a, b) => {
       const aReplay = a[0].startsWith('replay-') ? 0 : 1;
@@ -123,7 +125,10 @@ export class TrackAggregator extends EventEmitter {
       return a[1].lastUpdate - b[1].lastUpdate;
     });
     while (this.tracks.size > MAX_AGGREGATOR_TRACKS && entries.length > 0) {
-      const [key] = entries.shift();
+      const [key, entry] = entries.shift();
+      // Never evict fresh tracks — only drop stale replay ghosts
+      if (now - entry.lastUpdate < STALE_MS && !key.startsWith('replay-')) break;
+      if (now - entry.lastUpdate < STALE_MS && key.startsWith('replay-')) continue;
       this.tracks.delete(key);
     }
   }

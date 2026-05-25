@@ -51,7 +51,7 @@ export const DEFAULT_CONFIG = Object.freeze({
   smoothing_alpha: 0.6,                    // EMA blend (1 = use raw, 0 = no update)
 
   // Housekeeping
-  active_to_lost_timeout_ms: 1000,         // moved from active to lost after this gap
+  active_to_lost_timeout_ms: 4000,         // keep visible through brief perception gaps
 
   // Trail
   trail_max_length: 32,

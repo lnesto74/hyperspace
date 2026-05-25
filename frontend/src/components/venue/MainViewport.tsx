@@ -46,15 +46,25 @@ const MAX_RENDER_TRACKS_CAP = 80
 
 function capTracksForRender<T extends { timestamp?: number }>(
   source: Map<string, T>,
+  existingMeshKeys: Iterable<string>,
   max = MAX_RENDER_TRACKS_CAP,
 ): Map<string, T> {
   if (source.size <= max) return source
-  const entries = [...source.entries()].sort((a, b) => {
-    const tsDiff = (b[1].timestamp ?? 0) - (a[1].timestamp ?? 0)
-    if (tsDiff !== 0) return tsDiff
-    return (a[0].startsWith('replay-') ? 1 : 0) - (b[0].startsWith('replay-') ? 1 : 0)
-  })
-  return new Map(entries.slice(0, max))
+  const result = new Map<string, T>()
+  for (const key of existingMeshKeys) {
+    const track = source.get(key)
+    if (track) result.set(key, track)
+  }
+  if (result.size < max) {
+    const rest = [...source.entries()]
+      .filter(([k]) => !result.has(k))
+      .sort((a, b) => (b[1].timestamp ?? 0) - (a[1].timestamp ?? 0))
+    for (const [k, t] of rest) {
+      if (result.size >= max) break
+      result.set(k, t)
+    }
+  }
+  return result
 }
 
 const getObjectColorHex = (obj: { type: string; color?: string | null }, fallback = COLORS.custom) => {
@@ -256,7 +266,8 @@ export default function MainViewport({
   // Grace period: tracks hidden but not disposed, keyed by trackKey -> hide timestamp
   const trackGraceRef = useRef<Map<string, number>>(new Map())
   const emptyTracksSinceRef = useRef<number | null>(null)
-  const TRACK_GRACE_MS = 3000 // Keep meshes alive 3s after track disappears
+  const TRACK_GRACE_MS = 5000 // Keep meshes alive through re-ID gaps — avoids blink
+  const MESH_LERP = 0.35 // Smooth position updates instead of snapping
   const EMPTY_TRACKS_CLEAR_MS = 500 // Avoid nuking all meshes on a single empty frame
   // Instanced rendering for tracks - single draw call for all 200+ tracks
   const trackInstancedMeshRef = useRef<THREE.InstancedMesh | null>(null)
@@ -3791,20 +3802,20 @@ export default function MainViewport({
       const refCount = allTracks.size
       syncIntervalMs = refCount > 120 ? 200 : refCount > MAX_RENDER_TRACKS ? 100 : 33
 
-      // Only render the newest N tracks — creating 400+ Three.js groups freezes the browser
-      let currentTracks = allTracks
+      // Sticky cap: prefer tracks that already have meshes so IDs don't swap every frame
+      let tracksToRender = allTracks
       if (refCount > MAX_RENDER_TRACKS) {
-        currentTracks = capTracksForRender(allTracks)
+        tracksToRender = capTracksForRender(allTracks, trackMeshesRef.current.keys())
       }
+      const allTrackKeys = new Set(allTracks.keys())
       const currentDoohScreens = doohScreensRef.current
       const currentTracking = trackingRef.current
-      const currentTrackKeys = new Set(currentTracks.keys())
       const now = Date.now()
       const SEZ_LABEL_DURATION_MS = 60 * 1000
 
       diagSyncCount++
       const meshCount = trackMeshesRef.current.size
-      const renderCount = currentTracks.size
+      const renderCount = tracksToRender.size
       if (MESH_DIAG && (Math.abs(meshCount - diagLastMeshCount) > 3 || (diagSyncCount % 300 === 0))) {
         console.log(`[DIAG] meshSync  meshes=${meshCount}  refTracks=${refCount}  render=${renderCount}  grace=${trackGraceRef.current.size}  sync#=${diagSyncCount}  t=${now}`)
         diagLastMeshCount = meshCount
@@ -3851,14 +3862,11 @@ export default function MainViewport({
       }
       emptyTracksSinceRef.current = null
 
-      // Phase 1: Handle disappeared tracks with grace period
+      // Phase 1: hide only when track is truly gone from server snapshot (not just render-capped)
       trackMeshesRef.current.forEach((group, key) => {
-        if (!currentTrackKeys.has(key)) {
+        if (!allTrackKeys.has(key)) {
           if (!trackGraceRef.current.has(key)) {
             trackGraceRef.current.set(key, now)
-            group.visible = false
-            const trail = trailLinesRef.current.get(key)
-            if (trail) trail.visible = false
           } else if (now - trackGraceRef.current.get(key)! > TRACK_GRACE_MS) {
             // Grace period expired — dispose
             trackGraceRef.current.delete(key)
@@ -3893,18 +3901,18 @@ export default function MainViewport({
             trackMeshesRef.current.delete(key)
           }
         } else {
-          // Track reappeared during grace period — cancel grace, restore visibility
+          // Track present — keep visible (fade-in if returning from grace)
           if (trackGraceRef.current.has(key)) {
             trackGraceRef.current.delete(key)
-            group.visible = showTracksRef.current
-            const trail = trailLinesRef.current.get(key)
-            if (trail) trail.visible = showTracksRef.current
           }
+          group.visible = showTracksRef.current
+          const trail = trailLinesRef.current.get(key)
+          if (trail) trail.visible = showTracksRef.current
         }
       })
 
-      // Phase 2: Add/update tracks
-      currentTracks.forEach((track, key) => {
+      // Phase 2: Add/update tracks (create new meshes only within render cap)
+      tracksToRender.forEach((track, key) => {
         let group = trackMeshesRef.current.get(key)
 
         const personPos = { x: track.venuePosition.x, z: track.venuePosition.z }
@@ -4092,7 +4100,12 @@ export default function MainViewport({
           trackMeshesRef.current.set(key, group)
         }
 
-        group.position.set(track.venuePosition.x, cylinderHeight / 2, track.venuePosition.z)
+        const targetY = cylinderHeight / 2
+        const tx = track.venuePosition.x
+        const tz = track.venuePosition.z
+        group.position.x += (tx - group.position.x) * MESH_LERP
+        group.position.y += (targetY - group.position.y) * MESH_LERP
+        group.position.z += (tz - group.position.z) * MESH_LERP
 
         // Track-ID label — update text (when re-ID flips the perception id) and visibility.
         const perceptionId = (track as unknown as { originalPerceptionId?: string }).originalPerceptionId || track.id || ''
@@ -4193,7 +4206,7 @@ export default function MainViewport({
 
       // Clean up stale SEZ entry times
       sezEntryTimesRef.current.forEach((_, key) => {
-        if (!currentTrackKeys.has(key)) {
+        if (!allTrackKeys.has(key)) {
           sezEntryTimesRef.current.delete(key)
         }
       })

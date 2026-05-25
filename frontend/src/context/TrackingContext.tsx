@@ -6,7 +6,7 @@ import { API_BASE } from '../config/api'
 
 const MAX_TRAIL_LENGTH = 50 // ~5 seconds at 10Hz (reduced from 100 to save memory)
 const TRACK_TTL_MS = 20000 // 20s — generous margin to survive backend event-loop stalls without removing tracks
-const SNAPSHOT_GRACE_MS = 900 // keep tracks briefly if missing from one aggregator snapshot (re-ID gap)
+const SNAPSHOT_GRACE_MS = 2000 // keep tracks through re-ID gaps and capped-frame misses
 const CLEANUP_INTERVAL_MS = 1000 // Cleanup stale tracks every 1 second
 const INTERP_MAX_TRACKS = 80 // Disable interpolation above this — replay ID churn freezes the UI
 const MAX_CLIENT_TRACKS = 100 // Hard cap on client track map — prevents 400+ mesh explosion
@@ -21,6 +21,30 @@ function capTrackMap<T extends { timestamp?: number }>(source: Map<string, T>): 
     return aReplay - bReplay
   })
   return new Map(entries.slice(0, MAX_CLIENT_TRACKS))
+}
+
+/** Prefer tracks already on screen so the cap doesn't swap IDs every frame. */
+function stickyCapTrackMap<T extends { timestamp?: number }>(
+  incoming: Map<string, T>,
+  prev: Map<string, unknown>,
+  max = MAX_CLIENT_TRACKS,
+): Map<string, T> {
+  if (incoming.size <= max) return incoming
+  const result = new Map<string, T>()
+  for (const key of prev.keys()) {
+    const track = incoming.get(key)
+    if (track) result.set(key, track)
+  }
+  if (result.size < max) {
+    const rest = [...incoming.entries()]
+      .filter(([k]) => !result.has(k))
+      .sort((a, b) => (b[1].timestamp ?? 0) - (a[1].timestamp ?? 0))
+    for (const [k, t] of rest) {
+      if (result.size >= max) break
+      result.set(k, t)
+    }
+  }
+  return result
 }
 const LERP_SPEED = 0.18 // Exponential smoothing factor per frame
 const EXTRAP_FACTOR = 0.001 // Velocity extrapolation: m/s → m/frame (tuned for 60fps)
@@ -183,7 +207,7 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
       }
       pendingBatches = []
 
-      const cappedKeys = capTrackMap(latestByKey)
+      const cappedKeys = stickyCapTrackMap(latestByKey, liveTracksRef.current)
       
       setLiveTracks(prev => {
         const next = new Map<string, TrackWithTrail>()
