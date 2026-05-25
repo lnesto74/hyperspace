@@ -289,7 +289,7 @@ export default function CheckoutManagerModal({ isOpen, onClose }: CheckoutManage
     if (!isOpen) return
     
     fetchStatus()
-    const interval = setInterval(fetchStatus, 2000)
+    const interval = setInterval(fetchStatus, 5000)
     return () => clearInterval(interval)
   }, [isOpen, fetchStatus])
 

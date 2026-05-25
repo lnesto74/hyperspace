@@ -204,6 +204,15 @@ const lastOccupancyRecordTime = new Map();
 const roiCache = new Map();
 const ROI_CACHE_TTL_MS = 5000; // Refresh ROI cache every 5 seconds
 
+function roiBBox(vertices) {
+  let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+  for (const v of vertices) {
+    minX = Math.min(minX, v.x); maxX = Math.max(maxX, v.x);
+    minZ = Math.min(minZ, v.z); maxZ = Math.max(maxZ, v.z);
+  }
+  return { minX, maxX, minZ, maxZ };
+}
+
 function getCachedRois(venueId) {
   const cached = roiCache.get(venueId);
   const now = Date.now();
@@ -211,9 +220,20 @@ function getCachedRois(venueId) {
     return cached.rois;
   }
   const rois = db.prepare(`SELECT id, name, vertices, color FROM regions_of_interest WHERE venue_id = ?`).all(venueId);
-  const parsedRois = rois.map(r => ({ ...r, vertices: JSON.parse(r.vertices) }));
+  const parsedRois = rois.map(r => {
+    const vertices = JSON.parse(r.vertices);
+    return { ...r, vertices, bbox: roiBBox(vertices) };
+  });
   roiCache.set(venueId, { rois: parsedRois, timestamp: now });
   return parsedRois;
+}
+
+function getKpiIntervalMs(trackCount, roiCount) {
+  const cost = trackCount * Math.max(roiCount, 1);
+  if (cost > 12000) return 30000;
+  if (cost > 6000) return 15000;
+  if (cost > 2500) return 10000;
+  return KPI_RECORD_INTERVAL_MS;
 }
 
 let diagLastEmitTs = 0;
@@ -235,8 +255,11 @@ trackAggregator.on('tracks', (data) => {
   
   // Throttle KPI recording: only process every 2s instead of every 50ms emission.
   // This reduces event loop load from ~20 heavy batches/s to ~0.5/s.
+  const liveTracksPreview = data.tracks.filter(t => !t.trackKey?.startsWith('replay-'));
+  const parsedRoisPreview = getCachedRois(data.venueId);
+  const kpiInterval = getKpiIntervalMs(liveTracksPreview.length || data.tracks.length, parsedRoisPreview.length);
   const lastKpi = lastKpiRecordTime.get(data.venueId) || 0;
-  if (now - lastKpi < KPI_RECORD_INTERVAL_MS) return;
+  if (now - lastKpi < kpiInterval) return;
   lastKpiRecordTime.set(data.venueId, now);
 
   setImmediate(() => {
@@ -246,26 +269,32 @@ trackAggregator.on('tracks', (data) => {
     if (liveTracks.length === 0) return;
 
     const _t0 = Date.now();
-    const parsedRois = getCachedRois(data.venueId);
+    const parsedRois = parsedRoisPreview;
+    const heavyLoad = liveTracks.length * parsedRois.length > 2500;
+    // Under load, only run queue/checkout ROI KPI — alerts use TrackAggregator occupancy anyway.
+    const kpiRois = heavyLoad
+      ? parsedRois.filter(r => r.name?.includes('Queue') || r.name?.includes('Service'))
+      : parsedRois;
     
     for (const track of liveTracks) {
-      trajectoryStorage.recordTrackPosition(data.venueId, track, parsedRois);
+      trajectoryStorage.recordTrackPosition(data.venueId, track, kpiRois);
     }
     
     const kpiElapsed = Date.now() - _t0;
     if (kpiElapsed > 100) {
-      console.warn(`[DIAG] KPI recording SLOW  ${kpiElapsed}ms  tracks=${liveTracks.length}  t=${Date.now()}`);
+      console.warn(`[DIAG] KPI recording SLOW  ${kpiElapsed}ms  tracks=${liveTracks.length}  rois=${kpiRois.length}  t=${Date.now()}`);
     }
 
     const now2 = Date.now();
     const lastRecord = lastOccupancyRecordTime.get(data.venueId) || 0;
-    if (now2 - lastRecord >= 10000) {
+    const occupancyInterval = heavyLoad ? 30000 : 10000;
+    if (now2 - lastRecord >= occupancyInterval) {
       lastOccupancyRecordTime.set(data.venueId, now2);
       const tracksMap = new Map(liveTracks.map(t => [t.trackKey, t]));
-      trajectoryStorage.recordOccupancy(data.venueId, parsedRois, tracksMap);
+      trajectoryStorage.recordOccupancy(data.venueId, kpiRois, tracksMap);
     }
     const _elapsed = Date.now() - _t0;
-    if (_elapsed > 50) console.warn(`⏱️ KPI batch took ${_elapsed}ms (${liveTracks.length} tracks, ${parsedRois.length} ROIs)`);
+    if (_elapsed > 50) console.warn(`⏱️ KPI batch took ${_elapsed}ms (${liveTracks.length} tracks, ${kpiRois.length} ROIs)`);
   });
 });
 

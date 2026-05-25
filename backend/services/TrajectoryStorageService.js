@@ -1131,7 +1131,16 @@ export class TrajectoryStorageService extends EventEmitter {
    * Find all ROIs containing a position
    */
   findContainingRois(position, rois) {
-    return rois.filter(roi => this.isPointInPolygon(position, roi.vertices));
+    return rois.filter(roi => {
+      const bbox = roi.bbox;
+      if (bbox) {
+        if (position.x < bbox.minX || position.x > bbox.maxX ||
+            position.z < bbox.minZ || position.z > bbox.maxZ) {
+          return false;
+        }
+      }
+      return this.isPointInPolygon(position, roi.vertices);
+    });
   }
 
   /**

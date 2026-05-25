@@ -42,6 +42,21 @@ const COLORS = {
   sezInfluenced: 0xff3333, // Red for people influenced by digital displays
 }
 
+const MAX_RENDER_TRACKS_CAP = 80
+
+function capTracksForRender<T extends { timestamp?: number }>(
+  source: Map<string, T>,
+  max = MAX_RENDER_TRACKS_CAP,
+): Map<string, T> {
+  if (source.size <= max) return source
+  const entries = [...source.entries()].sort((a, b) => {
+    const tsDiff = (b[1].timestamp ?? 0) - (a[1].timestamp ?? 0)
+    if (tsDiff !== 0) return tsDiff
+    return (a[0].startsWith('replay-') ? 1 : 0) - (b[0].startsWith('replay-') ? 1 : 0)
+  })
+  return new Map(entries.slice(0, max))
+}
+
 const getObjectColorHex = (obj: { type: string; color?: string | null }, fallback = COLORS.custom) => {
   if (obj.color && /^#[0-9a-fA-F]{6}$/.test(obj.color)) {
     return parseInt(obj.color.slice(1), 16)
@@ -3761,7 +3776,10 @@ export default function MainViewport({
   trackingRef.current = tracking
 
   useEffect(() => {
-    const SYNC_INTERVAL = 33 // ~30fps mesh sync
+    const MESH_DIAG = import.meta.env.DEV || localStorage.getItem('hyperspace-diag') === '1'
+    const MAX_RENDER_TRACKS = 80
+    let syncIntervalMs = 33
+    let timer: ReturnType<typeof setTimeout> | null = null
 
     let diagLastMeshCount = 0
     let diagSyncCount = 0
@@ -3769,7 +3787,15 @@ export default function MainViewport({
     const syncTrackMeshes = () => {
       if (!sceneRef.current) return
       const scene = sceneRef.current
-      const currentTracks = tracksRef.current
+      const allTracks = tracksRef.current
+      const refCount = allTracks.size
+      syncIntervalMs = refCount > 120 ? 200 : refCount > MAX_RENDER_TRACKS ? 100 : 33
+
+      // Only render the newest N tracks — creating 400+ Three.js groups freezes the browser
+      let currentTracks = allTracks
+      if (refCount > MAX_RENDER_TRACKS) {
+        currentTracks = capTracksForRender(allTracks)
+      }
       const currentDoohScreens = doohScreensRef.current
       const currentTracking = trackingRef.current
       const currentTrackKeys = new Set(currentTracks.keys())
@@ -3778,9 +3804,9 @@ export default function MainViewport({
 
       diagSyncCount++
       const meshCount = trackMeshesRef.current.size
-      const refCount = currentTracks.size
-      if (Math.abs(meshCount - diagLastMeshCount) > 3 || (diagSyncCount % 300 === 0)) {
-        console.log(`[DIAG] meshSync  meshes=${meshCount}  refTracks=${refCount}  grace=${trackGraceRef.current.size}  sync#=${diagSyncCount}  t=${now}`)
+      const renderCount = currentTracks.size
+      if (MESH_DIAG && (Math.abs(meshCount - diagLastMeshCount) > 3 || (diagSyncCount % 300 === 0))) {
+        console.log(`[DIAG] meshSync  meshes=${meshCount}  refTracks=${refCount}  render=${renderCount}  grace=${trackGraceRef.current.size}  sync#=${diagSyncCount}  t=${now}`)
         diagLastMeshCount = meshCount
       }
       // Bulk clear: when all tracks vanish at once (simulator stopped), skip grace period
@@ -4173,8 +4199,12 @@ export default function MainViewport({
       })
     }
 
-    const interval = setInterval(syncTrackMeshes, SYNC_INTERVAL)
-    return () => clearInterval(interval)
+    const scheduleSync = () => {
+      syncTrackMeshes()
+      timer = setTimeout(scheduleSync, syncIntervalMs)
+    }
+    scheduleSync()
+    return () => { if (timer) clearTimeout(timer) }
   }, []) // Stable — reads everything via refs
 
   // Render ROIs (regions of interest) as polygons

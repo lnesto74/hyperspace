@@ -9,6 +9,19 @@ const TRACK_TTL_MS = 20000 // 20s — generous margin to survive backend event-l
 const SNAPSHOT_GRACE_MS = 900 // keep tracks briefly if missing from one aggregator snapshot (re-ID gap)
 const CLEANUP_INTERVAL_MS = 1000 // Cleanup stale tracks every 1 second
 const INTERP_MAX_TRACKS = 80 // Disable interpolation above this — replay ID churn freezes the UI
+const MAX_CLIENT_TRACKS = 100 // Hard cap on client track map — prevents 400+ mesh explosion
+
+function capTrackMap<T extends { timestamp?: number }>(source: Map<string, T>): Map<string, T> {
+  if (source.size <= MAX_CLIENT_TRACKS) return source
+  const entries = [...source.entries()].sort((a, b) => {
+    const tsDiff = (b[1].timestamp ?? 0) - (a[1].timestamp ?? 0)
+    if (tsDiff !== 0) return tsDiff
+    const aReplay = a[0].startsWith('replay-') ? 1 : 0
+    const bReplay = b[0].startsWith('replay-') ? 1 : 0
+    return aReplay - bReplay
+  })
+  return new Map(entries.slice(0, MAX_CLIENT_TRACKS))
+}
 const LERP_SPEED = 0.18 // Exponential smoothing factor per frame
 const EXTRAP_FACTOR = 0.001 // Velocity extrapolation: m/s → m/frame (tuned for 60fps)
 const INTERP_TRAIL_INTERVAL = 3 // Add trail point every N interpolation frames
@@ -169,11 +182,13 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
         latestByKey.set(track.trackKey, track)
       }
       pendingBatches = []
+
+      const cappedKeys = capTrackMap(latestByKey)
       
       setLiveTracks(prev => {
         const next = new Map<string, TrackWithTrail>()
 
-        for (const [key, track] of latestByKey) {
+        for (const [key, track] of cappedKeys) {
           const existing = prev.get(key)
           const oldTrail = existing?.trail || []
           let trail = [...oldTrail, { ...track.venuePosition }]
@@ -316,6 +331,8 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
         }
       })
       if (staleKeys.length > 0) {
+        // Remove at most 40 stale keys per tick to avoid one-frame mass wipe
+        if (staleKeys.length > 40) staleKeys = staleKeys.slice(0, 40)
         if (DIAG) {
           const total = trackLastSeenRef.current.size
           console.warn(`[DIAG] TTL cleanup  removing=${staleKeys.length}  remaining=${total - staleKeys.length}  t=${now}`)
@@ -333,6 +350,15 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
           }
           return next
         })
+      }
+      // Prevent trackLastSeen map from growing unbounded during replay ID churn
+      if (trackLastSeenRef.current.size > MAX_CLIENT_TRACKS * 2) {
+        const sorted = [...trackLastSeenRef.current.entries()]
+          .sort((a, b) => a[1] - b[1])
+        const drop = sorted.length - MAX_CLIENT_TRACKS
+        for (let i = 0; i < drop; i++) {
+          trackLastSeenRef.current.delete(sorted[i][0])
+        }
       }
     }, CLEANUP_INTERVAL_MS)
 

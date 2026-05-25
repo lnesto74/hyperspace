@@ -3,6 +3,7 @@ import { EventEmitter } from 'events';
 const EMIT_INTERVAL_MS = 100; // 10 fps — sufficient for smooth visualization, halves event loop load
 const TRACK_TTL_MS = 6000; // 6 seconds
 const MAX_TRAIL_LENGTH = 100; // ~10 seconds of trail at 10Hz
+const MAX_AGGREGATOR_TRACKS = 100; // Cap in-memory tracks — replay ID churn can exceed 600 without this
 
 export class TrackAggregator extends EventEmitter {
   constructor() {
@@ -106,6 +107,25 @@ export class TrackAggregator extends EventEmitter {
       lastUpdate: Date.now(),
       venueId: this.venueId,
     });
+
+    if (this.tracks.size > MAX_AGGREGATOR_TRACKS) {
+      this.evictExcessTracks();
+    }
+  }
+
+  /** Drop oldest replay IDs first so live edge tracks stay visible under load. */
+  evictExcessTracks() {
+    const entries = [...this.tracks.entries()];
+    entries.sort((a, b) => {
+      const aReplay = a[0].startsWith('replay-') ? 0 : 1;
+      const bReplay = b[0].startsWith('replay-') ? 0 : 1;
+      if (aReplay !== bReplay) return aReplay - bReplay;
+      return a[1].lastUpdate - b[1].lastUpdate;
+    });
+    while (this.tracks.size > MAX_AGGREGATOR_TRACKS && entries.length > 0) {
+      const [key] = entries.shift();
+      this.tracks.delete(key);
+    }
   }
 
   transformToVenueCoords(localPosition, placement) {
