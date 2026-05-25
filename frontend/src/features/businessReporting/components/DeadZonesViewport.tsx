@@ -1,16 +1,11 @@
 import { API_BASE } from '../../../config/api'
-import { useState, useEffect, useMemo, useRef, useCallback } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { MapPin } from 'lucide-react'
 import { useVenue } from '../../../context/VenueContext'
 import { ROI_CATEGORY_COLOR } from '../../../utils/roiCategoryUtils'
 import type { VenueObject } from '../../../types'
-import {
-  buildMapTransform,
-  computeFloorPlanBounds,
-  drawDeadZonesMap,
-  normalizeFloorVertex,
-  type MapRegion,
-} from '../../../utils/venueFloorPlanMap'
+import FloorPlanMiniMap from '../../../components/shared/FloorPlanMiniMap'
+import { normalizeFloorVertex, type MapRegion } from '../../../utils/venueFloorPlanMap'
 
 interface DeadZone {
   id: string
@@ -33,9 +28,9 @@ interface DeadZonesViewportProps {
 
 export default function DeadZonesViewport({ venueId, deadZones }: DeadZonesViewportProps) {
   const { objects: contextObjects, venue: contextVenue } = useVenue()
-  const canvasRef = useRef<HTMLCanvasElement>(null)
   const pulseRef = useRef(0)
   const rafRef = useRef<number | null>(null)
+  const [, setPulseTick] = useState(0)
 
   const [allRois, setAllRois] = useState<ROI[]>([])
   const [mapObjects, setMapObjects] = useState<VenueObject[]>([])
@@ -92,58 +87,18 @@ export default function DeadZonesViewport({ venueId, deadZones }: DeadZonesViewp
   const deadZoneIds = useMemo(() => new Set(deadZones.map(z => z.id)), [deadZones])
   const hasMapData = mapObjects.length > 0 || mapRegions.length > 0
 
-  const drawMap = useCallback(() => {
-    const canvas = canvasRef.current
-    if (!canvas || !hasMapData) return
-    const ctx = canvas.getContext('2d')
-    if (!ctx) return
-
-    const dpr = window.devicePixelRatio || 1
-    const cw = canvas.clientWidth
-    const ch = canvas.clientHeight
-    canvas.width = cw * dpr
-    canvas.height = ch * dpr
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
-    ctx.clearRect(0, 0, cw, ch)
-
-    const bounds = computeFloorPlanBounds(
-      mapObjects,
-      mapRegions,
-      venueSize ?? undefined,
-    )
-    const transform = buildMapTransform(bounds, cw, ch)
-
-    drawDeadZonesMap(ctx, {
-      objects: mapObjects,
-      regions: mapRegions,
-      deadZoneIds,
-      hoveredZoneId,
-      pulse: pulseRef.current,
-      transform,
-    })
-  }, [mapObjects, mapRegions, venueSize, deadZoneIds, hoveredZoneId, hasMapData])
-
   useEffect(() => {
     if (!hasMapData) return
-
     const tick = (ts: number) => {
       pulseRef.current = (ts % 2000) / 2000
-      drawMap()
+      setPulseTick(t => t + 1)
       rafRef.current = requestAnimationFrame(tick)
     }
     rafRef.current = requestAnimationFrame(tick)
-
-    const onResize = () => drawMap()
-    window.addEventListener('resize', onResize)
     return () => {
       if (rafRef.current) cancelAnimationFrame(rafRef.current)
-      window.removeEventListener('resize', onResize)
     }
-  }, [drawMap, hasMapData])
-
-  useEffect(() => {
-    drawMap()
-  }, [hoveredZoneId, drawMap])
+  }, [hasMapData])
 
   if (loading) {
     return (
@@ -177,9 +132,15 @@ export default function DeadZonesViewport({ venueId, deadZones }: DeadZonesViewp
           className="rounded-md border overflow-hidden"
           style={{ background: '#050810', borderColor: 'rgba(255,255,255,0.06)' }}
         >
-          <canvas
-            ref={canvasRef}
-            style={{ width: '100%', height: 320, display: 'block' }}
+          <FloorPlanMiniMap
+            objects={mapObjects}
+            regions={mapRegions}
+            venueSize={venueSize ?? undefined}
+            mode="deadZones"
+            deadZoneIds={deadZoneIds}
+            hoveredZoneId={hoveredZoneId}
+            pulse={pulseRef.current}
+            height={320}
           />
         </div>
         <div className="flex items-center gap-4 mt-3 text-xs text-gray-500">

@@ -1,12 +1,10 @@
-import { useEffect, useRef, useCallback } from 'react'
+import { useEffect, useRef, useMemo, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useRoi } from '../../context/RoiContext'
 import { useVenue } from '../../context/VenueContext'
-import {
-  buildMapTransform,
-  computeFloorPlanBounds,
-  drawAlertZoneMap,
-} from '../../utils/venueFloorPlanMap'
+import { API_BASE } from '../../config/api'
+import FloorPlanMiniMap from '../shared/FloorPlanMiniMap'
+import { normalizeFloorVertex, type MapRegion } from '../../utils/venueFloorPlanMap'
 
 interface AlertData {
   id: string
@@ -42,71 +40,62 @@ interface Props {
 }
 
 export default function AlertDetailModal({ alert, onClose }: Props) {
-  const { regions } = useRoi()
+  const { regions: contextRegions } = useRoi()
   const { objects, venue } = useVenue()
-  const canvasRef = useRef<HTMLCanvasElement>(null)
   const pulseRef = useRef(0)
   const rafRef = useRef<number | null>(null)
+  const [, setPulseTick] = useState(0)
+  const [fetchedRegions, setFetchedRegions] = useState<MapRegion[]>([])
 
-  const highlightIds = new Set<string>()
-  if (alert.zoneId) highlightIds.add(alert.zoneId)
-  if (alert.zoneIds) {
-    for (const id of alert.zoneIds) highlightIds.add(id)
-  }
+  const highlightIds = useMemo(() => {
+    const ids = new Set<string>()
+    if (alert.zoneId) ids.add(alert.zoneId)
+    if (alert.zoneIds) {
+      for (const id of alert.zoneIds) ids.add(id)
+    }
+    return ids
+  }, [alert.zoneId, alert.zoneIds])
 
-  const highlightKey = Array.from(highlightIds).sort().join(',')
-  const hasMapData = objects.length > 0 || regions.length > 0
+  useEffect(() => {
+    if (!venue?.id) return
+    let cancelled = false
+    fetch(`${API_BASE}/api/venues/${venue.id}/roi?all=true`)
+      .then(res => (res.ok ? res.json() : []))
+      .then(data => {
+        if (cancelled || !Array.isArray(data)) return
+        setFetchedRegions(data.map((r: { id: string; vertices: { x: number; z?: number; y?: number }[] }) => ({
+          id: r.id,
+          vertices: r.vertices.map(normalizeFloorVertex),
+        })))
+      })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [venue?.id])
 
-  const drawMap = useCallback(() => {
-    const canvas = canvasRef.current
-    if (!canvas || !hasMapData) return
-    const ctx = canvas.getContext('2d')
-    if (!ctx) return
+  const mapRegions: MapRegion[] = useMemo(() => {
+    const source = fetchedRegions.length > 0
+      ? fetchedRegions
+      : contextRegions.map(r => ({
+          id: r.id,
+          vertices: r.vertices.map(normalizeFloorVertex),
+        }))
+    return source
+  }, [fetchedRegions, contextRegions])
 
-    const hIds = new Set(highlightKey.split(',').filter(Boolean))
-
-    const dpr = window.devicePixelRatio || 1
-    const cw = canvas.clientWidth
-    const ch = canvas.clientHeight
-    canvas.width = cw * dpr
-    canvas.height = ch * dpr
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
-    ctx.clearRect(0, 0, cw, ch)
-
-    const bounds = computeFloorPlanBounds(
-      objects,
-      regions,
-      venue ? { width: venue.width, depth: venue.depth } : undefined,
-    )
-    const transform = buildMapTransform(bounds, cw, ch)
-
-    drawAlertZoneMap(ctx, {
-      objects,
-      regions,
-      highlightIds: hIds,
-      pulse: pulseRef.current,
-      transform,
-    })
-  }, [objects, regions, venue, highlightKey, hasMapData])
+  const hasMapData = objects.length > 0 || mapRegions.length > 0
 
   useEffect(() => {
     if (!hasMapData) return
-
     const tick = (ts: number) => {
       pulseRef.current = (ts % 2000) / 2000
-      drawMap()
+      setPulseTick(t => t + 1)
       rafRef.current = requestAnimationFrame(tick)
     }
     rafRef.current = requestAnimationFrame(tick)
-
-    const onResize = () => drawMap()
-    window.addEventListener('resize', onResize)
-
     return () => {
       if (rafRef.current) cancelAnimationFrame(rafRef.current)
-      window.removeEventListener('resize', onResize)
     }
-  }, [drawMap, hasMapData])
+  }, [hasMapData])
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
@@ -216,7 +205,7 @@ export default function AlertDetailModal({ alert, onClose }: Props) {
               <div className="flex items-center justify-between mb-2">
                 <div className="text-[9px] text-white/30 uppercase tracking-wider">Zone Map</div>
                 <div className="text-[8px] text-white/25">
-                  {objects.length} fixtures · {regions.length} zones
+                  {objects.length} fixtures · {mapRegions.length} zones
                   {highlightCount > 0 ? ` · ${highlightCount} highlighted` : ''}
                 </div>
               </div>
@@ -224,9 +213,14 @@ export default function AlertDetailModal({ alert, onClose }: Props) {
                 className="rounded-md border overflow-hidden"
                 style={{ background: 'rgba(0,0,0,0.5)', borderColor: 'rgba(255,255,255,0.06)' }}
               >
-                <canvas
-                  ref={canvasRef}
-                  style={{ width: '100%', height: 320, display: 'block' }}
+                <FloorPlanMiniMap
+                  objects={objects}
+                  regions={mapRegions}
+                  venueSize={venue ? { width: venue.width, depth: venue.depth } : undefined}
+                  mode="alert"
+                  highlightIds={highlightIds}
+                  pulse={pulseRef.current}
+                  height={320}
                 />
               </div>
               <div className="flex items-center gap-4 mt-2 text-[8px] text-white/30">
