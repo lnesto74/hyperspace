@@ -52,6 +52,8 @@ import launchpadRoutes from './routes/launchpad.js';
 import createAiClassifyRoutes from './routes/aiClassify.js';
 import createAiSmartFilterRoutes from './routes/aiSmartFilter.js';
 import createNeuralRoutes from './routes/neural.js';
+import DemoSessionService from './services/DemoSessionService.js';
+import createDemoSessionRoutes from './routes/demoSession.js';
 import {
   getCheckoutAlertConfig,
   saveCheckoutAlertConfig,
@@ -125,6 +127,7 @@ const trackAggregator = new TrackAggregator();
 // Initialize trajectory storage and KPI services
 const trajectoryStorage = new TrajectoryStorageService(db);
 const kpiCalculator = new KPICalculator(db);
+const demoSessionService = new DemoSessionService(db);
 const _startupT2 = Date.now();
 trajectoryStorage.start();
 console.log(`⏱️ STARTUP: trajectoryStorage.start ${Date.now() - _startupT2}ms`);
@@ -269,6 +272,12 @@ trackAggregator.on('tracks', (data) => {
   // Throttle KPI recording: only process every 2s instead of every 50ms emission.
   // This reduces event loop load from ~20 heavy batches/s to ~0.5/s.
   const liveTracksPreview = data.tracks.filter(t => !t.trackKey?.startsWith('replay-'));
+  const replayTracksPreview = data.tracks.filter(t => t.trackKey?.startsWith('replay-'));
+  const demoStoragePreview = replayTracksPreview.length
+    ? demoSessionService.getTrajectoryStorage(data.venueId)
+    : null;
+  if (liveTracksPreview.length === 0 && !(demoStoragePreview && replayTracksPreview.length > 0)) return;
+
   const parsedRoisPreview = getCachedRois(data.venueId);
   const kpiInterval = getKpiIntervalMs(liveTracksPreview.length || data.tracks.length, parsedRoisPreview.length);
   const lastKpi = lastKpiRecordTime.get(data.venueId) || 0;
@@ -277,43 +286,63 @@ trackAggregator.on('tracks', (data) => {
 
   setImmediate(() => {
     const liveTracks = data.tracks.filter(t => !t.trackKey?.startsWith('replay-'));
-    // JSONL replay floods hundreds of ephemeral perception IDs — skip KPI/occupancy
-    // (28 ROIs × 600+ tracks ≈ 17k polygon tests every 5s blocks the event loop).
-    if (liveTracks.length === 0) return;
+    const replayTracks = data.tracks.filter(t => t.trackKey?.startsWith('replay-'));
+    if (liveTracks.length === 0 && replayTracks.length === 0) return;
 
     const _t0 = Date.now();
     const parsedRois = parsedRoisPreview;
-    const heavyLoad = liveTracks.length * parsedRois.length > 2500;
-    // Under load, skip misc ROIs but keep all smart-kpi zones (shelf engagement + checkout).
-    const kpiRois = heavyLoad
-      ? parsedRois.filter(r => shouldRecordKpiForRoi(r, true))
-      : parsedRois;
-    
-    for (const track of liveTracks) {
-      trajectoryStorage.recordTrackPosition(data.venueId, track, kpiRois);
-    }
-    
-    const kpiElapsed = Date.now() - _t0;
-    if (kpiElapsed > 100) {
-      console.warn(`[DIAG] KPI recording SLOW  ${kpiElapsed}ms  tracks=${liveTracks.length}  rois=${kpiRois.length}  t=${Date.now()}`);
+
+    const recordKpiBatch = (tracks, storage) => {
+      if (!tracks.length || !storage) return;
+      const heavyLoad = tracks.length * parsedRois.length > 2500;
+      const kpiRois = heavyLoad
+        ? parsedRois.filter(r => shouldRecordKpiForRoi(r, true))
+        : parsedRois;
+
+      for (const track of tracks) {
+        storage.recordTrackPosition(data.venueId, track, kpiRois);
+      }
+
+      const now2 = Date.now();
+      const occKey = `${data.venueId}:${storage === trajectoryStorage ? 'live' : 'demo'}`;
+      const lastRecord = lastOccupancyRecordTime.get(occKey) || 0;
+      const occupancyInterval = heavyLoad ? 30000 : 10000;
+      if (now2 - lastRecord >= occupancyInterval) {
+        lastOccupancyRecordTime.set(occKey, now2);
+        const tracksMap = new Map(tracks.map(t => [t.trackKey, t]));
+        storage.recordOccupancy(data.venueId, kpiRois, tracksMap);
+      }
+    };
+
+    if (liveTracks.length > 0) {
+      recordKpiBatch(liveTracks, trajectoryStorage);
     }
 
-    const now2 = Date.now();
-    const lastRecord = lastOccupancyRecordTime.get(data.venueId) || 0;
-    const occupancyInterval = heavyLoad ? 30000 : 10000;
-    if (now2 - lastRecord >= occupancyInterval) {
-      lastOccupancyRecordTime.set(data.venueId, now2);
-      const tracksMap = new Map(liveTracks.map(t => [t.trackKey, t]));
-      trajectoryStorage.recordOccupancy(data.venueId, kpiRois, tracksMap);
+    if (replayTracks.length > 0) {
+      const demoStorage = demoSessionService.getTrajectoryStorage(data.venueId);
+      if (demoStorage) {
+        recordKpiBatch(replayTracks, demoStorage);
+      }
     }
-    const _elapsed = Date.now() - _t0;
-    if (_elapsed > 50) console.warn(`⏱️ KPI batch took ${_elapsed}ms (${liveTracks.length} tracks, ${kpiRois.length} ROIs)`);
+
+    const kpiElapsed = Date.now() - _t0;
+    if (kpiElapsed > 100) {
+      console.warn(`[DIAG] KPI recording SLOW  ${kpiElapsed}ms  live=${liveTracks.length}  replay=${replayTracks.length}  rois=${parsedRois.length}  t=${Date.now()}`);
+    }
+    if (kpiElapsed > 50) {
+      console.warn(`⏱️ KPI batch took ${kpiElapsed}ms (live=${liveTracks.length}, replay=${replayTracks.length}, ${parsedRois.length} ROIs)`);
+    }
   });
 });
 
 trackAggregator.on('track_removed', (data) => {
-  // Replay snapshots already drop stale IDs every 100ms — skip flood of track_removed.
-  if (data.trackKey?.startsWith('replay-')) return;
+  if (data.trackKey?.startsWith('replay-')) {
+    for (const venueId of demoSessionService.venueSessions.keys()) {
+      const demoStorage = demoSessionService.getTrajectoryStorage(venueId);
+      demoStorage?.endTrackSessions(data.trackKey);
+    }
+    return;
+  }
 
   io.of('/tracking').emit('track_removed', data);
   trajectoryStorage.endTrackSessions(data.trackKey);
@@ -418,7 +447,8 @@ app.use('/api/benchmark', benchmarkRoutes({
 app.use('/api/lidars', lidarsRoutes(lidarConnectionManager, tailscaleService, mockGenerator));
 app.use('/api/models', modelsRoutes(db));
 app.use('/api', createRoiRoutes(db));
-app.use('/api', createKpiRoutes(db, kpiCalculator, trajectoryStorage));
+app.use('/api/demo', createDemoSessionRoutes(demoSessionService));
+app.use('/api', createKpiRoutes(db, kpiCalculator, trajectoryStorage, demoSessionService));
 app.use('/api', createZoneSettingsRoutes(db, trajectoryStorage));
 app.use('/api', createWhiteLabelRoutes(db));
 app.use('/api/smart-kpi', createSmartKpiRoutes(db));
@@ -460,7 +490,7 @@ app.use('/api/dwg', createAiClassifyRoutes(db));
 app.use('/api/dwg', createAiSmartFilterRoutes(db));
 
 // Neural Dashboard routes (funnel, transitions, alerts, media summary)
-app.use('/api/neural', createNeuralRoutes(db, trackAggregator));
+app.use('/api/neural', createNeuralRoutes(db, trackAggregator, demoSessionService));
 
 // Replay Insight routes (parallel, read-only behavior episode system)
 console.log(`⏱️ STARTUP: pre-routes +${Date.now() - _startupT0}ms`);

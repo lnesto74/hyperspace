@@ -14,7 +14,9 @@ function getTimelineCacheKey(venueId, startTime, endTime, interval, roiId) {
   return `${venueId}:${startTime}:${endTime}:${interval}:${roiId || 'all'}`;
 }
 
-export default function createKpiRoutes(db, kpiCalculator, trajectoryStorage) {
+import { resolveKpiContext, demoCacheSuffix } from '../utils/demoKpiContext.js';
+
+export default function createKpiRoutes(db, kpiCalculator, trajectoryStorage, demoSessionService = null) {
   // Initialize shelf KPI enricher
   const shelfKPIEnricher = new ShelfKPIEnricher(db);
   const router = Router();
@@ -127,6 +129,7 @@ export default function createKpiRoutes(db, kpiCalculator, trajectoryStorage) {
     try {
       const { roiId } = req.params;
       const { startTime, endTime, period } = req.query;
+      const ctx = resolveKpiContext(req, db, kpiCalculator, trajectoryStorage, demoSessionService);
       
       // Default to last 24 hours if not specified
       const now = Date.now();
@@ -153,13 +156,13 @@ export default function createKpiRoutes(db, kpiCalculator, trajectoryStorage) {
       }
       
       // Check KPI cache
-      const kpiCacheKey = `${roiId}:${start}:${end}`;
+      const kpiCacheKey = `${roiId}:${start}:${end}${demoCacheSuffix(req, demoSessionService)}`;
       const cachedKpi = kpiCache.get(kpiCacheKey);
       if (cachedKpi && (Date.now() - cachedKpi.cachedAt) < KPI_CACHE_TTL_MS) {
-        return res.json({ roiId, startTime: start, endTime: end, kpis: cachedKpi.data, fromCache: true });
+        return res.json({ roiId, startTime: start, endTime: end, kpis: cachedKpi.data, fromCache: true, demo: ctx.isDemo });
       }
 
-      const kpis = kpiCalculator.getZoneKPIs(roiId, start, end);
+      const kpis = ctx.kpiCalculator.getZoneKPIs(roiId, start, end);
       
       // Store in cache
       kpiCache.set(kpiCacheKey, { data: kpis, cachedAt: Date.now() });
@@ -176,6 +179,7 @@ export default function createKpiRoutes(db, kpiCalculator, trajectoryStorage) {
         startTime: start,
         endTime: end,
         kpis,
+        demo: ctx.isDemo,
       });
     } catch (err) {
       console.error('Failed to get zone KPIs:', err);
@@ -289,9 +293,10 @@ export default function createKpiRoutes(db, kpiCalculator, trajectoryStorage) {
     try {
       const { roiId } = req.params;
       const now = Date.now();
+      const ctx = resolveKpiContext(req, db, kpiCalculator, trajectoryStorage, demoSessionService);
       
       // Get most recent occupancy (last 10 seconds to ensure we catch data)
-      const result = db.prepare(`
+      const result = ctx.db.prepare(`
         SELECT occupancy_count, timestamp
         FROM zone_occupancy
         WHERE roi_id = ? AND timestamp > ?
@@ -305,6 +310,7 @@ export default function createKpiRoutes(db, kpiCalculator, trajectoryStorage) {
         currentOccupancy: result?.occupancy_count ?? 0,
         lastUpdate: result?.timestamp || null,
         dataAge: result?.timestamp ? now - result.timestamp : null,
+        demo: ctx.isDemo,
       });
     } catch (err) {
       console.error('Failed to get live occupancy:', err);

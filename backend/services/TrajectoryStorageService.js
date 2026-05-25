@@ -21,7 +21,7 @@ const DEBUG_QUEUE = process.env.DEBUG_QUEUE_TRACKING === 'true';
  * This approach prevents blocking the main tracking loop with DB writes
  */
 export class TrajectoryStorageService extends EventEmitter {
-  constructor(db) {
+  constructor(db, options = {}) {
     super();
     this.db = db;
     this.buffer = new Map(); // venueId -> Map<trackKey, positions[]>
@@ -29,7 +29,8 @@ export class TrajectoryStorageService extends EventEmitter {
     this.queueSessions = new Map(); // trackKey -> { queueZoneId, queueEntryTime, ... }
     this.zoneLinks = new Map(); // queueZoneId -> serviceZoneId (loaded from DB)
     this.zoneThresholds = new Map(); // roiId -> { dwellMs, engagementMs } (cached from DB)
-    this.dataDir = path.join(__dirname, '../data/trajectories');
+    this.dataDir = options.dataDir || path.join(__dirname, '../data/trajectories');
+    this.quiet = options.quiet === true;
     this.flushInterval = null;
     this.syncInterval = null;
     this.isRunning = false;
@@ -934,7 +935,9 @@ export class TrajectoryStorageService extends EventEmitter {
     }, 2000);
     this._lagInterval.unref(); // don't keep process alive
     
-    console.log('📊 Trajectory storage service started (with perf monitoring)');
+    if (!this.quiet) {
+      console.log('📊 Trajectory storage service started (with perf monitoring)');
+    }
   }
 
   stop() {

@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { History, Play, Square, X, ChevronDown, ChevronUp, RefreshCw, Loader2, Circle } from 'lucide-react'
 import { API_BASE } from '../../config/api'
-import { useTrackingActions } from '../../context/TrackingContext'
+import { useTrackingActions, useTracking } from '../../context/TrackingContext'
+import { useVenue } from '../../context/VenueContext'
 
 interface ReplayFile {
   name: string
@@ -89,7 +90,9 @@ const tsAtProgress = (meta: FileMeta | null, progress: number) => {
 const RECORD_SOFT_CAP_BYTES = 500 * 1024 * 1024
 
 export default function ReplayPanel({ onClose }: ReplayPanelProps) {
-  const { clearReplayTracks, setMqttReplayActive } = useTrackingActions()
+  const { venue } = useVenue()
+  const { demoSessionId } = useTracking()
+  const { clearReplayTracks, setMqttReplayActive, startDemoSession, stopDemoSession } = useTrackingActions()
   const [files, setFiles] = useState<ReplayFile[]>([])
   const [selected, setSelected] = useState<string>('')
   const [speed, setSpeed] = useState<number>(4)
@@ -261,6 +264,10 @@ export default function ReplayPanel({ onClose }: ReplayPanelProps) {
       await fetch(`${API_BASE}/api/replay/stop`, { method: 'POST' })
       await waitForReplayStopped()
 
+      if (venue?.id) {
+        await startDemoSession(venue.id)
+      }
+
       const res = await fetch(`${API_BASE}/api/replay/start`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -282,7 +289,7 @@ export default function ReplayPanel({ onClose }: ReplayPanelProps) {
     } finally {
       startingReplayRef.current = false
     }
-  }, [speed, refreshStatus, waitForReplayStopped, scrubPct, setMqttReplayActive])
+  }, [speed, refreshStatus, waitForReplayStopped, scrubPct, setMqttReplayActive, venue?.id, startDemoSession])
 
   const seekTo = useCallback(async (pct: number) => {
     const fileToPlay = readSelectedFile() || status?.file
@@ -312,12 +319,13 @@ export default function ReplayPanel({ onClose }: ReplayPanelProps) {
     clearReplayTracks()
     try {
       await fetch(`${API_BASE}/api/replay/stop`, { method: 'POST' })
+      await stopDemoSession()
       clearReplayTracks()
       await refreshStatus()
     } catch (err) {
       console.error(err)
     }
-  }, [refreshStatus, clearReplayTracks, setMqttReplayActive])
+  }, [refreshStatus, clearReplayTracks, setMqttReplayActive, stopDemoSession])
 
   const running = !!status?.running
   const playingFile = status?.file || null
@@ -349,6 +357,11 @@ export default function ReplayPanel({ onClose }: ReplayPanelProps) {
         <History className="w-4 h-4 text-amber-400" />
         <span className="font-semibold text-white">MQTT Replay</span>
         {running && <span className="ml-2 text-[10px] uppercase tracking-wider text-amber-400 animate-pulse">replaying</span>}
+        {demoSessionId && (
+          <span className="ml-1 text-[10px] uppercase tracking-wider text-emerald-400" title="KPIs recorded to isolated demo DB">
+            demo kpis
+          </span>
+        )}
         {recording && <span className="ml-1 text-[10px] uppercase tracking-wider text-red-400 animate-pulse">rec</span>}
         <div className="flex-1" />
         <button onClick={() => { refreshFiles(); refreshRecordStatus() }} disabled={loading} className="p-1 rounded hover:bg-gray-700/60 disabled:opacity-50" title="Refresh">

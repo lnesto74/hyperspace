@@ -16,6 +16,7 @@ import {
   evaluateCheckoutLaneAlerts,
 } from '../services/CheckoutAlertConfig.js';
 import { getCheckoutLanes } from '../services/CheckoutLiveStatus.js';
+import { resolveKpiContext, demoCacheSuffix } from '../utils/demoKpiContext.js';
 
 // Stale-while-revalidate cache with staggered background recomputes.
 // On cache HIT: return data instantly.
@@ -74,7 +75,7 @@ function cached(key, ttlMs, computeFn) {
   return data;
 }
 
-export default function createNeuralRoutes(db, trackAggregator) {
+export default function createNeuralRoutes(db, trackAggregator, demoSessionService = null) {
   const router = Router();
 
   // ============================================
@@ -297,7 +298,9 @@ export default function createNeuralRoutes(db, trackAggregator) {
       const { venueId } = req.query;
       if (!venueId) return res.status(400).json({ error: 'venueId required' });
 
-      const result = cached(`xray-zones:${venueId}`, 30000, () => computeXRayZones(db, venueId));
+      const ctx = resolveKpiContext(req, db, null, null, demoSessionService);
+      const cacheKey = `xray-zones:${venueId}${demoCacheSuffix(req, demoSessionService)}`;
+      const result = cached(cacheKey, 30000, () => computeXRayZones(ctx.db, venueId));
       res.json(result);
     } catch (err) {
       console.error('[Neural] xray-zones error:', err.message);
@@ -437,12 +440,16 @@ export default function createNeuralRoutes(db, trackAggregator) {
       const { venueId, range } = req.query;
       if (!venueId) return res.status(400).json({ error: 'venueId required' });
 
+      const ctx = resolveKpiContext(req, db, null, null, demoSessionService);
+      const kpiDb = ctx.db;
+      const demoSuffix = demoCacheSuffix(req, demoSessionService);
+
       // Cache TTLs MUST exceed the polling interval (8s) to guarantee cache hits
       // on most requests. Sub-caches are staggered so they never all expire at once.
-      const venueKpisKey = `venue-kpis:${venueId}`;
-      const funnelKey = `funnel:${venueId}:${range}`;
-      const alertsKey = `alerts:${venueId}`;
-      const mediaKey = `media-summary:${venueId}:${range}`;
+      const venueKpisKey = `venue-kpis:${venueId}${demoSuffix}`;
+      const funnelKey = `funnel:${venueId}:${range}${demoSuffix}`;
+      const alertsKey = `alerts:${venueId}${demoSuffix}`;
+      const mediaKey = `media-summary:${venueId}:${range}${demoSuffix}`;
 
       const t0 = Date.now();
       const hitsBefore = [venueKpisKey, funnelKey, alertsKey, mediaKey].map(k => {
@@ -453,10 +460,11 @@ export default function createNeuralRoutes(db, trackAggregator) {
       // TTLs are deliberately staggered (prime-ish intervals) so they never
       // all expire on the same poll cycle, preventing simultaneous recomputes.
       const batchResult = {
-        venueKpis: cached(venueKpisKey, 45000, () => computeVenueKpis(db, venueId)),
-        funnel: cached(funnelKey, 55000, () => computeFunnel(db, venueId, range)),
-        alerts: cached(alertsKey, 35000, () => computeAlerts(db, venueId, trackAggregator)),
-        mediaSummary: cached(mediaKey, 70000, () => computeMediaSummary(db, venueId, range)),
+        venueKpis: cached(venueKpisKey, 45000, () => computeVenueKpis(kpiDb, venueId)),
+        funnel: cached(funnelKey, 55000, () => computeFunnel(kpiDb, venueId, range)),
+        alerts: cached(alertsKey, 35000, () => computeAlerts(ctx.isDemo ? kpiDb : db, venueId, trackAggregator)),
+        mediaSummary: cached(mediaKey, 70000, () => computeMediaSummary(kpiDb, venueId, range)),
+        demo: ctx.isDemo,
       };
 
       const elapsed = Date.now() - t0;

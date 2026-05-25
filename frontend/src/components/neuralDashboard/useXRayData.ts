@@ -1,6 +1,8 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useVenue } from '../../context/VenueContext'
+import { useTracking } from '../../context/TrackingContext'
 import { API_BASE } from '../../config/api'
+import { withDemoSession } from '../../utils/demoSession'
 
 interface XRayZone {
   roiId: string
@@ -37,6 +39,7 @@ const XRAY_POLL_INTERVAL = 15_000
 
 export function useXRayData(enabled: boolean): XRayData | null {
   const { venue } = useVenue()
+  const { demoSessionId } = useTracking()
   const [data, setData] = useState<XRayData | null>(null)
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
@@ -45,7 +48,7 @@ export function useXRayData(enabled: boolean): XRayData | null {
     const t0 = performance.now()
     try {
       const res = await fetch(
-        `${API_BASE}/api/neural/xray-zones?venueId=${venue.id}`
+        withDemoSession(`${API_BASE}/api/neural/xray-zones?venueId=${venue.id}`, demoSessionId)
       )
       const elapsed = Math.round(performance.now() - t0)
       if (res.ok) {
@@ -63,7 +66,7 @@ export function useXRayData(enabled: boolean): XRayData | null {
       console.warn(`[DIAG] xray fetch ERROR  ${Math.round(performance.now() - t0)}ms  err=${e}  t=${Date.now()}`)
       setData(null)
     }
-  }, [venue?.id])
+  }, [venue?.id, demoSessionId])
 
   useEffect(() => {
     if (!enabled) {

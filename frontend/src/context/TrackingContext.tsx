@@ -65,6 +65,7 @@ interface TrackingContextType {
   isReplayMode: boolean
   mqttReplayActive: boolean
   useHistoricalTracks: boolean
+  demoSessionId: string | null
   subscribe: (venueId: string) => void
   unsubscribe: (venueId: string) => void
   setReplayMode: (enabled: boolean) => void
@@ -92,6 +93,8 @@ interface TrackingActionsType {
   setInterpolation: (enabled: boolean) => void
   setMqttReplayActive: (active: boolean) => void
   clearReplayTracks: () => void
+  startDemoSession: (venueId: string) => Promise<string | null>
+  stopDemoSession: () => Promise<void>
 }
 const TrackingActionsContext = createContext<TrackingActionsType | null>(null)
 
@@ -113,6 +116,9 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
   const [isConnected, setIsConnected] = useState(false)
   const [isReplayMode, setIsReplayMode] = useState(false)
   const [mqttReplayActive, setMqttReplayActiveState] = useState(false)
+  const [demoSessionId, setDemoSessionId] = useState<string | null>(null)
+  const demoSessionIdRef = useRef<string | null>(null)
+  demoSessionIdRef.current = demoSessionId
   const mqttReplayActiveRef = useRef(false)
   mqttReplayActiveRef.current = mqttReplayActive
   const socketRef = useRef<Socket | null>(null)
@@ -160,6 +166,21 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
   }, [])
 
   subscribeRef.current = subscribe
+
+  // Restore demo session after page refresh (replay may still be running server-side).
+  useEffect(() => {
+    if (!venue?.id) return
+    let cancelled = false
+    fetch(`${API_BASE}/api/demo/sessions/active?venueId=${encodeURIComponent(venue.id)}`)
+      .then(res => (res.ok ? res.json() : null))
+      .then(data => {
+        if (cancelled || !data?.active || !data.sessionId) return
+        demoSessionIdRef.current = data.sessionId
+        setDemoSessionId(data.sessionId)
+      })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [venue?.id])
 
   useEffect(() => {
     const socket = io(`${API_BASE}/tracking`, {
@@ -595,6 +616,44 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
     setInterpolationRef.current(smoothMotionRequestedRef.current)
   }, [])
 
+  const startDemoSession = useCallback(async (venueId: string) => {
+    try {
+      const res = await fetch(`${API_BASE}/api/demo/sessions/start`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ venueId }),
+      })
+      if (!res.ok) {
+        console.warn('[DemoSession] start failed', res.status)
+        return null
+      }
+      const data = await res.json()
+      const sessionId = data.sessionId as string
+      demoSessionIdRef.current = sessionId
+      setDemoSessionId(sessionId)
+      return sessionId
+    } catch (err) {
+      console.warn('[DemoSession] start error', err)
+      return null
+    }
+  }, [])
+
+  const stopDemoSession = useCallback(async () => {
+    const sessionId = demoSessionIdRef.current
+    if (!sessionId) return
+    demoSessionIdRef.current = null
+    setDemoSessionId(null)
+    try {
+      await fetch(`${API_BASE}/api/demo/sessions/stop`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId }),
+      })
+    } catch (err) {
+      console.warn('[DemoSession] stop error', err)
+    }
+  }, [])
+
   // Smooth 30fps motion for live edge only (not MQTT file replay or historical timeline).
   useEffect(() => {
     setInterpolation(true)
@@ -645,7 +704,8 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
     clearReplayTracks,
     mqttReplayActive,
     useHistoricalTracks,
-  }), [tracks, isConnected, isReplayMode, mqttReplayActive, useHistoricalTracks, subscribe, unsubscribe, setReplayMode, setReplayTracks, setTrackVisibility, setInterpolation, setMqttReplayActive, clearReplayTracks])
+    demoSessionId,
+  }), [tracks, isConnected, isReplayMode, mqttReplayActive, useHistoricalTracks, demoSessionId, subscribe, unsubscribe, setReplayMode, setReplayTracks, setTrackVisibility, setInterpolation, setMqttReplayActive, clearReplayTracks])
 
   const actionsValue = useMemo(() => ({
     subscribe,
@@ -656,7 +716,9 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
     setInterpolation,
     setMqttReplayActive,
     clearReplayTracks,
-  }), [subscribe, unsubscribe, setReplayMode, setReplayTracks, setTrackVisibility, setInterpolation, setMqttReplayActive, clearReplayTracks])
+    startDemoSession,
+    stopDemoSession,
+  }), [subscribe, unsubscribe, setReplayMode, setReplayTracks, setTrackVisibility, setInterpolation, setMqttReplayActive, clearReplayTracks, startDemoSession, stopDemoSession])
 
   return (
     <TracksRefContext.Provider value={stableTracksRef}>

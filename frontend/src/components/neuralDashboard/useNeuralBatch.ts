@@ -9,7 +9,9 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useVenue } from '../../context/VenueContext'
+import { useTracking } from '../../context/TrackingContext'
 import { API_BASE } from '../../config/api'
+import { withDemoSession } from '../../utils/demoSession'
 
 interface NeuralBatchData {
   venueKpis: any | null
@@ -22,6 +24,7 @@ const BATCH_POLL_INTERVAL = 8000
 
 export function useNeuralBatch(range: string = '1h') {
   const { venue } = useVenue()
+  const { demoSessionId } = useTracking()
   const [data, setData] = useState<NeuralBatchData>({
     venueKpis: null,
     funnel: null,
@@ -38,7 +41,7 @@ export function useNeuralBatch(range: string = '1h') {
     try {
       setLoading(true)
       const res = await fetch(
-        `${API_BASE}/api/neural/batch?venueId=${venue.id}&range=${rangeRef.current}`
+        withDemoSession(`${API_BASE}/api/neural/batch?venueId=${venue.id}&range=${rangeRef.current}`, demoSessionId)
       )
       const elapsed = Math.round(performance.now() - t0)
       if (res.ok) {
@@ -57,7 +60,7 @@ export function useNeuralBatch(range: string = '1h') {
     } finally {
       setLoading(false)
     }
-  }, [venue?.id])
+  }, [venue?.id, demoSessionId])
 
   useEffect(() => {
     rangeRef.current = range

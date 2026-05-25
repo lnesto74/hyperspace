@@ -4,6 +4,8 @@ import { KPI_DEFINITIONS } from './kpiDefinitions'
 import ZoneSettingsPanel from './ZoneSettingsPanel'
 import ProductAnalyticsTab from './ProductAnalyticsTab'
 import { API_BASE } from '../../config/api'
+import { useTracking } from '../../context/TrackingContext'
+import { withDemoSession } from '../../utils/demoSession'
 
 
 interface KPIData {
@@ -311,6 +313,7 @@ function ProgressRing({ value, max = 100, size = 60, strokeWidth = 6, color = '#
 }
 
 export default function ZoneKPIPopup({ roiId, roiName, roiColor, onClose, shelfId: propShelfId, planogramId: propPlanogramId }: ZoneKPIPopupProps) {
+  const { demoSessionId } = useTracking()
   const [kpis, setKpis] = useState<KPIData | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -367,7 +370,7 @@ export default function ZoneKPIPopup({ roiId, roiName, roiColor, onClose, shelfI
     setError(null)
     
     try {
-      const res = await fetch(`${API_BASE}/api/roi/${roiId}/kpis?period=${period}`)
+      const res = await fetch(withDemoSession(`${API_BASE}/api/roi/${roiId}/kpis?period=${period}`, demoSessionId))
       if (!res.ok) throw new Error('Failed to fetch KPIs')
       const data = await res.json()
       setKpis(data.kpis)
@@ -376,12 +379,12 @@ export default function ZoneKPIPopup({ roiId, roiName, roiColor, onClose, shelfI
     } finally {
       setLoading(false)
     }
-  }, [roiId, period])
+  }, [roiId, period, demoSessionId])
 
   // Fetch live occupancy every 2 seconds
   const fetchLiveOccupancy = useCallback(async () => {
     try {
-      const res = await fetch(`${API_BASE}/api/roi/${roiId}/occupancy/live`)
+      const res = await fetch(withDemoSession(`${API_BASE}/api/roi/${roiId}/occupancy/live`, demoSessionId))
       if (res.ok) {
         const data = await res.json()
         setLiveOccupancy(data.currentOccupancy)
@@ -389,7 +392,7 @@ export default function ZoneKPIPopup({ roiId, roiName, roiColor, onClose, shelfI
     } catch (err) {
       console.error('Failed to fetch live occupancy:', err)
     }
-  }, [roiId])
+  }, [roiId, demoSessionId])
 
   // Fetch on open, when period changes, or when roi changes
   useEffect(() => {
