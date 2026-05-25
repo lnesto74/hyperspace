@@ -1,10 +1,12 @@
-import { AlertTriangle, CheckCircle, Lightbulb, TrendingUp } from 'lucide-react';
+import { useState } from 'react';
+import { AlertTriangle, CheckCircle, Lightbulb, TrendingUp, ChevronDown, ChevronRight } from 'lucide-react';
 import { KpiTileDefinition, KpiThresholds } from '../personas';
 
 interface InsightsPanelProps {
   kpiDefinitions: KpiTileDefinition[];
   kpiValues: Record<string, number | null | undefined>;
   personaName: string;
+  compact?: boolean;
 }
 
 interface Alert {
@@ -147,21 +149,61 @@ function generateKeyTakeaways(
 export default function ReportingInsightsPanel({ 
   kpiDefinitions, 
   kpiValues, 
-  personaName 
+  personaName,
+  compact = false,
 }: InsightsPanelProps) {
+  const [expanded, setExpanded] = useState(!compact);
   const alerts = getAlerts(kpiDefinitions, kpiValues);
   const takeaways = generateKeyTakeaways(kpiDefinitions, kpiValues, personaName);
   
-  // Show only top alerts
   const criticalAlerts = alerts.filter(a => a.type === 'critical').slice(0, 3);
   const warningAlerts = alerts.filter(a => a.type === 'warning').slice(0, 2);
   const successAlerts = alerts.filter(a => a.type === 'success').slice(0, 2);
-  
+  const alertCount = criticalAlerts.length + warningAlerts.length;
+
+  if (compact && !expanded) {
+    return (
+      <button
+        type="button"
+        onClick={() => setExpanded(true)}
+        className="w-full mt-3 flex items-center justify-between px-3 py-2 rounded-lg border border-gray-700/80 bg-gray-800/40 hover:bg-gray-800/60 transition-colors text-left"
+      >
+        <div className="flex items-center gap-2 text-xs text-gray-400">
+          <ChevronRight className="w-3.5 h-3.5" />
+          <Lightbulb className="w-3.5 h-3.5 text-amber-400" />
+          <span>
+            {alertCount > 0
+              ? `${alertCount} alert${alertCount > 1 ? 's' : ''} · ${takeaways[0] || 'View insights'}`
+              : takeaways[0] || 'Insights & recommendations'}
+          </span>
+        </div>
+        {successAlerts.length > 0 && (
+          <span className="text-[10px] text-green-400">{successAlerts.length} healthy</span>
+        )}
+      </button>
+    );
+  }
+
+  const gridClass = compact
+    ? 'grid grid-cols-1 lg:grid-cols-2 gap-3 mt-3'
+    : 'grid grid-cols-1 lg:grid-cols-2 gap-4 mt-6';
+
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mt-6">
+    <div className={compact ? 'mt-3' : ''}>
+      {compact && (
+        <button
+          type="button"
+          onClick={() => setExpanded(false)}
+          className="flex items-center gap-1 text-[10px] text-gray-500 hover:text-gray-300 mb-2"
+        >
+          <ChevronDown className="w-3 h-3" />
+          Collapse insights
+        </button>
+      )}
+      <div className={gridClass}>
       {/* Key Takeaways */}
-      <div className="bg-gray-800/50 rounded-xl border border-gray-700 p-5">
-        <h3 className="text-sm font-semibold text-white mb-4 flex items-center gap-2">
+      <div className={`bg-gray-800/50 rounded-lg border border-gray-700 ${compact ? 'p-3' : 'p-5 rounded-xl'}`}>
+        <h3 className={`font-semibold text-white mb-3 flex items-center gap-2 ${compact ? 'text-xs' : 'text-sm mb-4'}`}>
           <Lightbulb className="w-4 h-4 text-amber-400" />
           Key Takeaways
         </h3>
@@ -180,8 +222,8 @@ export default function ReportingInsightsPanel({
       </div>
       
       {/* Alerts & Recommendations */}
-      <div className="bg-gray-800/50 rounded-xl border border-gray-700 p-5">
-        <h3 className="text-sm font-semibold text-white mb-4 flex items-center gap-2">
+      <div className={`bg-gray-800/50 rounded-lg border border-gray-700 ${compact ? 'p-3' : 'p-5 rounded-xl'}`}>
+        <h3 className={`font-semibold text-white mb-3 flex items-center gap-2 ${compact ? 'text-xs' : 'text-sm mb-4'}`}>
           <AlertTriangle className="w-4 h-4 text-red-400" />
           Alerts & Recommendations
         </h3>
@@ -208,6 +250,7 @@ export default function ReportingInsightsPanel({
             <p className="text-sm text-gray-500">No alerts at this time.</p>
           )}
         </div>
+      </div>
       </div>
     </div>
   );

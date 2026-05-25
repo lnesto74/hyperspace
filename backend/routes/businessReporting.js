@@ -279,6 +279,7 @@ async function computeStoreManagerKpis(db, kpiCalculator, trajectoryStorage, tra
   const kpis = narrator2Data?.kpis ? { ...narrator2Data.kpis } : {};
   const supporting = {
     deadZones: narrator2Data?.supporting?.storeDeadZones || [],
+    topZones: narrator2Data?.supporting?.storeTopZones || [],
     topCategories: narrator2Data?.supporting?.topCategories || [],
   };
 
@@ -305,7 +306,7 @@ async function computeStoreManagerKpis(db, kpiCalculator, trajectoryStorage, tra
  * Adds category-filtered metrics on top of base KPIs.
  */
 async function computeMerchandisingKpis(db, kpiCalculator, shelfKPIEnricher, venueId, startTs, endTs, categoryId, shelfId) {
-  const supporting = { topCategories: [], topBrands: [], selectedCategory: categoryId || 'all', deadZones: [] };
+  const supporting = { topCategories: [], topBrands: [], selectedCategory: categoryId || 'all', deadZones: [], topZones: [] };
 
   // Get base KPIs from AI Narrator 2 (single source of truth)
   const narrator2Data = await getNarrator2Kpis(venueId, 'merchandising', startTs, endTs);
@@ -316,6 +317,9 @@ async function computeMerchandisingKpis(db, kpiCalculator, shelfKPIEnricher, ven
   // Merge supporting data from Narrator2
   if (narrator2Data?.supporting?.deadZones) {
     supporting.deadZones = narrator2Data.supporting.deadZones;
+  }
+  if (narrator2Data?.supporting?.topZones) {
+    supporting.topZones = narrator2Data.supporting.topZones;
   }
   if (narrator2Data?.supporting?.topCategories?.length) {
     supporting.topCategories = narrator2Data.supporting.topCategories;

@@ -36,6 +36,30 @@ function safeQuery(sql, params = []) {
   }
 }
 
+function buildZonePerformanceLists(zoneRows, totalTimeRange, venueId, { deadThreshold, limit = 10 } = {}) {
+  const all = zoneRows.map(z => {
+    const zoneUtilRate = (z.total_ms / totalTimeRange) * 100;
+    return {
+      id: z.id,
+      name: z.name,
+      category: resolveRoiCategoryLabel(venueId, z.id),
+      utilization: Math.round(zoneUtilRate * 10) / 10,
+    };
+  });
+  const deadZones = all
+    .filter(z => z.utilization < deadThreshold)
+    .sort((a, b) => a.utilization - b.utilization)
+    .slice(0, limit);
+  let topZones = all
+    .filter(z => z.utilization >= deadThreshold && z.utilization > 0)
+    .sort((a, b) => b.utilization - a.utilization)
+    .slice(0, limit);
+  if (topZones.length === 0) {
+    topZones = [...all].sort((a, b) => b.utilization - a.utilization).slice(0, limit);
+  }
+  return { deadZones, topZones, deadZoneCount: all.filter(z => z.utilization < deadThreshold).length };
+}
+
 function safeQueryAll(sql, params = []) {
   try {
     return getDb().prepare(sql).all(...params);
@@ -382,25 +406,12 @@ export async function getReportingSummary(venueId, personaId, startTs, endTs) {
         GROUP BY r.id, r.name
       `, [startTs, endTs, venueId]);
 
-      let deadZoneCount = 0;
-      const deadZonesList = [];
-      for (const z of shelfZoneUtils) {
-        const zoneUtilRate = (z.total_ms / totalTimeRange) * 100;
-        if (zoneUtilRate < DEAD_ZONE_THRESHOLD) {
-          deadZoneCount++;
-          const category = resolveRoiCategoryLabel(venueId, z.id);
-          deadZonesList.push({
-            id: z.id,
-            name: z.name,
-            category,
-            utilization: Math.round(zoneUtilRate * 10) / 10,
-          });
-        }
-      }
-      kpis.deadZones = deadZoneCount;
-      supporting.deadZones = deadZonesList
-        .sort((a, b) => a.utilization - b.utilization)
-        .slice(0, 10);
+      const shelfPerf = buildZonePerformanceLists(
+        shelfZoneUtils, totalTimeRange, venueId, { deadThreshold: DEAD_ZONE_THRESHOLD },
+      );
+      kpis.deadZones = shelfPerf.deadZoneCount;
+      supporting.deadZones = shelfPerf.deadZones;
+      supporting.topZones = shelfPerf.topZones;
       supporting.topCategories = getCategoryPerformanceRanking(venueId, startTs, endTs);
     }
 
@@ -439,25 +450,12 @@ export async function getReportingSummary(venueId, personaId, startTs, endTs) {
         GROUP BY r.id, r.name
       `, [startTs, endTs, venueId]);
 
-      let storeDeadZoneCount = 0;
-      const storeDeadZonesList = [];
-      for (const z of zoneUtils) {
-        const zoneUtilRate = (z.total_ms / totalTimeRange) * 100;
-        if (zoneUtilRate < DEAD_ZONE_THRESHOLD) {
-          storeDeadZoneCount++;
-          const category = resolveRoiCategoryLabel(venueId, z.id);
-          storeDeadZonesList.push({
-            id: z.id,
-            name: z.name,
-            category,
-            utilization: Math.round(zoneUtilRate * 10) / 10,
-          });
-        }
-      }
-      kpis.deadZonesCount = storeDeadZoneCount;
-      supporting.storeDeadZones = storeDeadZonesList
-        .sort((a, b) => a.utilization - b.utilization)
-        .slice(0, 10);
+      const storePerf = buildZonePerformanceLists(
+        zoneUtils, totalTimeRange, venueId, { deadThreshold: DEAD_ZONE_THRESHOLD },
+      );
+      kpis.deadZonesCount = storePerf.deadZoneCount;
+      supporting.storeDeadZones = storePerf.deadZones;
+      supporting.storeTopZones = storePerf.topZones;
       if (!supporting.topCategories?.length) {
         supporting.topCategories = getCategoryPerformanceRanking(venueId, startTs, endTs);
       }

@@ -15,9 +15,10 @@ interface FloorPlanMiniMapProps {
   regions: MapRegion[]
   venueSize?: { width: number; depth: number }
   height?: number
-  mode: 'alert' | 'deadZones'
+  mode: 'alert' | 'deadZones' | 'topPerformers'
   highlightIds?: Set<string>
   deadZoneIds?: Set<string>
+  topPerformerIds?: Set<string>
   hoveredZoneId?: string | null
   pulse?: number
 }
@@ -33,6 +34,7 @@ export default function FloorPlanMiniMap({
   mode,
   highlightIds = new Set(),
   deadZoneIds = new Set(),
+  topPerformerIds = new Set(),
   hoveredZoneId = null,
   pulse = 0,
 }: FloorPlanMiniMapProps) {
@@ -151,6 +153,42 @@ export default function FloorPlanMiniMap({
               hovered
                 ? 'rgba(248, 113, 113, 0.95)'
                 : `rgba(255, 50, 50, ${0.65 + pulseWave * 0.35})`
+            }
+            strokeWidth={hovered ? 0.12 : 0.07 + pulseWave * 0.05}
+          />
+        )
+      })}
+
+      {mode === 'topPerformers' && mapRegions.map(r => {
+        if (topPerformerIds.has(r.id)) return null
+        const hovered = hoveredZoneId === r.id
+        return (
+          <path
+            key={r.id}
+            d={polygonPath(r.vertices)}
+            fill={hovered ? 'rgba(55, 65, 81, 0.25)' : 'rgba(55, 65, 81, 0.1)'}
+            stroke={hovered ? 'rgba(156, 163, 175, 0.7)' : 'rgba(75, 85, 99, 0.5)'}
+            strokeWidth={hovered ? 0.06 : 0.03}
+          />
+        )
+      })}
+
+      {mode === 'topPerformers' && mapRegions.map(r => {
+        if (!topPerformerIds.has(r.id)) return null
+        const hovered = hoveredZoneId === r.id
+        return (
+          <path
+            key={`top-${r.id}`}
+            d={polygonPath(r.vertices)}
+            fill={
+              hovered
+                ? 'rgba(34, 197, 94, 0.45)'
+                : `rgba(34, 197, 94, ${0.15 + pulseWave * 0.25})`
+            }
+            stroke={
+              hovered
+                ? 'rgba(74, 222, 128, 0.95)'
+                : `rgba(74, 222, 128, ${0.65 + pulseWave * 0.35})`
             }
             strokeWidth={hovered ? 0.12 : 0.07 + pulseWave * 0.05}
           />
