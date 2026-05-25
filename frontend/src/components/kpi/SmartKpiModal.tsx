@@ -27,6 +27,8 @@ interface DetectedObject {
   position: { x: number; y: number; z: number }
   rotation?: { x: number; y: number; z: number }
   scale?: { x: number; y: number; z: number }
+  source?: string | null
+  footprintPoints?: { x: number; z: number }[] | null
   maxDimension?: number | null
 }
 
@@ -396,6 +398,8 @@ export default function SmartKpiModal({ isOpen, onClose, dwgLayoutId: propDwgLay
         position: obj.position,
         rotation: obj.rotation,
         scale: obj.scale,
+        source: obj.source,
+        footprintPoints: obj.footprintPoints,
       })))
       setReferenceFixtureId(sorted[0]?.id ?? '')
     }
@@ -473,6 +477,8 @@ export default function SmartKpiModal({ isOpen, onClose, dwgLayoutId: propDwgLay
       position: obj.position,
       rotation: obj.rotation,
       scale: obj.scale,
+      source: obj.source,
+      footprintPoints: obj.footprintPoints,
     }))
   }, [availableTemplates])
 

@@ -93,14 +93,7 @@ export class SmartKpiService {
         availableKpis.push({
           ...template,
           detectedCount: matchingObjects.length,
-          detectedObjects: matchingObjects.map(o => ({
-            id: o.id,
-            name: o.name,
-            type: o.type,
-            position: o.position,
-            rotation: o.rotation,
-            scale: o.scale,
-          })),
+          detectedObjects: matchingObjects.map(o => this.serializeFixtureForKpiApi(o)),
           canGenerate: true,
         });
       }
@@ -169,8 +162,95 @@ export class SmartKpiService {
     };
   }
 
+  // Derive counter axes from DWG polygon footprint (matches floorplan canvas geometry)
+  computeAxesFromFootprint(points, position, defaultFacingX = 0, defaultFacingZ = 1) {
+    const cx = position.x;
+    const cz = position.z;
+    const n = points.length;
+
+    let bestLen = 0;
+    let alongX = 1;
+    let alongZ = 0;
+    for (let i = 0; i < n; i++) {
+      const j = (i + 1) % n;
+      const dx = points[j].x - points[i].x;
+      const dz = points[j].z - points[i].z;
+      const len = Math.hypot(dx, dz);
+      if (len > bestLen) {
+        bestLen = len;
+        alongX = dx / len;
+        alongZ = dz / len;
+      }
+    }
+
+    const candidates = [
+      { fromX: alongZ, fromZ: -alongX },
+      { fromX: -alongZ, fromZ: alongX },
+    ];
+
+    const scoreFrom = (fx, fz) => {
+      let pos = 0;
+      let neg = 0;
+      for (const p of points) {
+        const d = (p.x - cx) * fx + (p.z - cz) * fz;
+        if (d >= 0) pos += d;
+        else neg -= d;
+      }
+      return neg - pos;
+    };
+
+    let fromX = candidates[0].fromX;
+    let fromZ = candidates[0].fromZ;
+    let bestScore = scoreFrom(fromX, fromZ);
+    for (let i = 1; i < candidates.length; i++) {
+      const s = scoreFrom(candidates[i].fromX, candidates[i].fromZ);
+      if (s > bestScore) {
+        bestScore = s;
+        fromX = candidates[i].fromX;
+        fromZ = candidates[i].fromZ;
+      }
+    }
+
+    const rowLen = Math.hypot(defaultFacingX, defaultFacingZ);
+    if (rowLen > 0.01) {
+      const dot = fromX * defaultFacingX + fromZ * defaultFacingZ;
+      if (dot < 0) {
+        fromX = -fromX;
+        fromZ = -fromZ;
+      }
+    }
+
+    return {
+      rotY: Math.atan2(alongX, alongZ),
+      facingX: fromX,
+      facingZ: fromZ,
+      alongX,
+      alongZ,
+      fromX,
+      fromZ,
+    };
+  }
+
+  serializeFixtureForKpiApi(obj) {
+    return {
+      id: obj.id,
+      name: obj.name,
+      type: obj.type,
+      position: obj.position,
+      rotation: obj.rotation,
+      scale: obj.scale,
+      source: obj.source || null,
+      footprintPoints: obj.metadata?.dwg_footprint_points || null,
+    };
+  }
+
   // Fixture-local axes: along = counter edge, from = customer-facing direction
   getCashierAxes(cashier, sorted, isHorizontalRow, isVerticalRow, defaultFacingX, defaultFacingZ) {
+    const footprint = cashier.metadata?.dwg_footprint_points;
+    if (footprint && footprint.length >= 3) {
+      return this.computeAxesFromFootprint(footprint, cashier.position, defaultFacingX, defaultFacingZ);
+    }
+
     const { rotation, source } = cashier;
     const isDwgFixture = source === 'dwg';
     const hasExplicitRotation = rotation?.y && Math.abs(rotation.y) > 0.01;
@@ -929,12 +1009,7 @@ export class SmartKpiService {
           ...template,
           detectedCount: matchingFixtures.length,
           detectedObjects: matchingFixtures.map(f => ({
-            id: f.id,
-            name: f.name,
-            type: f.type,
-            position: f.position,
-            rotation: f.rotation,
-            scale: f.scale,
+            ...this.serializeFixtureForKpiApi(f),
             maxDimension: f.scale ? Math.max(f.scale.x || 0, f.scale.z || 0) : null,
           })),
           sizeDistribution,

@@ -20,6 +20,8 @@ import {
   findRoiForFixture,
   focusBoundsAroundFixture,
   getFixtureAxes,
+  getFixtureFootprintBounds,
+  getFixtureOutlinePoints,
   sortFixtures,
 } from './checkoutCalibrationUtils'
 
@@ -90,7 +92,7 @@ function CalibrationSlider({
   )
 }
 
-function FixtureRect({
+function FixtureFootprint({
   fixture,
   highlighted,
   dimmed,
@@ -99,35 +101,43 @@ function FixtureRect({
   highlighted?: boolean
   dimmed?: boolean
 }) {
-  const { rotY } = getFixtureAxes(fixture)
-  const widthM = fixture.scale?.x ?? 1.5
-  const depthM = fixture.scale?.z ?? 0.8
-  const cx = fixture.position.x
-  const cz = fixture.position.z
-  const deg = -(rotY * 180) / Math.PI
+  const outline = getFixtureOutlinePoints(fixture)
+  const bounds = getFixtureFootprintBounds(fixture)
+  const pointsStr = outline.map(p => `${p.x},${p.z}`).join(' ')
+  const labelY = bounds.minZ - 0.35
+  const labelX = (bounds.minX + bounds.maxX) / 2
+  const hasPolygon = (fixture.footprintPoints?.length ?? 0) >= 3
 
   return (
     <g opacity={dimmed ? 0.35 : 1}>
-      <rect
-        x={cx - widthM / 2}
-        y={cz - depthM / 2}
-        width={widthM}
-        height={depthM}
-        fill={highlighted ? '#4b5563' : '#374151'}
-        stroke={highlighted ? '#e5e7eb' : '#9ca3af'}
-        strokeWidth={highlighted ? 0.06 : 0.04}
-        rx={0.05}
-        transform={`rotate(${deg}, ${cx}, ${cz})`}
+      <polygon
+        points={pointsStr}
+        fill={highlighted ? '#164e63' : '#1e293b'}
+        fillOpacity={highlighted ? 0.55 : 0.35}
+        stroke={highlighted ? '#22d3ee' : '#06b6d4'}
+        strokeWidth={highlighted ? 0.07 : 0.05}
+        strokeLinejoin="round"
       />
       {highlighted && (
         <text
-          x={cx}
-          y={cz - depthM / 2 - 0.25}
+          x={labelX}
+          y={labelY}
           textAnchor="middle"
           fontSize={0.35}
-          fill="#d1d5db"
+          fill="#a5f3fc"
         >
           {fixture.name}
+        </text>
+      )}
+      {!hasPolygon && highlighted && (
+        <text
+          x={labelX}
+          y={labelY - 0.45}
+          textAnchor="middle"
+          fontSize={0.28}
+          fill="#64748b"
+        >
+          (no DWG polygon — using box fallback)
         </text>
       )}
     </g>
@@ -179,9 +189,10 @@ export default function CheckoutCalibrationPanel({
   }, [viewMode, previewRois, referenceFixture, fixtures])
 
   const bounds = useMemo(() => {
+    const footprintPts = fixtures.flatMap(f => getFixtureOutlinePoints(f))
     const points = [
       ...displayRois.flatMap(r => r.vertices),
-      ...fixtures.map(f => ({ x: f.position.x, z: f.position.z })),
+      ...footprintPts,
     ]
     const base = viewMode === 'focus' && referenceFixture
       ? focusBoundsAroundFixture(referenceFixture, 7)
@@ -518,7 +529,7 @@ export default function CheckoutCalibrationPanel({
             />
 
             {fixtures.map(fixture => (
-              <FixtureRect
+              <FixtureFootprint
                 key={fixture.id}
                 fixture={fixture}
                 highlighted={fixture.id === referenceFixtureId}
@@ -558,7 +569,7 @@ export default function CheckoutCalibrationPanel({
               <span className="w-2 h-2 rounded-sm bg-red-500/60 border border-red-500" /> Queue
             </span>
             <span className="flex items-center gap-1">
-              <span className="w-3 h-2 rounded-sm bg-gray-500 border border-gray-300" /> Counter
+              <span className="w-3 h-2 rounded-sm border border-cyan-400 bg-cyan-900/40" /> Counter (DWG shape)
             </span>
           </div>
         </div>

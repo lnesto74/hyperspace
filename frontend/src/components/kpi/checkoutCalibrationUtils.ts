@@ -55,37 +55,159 @@ export function getCheckoutNumber(fixtureId: string, fixtures: FixtureInfo[]): n
   return idx >= 0 ? idx + 1 : 1
 }
 
+export interface FixtureInfo {
+  id: string
+  name: string
+  position: { x: number; y: number; z: number }
+  rotation?: { x: number; y: number; z: number }
+  scale?: { x: number; y: number; z: number }
+  source?: string | null
+  footprintPoints?: { x: number; z: number }[] | null
+}
+
+function computeAxesFromFootprint(
+  points: { x: number; z: number }[],
+  position: { x: number; z: number },
+  defaultFacingX = 0,
+  defaultFacingZ = 1,
+) {
+  const cx = position.x
+  const cz = position.z
+  const n = points.length
+
+  let bestLen = 0
+  let alongX = 1
+  let alongZ = 0
+  for (let i = 0; i < n; i++) {
+    const j = (i + 1) % n
+    const dx = points[j].x - points[i].x
+    const dz = points[j].z - points[i].z
+    const len = Math.hypot(dx, dz)
+    if (len > bestLen) {
+      bestLen = len
+      alongX = dx / len
+      alongZ = dz / len
+    }
+  }
+
+  const candidates = [
+    { fromX: alongZ, fromZ: -alongX },
+    { fromX: -alongZ, fromZ: alongX },
+  ]
+
+  const scoreFrom = (fx: number, fz: number) => {
+    let pos = 0
+    let neg = 0
+    for (const p of points) {
+      const d = (p.x - cx) * fx + (p.z - cz) * fz
+      if (d >= 0) pos += d
+      else neg -= d
+    }
+    return neg - pos
+  }
+
+  let fromX = candidates[0].fromX
+  let fromZ = candidates[0].fromZ
+  let bestScore = scoreFrom(fromX, fromZ)
+  for (let i = 1; i < candidates.length; i++) {
+    const s = scoreFrom(candidates[i].fromX, candidates[i].fromZ)
+    if (s > bestScore) {
+      bestScore = s
+      fromX = candidates[i].fromX
+      fromZ = candidates[i].fromZ
+    }
+  }
+
+  const rowLen = Math.hypot(defaultFacingX, defaultFacingZ)
+  if (rowLen > 0.01) {
+    const dot = fromX * defaultFacingX + fromZ * defaultFacingZ
+    if (dot < 0) {
+      fromX = -fromX
+      fromZ = -fromZ
+    }
+  }
+
+  const baseRotation = Math.atan2(fromX, fromZ)
+  return {
+    rotY: Math.atan2(alongX, alongZ),
+    alongX,
+    alongZ,
+    fromX,
+    fromZ,
+    baseRotation,
+  }
+}
+
+export function getFixtureFootprintBounds(fixture: FixtureInfo) {
+  if (fixture.footprintPoints && fixture.footprintPoints.length >= 3) {
+    const xs = fixture.footprintPoints.map(p => p.x)
+    const zs = fixture.footprintPoints.map(p => p.z)
+    return {
+      minX: Math.min(...xs),
+      maxX: Math.max(...xs),
+      minZ: Math.min(...zs),
+      maxZ: Math.max(...zs),
+    }
+  }
+  const hw = (fixture.scale?.x ?? 1.5) / 2
+  const hd = (fixture.scale?.z ?? 0.8) / 2
+  return {
+    minX: fixture.position.x - hw,
+    maxX: fixture.position.x + hw,
+    minZ: fixture.position.z - hd,
+    maxZ: fixture.position.z + hd,
+  }
+}
+
+export function getFixtureOutlinePoints(fixture: FixtureInfo): { x: number; z: number }[] {
+  if (fixture.footprintPoints && fixture.footprintPoints.length >= 3) {
+    return fixture.footprintPoints
+  }
+  const hw = (fixture.scale?.x ?? 1.5) / 2
+  const hd = (fixture.scale?.z ?? 0.8) / 2
+  const cx = fixture.position.x
+  const cz = fixture.position.z
+  return [
+    { x: cx - hw, z: cz - hd },
+    { x: cx + hw, z: cz - hd },
+    { x: cx + hw, z: cz + hd },
+    { x: cx - hw, z: cz + hd },
+  ]
+}
+
+function getRowFacingDefaults(allFixtures?: FixtureInfo[]) {
+  if (!allFixtures || allFixtures.length <= 1) {
+    return { defaultFacingX: 0, defaultFacingZ: 1, isHorizontalRow: false, isVerticalRow: false }
+  }
+  const sorted = sortFixtures(allFixtures)
+  const xSpread = Math.max(...sorted.map(c => c.position.x)) - Math.min(...sorted.map(c => c.position.x))
+  const zSpread = Math.max(...sorted.map(c => c.position.z)) - Math.min(...sorted.map(c => c.position.z))
+  const isHorizontalRow = xSpread > zSpread * 2
+  const isVerticalRow = zSpread > xSpread * 2
+  let defaultFacingX = 0
+  let defaultFacingZ = 1
+  if (isVerticalRow) {
+    defaultFacingX = 1
+    defaultFacingZ = 0
+  }
+  return { defaultFacingX, defaultFacingZ, isHorizontalRow, isVerticalRow }
+}
+
 export function getFixtureAxes(fixture: FixtureInfo, allFixtures?: FixtureInfo[]) {
+  const { defaultFacingX, defaultFacingZ, isHorizontalRow, isVerticalRow } = getRowFacingDefaults(allFixtures)
+
+  if (fixture.footprintPoints && fixture.footprintPoints.length >= 3) {
+    return computeAxesFromFootprint(fixture.footprintPoints, fixture.position, defaultFacingX, defaultFacingZ)
+  }
+
   const rotY = fixture.rotation?.y ?? 0
   const hasExplicitRotation = Math.abs(rotY) > 0.01
-  const isDwgFixture = hasExplicitRotation
+  const isDwgFixture = fixture.source === 'dwg' || hasExplicitRotation
 
   let facingX: number
   let facingZ: number
 
-  if (allFixtures && allFixtures.length > 1) {
-    const sorted = sortFixtures(allFixtures)
-    const xSpread = Math.max(...sorted.map(c => c.position.x)) - Math.min(...sorted.map(c => c.position.x))
-    const zSpread = Math.max(...sorted.map(c => c.position.z)) - Math.min(...sorted.map(c => c.position.z))
-    const isHorizontalRow = xSpread > zSpread * 2
-    const isVerticalRow = zSpread > xSpread * 2
-
-    if (isDwgFixture && hasExplicitRotation) {
-      const perpendicularRotY = rotY + Math.PI / 2
-      facingZ = Math.cos(perpendicularRotY)
-      facingX = Math.sin(perpendicularRotY)
-      if (facingZ < 0) {
-        facingZ = -facingZ
-        facingX = -facingX
-      }
-    } else if (isHorizontalRow || isVerticalRow) {
-      facingX = isVerticalRow ? 1 : 0
-      facingZ = isVerticalRow ? 0 : 1
-    } else {
-      facingZ = Math.cos(rotY)
-      facingX = Math.sin(rotY)
-    }
-  } else if (isDwgFixture && hasExplicitRotation) {
+  if (isDwgFixture && hasExplicitRotation) {
     const perpendicularRotY = rotY + Math.PI / 2
     facingZ = Math.cos(perpendicularRotY)
     facingX = Math.sin(perpendicularRotY)
@@ -93,6 +215,9 @@ export function getFixtureAxes(fixture: FixtureInfo, allFixtures?: FixtureInfo[]
       facingZ = -facingZ
       facingX = -facingX
     }
+  } else if (isHorizontalRow || isVerticalRow) {
+    facingX = defaultFacingX
+    facingZ = defaultFacingZ
   } else {
     facingZ = Math.cos(rotY)
     facingX = Math.sin(rotY)
@@ -226,10 +351,15 @@ export function focusBoundsAroundFixture(
   fixture: FixtureInfo,
   radius = 6,
 ) {
+  const bounds = getFixtureFootprintBounds(fixture)
+  const cx = (bounds.minX + bounds.maxX) / 2
+  const cz = (bounds.minZ + bounds.maxZ) / 2
+  const halfW = Math.max(radius, (bounds.maxX - bounds.minX) / 2 + 2)
+  const halfD = Math.max(radius, (bounds.maxZ - bounds.minZ) / 2 + 2)
   return {
-    minX: fixture.position.x - radius,
-    maxX: fixture.position.x + radius,
-    minZ: fixture.position.z - radius,
-    maxZ: fixture.position.z + radius,
+    minX: cx - halfW,
+    maxX: cx + halfW,
+    minZ: cz - halfD,
+    maxZ: cz + halfD,
   }
 }
