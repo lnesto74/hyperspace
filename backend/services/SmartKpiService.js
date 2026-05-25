@@ -545,8 +545,88 @@ export class SmartKpiService {
     return rois;
   }
 
+  getShelfAxes(shelf, sorted, isHorizontalRow, isVerticalRow, defaultFacingX, defaultFacingZ) {
+    const footprint = shelf.footprintPoints || shelf.metadata?.dwg_footprint_points;
+    if (footprint && footprint.length >= 3) {
+      return this.computeAxesFromFootprint(footprint, shelf.position, defaultFacingX, defaultFacingZ);
+    }
+    return this.getCashierAxes(shelf, sorted, isHorizontalRow, isVerticalRow, defaultFacingX, defaultFacingZ);
+  }
+
+  generateCalibratedShelfRois(sorted, config, options) {
+    const cal = options.shelfCalibration;
+    const rois = [];
+    const xSpread = Math.max(...sorted.map(s => s.position.x)) - Math.min(...sorted.map(s => s.position.x));
+    const zSpread = Math.max(...sorted.map(s => s.position.z)) - Math.min(...sorted.map(s => s.position.z));
+    const isHorizontalRow = xSpread > zSpread * 2 && sorted.length > 1;
+    const isVerticalRow = zSpread > xSpread * 2 && sorted.length > 1;
+    let defaultFacingX = 0;
+    let defaultFacingZ = 1;
+    if (isVerticalRow) {
+      defaultFacingX = 1;
+      defaultFacingZ = 0;
+    }
+
+    sorted.forEach((shelf, index) => {
+      const axes = this.getShelfAxes(shelf, sorted, isHorizontalRow, isVerticalRow, defaultFacingX, defaultFacingZ);
+      const shelfNumber = index + 1;
+      const uniqueName = this.isNameUnique(shelf.name, sorted) ? shelf.name : `Shelf ${shelfNumber}`;
+
+      for (const { zoneType, zoneCal, color } of [
+        { zoneType: 'left', zoneCal: cal.left, color: config.color },
+        { zoneType: 'right', zoneCal: cal.right, color: config.colorBack || config.color },
+      ]) {
+        if (!zoneCal) continue;
+
+        const {
+          width,
+          depth,
+          alongCounter = 0,
+          fromCounter = 0,
+          rotationOffset = 0,
+        } = zoneCal;
+
+        const centerX = shelf.position.x + axes.alongX * alongCounter + axes.fromX * fromCounter;
+        const centerZ = shelf.position.z + axes.alongZ * alongCounter + axes.fromZ * fromCounter;
+        const rotation = Math.atan2(axes.fromX, axes.fromZ) + (rotationOffset * Math.PI / 180);
+        const label = zoneType === 'left' ? 'Left' : 'Right';
+
+        rois.push(this.createRectangularRoi({
+          name: `${uniqueName} - Engagement (${label})`,
+          centerX,
+          centerZ,
+          width,
+          depth,
+          rotation,
+          color,
+          opacity: 0.3,
+          metadata: {
+            type: 'smart-kpi',
+            template: 'shelf-engagement',
+            zoneType,
+            shelfId: shelf.id,
+            shelfIndex: index,
+            calibrated: true,
+          },
+        }));
+      }
+    });
+
+    console.log(`[SmartKPI] Generated ${rois.length} calibrated shelf zones for ${sorted.length} fixtures`);
+    return rois;
+  }
+
   // Generate shelf engagement zones (both sides - left and right of shelf)
   generateShelfRois(shelves, config, options = {}) {
+    if (options.shelfCalibration) {
+      const sorted = [...shelves].sort((a, b) => {
+        const dx = (a.position?.x || 0) - (b.position?.x || 0);
+        if (Math.abs(dx) > 0.5) return dx;
+        return (a.position?.z || 0) - (b.position?.z || 0);
+      });
+      return this.generateCalibratedShelfRois(sorted, config, options);
+    }
+
     const rois = [];
     const { engagementDepth = config.engagementDepth } = options;
 
