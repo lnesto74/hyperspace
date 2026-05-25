@@ -1,7 +1,9 @@
-import { useState, useMemo, useEffect, useRef } from 'react'
+import { useState, useMemo, useEffect, useRef, useCallback } from 'react'
 import { useRoi } from '../../context/RoiContext'
 import { useVenue } from '../../context/VenueContext'
 import ZoneKPIIndicator from './ZoneKPIIndicator'
+import { API_BASE } from '../../config/api'
+import { fetchRoiCategoryLabel, resolveRoiCategorySync } from '../../utils/roiCategoryUtils'
 
 interface ZoneKPIOverlayPanelProps {
   onZoneClick?: (roiId: string) => void
@@ -28,31 +30,44 @@ function getZoneCategory(name: string): ZoneCategory {
 
 export default function ZoneKPIOverlayPanel({ onZoneClick }: ZoneKPIOverlayPanelProps) {
   const { regions, showKPIOverlays, openKPIPopup, hoveredRoiId } = useRoi()
-  const { selectedObjectId } = useVenue()
+  const { selectedObjectId, objects } = useVenue()
   const [activeFilters, setActiveFilters] = useState<Set<ZoneCategory>>(new Set())
   
   // Track pinned ROI that stays highlighted for 10 seconds
   const [pinnedRoiId, setPinnedRoiId] = useState<string | null>(null)
   const pinnedTimeoutRef = useRef<NodeJS.Timeout | null>(null)
   const listContainerRef = useRef<HTMLDivElement>(null)
-  
+
+  // Live metrics from cards for realtime sort order
+  const liveMetricsRef = useRef<Map<string, { currentOccupancy: number; totalEntries: number }>>(new Map())
+  const [sortTick, setSortTick] = useState(0)
+
+  // Category labels resolved from ROI metadata, linked objects, or shelf-info API
+  const categoryCacheRef = useRef<Map<string, string>>(new Map())
+  const [categoryTick, setCategoryTick] = useState(0)
+
+  const handleMetricsUpdate = useCallback((roiId: string, metrics: { currentOccupancy: number; totalEntries: number }) => {
+    liveMetricsRef.current.set(roiId, metrics)
+  }, [])
+
+  useEffect(() => {
+    const id = setInterval(() => setSortTick(t => t + 1), 500)
+    return () => clearInterval(id)
+  }, [])
+
   // When hoveredRoiId changes, pin it and set 10-second timeout
   useEffect(() => {
     if (hoveredRoiId) {
-      // Clear any existing timeout
       if (pinnedTimeoutRef.current) {
         clearTimeout(pinnedTimeoutRef.current)
       }
       
-      // Pin the new ROI
       setPinnedRoiId(hoveredRoiId)
       
-      // Scroll to top when pinning
       if (listContainerRef.current) {
         listContainerRef.current.scrollTo({ top: 0, behavior: 'smooth' })
       }
       
-      // Set 10-second timeout to unpin
       pinnedTimeoutRef.current = setTimeout(() => {
         setPinnedRoiId(null)
       }, 10000)
@@ -65,29 +80,60 @@ export default function ZoneKPIOverlayPanel({ onZoneClick }: ZoneKPIOverlayPanel
     }
   }, [hoveredRoiId])
 
+  const baseRegions = useMemo(
+    () => regions.filter(roi => roi.name !== 'Zone 1' && roi.name !== 'LiDAR Coverage'),
+    [regions],
+  )
+
+  // Resolve categories (sync first, async fetch for shelf zones)
+  useEffect(() => {
+    baseRegions.forEach(roi => {
+      const sync = resolveRoiCategorySync(roi, objects)
+      if (sync) {
+        categoryCacheRef.current.set(roi.id, sync)
+        return
+      }
+      if (categoryCacheRef.current.has(roi.id)) return
+
+      void fetchRoiCategoryLabel(roi.id, API_BASE).then(label => {
+        if (!label) return
+        categoryCacheRef.current.set(roi.id, label)
+        setCategoryTick(t => t + 1)
+      }).catch(() => {})
+    })
+  }, [baseRegions, objects])
+
+  const roiCategories = useMemo(() => {
+    const map = new Map<string, string>()
+    baseRegions.forEach(roi => {
+      const label =
+        categoryCacheRef.current.get(roi.id) ??
+        resolveRoiCategorySync(roi, objects)
+      if (label) map.set(roi.id, label)
+    })
+    return map
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [baseRegions, objects, categoryTick])
+
   // Compute display names for ROIs, adding @Z{value} suffix for duplicates
   const roiDisplayNames = useMemo(() => {
-    const nameMap = new Map<string, string[]>() // name -> [id1, id2, ...]
-    const displayNames = new Map<string, string>() // id -> display name
+    const nameMap = new Map<string, string[]>()
+    const displayNames = new Map<string, string>()
     
-    // First pass: group ROIs by name
     regions.forEach(roi => {
       const ids = nameMap.get(roi.name) || []
       ids.push(roi.id)
       nameMap.set(roi.name, ids)
     })
     
-    // Second pass: assign display names
     regions.forEach(roi => {
       const ids = nameMap.get(roi.name) || []
       if (ids.length > 1) {
-        // Duplicate name - add @Z{value} suffix using centroid Z
         const centroidZ = roi.vertices.length > 0
           ? roi.vertices.reduce((sum, v) => sum + v.z, 0) / roi.vertices.length
           : 0
         displayNames.set(roi.id, `${roi.name} @Z${Math.round(centroidZ)}`)
       } else {
-        // Unique name - use as-is
         displayNames.set(roi.id, roi.name)
       }
     })
@@ -95,22 +141,27 @@ export default function ZoneKPIOverlayPanel({ onZoneClick }: ZoneKPIOverlayPanel
     return displayNames
   }, [regions])
 
-  // Get available categories from current regions (excluding auto-generated zones)
   const availableCategories = useMemo(() => {
     const cats = new Set<ZoneCategory>()
-    regions
-      .filter(roi => roi.name !== 'Zone 1' && roi.name !== 'LiDAR Coverage')
-      .forEach(roi => cats.add(getZoneCategory(roi.name)))
+    baseRegions.forEach(roi => cats.add(getZoneCategory(roi.name)))
     return Array.from(cats)
-  }, [regions])
+  }, [baseRegions])
 
-  // Filter regions based on active filters (empty = show all)
-  // Also hide auto-generated zones like "Zone 1" and "LiDAR Coverage"
   const filteredRegions = useMemo(() => {
-    const baseRegions = regions.filter(roi => roi.name !== 'Zone 1' && roi.name !== 'LiDAR Coverage')
-    let result = activeFilters.size === 0 ? baseRegions : baseRegions.filter(roi => activeFilters.has(getZoneCategory(roi.name)))
-    
-    // If there's a pinned ROI, move it to the top of the list
+    let result = activeFilters.size === 0
+      ? [...baseRegions]
+      : baseRegions.filter(roi => activeFilters.has(getZoneCategory(roi.name)))
+
+    // Sort by realtime traffic: current occupancy, then total entries
+    result.sort((a, b) => {
+      const ma = liveMetricsRef.current.get(a.id)
+      const mb = liveMetricsRef.current.get(b.id)
+      const occDiff = (mb?.currentOccupancy ?? 0) - (ma?.currentOccupancy ?? 0)
+      if (occDiff !== 0) return occDiff
+      return (mb?.totalEntries ?? 0) - (ma?.totalEntries ?? 0)
+    })
+
+    // Pinned (hovered) ROI stays on top with distinct highlight
     if (pinnedRoiId) {
       const pinnedIndex = result.findIndex(r => r.id === pinnedRoiId)
       if (pinnedIndex > 0) {
@@ -118,11 +169,12 @@ export default function ZoneKPIOverlayPanel({ onZoneClick }: ZoneKPIOverlayPanel
         result = [pinned, ...result.slice(0, pinnedIndex), ...result.slice(pinnedIndex + 1)]
       }
     }
-    
-    return result
-  }, [regions, activeFilters, pinnedRoiId])
 
-  // Toggle filter
+    return result
+    // sortTick triggers re-sort as live metrics update
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [baseRegions, activeFilters, pinnedRoiId, sortTick])
+
   const toggleFilter = (cat: ZoneCategory) => {
     setActiveFilters(prev => {
       const next = new Set(prev)
@@ -135,7 +187,6 @@ export default function ZoneKPIOverlayPanel({ onZoneClick }: ZoneKPIOverlayPanel
     })
   }
 
-  // Hide when right panel is open (object selected) or KPI overlays toggled off
   if (!showKPIOverlays || regions.length === 0 || selectedObjectId) {
     return null
   }
@@ -150,7 +201,6 @@ export default function ZoneKPIOverlayPanel({ onZoneClick }: ZoneKPIOverlayPanel
 
   return (
     <div className="absolute top-14 right-4 z-20 flex gap-3">
-      {/* Category Filter Pills - horizontal row on left */}
       {availableCategories.length > 1 && (
         <div className="flex flex-col gap-1 pt-1">
           {availableCategories.map(cat => {
@@ -185,7 +235,6 @@ export default function ZoneKPIOverlayPanel({ onZoneClick }: ZoneKPIOverlayPanel
         </div>
       )}
 
-      {/* KPI Cards column - fixed width */}
       <div 
         ref={listContainerRef}
         className="flex flex-col gap-2 max-h-[calc(100vh-200px)] overflow-y-auto pr-1 w-[168px]"
@@ -196,12 +245,13 @@ export default function ZoneKPIOverlayPanel({ onZoneClick }: ZoneKPIOverlayPanel
             roiId={roi.id}
             roiName={roiDisplayNames.get(roi.id) || roi.name}
             roiColor={roi.color}
+            categoryLabel={roiCategories.get(roi.id) ?? null}
             highlighted={roi.id === pinnedRoiId}
+            onMetricsUpdate={handleMetricsUpdate}
             onClick={() => handleZoneClick(roi.id)}
           />
         ))}
 
-        {/* Empty state when all filtered out */}
         {filteredRegions.length === 0 && activeFilters.size > 0 && (
           <div className="text-white/40 text-xs text-center py-4">
             No zones match selected filters

@@ -9,6 +9,22 @@
  */
 
 import { shelfPlanogramQueries, skuItemQueries } from '../../database/schema.js';
+import { resolveShelfCategories } from '../ShelfCategoryResolver.js';
+
+const SHELF_ENGAGEMENT_TYPES = ['shelf', 'fridge', 'service_counter'];
+const SHELF_NAME_PATTERNS = [
+  'shelf', 'display', 'gondola', 'rack', 'scaffale', 'regal', 'fridge', 'frigo',
+  'banco', 'bancone', 'refriger', 'gastronomia', 'freezer', 'schematico',
+];
+
+function parseJson(raw) {
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
 
 export class ShelfAnalyticsAdapter {
   constructor(db) {
@@ -297,6 +313,12 @@ export class ShelfAnalyticsAdapter {
     result.categories = Array.from(cats);
     result.brands = Array.from(brands);
     result.skuIds = skuIds;
+
+    if (result.categories.length === 0) {
+      const resolved = resolveShelfCategories(this.db, shelfId);
+      result.categories = resolved.categories;
+    }
+
     this._shelfMatchCache.set(shelfId, result);
     return result;
   }
@@ -441,35 +463,54 @@ export class ShelfAnalyticsAdapter {
     const shelfIds = new Set();
 
     const planogramId = this.findBestPlanogram(venueId);
-    if (!planogramId) return [];
 
-    const shelfPlanograms = shelfPlanogramQueries.getByPlanogramId(this.db, planogramId);
-    let totalSlots = 0;
-    let totalSkus = 0;
+    if (planogramId) {
+      const shelfPlanograms = shelfPlanogramQueries.getByPlanogramId(this.db, planogramId);
+      let totalSlots = 0;
+      let totalSkus = 0;
 
-    for (const sp of shelfPlanograms) {
-      const slots = sp.slots;
-      slots.levels?.forEach(level => {
-        level.slots?.forEach(slot => {
-          totalSlots++;
-          if (slot.skuItemId) {
-            const sku = this._getSkuCached(slot.skuItemId);
-            if (sku) {
-              totalSkus++;
-              if (type === 'category' && ids.includes(sku.category)) {
-                shelfIds.add(sp.shelfId);
-              } else if (type === 'brand' && ids.includes(sku.brand)) {
-                shelfIds.add(sp.shelfId);
-              } else if (type === 'sku' && ids.includes(sku.id)) {
-                shelfIds.add(sp.shelfId);
+      for (const sp of shelfPlanograms) {
+        const slots = sp.slots;
+        slots.levels?.forEach(level => {
+          level.slots?.forEach(slot => {
+            totalSlots++;
+            if (slot.skuItemId) {
+              const sku = this._getSkuCached(slot.skuItemId);
+              if (sku) {
+                totalSkus++;
+                if (type === 'category' && ids.includes(sku.category)) {
+                  shelfIds.add(sp.shelfId);
+                } else if (type === 'brand' && ids.includes(sku.brand)) {
+                  shelfIds.add(sp.shelfId);
+                } else if (type === 'sku' && ids.includes(sku.id)) {
+                  shelfIds.add(sp.shelfId);
+                }
               }
             }
-          }
+          });
         });
-      });
+      }
+
+      console.log(`🔍 [PEBLE] findShelvesForTarget: ${shelfPlanograms.length} shelves, ${totalSlots} slots, ${totalSkus} SKUs → matched ${shelfIds.size}`);
     }
 
-    console.log(`🔍 [PEBLE] findShelvesForTarget: ${shelfPlanograms.length} shelves, ${totalSlots} slots, ${totalSkus} SKUs → matched ${shelfIds.size}`);
+    if (type === 'category') {
+      const objects = this.db.prepare(`
+        SELECT id, metadata_json FROM venue_objects WHERE venue_id = ?
+      `).all(venueId);
+      for (const obj of objects) {
+        const resolved = resolveShelfCategories(this.db, obj.id);
+        if (resolved.categories.some((cat) => ids.includes(cat))) {
+          shelfIds.add(obj.id);
+        }
+        const meta = parseJson(obj.metadata_json) || {};
+        const label = meta.business_category_label || meta.business_category;
+        if (label && ids.includes(label)) {
+          shelfIds.add(obj.id);
+        }
+      }
+    }
+
     return Array.from(shelfIds);
   }
 
@@ -594,17 +635,50 @@ export class ShelfAnalyticsAdapter {
   }
 
   /**
-   * Get all target options for campaign builder
-   * Returns available shelves, categories, brands, SKUs
+   * Collect product categories from company taxonomy, object/ROI metadata, and planogram SKUs.
    */
-  getTargetOptions(venueId) {
-    // Get shelves
-    const shelves = this.db.prepare(`
-      SELECT id, name FROM venue_objects 
-      WHERE venue_id = ? AND type = 'shelf'
-    `).all(venueId);
+  _collectVenueCategories(venueId) {
+    const byLabel = new Map();
 
-    // Get categories and brands from SKU catalog
+    const addCategory = (label, source) => {
+      if (!label || typeof label !== 'string') return;
+      const trimmed = label.trim();
+      if (!trimmed) return;
+      const existing = byLabel.get(trimmed);
+      if (existing) {
+        if (source && !existing.sources.includes(source)) existing.sources.push(source);
+        return;
+      }
+      byLabel.set(trimmed, { id: trimmed, label: trimmed, sources: [source] });
+    };
+
+    const venue = this.db.prepare('SELECT company_id FROM venues WHERE id = ?').get(venueId);
+    if (venue?.company_id) {
+      const companyCats = this.db.prepare(`
+        SELECT name FROM company_categories WHERE company_id = ? ORDER BY name
+      `).all(venue.company_id);
+      companyCats.forEach((row) => addCategory(row.name, 'company'));
+    }
+
+    const objects = this.db.prepare(`
+      SELECT id, metadata_json FROM venue_objects WHERE venue_id = ?
+    `).all(venueId);
+    for (const obj of objects) {
+      const meta = parseJson(obj.metadata_json) || {};
+      addCategory(meta.business_category_label, 'object');
+      addCategory(meta.business_category, 'object');
+      const resolved = resolveShelfCategories(this.db, obj.id);
+      resolved.categories.forEach((cat) => addCategory(cat, resolved.source));
+    }
+
+    const rois = this.db.prepare(`
+      SELECT metadata_json FROM regions_of_interest WHERE venue_id = ?
+    `).all(venueId);
+    for (const roi of rois) {
+      const meta = parseJson(roi.metadata_json) || {};
+      addCategory(meta.business_category_label, 'roi');
+    }
+
     const planogram = this.db.prepare(`
       SELECT p.id, sc.id as catalog_id
       FROM planograms p
@@ -614,17 +688,85 @@ export class ShelfAnalyticsAdapter {
       LIMIT 1
     `).get(venueId);
 
-    let categories = [];
+    if (planogram?.catalog_id) {
+      const skuCategories = this.db.prepare(`
+        SELECT DISTINCT category FROM sku_items
+        WHERE catalog_id = ? AND category IS NOT NULL
+      `).all(planogram.catalog_id);
+      skuCategories.forEach((row) => addCategory(row.category, 'planogram'));
+    }
+
+    return byLabel;
+  }
+
+  _isSelectableShelfFixture(obj) {
+    const typeMatch = SHELF_ENGAGEMENT_TYPES.includes(obj.type);
+    const nameMatch = SHELF_NAME_PATTERNS.some((pattern) =>
+      obj.name.toLowerCase().includes(pattern.toLowerCase())
+    );
+    return typeMatch || nameMatch;
+  }
+
+  /**
+   * Get all target options for campaign builder
+   * Returns available shelves, categories, brands, SKUs
+   */
+  getTargetOptions(venueId) {
+    const categoryMap = this._collectVenueCategories(venueId);
+
+    const shelfRows = this.db.prepare(`
+      SELECT id, name, type, position_x, position_y, position_z,
+             rotation_y, scale_x, scale_y, scale_z, metadata_json
+      FROM venue_objects
+      WHERE venue_id = ?
+    `).all(venueId);
+
+    const shelves = shelfRows
+      .filter((obj) => this._isSelectableShelfFixture(obj))
+      .map((obj) => {
+        const meta = parseJson(obj.metadata_json) || {};
+        const resolved = resolveShelfCategories(this.db, obj.id);
+        const categoryLabel = resolved.categories[0]
+          || meta.business_category_label
+          || meta.business_category
+          || null;
+        return {
+          id: obj.id,
+          name: obj.name,
+          type: obj.type,
+          position: {
+            x: obj.position_x,
+            y: obj.position_y ?? 0,
+            z: obj.position_z,
+          },
+          rotation: obj.rotation_y ? { y: obj.rotation_y } : undefined,
+          scale: {
+            x: obj.scale_x,
+            y: obj.scale_y,
+            z: obj.scale_z,
+          },
+          footprintPoints: meta.dwg_footprint_points || null,
+          categoryLabel,
+          categories: resolved.categories.length
+            ? resolved.categories
+            : (categoryLabel ? [categoryLabel] : []),
+        };
+      });
+
+    // Get categories and brands from SKU catalog (legacy strings merged above)
+    const planogram = this.db.prepare(`
+      SELECT p.id, sc.id as catalog_id
+      FROM planograms p
+      LEFT JOIN sku_catalogs sc ON 1=1
+      WHERE p.venue_id = ?
+      ORDER BY p.version DESC
+      LIMIT 1
+    `).get(venueId);
+
     let brands = [];
     let skus = [];
 
     if (planogram?.catalog_id) {
-      categories = this.db.prepare(`
-        SELECT DISTINCT category FROM sku_items 
-        WHERE catalog_id = ? AND category IS NOT NULL
-        ORDER BY category
-      `).all(planogram.catalog_id).map(r => r.category);
-
       brands = this.db.prepare(`
         SELECT DISTINCT brand FROM sku_items 
         WHERE catalog_id = ? AND brand IS NOT NULL
@@ -639,8 +781,12 @@ export class ShelfAnalyticsAdapter {
       `).all(planogram.catalog_id);
     }
 
+    const categories = Array.from(categoryMap.values())
+      .map(({ id, label, sources }) => ({ id, label, sources }))
+      .sort((a, b) => a.label.localeCompare(b.label));
+
     return {
-      shelves: shelves.map(s => ({ id: s.id, name: s.name })),
+      shelves,
       categories,
       brands,
       skus: skus.map(s => ({ 

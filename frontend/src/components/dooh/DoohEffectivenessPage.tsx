@@ -36,6 +36,8 @@ import {
   Gauge,
   HelpCircle,
 } from 'lucide-react'
+import AttributionShelfPicker from './AttributionShelfPicker'
+import { ROI_CATEGORY_COLOR } from '../../utils/roiCategoryUtils'
 
 // KPI Tooltip descriptions
 const KPI_TOOLTIPS: Record<string, { title: string; description: string }> = {
@@ -129,11 +131,33 @@ interface Screen {
   enabled: boolean
 }
 
+interface CategoryOption {
+  id: string
+  label: string
+  sources?: string[]
+}
+
+interface ShelfOption {
+  id: string
+  name: string
+  type?: string
+  categoryLabel?: string | null
+  categories?: string[]
+}
+
 interface TargetOptions {
-  shelves: { id: string; name: string }[]
-  categories: string[]
+  shelves: ShelfOption[]
+  categories: CategoryOption[] | string[]
   brands: string[]
   skus: { id: string; skuCode: string; name: string; brand?: string; category?: string }[]
+}
+
+function normalizeCategories(raw: TargetOptions['categories'] | undefined): CategoryOption[] {
+  if (!raw?.length) return []
+  return raw.map((item) => {
+    if (typeof item === 'string') return { id: item, label: item }
+    return { id: item.id, label: item.label, sources: item.sources }
+  })
 }
 
 interface KPISummary {
@@ -502,6 +526,10 @@ export default function DoohEffectivenessPage({ onClose }: DoohEffectivenessPage
   }, [fetchCampaigns, fetchScreens, fetchTargetOptions])
 
   useEffect(() => {
+    if (showBuilder) fetchTargetOptions()
+  }, [showBuilder, fetchTargetOptions])
+
+  useEffect(() => {
     if (selectedCampaign) {
       // Load cached KPIs when selecting a campaign
       fetchLatestKPIs()
@@ -693,6 +721,7 @@ export default function DoohEffectivenessPage({ onClose }: DoohEffectivenessPage
                           setEditingCampaign(campaign);
                           setBuilderName(campaign.name);
                           setBuilderScreenIds(campaign.screenIds || []);
+                          setBuilderTargetType(campaign.target?.type === 'slot' ? 'shelf' : (campaign.target?.type || 'category'));
                           setBuilderTargetIds(campaign.target?.ids || []);
                           setShowBuilder(true);
                         }}
@@ -1144,7 +1173,9 @@ export default function DoohEffectivenessPage({ onClose }: DoohEffectivenessPage
       {/* Campaign builder modal */}
       {showBuilder && (
         <div className="fixed inset-0 z-60 bg-black/50 flex items-center justify-center p-4">
-          <div className="bg-gray-800 rounded-xl w-full max-w-lg border border-gray-700">
+          <div className={`bg-gray-800 rounded-xl w-full border border-gray-700 ${
+            builderTargetType === 'shelf' ? 'max-w-4xl' : 'max-w-lg'
+          }`}>
             <div className="p-4 border-b border-gray-700 flex items-center justify-between">
               <h3 className="text-lg font-medium text-white">{editingCampaign ? 'Edit Campaign' : 'New Attribution Campaign'}</h3>
               <button
@@ -1226,28 +1257,49 @@ export default function DoohEffectivenessPage({ onClose }: DoohEffectivenessPage
               {/* Target selection */}
               <div>
                 <label className="block text-sm text-gray-400 mb-1">Target Items</label>
+                {builderTargetType === 'category' && (
+                  <div className="space-y-2 max-h-52 overflow-y-auto">
+                    {normalizeCategories(targetOptions?.categories).length === 0 ? (
+                      <p className="text-xs text-gray-500 p-3 bg-gray-900/50 rounded-lg border border-gray-700">
+                        No product categories found yet. Assign categories in DWG object mapping or Smart KPI custom zones.
+                      </p>
+                    ) : (
+                      normalizeCategories(targetOptions?.categories).map((cat) => {
+                        const selected = builderTargetIds.includes(cat.id)
+                        return (
+                          <button
+                            key={cat.id}
+                            type="button"
+                            onClick={() => {
+                              setBuilderTargetIds(prev =>
+                                selected ? prev.filter(id => id !== cat.id) : [...prev, cat.id]
+                              )
+                            }}
+                            className={`w-full flex justify-center p-2 rounded-full transition-all ${
+                              selected
+                                ? 'ring-2 ring-amber-400/60'
+                                : 'hover:bg-gray-700/80'
+                            }`}
+                          >
+                            <span
+                              className="inline-block w-full text-center rounded-full px-3 py-1.5 text-sm font-semibold truncate"
+                              style={{
+                                color: ROI_CATEGORY_COLOR,
+                                backgroundColor: selected ? `${ROI_CATEGORY_COLOR}28` : `${ROI_CATEGORY_COLOR}12`,
+                                border: `1px solid ${selected ? ROI_CATEGORY_COLOR : `${ROI_CATEGORY_COLOR}44`}`,
+                              }}
+                            >
+                              {cat.label}
+                            </span>
+                          </button>
+                        )
+                      })
+                    )}
+                  </div>
+                )}
+                {builderTargetType === 'brand' && (
                 <div className="space-y-1 max-h-40 overflow-y-auto">
-                  {builderTargetType === 'category' && targetOptions?.categories.map((cat) => (
-                    <label
-                      key={cat}
-                      className="flex items-center gap-2 p-2 bg-gray-700/50 rounded hover:bg-gray-700 cursor-pointer"
-                    >
-                      <input
-                        type="checkbox"
-                        checked={builderTargetIds.includes(cat)}
-                        onChange={(e) => {
-                          if (e.target.checked) {
-                            setBuilderTargetIds([...builderTargetIds, cat])
-                          } else {
-                            setBuilderTargetIds(builderTargetIds.filter(id => id !== cat))
-                          }
-                        }}
-                        className="rounded"
-                      />
-                      <span className="text-sm text-white">{cat}</span>
-                    </label>
-                  ))}
-                  {builderTargetType === 'brand' && targetOptions?.brands.map((brand) => (
+                  {targetOptions?.brands.map((brand) => (
                     <label
                       key={brand}
                       className="flex items-center gap-2 p-2 bg-gray-700/50 rounded hover:bg-gray-700 cursor-pointer"
@@ -1267,27 +1319,26 @@ export default function DoohEffectivenessPage({ onClose }: DoohEffectivenessPage
                       <span className="text-sm text-white">{brand}</span>
                     </label>
                   ))}
-                  {builderTargetType === 'shelf' && targetOptions?.shelves.map((shelf) => (
-                    <label
-                      key={shelf.id}
-                      className="flex items-center gap-2 p-2 bg-gray-700/50 rounded hover:bg-gray-700 cursor-pointer"
-                    >
-                      <input
-                        type="checkbox"
-                        checked={builderTargetIds.includes(shelf.id)}
-                        onChange={(e) => {
-                          if (e.target.checked) {
-                            setBuilderTargetIds([...builderTargetIds, shelf.id])
-                          } else {
-                            setBuilderTargetIds(builderTargetIds.filter(id => id !== shelf.id))
-                          }
-                        }}
-                        className="rounded"
-                      />
-                      <span className="text-sm text-white">{shelf.name}</span>
-                    </label>
-                  ))}
-                  {builderTargetType === 'sku' && targetOptions?.skus.slice(0, 50).map((sku) => (
+                </div>
+                )}
+                {builderTargetType === 'shelf' && venue?.id && (
+                  <AttributionShelfPicker
+                    venueId={venue.id}
+                    dwgLayoutId={venue.dwg_layout_version_id}
+                    shelfOptions={targetOptions?.shelves ?? []}
+                    selectedIds={builderTargetIds}
+                    onToggle={(shelfId) => {
+                      setBuilderTargetIds(prev =>
+                        prev.includes(shelfId)
+                          ? prev.filter(id => id !== shelfId)
+                          : [...prev, shelfId]
+                      )
+                    }}
+                  />
+                )}
+                {builderTargetType === 'sku' && (
+                <div className="space-y-1 max-h-40 overflow-y-auto">
+                  {targetOptions?.skus.slice(0, 50).map((sku) => (
                     <label
                       key={sku.id}
                       className="flex items-center gap-2 p-2 bg-gray-700/50 rounded hover:bg-gray-700 cursor-pointer"
@@ -1309,6 +1360,7 @@ export default function DoohEffectivenessPage({ onClose }: DoohEffectivenessPage
                     </label>
                   ))}
                 </div>
+                )}
               </div>
             </div>
 

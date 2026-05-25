@@ -2,27 +2,17 @@ import { useState, useEffect, useRef, useMemo } from 'react'
 import { ArrowUp, ArrowDown, ArrowRight } from 'lucide-react'
 import { useTracksRef } from '../../context/TrackingContext'
 import { useRoi } from '../../context/RoiContext'
-
-// Point-in-polygon test using ray casting
-const isPointInPolygon = (x: number, z: number, vertices: { x: number; z: number }[]): boolean => {
-  if (vertices.length < 3) return false
-  let inside = false
-  for (let i = 0, j = vertices.length - 1; i < vertices.length; j = i++) {
-    const xi = vertices[i].x, zi = vertices[i].z
-    const xj = vertices[j].x, zj = vertices[j].z
-    if (((zi > z) !== (zj > z)) && (x < (xj - xi) * (z - zi) / (zj - zi) + xi)) {
-      inside = !inside
-    }
-  }
-  return inside
-}
+import { isPointInPolygon } from '../../utils/zoneLiveMetrics'
+import { ROI_CATEGORY_COLOR } from '../../utils/roiCategoryUtils'
 
 interface ZoneKPIIndicatorProps {
   roiId: string
   roiName: string
   roiColor: string
+  categoryLabel?: string | null
   highlighted?: boolean
   onClick?: () => void
+  onMetricsUpdate?: (roiId: string, metrics: { currentOccupancy: number; totalEntries: number }) => void
 }
 
 interface LiveKPIData {
@@ -130,7 +120,15 @@ function TrendArrow({ current, previous }: { current: number; previous: number }
   )
 }
 
-export default function ZoneKPIIndicator({ roiId, roiName, roiColor, highlighted = false, onClick }: ZoneKPIIndicatorProps) {
+export default function ZoneKPIIndicator({
+  roiId,
+  roiName,
+  roiColor,
+  categoryLabel,
+  highlighted = false,
+  onClick,
+  onMetricsUpdate,
+}: ZoneKPIIndicatorProps) {
   const tracksRef = useTracksRef()
   const { regions } = useRoi()
   const previousOccupancyRef = useRef(0)
@@ -206,11 +204,15 @@ export default function ZoneKPIIndicator({ roiId, roiName, roiColor, highlighted
         previousOccupancy: prev,
         avgWaitingTime: avgWait,
       })
+      onMetricsUpdate?.(roiId, {
+        currentOccupancy: occupancy,
+        totalEntries: totalEntriesRef.current,
+      })
     }
     const id = setInterval(tick, KPI_INTERVAL)
     tick()
     return () => clearInterval(id)
-  }, [roiId])
+  }, [roiId, onMetricsUpdate])
 
   if (!kpiData) {
     return (
@@ -228,9 +230,13 @@ export default function ZoneKPIIndicator({ roiId, roiName, roiColor, highlighted
     <div 
       className={`backdrop-blur-xl rounded-xl p-2.5 cursor-pointer transition-all shadow-xl min-w-[160px] ${
         highlighted 
-          ? 'bg-white/15 border-2 border-white/40 ring-2 ring-white/20 scale-[1.02]' 
+          ? 'bg-white/15 border-2 scale-[1.03]' 
           : 'bg-black/40 border border-white/10 hover:bg-black/50 hover:border-white/20'
       }`}
+      style={highlighted ? {
+        borderColor: roiColor,
+        boxShadow: `0 0 0 2px ${roiColor}44, 0 0 16px ${roiColor}66, 0 4px 24px rgba(0,0,0,0.4)`,
+      } : undefined}
       onClick={onClick}
     >
       {/* Zone Name Header with subtle color indicator */}
@@ -312,6 +318,21 @@ export default function ZoneKPIIndicator({ roiId, roiName, roiColor, highlighted
           </div>
         )}
       </div>
+
+      {categoryLabel && (
+        <div className="mt-2 flex justify-center">
+          <span
+            className="inline-block w-full text-center rounded-full px-2 py-1 text-[10px] font-semibold tracking-wide truncate"
+            style={{
+              color: ROI_CATEGORY_COLOR,
+              backgroundColor: `${ROI_CATEGORY_COLOR}18`,
+              border: `1px solid ${ROI_CATEGORY_COLOR}44`,
+            }}
+          >
+            {categoryLabel}
+          </span>
+        </div>
+      )}
     </div>
   )
 }

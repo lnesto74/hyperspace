@@ -6,6 +6,7 @@ import ProductAnalyticsTab from './ProductAnalyticsTab'
 import { API_BASE } from '../../config/api'
 import { useTracking } from '../../context/TrackingContext'
 import { withDemoSession } from '../../utils/demoSession'
+import { useRoiLiveOccupancy } from '../../utils/zoneLiveMetrics'
 
 
 interface KPIData {
@@ -319,7 +320,7 @@ export default function ZoneKPIPopup({ roiId, roiName, roiColor, onClose, shelfI
   const [error, setError] = useState<string | null>(null)
   const [period, setPeriod] = useState<TimePeriod>('day')
   const [activeTab, setActiveTab] = useState<'overview' | 'dwell' | 'flow' | 'velocity' | 'products'>('overview')
-  const [liveOccupancy, setLiveOccupancy] = useState<number>(0)
+  const liveOccupancy = useRoiLiveOccupancy(roiId)
   const [showSettings, setShowSettings] = useState(false)
   
   // Auto-detected shelf info (fetched from backend)
@@ -394,32 +395,15 @@ export default function ZoneKPIPopup({ roiId, roiName, roiColor, onClose, shelfI
     }
   }, [roiId, period, demoSessionId])
 
-  // Fetch live occupancy every 2 seconds
-  const fetchLiveOccupancy = useCallback(async () => {
-    try {
-      const res = await fetch(withDemoSession(`${API_BASE}/api/roi/${roiId}/occupancy/live`, demoSessionId))
-      if (res.ok) {
-        const data = await res.json()
-        setLiveOccupancy(data.currentOccupancy)
-      }
-    } catch (err) {
-      console.error('Failed to fetch live occupancy:', err)
-    }
-  }, [roiId, demoSessionId])
-
   // Fetch on open, when period changes, or when roi changes
   useEffect(() => {
     fetchKPIs()
-    fetchLiveOccupancy()
-    const interval = setInterval(fetchLiveOccupancy, 2000)
-    return () => clearInterval(interval)
-  }, [fetchKPIs, fetchLiveOccupancy])
+  }, [fetchKPIs])
 
   // Manual refresh handler
   const handleRefresh = useCallback(() => {
     fetchKPIs()
-    fetchLiveOccupancy()
-  }, [fetchKPIs, fetchLiveOccupancy])
+  }, [fetchKPIs])
 
   const formatTime = (minutes: number) => {
     if (minutes < 1) return `${Math.round(minutes * 60)}s`
