@@ -1109,6 +1109,10 @@ export function initDatabase() {
       db.exec("ALTER TABLE venues ADD COLUMN grid_opacity REAL NOT NULL DEFAULT 0.35");
       console.log('📦 Migration: Added grid_opacity column to venues');
     }
+    if (venueColumnNames.length > 0 && !venueColumnNames.includes('checkout_alert_config_json')) {
+      db.exec("ALTER TABLE venues ADD COLUMN checkout_alert_config_json TEXT DEFAULT NULL");
+      console.log('📦 Migration: Added checkout_alert_config_json column to venues');
+    }
   } catch (migrationErr) {
     // Table may not exist yet, that's fine
   }

@@ -53,9 +53,10 @@ interface NeuralDashboardProps {
   children: React.ReactNode
   enabled?: boolean
   leftOffset?: number
+  isReplayMode?: boolean
 }
 
-export default function NeuralDashboard({ children, enabled = true, leftOffset = 0 }: NeuralDashboardProps) {
+export default function NeuralDashboard({ children, enabled = true, leftOffset = 0, isReplayMode = false }: NeuralDashboardProps) {
   const { setInterpolation } = useTrackingActions()
   const tracksRef = useTracksRef()
   const { regions } = useRoi()
@@ -66,9 +67,9 @@ export default function NeuralDashboard({ children, enabled = true, leftOffset =
   
   // Toggle track interpolation when Neural Dashboard is enabled/disabled
   useEffect(() => {
-    setInterpolation(enabled)
+    setInterpolation(enabled && !isReplayMode)
     return () => setInterpolation(false)
-  }, [enabled, setInterpolation])
+  }, [enabled, isReplayMode, setInterpolation])
   
   // Throttled metrics — recompute at most once per second to avoid lag
   const [metrics, setMetrics] = useState({
@@ -198,7 +199,8 @@ interface PanelProps {
 
 const MemoizedPanels = memo(function MemoizedPanels({ monoMode, leftOffset, metrics }: PanelProps) {
   const panelFilter = monoMode ? 'grayscale(1)' : 'none'
-  const { data: batchData } = useNeuralBatch('1h')
+  const [funnelRange, setFunnelRange] = useState<'1h' | '24h' | '7d'>('1h')
+  const { data: batchData } = useNeuralBatch(funnelRange)
   
   return (
     <>
@@ -243,7 +245,11 @@ const MemoizedPanels = memo(function MemoizedPanels({ monoMode, leftOffset, metr
           <JourneyFlowGraph />
         </div>
         <div className="flex-1 border-r border-[rgba(255,255,255,0.04)] overflow-hidden">
-          <ConversionFunnel batchFunnel={batchData.funnel} />
+          <ConversionFunnel
+            batchFunnel={batchData.funnel}
+            range={funnelRange}
+            onRangeChange={setFunnelRange}
+          />
         </div>
         <div className="flex-1 overflow-hidden">
           <RetailMediaPanel batchMedia={batchData.mediaSummary} />

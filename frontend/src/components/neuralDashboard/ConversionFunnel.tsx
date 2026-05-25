@@ -35,21 +35,30 @@ const STAGE_COLORS = [
 ]
 
 const STAGE_TIPS: Record<string, string> = {
-  entry: 'All unique visitors detected in the venue',
-  shop: 'Visitors who entered at least 1 product zone',
+  entry: 'Visitors who crossed an entrance/traffic zone',
+  shop: 'Visitors who entered at least 1 product/shelf zone',
   engage: 'Visitors who dwelled in a product zone',
   basket: 'Visitors engaged in 3+ different product zones',
-  checkout: 'Visitors who entered a checkout zone',
+  checkout: 'Visitors who reached a checkout service zone (not queue waiting)',
 }
 
-export default function ConversionFunnel({ batchFunnel }: { batchFunnel?: FunnelData | null }) {
+type FunnelRange = '1h' | '24h' | '7d'
+
+interface ConversionFunnelProps {
+  batchFunnel?: FunnelData | null
+  range?: FunnelRange
+  onRangeChange?: (range: FunnelRange) => void
+}
+
+export default function ConversionFunnel({ batchFunnel, range: controlledRange, onRangeChange }: ConversionFunnelProps) {
   const { venue } = useVenue()
   const [data, setData] = useState<FunnelData | null>(null)
-  const [range, setRange] = useState<'1h' | '24h' | '7d'>('1h')
+  const [internalRange, setInternalRange] = useState<FunnelRange>('1h')
+  const range = controlledRange ?? internalRange
+  const setRange = onRangeChange ?? setInternalRange
   const [animatedWidths, setAnimatedWidths] = useState<number[]>([])
   const prevDataRef = useRef<FunnelData | null>(null)
 
-  // Use batch data if available
   useEffect(() => {
     if (batchFunnel) setData(batchFunnel)
   }, [batchFunnel])
@@ -62,7 +71,7 @@ export default function ConversionFunnel({ batchFunnel }: { batchFunnel?: Funnel
         const json = await res.json()
         setData(json)
       }
-    } catch (e) {
+    } catch {
       // silent
     }
   }, [venue?.id, range, batchFunnel])
@@ -74,14 +83,11 @@ export default function ConversionFunnel({ batchFunnel }: { batchFunnel?: Funnel
     return () => clearInterval(interval)
   }, [fetchFunnel, batchFunnel])
 
-  // Animate widths when data changes
   useEffect(() => {
     if (!data?.stages) return
-    // Start from 0 or previous values
     const prev = prevDataRef.current?.stages?.map(s => s.pctOfEntry) || data.stages.map(() => 0)
     setAnimatedWidths(prev)
 
-    // Animate to target
     const timer = setTimeout(() => {
       setAnimatedWidths(data.stages.map(s => s.pctOfEntry))
     }, 50)
@@ -92,7 +98,6 @@ export default function ConversionFunnel({ batchFunnel }: { batchFunnel?: Funnel
 
   return (
     <div className="h-full flex flex-col p-3 font-mono text-[10px]">
-      {/* Header */}
       <div className="flex items-center justify-between mb-2">
         <div className="text-[11px] text-white/70 tracking-wider uppercase">
           Engagement Funnel
@@ -114,20 +119,16 @@ export default function ConversionFunnel({ batchFunnel }: { batchFunnel?: Funnel
         </div>
       </div>
 
-      {/* Funnel bars */}
       <div className="flex-1 flex flex-col justify-center gap-1.5">
         {data?.stages?.map((stage, i) => (
           <div key={stage.id} className="flex items-center gap-2">
-            {/* Label */}
             <Tooltip text={STAGE_TIPS[stage.id] || stage.label}>
               <div className="w-[52px] text-right text-white/60 text-[9px] shrink-0 cursor-help">
                 {stage.label}
               </div>
             </Tooltip>
 
-            {/* Bar container */}
             <div className="flex-1 h-[18px] bg-white/[0.03] rounded-sm relative overflow-hidden">
-              {/* Animated bar */}
               <div
                 className="h-full rounded-sm relative"
                 style={{
@@ -137,7 +138,6 @@ export default function ConversionFunnel({ batchFunnel }: { batchFunnel?: Funnel
                   boxShadow: `0 0 8px ${STAGE_COLORS[i].replace('0.7', '0.3').replace('0.8', '0.3')}`,
                 }}
               >
-                {/* Count inside bar */}
                 {stage.count > 0 && (
                   <AnimatedNumber
                     value={stage.count}
@@ -148,7 +148,6 @@ export default function ConversionFunnel({ batchFunnel }: { batchFunnel?: Funnel
               </div>
             </div>
 
-            {/* Drop % */}
             <div className="w-[36px] text-right shrink-0">
               {i > 0 && stage.dropPct > 0 ? (
                 <span className="text-red-400/70 text-[9px]">-{stage.dropPct}%</span>
@@ -162,7 +161,6 @@ export default function ConversionFunnel({ batchFunnel }: { batchFunnel?: Funnel
         ))}
       </div>
 
-      {/* Biggest leak insight */}
       {data?.biggestLeak && data.biggestLeak.lost > 0 && (
         <div className="mt-2 pt-2 border-t border-white/[0.04]">
           <div className="flex items-center gap-1.5">
@@ -175,7 +173,6 @@ export default function ConversionFunnel({ batchFunnel }: { batchFunnel?: Funnel
         </div>
       )}
 
-      {/* Empty state */}
       {(!data || data.stages?.[0]?.count === 0) && (
         <div className="flex-1 flex items-center justify-center">
           <span className="text-white/20 text-[10px]">No funnel data for this period</span>

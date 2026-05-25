@@ -60,7 +60,11 @@ export function useNeuralBatch(range: string = '1h') {
   }, [venue?.id])
 
   useEffect(() => {
+    rangeRef.current = range
     fetchBatch()
+  }, [range, fetchBatch])
+
+  useEffect(() => {
     const interval = setInterval(fetchBatch, BATCH_POLL_INTERVAL)
     return () => clearInterval(interval)
   }, [fetchBatch])

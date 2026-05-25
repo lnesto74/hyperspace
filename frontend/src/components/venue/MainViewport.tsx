@@ -4781,8 +4781,8 @@ export default function MainViewport({
       if (ambientLightRef.current) ambientLightRef.current.intensity = lighting.ambientIntensity
       if (directionalLightRef.current) directionalLightRef.current.intensity = lighting.directionalIntensity
 
-      // Restore tracks to pre-xray state
-      setShowTracksLayer(preXrayTracksRef.current)
+      // Restore tracks to pre-xray state (default visible if unset)
+      setShowTracksLayer(preXrayTracksRef.current ?? true)
       roiMeshesRef.current.forEach(g => { g.visible = showRoiLayer })
 
       // Restore fixture materials

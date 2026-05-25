@@ -150,6 +150,7 @@ export default function AppShell({ onOpenDwgImporter, onOpenEdgeCommissioning, s
         <NeuralDashboard 
           enabled={neuralDashboardEnabled}
           leftOffset={sidebarCollapsed ? 16 : 0}
+          isReplayMode={isReplayMode}
         >
           <MainViewport 
             cameraView={cameraView} 

@@ -52,6 +52,11 @@ import launchpadRoutes from './routes/launchpad.js';
 import createAiClassifyRoutes from './routes/aiClassify.js';
 import createAiSmartFilterRoutes from './routes/aiSmartFilter.js';
 import createNeuralRoutes from './routes/neural.js';
+import {
+  getCheckoutAlertConfig,
+  saveCheckoutAlertConfig,
+} from './services/CheckoutAlertConfig.js';
+import { getCheckoutLanes } from './services/CheckoutLiveStatus.js';
 
 const PORT = process.env.PORT || 3001;
 const MOCK_LIDAR = process.env.MOCK_LIDAR === 'true';
@@ -407,7 +412,7 @@ app.use('/api/dwg', createAiClassifyRoutes(db));
 app.use('/api/dwg', createAiSmartFilterRoutes(db));
 
 // Neural Dashboard routes (funnel, transitions, alerts, media summary)
-app.use('/api/neural', createNeuralRoutes(db));
+app.use('/api/neural', createNeuralRoutes(db, trackAggregator));
 
 // Replay Insight routes (parallel, read-only behavior episode system)
 console.log(`⏱️ STARTUP: pre-routes +${Date.now() - _startupT0}ms`);
@@ -836,107 +841,48 @@ app.get('/api/tracking/status', (req, res) => {
 // Uses queueZoneId (UUID) as single source of truth, sorted by X position for consistent Lane 1, 2, 3 numbering
 app.get('/api/venues/:venueId/checkout/live-status', (req, res) => {
   const { venueId } = req.params;
-  
+
   try {
-    // Get all ROIs for this venue with vertices for sorting by position (synchronous better-sqlite3)
-    const rois = db.prepare('SELECT id, name, vertices FROM regions_of_interest WHERE venue_id = ?').all(venueId);
-    
-    // Find Queue and Service ROI pairs, deduplicating by name
-    // (Old stale ROIs may coexist with new ones after ROI recreation)
-    const dedupeByName = (list) => {
-      const byName = new Map();
-      for (const r of list) byName.set(r.name, r); // last one wins (newest)
-      return [...byName.values()];
-    };
-    const queueRois = dedupeByName(rois.filter(r => r.name && r.name.includes('- Queue')));
-    const serviceRois = dedupeByName(rois.filter(r => r.name && r.name.includes('- Service')));
-    
-    // Build open/closed map from zone_settings, keyed by ROI NAME (not ID)
-    // This handles the case where zone_settings has old ROI IDs but live-status uses new deduped IDs
-    const zoneSettingsRows = db.prepare(`
-      SELECT r.name, zs.is_open 
-      FROM zone_settings zs 
-      JOIN regions_of_interest r ON r.id = zs.roi_id 
-      WHERE zs.venue_id = ?
-    `).all(venueId);
-    const openByName = new Map();
-    for (const row of zoneSettingsRows) {
-      openByName.set(row.name, row.is_open === 1);
-    }
-    
-    // Calculate center X for each queue ROI for sorting
-    const getCenter = (roi) => {
-      try {
-        const vertices = JSON.parse(roi.vertices || '[]');
-        if (vertices.length === 0) return { x: 0, z: 0 };
-        const sumX = vertices.reduce((s, v) => s + (v.x || 0), 0);
-        const sumZ = vertices.reduce((s, v) => s + (v.z || 0), 0);
-        return { x: sumX / vertices.length, z: sumZ / vertices.length };
-      } catch (e) { return { x: 0, z: 0 }; }
-    };
-    
-    // Sort queue ROIs by X position for consistent Lane 1, 2, 3 numbering
-    const sortedQueueRois = queueRois.map(r => ({ ...r, center: getCenter(r) }))
-      .sort((a, b) => a.center.x - b.center.x);
-    
-    // Build lane status from ROI pairs
-    const lanes = [];
-    let totalQueueCount = 0;
-    
-    sortedQueueRois.forEach((queueRoi, index) => {
-      const prefix = queueRoi.name.replace('- Queue', '').trim();
-      const serviceRoi = serviceRois.find(s => s.name.replace('- Service', '').trim() === prefix);
-      
-      // Get current occupancy for the queue ROI
-      const queueCount = trackAggregator.getZoneOccupancy(queueRoi.id) || 0;
-      
-      // Look up open/closed state by ROI name (resilient to stale ROI IDs in zone_settings)
-      const isOpen = openByName.has(queueRoi.name) ? openByName.get(queueRoi.name) : true;
-      
-      if (isOpen) totalQueueCount += queueCount;
-      
-      const displayIndex = index + 1;
-      lanes.push({
-        laneId: displayIndex,           // For backward compatibility with UI
-        queueZoneId: queueRoi.id,       // UUID - the single source of truth
-        serviceZoneId: serviceRoi?.id,  // UUID
-        displayIndex,
-        displayName: `Lane ${displayIndex}`,
-        name: prefix,
-        desiredState: isOpen ? 'open' : 'closed',
-        status: isOpen ? 'OPEN' : 'CLOSED',
-        queueCount: isOpen ? queueCount : 0,
-        cashierAgentId: null
-      });
-    });
-    
-    const openLaneCount = lanes.filter(l => l.status === 'OPEN').length;
-    const closedLaneCount = lanes.filter(l => l.status === 'CLOSED').length;
-    const avgQueuePerLane = openLaneCount > 0 ? totalQueueCount / openLaneCount : 0;
-    const queuePressureThreshold = 5; // Default threshold
-    
-    const closedLane = lanes.find(l => l.status === 'CLOSED');
-    
+    const alertConfig = getCheckoutAlertConfig(db, venueId);
+    const { lanes, pressure } = getCheckoutLanes(db, trackAggregator, venueId);
+
     res.json({
       lanes,
-      pressure: {
-        totalQueueCount,
-        openLaneCount,
-        closedLaneCount,
-        avgQueuePerLane: Math.round(avgQueuePerLane * 10) / 10,
-        pressureThreshold: queuePressureThreshold,
-        shouldOpenMore: avgQueuePerLane > queuePressureThreshold && closedLaneCount > 0,
-        suggestedLaneToOpen: closedLane?.displayIndex || null,
-        suggestedQueueZoneId: closedLane?.queueZoneId || null
-      },
+      pressure,
       thresholds: {
-        queuePressureThreshold,
-        inflowRateThreshold: 10
+        queuePressureThreshold: alertConfig.queuePressureThreshold,
+        inflowRateThreshold: alertConfig.inflowRateThreshold,
+        waitTimeWarningMin: alertConfig.waitTimeWarningMin,
+        waitTimeCriticalMin: alertConfig.waitTimeCriticalMin,
+        queueLengthWarning: alertConfig.queueLengthWarning,
+        queueLengthCritical: alertConfig.queueLengthCritical,
+        occupancyWarning: alertConfig.occupancyWarning,
+        occupancyCritical: alertConfig.occupancyCritical,
       },
-      source: 'live'
+      alertConfig,
+      source: 'live',
     });
   } catch (err) {
     console.error('❌ Failed to get live checkout status:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/venues/:venueId/checkout/alert-config', (req, res) => {
+  const { venueId } = req.params;
+  try {
+    res.json(getCheckoutAlertConfig(db, venueId));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.put('/api/venues/:venueId/checkout/alert-config', (req, res) => {
+  const { venueId } = req.params;
+  try {
+    const saved = saveCheckoutAlertConfig(db, venueId, req.body || {});
+    res.json(saved);
+  } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });

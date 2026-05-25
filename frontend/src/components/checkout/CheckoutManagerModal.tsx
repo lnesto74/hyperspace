@@ -129,8 +129,8 @@ interface CheckoutManagerModalProps {
 const DEFAULT_THRESHOLDS: ThresholdSettings = {
   waitTimeWarningMin: 2,
   waitTimeCriticalMin: 5,
-  queueLengthWarning: 5,
-  queueLengthCritical: 10,
+  queueLengthWarning: 2,
+  queueLengthCritical: 5,
   occupancyWarning: 70,
   occupancyCritical: 90,
 }
@@ -170,6 +170,43 @@ export default function CheckoutManagerModal({ isOpen, onClose }: CheckoutManage
   const [rules, setRules] = useState<CheckoutAlertRule[]>(DEFAULT_RULES)
   const [thresholds, setThresholds] = useState<ThresholdSettings>(DEFAULT_THRESHOLDS)
   const [editingRule, setEditingRule] = useState<CheckoutAlertRule | null>(null)
+
+  const persistAlertConfig = useCallback(async (
+    nextRules: CheckoutAlertRule[] = rules,
+    nextThresholds: ThresholdSettings = thresholds,
+  ) => {
+    if (!venue?.id) return
+    try {
+      await fetch(`${API_BASE}/api/venues/${venue.id}/checkout/alert-config`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...nextThresholds, rules: nextRules }),
+      })
+    } catch (err) {
+      console.error('Failed to save checkout alert config:', err)
+    }
+  }, [venue?.id, rules, thresholds])
+
+  useEffect(() => {
+    if (!isOpen || !venue?.id) return
+    fetch(`${API_BASE}/api/venues/${venue.id}/checkout/alert-config`)
+      .then(res => (res.ok ? res.json() : null))
+      .then(cfg => {
+        if (!cfg) return
+        if (Array.isArray(cfg.rules) && cfg.rules.length > 0) {
+          setRules(cfg.rules)
+        }
+        setThresholds(t => ({
+          waitTimeWarningMin: cfg.waitTimeWarningMin ?? t.waitTimeWarningMin,
+          waitTimeCriticalMin: cfg.waitTimeCriticalMin ?? t.waitTimeCriticalMin,
+          queueLengthWarning: cfg.queueLengthWarning ?? t.queueLengthWarning,
+          queueLengthCritical: cfg.queueLengthCritical ?? t.queueLengthCritical,
+          occupancyWarning: cfg.occupancyWarning ?? t.occupancyWarning,
+          occupancyCritical: cfg.occupancyCritical ?? t.occupancyCritical,
+        }))
+      })
+      .catch(() => {})
+  }, [isOpen, venue?.id])
 
   // Check lanes against rules and generate alerts
   const checkAndGenerateAlerts = useCallback((lanes: LaneStatus[]) => {
@@ -354,16 +391,18 @@ export default function CheckoutManagerModal({ isOpen, onClose }: CheckoutManage
   }
 
   const handleSaveRule = (rule: CheckoutAlertRule) => {
-    if (rule.id && rules.find(r => r.id === rule.id)) {
-      setRules(prev => prev.map(r => r.id === rule.id ? rule : r))
-    } else {
-      setRules(prev => [...prev, { ...rule, id: Date.now().toString() }])
-    }
+    const nextRules = rule.id && rules.find(r => r.id === rule.id)
+      ? rules.map(r => r.id === rule.id ? rule : r)
+      : [...rules, { ...rule, id: Date.now().toString() }]
+    setRules(nextRules)
     setEditingRule(null)
+    persistAlertConfig(nextRules)
   }
 
   const handleDeleteRule = (ruleId: string) => {
-    setRules(prev => prev.filter(r => r.id !== ruleId))
+    const nextRules = rules.filter(r => r.id !== ruleId)
+    setRules(nextRules)
+    persistAlertConfig(nextRules)
   }
 
   const activeAlerts = alerts.filter(a => !a.dismissed)
@@ -919,7 +958,16 @@ export default function CheckoutManagerModal({ isOpen, onClose }: CheckoutManage
                         <span className="text-sm text-gray-300">Data Source</span>
                         <span className="text-sm text-green-400">Backend Trajectory Analysis</span>
                       </div>
-                      <p className="text-xs text-gray-500 mt-1">Analyzes trajectories from any source (simulator or real LiDAR) against ROIs</p>
+                      <p className="text-xs text-gray-500 mt-1">
+                        Alert rules and thresholds are shared with the Neural Dashboard alerts panel.
+                      </p>
+                      <button
+                        onClick={() => persistAlertConfig()}
+                        className="mt-3 flex items-center gap-2 px-3 py-2 bg-green-600 hover:bg-green-500 text-white text-sm rounded-lg transition-colors"
+                      >
+                        <Save className="w-4 h-4" />
+                        Save Thresholds
+                      </button>
                     </div>
                   </div>
                 )}

@@ -11,6 +11,11 @@
  */
 
 import { Router } from 'express';
+import {
+  getCheckoutAlertConfig,
+  evaluateCheckoutLaneAlerts,
+} from '../services/CheckoutAlertConfig.js';
+import { getCheckoutLanes } from '../services/CheckoutLiveStatus.js';
 
 // Stale-while-revalidate cache with staggered background recomputes.
 // On cache HIT: return data instantly.
@@ -69,7 +74,7 @@ function cached(key, ttlMs, computeFn) {
   return data;
 }
 
-export default function createNeuralRoutes(db) {
+export default function createNeuralRoutes(db, trackAggregator) {
   const router = Router();
 
   // ============================================
@@ -80,115 +85,20 @@ export default function createNeuralRoutes(db) {
    * GET /api/neural/funnel?venueId=X&range=1h|24h|7d
    * 
    * Stages:
-   *   ENTRY    — unique visitors (distinct track_key)
-   *   SHOP     — visited ≥1 shelf zone (zone name contains 'shelf')
-   *   ENGAGE   — dwelled at any shelf zone (is_dwell=1)
+   *   ENTRY    — entrance/traffic zones (fallback: non-queue footfall)
+   *   SHOP     — product/shelf zones
+   *   ENGAGE   — dwelled at any shelf zone
    *   BASKET   — engaged at 3+ different shelf zones
-   *   CHECKOUT — entered a checkout zone
+   *   CHECKOUT — checkout service zones (excludes queue waiting)
    */
   router.get('/funnel', (req, res) => {
     try {
       const { venueId, range } = req.query;
       if (!venueId) return res.status(400).json({ error: 'venueId required' });
 
-      const result = cached(`funnel:${venueId}:${range}`, 55000, () => {
-        const { startTime, endTime } = resolveRange(range);
-
-        const rois = db.prepare(
-          `SELECT id, name FROM regions_of_interest WHERE venue_id = ?`
-        ).all(venueId);
-
-        const shelfRoiIds = rois
-          .filter(r => /shelf|gondola|aisle|product|display/i.test(r.name) && !/checkout|queue|entrance|exit/i.test(r.name))
-          .map(r => r.id);
-        const checkoutRoiIds = rois
-          .filter(r => /checkout|register|cashier|queue/i.test(r.name))
-          .map(r => r.id);
-
-        const entryRow = db.prepare(`
-          SELECT COUNT(DISTINCT track_key) AS cnt
-          FROM zone_visits
-          WHERE venue_id = ? AND start_time >= ? AND start_time < ?
-        `).get(venueId, startTime, endTime);
-        const entry = entryRow?.cnt || 0;
-
-        let shop = 0, engage = 0, basket = 0, checkout = 0;
-
-        if (shelfRoiIds.length > 0) {
-          const shelfPlaceholders = shelfRoiIds.map(() => '?').join(',');
-
-          const shopRow = db.prepare(`
-            SELECT COUNT(DISTINCT track_key) AS cnt
-            FROM zone_visits
-            WHERE venue_id = ? AND roi_id IN (${shelfPlaceholders})
-              AND start_time >= ? AND start_time < ?
-          `).get(venueId, ...shelfRoiIds, startTime, endTime);
-          shop = shopRow?.cnt || 0;
-
-          const engageRow = db.prepare(`
-            SELECT COUNT(DISTINCT track_key) AS cnt
-            FROM zone_visits
-            WHERE venue_id = ? AND roi_id IN (${shelfPlaceholders})
-              AND is_dwell = 1
-              AND start_time >= ? AND start_time < ?
-          `).get(venueId, ...shelfRoiIds, startTime, endTime);
-          engage = engageRow?.cnt || 0;
-
-          const basketRows = db.prepare(`
-            SELECT track_key, COUNT(DISTINCT roi_id) AS zone_count
-            FROM zone_visits
-            WHERE venue_id = ? AND roi_id IN (${shelfPlaceholders})
-              AND is_dwell = 1
-              AND start_time >= ? AND start_time < ?
-            GROUP BY track_key
-            HAVING zone_count >= 3
-          `).all(venueId, ...shelfRoiIds, startTime, endTime);
-          basket = basketRows.length;
-        }
-
-        if (checkoutRoiIds.length > 0) {
-          const checkoutPlaceholders = checkoutRoiIds.map(() => '?').join(',');
-          const checkoutRow = db.prepare(`
-            SELECT COUNT(DISTINCT track_key) AS cnt
-            FROM zone_visits
-            WHERE venue_id = ? AND roi_id IN (${checkoutPlaceholders})
-              AND start_time >= ? AND start_time < ?
-          `).get(venueId, ...checkoutRoiIds, startTime, endTime);
-          checkout = checkoutRow?.cnt || 0;
-        }
-
-        const stages = [
-          { id: 'entry', label: 'ENTRY', count: entry },
-          { id: 'shop', label: 'SHOP', count: shop },
-          { id: 'engage', label: 'ENGAGE', count: engage },
-          { id: 'basket', label: 'BASKET', count: basket },
-          { id: 'checkout', label: 'CHECKOUT', count: checkout },
-        ];
-
-        for (let i = 1; i < stages.length; i++) {
-          const prev = stages[i - 1].count;
-          stages[i].dropPct = prev > 0 ? Math.round((1 - stages[i].count / prev) * 100) : 0;
-          stages[i].pctOfEntry = entry > 0 ? Math.round((stages[i].count / entry) * 100) : 0;
-        }
-        stages[0].dropPct = 0;
-        stages[0].pctOfEntry = 100;
-
-        let biggestLeak = null;
-        let maxDrop = 0;
-        for (let i = 1; i < stages.length; i++) {
-          if (stages[i].dropPct > maxDrop && stages[i - 1].count > 0) {
-            maxDrop = stages[i].dropPct;
-            biggestLeak = {
-              from: stages[i - 1].label,
-              to: stages[i].label,
-              dropPct: stages[i].dropPct,
-              lost: stages[i - 1].count - stages[i].count,
-            };
-          }
-        }
-
-        return { stages, biggestLeak, range, venueId };
-      });
+      const result = cached(`funnel:${venueId}:${range}`, 55000, () =>
+        computeFunnel(db, venueId, range)
+      );
 
       res.json(result);
     } catch (err) {
@@ -338,7 +248,7 @@ export default function createNeuralRoutes(db) {
       if (!venueId) return res.status(400).json({ error: 'venueId required' });
 
       const maxAlerts = parseInt(limit) || 15;
-      const result = cached(`alerts:${venueId}`, 35000, () => computeAlerts(db, venueId));
+      const result = cached(`alerts:${venueId}`, 35000, () => computeAlerts(db, venueId, trackAggregator));
       res.json({ alerts: result.alerts.slice(0, maxAlerts), count: result.count });
     } catch (err) {
       console.error('[Neural] alerts error:', err.message);
@@ -545,7 +455,7 @@ export default function createNeuralRoutes(db) {
       const batchResult = {
         venueKpis: cached(venueKpisKey, 45000, () => computeVenueKpis(db, venueId)),
         funnel: cached(funnelKey, 55000, () => computeFunnel(db, venueId, range)),
-        alerts: cached(alertsKey, 35000, () => computeAlerts(db, venueId)),
+        alerts: cached(alertsKey, 35000, () => computeAlerts(db, venueId, trackAggregator)),
         mediaSummary: cached(mediaKey, 70000, () => computeMediaSummary(db, venueId, range)),
       };
 
@@ -574,7 +484,7 @@ export default function createNeuralRoutes(db) {
       try { cached(`funnel:${vid}:1h`, 55000, () => computeFunnel(db, vid, '1h')); } catch {}
     }, base + 3000);
     setTimeout(() => {
-      try { cached(`alerts:${vid}`, 35000, () => computeAlerts(db, vid)); } catch {}
+      try { cached(`alerts:${vid}`, 35000, () => computeAlerts(db, vid, trackAggregator)); } catch {}
     }, base + 6000);
     setTimeout(() => {
       try { cached(`media-summary:${vid}:1h`, 70000, () => computeMediaSummary(db, vid, '1h')); } catch {}
@@ -680,6 +590,28 @@ function computeVenueKpis(db, venueId) {
   return { avgVelocity, avgDwellSec, drawRate, bounceRate, uniqueVisitors, topZones, sparkline };
 }
 
+function classifyFunnelRoi(name) {
+  const n = (name || '').toLowerCase();
+  if (/\bqueue\b/.test(n) || n.includes('- queue')) return 'queue';
+  if (/entrance|entry|exit|door|gate|traffic|ingress|ingresso|uscita/.test(n)) return 'entry';
+  if (/checkout|register|cashier|\bservice\b/.test(n)) return 'checkout';
+  if (/shelf|gondola|aisle|product|display|fridge|promo|engagement/.test(n)) return 'shelf';
+  return 'other';
+}
+
+function countDistinctFunnelTracks(db, venueId, roiIds, startTime, endTime, extraWhere = '') {
+  if (!roiIds.length) return 0;
+  const placeholders = roiIds.map(() => '?').join(',');
+  const row = db.prepare(`
+    SELECT COUNT(DISTINCT track_key) AS cnt
+    FROM zone_visits
+    WHERE venue_id = ? AND roi_id IN (${placeholders})
+      AND start_time >= ? AND start_time < ?
+      ${extraWhere}
+  `).get(venueId, ...roiIds, startTime, endTime);
+  return row?.cnt || 0;
+}
+
 function computeFunnel(db, venueId, range) {
   const { startTime, endTime } = resolveRange(range);
 
@@ -687,45 +619,31 @@ function computeFunnel(db, venueId, range) {
     `SELECT id, name FROM regions_of_interest WHERE venue_id = ?`
   ).all(venueId);
 
-  const shelfRoiIds = rois
-    .filter(r => /shelf|gondola|aisle|product|display/i.test(r.name) && !/checkout|queue|entrance|exit/i.test(r.name))
-    .map(r => r.id);
-  const checkoutRoiIds = rois
-    .filter(r => /checkout|register|cashier|queue/i.test(r.name))
-    .map(r => r.id);
+  const entryRoiIds = rois.filter(r => classifyFunnelRoi(r.name) === 'entry').map(r => r.id);
+  const shelfRoiIds = rois.filter(r => classifyFunnelRoi(r.name) === 'shelf').map(r => r.id);
+  const checkoutRoiIds = rois.filter(r => classifyFunnelRoi(r.name) === 'checkout').map(r => r.id);
 
-  const entryRow = db.prepare(`
-    SELECT COUNT(DISTINCT track_key) AS cnt
-    FROM zone_visits
-    WHERE venue_id = ? AND start_time >= ? AND start_time < ?
-  `).get(venueId, startTime, endTime);
-  const entry = entryRow?.cnt || 0;
+  let entry = countDistinctFunnelTracks(db, venueId, entryRoiIds, startTime, endTime);
+  if (entry === 0 && entryRoiIds.length === 0) {
+    const footfallRoiIds = rois.filter(r => classifyFunnelRoi(r.name) !== 'queue').map(r => r.id);
+    entry = countDistinctFunnelTracks(db, venueId, footfallRoiIds, startTime, endTime);
+  }
 
-  let shop = 0, engage = 0, basket = 0, checkout = 0;
+  let shop = 0;
+  let engage = 0;
+  let basket = 0;
+  let checkout = 0;
 
   if (shelfRoiIds.length > 0) {
-    const shelfPlaceholders = shelfRoiIds.map(() => '?').join(',');
-    const shopRow = db.prepare(`
-      SELECT COUNT(DISTINCT track_key) AS cnt
-      FROM zone_visits
-      WHERE venue_id = ? AND roi_id IN (${shelfPlaceholders})
-        AND start_time >= ? AND start_time < ?
-    `).get(venueId, ...shelfRoiIds, startTime, endTime);
-    shop = shopRow?.cnt || 0;
-
-    const engageRow = db.prepare(`
-      SELECT COUNT(DISTINCT track_key) AS cnt
-      FROM zone_visits
-      WHERE venue_id = ? AND roi_id IN (${shelfPlaceholders})
-        AND is_dwell = 1
-        AND start_time >= ? AND start_time < ?
-    `).get(venueId, ...shelfRoiIds, startTime, endTime);
-    engage = engageRow?.cnt || 0;
+    shop = countDistinctFunnelTracks(db, venueId, shelfRoiIds, startTime, endTime);
+    engage = countDistinctFunnelTracks(
+      db, venueId, shelfRoiIds, startTime, endTime, 'AND is_dwell = 1'
+    );
 
     const basketRows = db.prepare(`
       SELECT track_key, COUNT(DISTINCT roi_id) AS zone_count
       FROM zone_visits
-      WHERE venue_id = ? AND roi_id IN (${shelfPlaceholders})
+      WHERE venue_id = ? AND roi_id IN (${shelfRoiIds.map(() => '?').join(',')})
         AND is_dwell = 1
         AND start_time >= ? AND start_time < ?
       GROUP BY track_key
@@ -735,14 +653,7 @@ function computeFunnel(db, venueId, range) {
   }
 
   if (checkoutRoiIds.length > 0) {
-    const checkoutPlaceholders = checkoutRoiIds.map(() => '?').join(',');
-    const checkoutRow = db.prepare(`
-      SELECT COUNT(DISTINCT track_key) AS cnt
-      FROM zone_visits
-      WHERE venue_id = ? AND roi_id IN (${checkoutPlaceholders})
-        AND start_time >= ? AND start_time < ?
-    `).get(venueId, ...checkoutRoiIds, startTime, endTime);
-    checkout = checkoutRow?.cnt || 0;
+    checkout = countDistinctFunnelTracks(db, venueId, checkoutRoiIds, startTime, endTime);
   }
 
   const stages = [
@@ -778,74 +689,17 @@ function computeFunnel(db, venueId, range) {
   return { stages, biggestLeak, range, venueId };
 }
 
-function computeAlerts(db, venueId) {
+function computeAlerts(db, venueId, trackAggregator) {
   const now = Date.now();
   const lookback = now - 60 * 60 * 1000;
   const alerts = [];
 
-  // 1. Queue buildup — only alert for significant queues (≥4 people),
-  //    and group low-severity ones into a single summary alert.
+  // 1. Queue alerts — same lanes + thresholds as Checkout Operations Center
   try {
-    const queueAlerts = db.prepare(`
-      SELECT r.id, r.name, zo.occupancy_count
-      FROM regions_of_interest r
-      JOIN (
-        SELECT roi_id, occupancy_count, MAX(timestamp) as max_ts
-        FROM zone_occupancy
-        WHERE timestamp > ?
-        GROUP BY roi_id
-      ) zo ON zo.roi_id = r.id
-      WHERE r.venue_id = ? 
-        AND (r.name LIKE '%checkout%' OR r.name LIKE '%queue%')
-        AND zo.occupancy_count >= 4
-      ORDER BY zo.occupancy_count DESC
-      LIMIT 20
-    `).all(now - 60000, venueId);
-
-    const highQueues = queueAlerts.filter(r => r.occupancy_count >= 8);
-    const medQueues = queueAlerts.filter(r => r.occupancy_count >= 5 && r.occupancy_count < 8);
-    const lowQueues = queueAlerts.filter(r => r.occupancy_count >= 4 && r.occupancy_count < 5);
-
-    for (const row of highQueues) {
-      alerts.push({
-        id: `queue-${row.id}`,
-        type: 'queue_risk',
-        severity: 'high',
-        title: 'QUEUE BUILDUP',
-        message: `${simplifyZoneName(row.name)}: ${row.occupancy_count} people waiting`,
-        action: 'Open additional register immediately',
-        timestamp: now,
-        zoneId: row.id,
-      });
-    }
-
-    for (const row of medQueues.slice(0, 5)) {
-      alerts.push({
-        id: `queue-${row.id}`,
-        type: 'queue_risk',
-        severity: 'medium',
-        title: 'QUEUE BUILDUP',
-        message: `${simplifyZoneName(row.name)}: ${row.occupancy_count} people waiting`,
-        action: 'Consider opening another register',
-        timestamp: now,
-        zoneId: row.id,
-      });
-    }
-
-    if (lowQueues.length > 0) {
-      const names = lowQueues.slice(0, 3).map(r => simplifyZoneName(r.name));
-      const suffix = lowQueues.length > 3 ? ` +${lowQueues.length - 3} more` : '';
-      alerts.push({
-        id: `queue-summary-low`,
-        type: 'queue_risk',
-        severity: 'low',
-        title: 'QUEUE ACTIVITY',
-        message: `${names.join(', ')}${suffix}: 4 people waiting each`,
-        action: 'Monitor — no action needed yet',
-        timestamp: now - 30000,
-        zoneIds: lowQueues.map(r => r.id),
-      });
-    }
+    const alertConfig = getCheckoutAlertConfig(db, venueId);
+    const { lanes } = getCheckoutLanes(db, trackAggregator, venueId);
+    const checkoutAlerts = evaluateCheckoutLaneAlerts(lanes, alertConfig, now);
+    alerts.push(...checkoutAlerts);
   } catch (e) {}
 
   // 2. Low engagement — only show with ≥5 visitors (enough traffic to be meaningful),

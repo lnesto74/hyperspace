@@ -6,6 +6,7 @@ import { API_BASE } from '../config/api'
 
 const MAX_TRAIL_LENGTH = 50 // ~5 seconds at 10Hz (reduced from 100 to save memory)
 const TRACK_TTL_MS = 20000 // 20s — generous margin to survive backend event-loop stalls without removing tracks
+const SNAPSHOT_GRACE_MS = 900 // keep tracks briefly if missing from one aggregator snapshot (re-ID gap)
 const CLEANUP_INTERVAL_MS = 1000 // Cleanup stale tracks every 1 second
 const LERP_SPEED = 0.18 // Exponential smoothing factor per frame
 const EXTRAP_FACTOR = 0.001 // Velocity extrapolation: m/s → m/frame (tuned for 60fps)
@@ -61,6 +62,10 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
   const { venue } = useVenue()
   const [liveTracks, setLiveTracks] = useState<Map<string, TrackWithTrail>>(new Map())
   const [replayTracks, setReplayTracksState] = useState<Map<string, TrackWithTrail>>(new Map())
+  const liveTracksRef = useRef(liveTracks)
+  liveTracksRef.current = liveTracks
+  const replayTracksRef = useRef(replayTracks)
+  replayTracksRef.current = replayTracks
   const [isConnected, setIsConnected] = useState(false)
   const [isReplayMode, setIsReplayMode] = useState(false)
   const socketRef = useRef<Socket | null>(null)
@@ -156,7 +161,7 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
       
       setLiveTracks(prev => {
         const next = new Map<string, TrackWithTrail>()
-        
+
         for (const [key, track] of latestByKey) {
           const existing = prev.get(key)
           const oldTrail = existing?.trail || []
@@ -164,9 +169,18 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
           if (trail.length > MAX_TRAIL_LENGTH) {
             trail = trail.slice(trail.length - MAX_TRAIL_LENGTH)
           }
-          
+
           next.set(key, { ...track, trail })
           trackLastSeenRef.current.set(key, now)
+        }
+
+        // Brief grace: reconciler re-ID can drop a track from one snapshot then restore it
+        for (const [key, track] of prev) {
+          if (next.has(key)) continue
+          const lastSeen = trackLastSeenRef.current.get(key) ?? 0
+          if (now - lastSeen < SNAPSHOT_GRACE_MS) {
+            next.set(key, track)
+          }
         }
 
         if (DIAG && prev.size !== next.size) {
@@ -175,7 +189,7 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
             console.log(`[DIAG] Snapshot reconciliation removed ${removed.length} stale tracks: ${removed.join(', ')}  t=${now}`)
           }
         }
-        
+
         return next
       })
     }
@@ -225,15 +239,25 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
     })
 
     socket.on('track_removed', (data: { trackKey: string }) => {
-      if (DIAG) console.log(`[DIAG] track_removed event  key=${data.trackKey}  t=${Date.now()}`)
-      setLiveTracks(prev => {
-        const next = new Map(prev)
-        next.delete(data.trackKey)
-        return next
-      })
-      trackLastSeenRef.current.delete(data.trackKey)
-      targetTracksRef.current.delete(data.trackKey)
-      interpTsRef.current.delete(data.trackKey)
+      // Full aggregator snapshots arrive every 100ms — they are authoritative.
+      // Immediate track_removed (reconciler sweep) caused visible blink when re-ID
+      // restored the same shopper on the next frame. Grace-delete only if absent
+      // from snapshots for a short window.
+      if (DIAG) console.log(`[DIAG] track_removed deferred  key=${data.trackKey}  t=${Date.now()}`)
+      const key = data.trackKey
+      window.setTimeout(() => {
+        const lastSeen = trackLastSeenRef.current.get(key) ?? 0
+        if (Date.now() - lastSeen < SNAPSHOT_GRACE_MS) return
+        setLiveTracks(prev => {
+          if (!prev.has(key)) return prev
+          const next = new Map(prev)
+          next.delete(key)
+          return next
+        })
+        trackLastSeenRef.current.delete(key)
+        targetTracksRef.current.delete(key)
+        interpTsRef.current.delete(key)
+      }, SNAPSHOT_GRACE_MS)
     })
 
     socket.on('tracks_cleared', () => {
@@ -314,8 +338,15 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
     setReplayTracksState(newTracks)
   }, [])
 
-  const setTrackVisibility = useCallback((visible: boolean) => {
-    socketRef.current?.emit('track_visibility', { visible })
+  const seedInterpolationTargets = useCallback(() => {
+    const now = Date.now()
+    const source = isReplayModeRef.current ? replayTracksRef.current : liveTracksRef.current
+    for (const [key, track] of source) {
+      const { trail: _trail, ...base } = track
+      targetTracksRef.current.set(key, base as Track)
+      interpTsRef.current.set(key, now)
+      trackLastSeenRef.current.set(key, now)
+    }
   }, [])
 
   // Interpolation RAF loop — only runs when Neural Dashboard enables it
@@ -341,7 +372,11 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
     }
 
     if (targets.size === 0) {
-      // No active targets — clear any leftover liveTracks from interpolation
+      // Preserve tracks during brief gaps (e.g. Neural Dashboard enabling interpolation)
+      if (liveTracksRef.current.size > 0 || isReplayModeRef.current) {
+        interpRAFRef.current = requestAnimationFrame(interpLoop)
+        return
+      }
       setLiveTracks(prev => prev.size === 0 ? prev : new Map())
       interpRAFRef.current = requestAnimationFrame(interpLoop)
       return
@@ -427,9 +462,11 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const setInterpolation = useCallback((enabled: boolean) => {
-    if (DIAG) console.log(`[DIAG] setInterpolation  enabled=${enabled}  t=${Date.now()}`)
-    interpEnabledRef.current = enabled
-    if (enabled) {
+    const shouldInterp = enabled && !isReplayModeRef.current
+    if (DIAG) console.log(`[DIAG] setInterpolation  enabled=${enabled}  active=${shouldInterp}  replay=${isReplayModeRef.current}  t=${Date.now()}`)
+    interpEnabledRef.current = shouldInterp
+    if (shouldInterp) {
+      seedInterpolationTargets()
       diagInterpFrameCount = 0
       diagInterpDrops = 0
       if (!interpRAFRef.current) {
@@ -444,7 +481,11 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
       interpTsRef.current.clear()
       interpFrameRef.current = 0
     }
-  }, [interpLoop])
+  }, [interpLoop, seedInterpolationTargets])
+
+  const setTrackVisibility = useCallback((visible: boolean) => {
+    socketRef.current?.emit('track_visibility', { visible })
+  }, [])
 
   const clearReplayTracks = useCallback(() => {
     const purge = (keys: Iterable<string>) => {
