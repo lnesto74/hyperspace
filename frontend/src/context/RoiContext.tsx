@@ -20,7 +20,7 @@ interface RoiContextType {
   toggleRoiVisibility: (roiId: string) => void
   isRoiVisible: (roiId: string) => boolean
   createRegion: (venueId: string, name: string, vertices: Vector2[], color?: string, dwgLayoutId?: string | null, options?: { opacity?: number; metadata?: Record<string, unknown> }) => Promise<RegionOfInterest | null>
-  updateRegion: (id: string, updates: Partial<RegionOfInterest>) => Promise<void>
+  updateRegion: (id: string, updates: Partial<RegionOfInterest>) => Promise<boolean>
   updateRegionVerticesLocal: (id: string, vertices: Vector2[]) => void
   deleteRegion: (id: string) => Promise<void>
   selectRegion: (id: string | null) => void
@@ -163,18 +163,21 @@ export function RoiProvider({ children }: { children: ReactNode }) {
     }
   }, [regions.length, addToast])
 
-  const updateRegion = useCallback(async (id: string, updates: Partial<RegionOfInterest>) => {
+  const updateRegion = useCallback(async (id: string, updates: Partial<RegionOfInterest>): Promise<boolean> => {
     try {
       const res = await fetch(`${API_BASE}/api/roi/${id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(updates),
       })
+      if (res.status === 404) return false
       if (!res.ok) throw new Error('Failed to update region')
       const updated = await res.json()
       setRegions(prev => prev.map(r => r.id === id ? updated : r))
+      return true
     } catch (err) {
       addToast('error', 'Failed to update region')
+      return false
     }
   }, [addToast])
 

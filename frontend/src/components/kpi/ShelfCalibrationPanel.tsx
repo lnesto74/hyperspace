@@ -44,7 +44,7 @@ import {
 } from './shelfCalibrationUtils'
 import {
   applyZoneCalibrationToRoi,
-  isPersistedShelfRoiId,
+  isShelfRoiInLayout,
   parseShelfRoiFixtureId,
   parseShelfRoiZoneType,
   resolveFixtureForShelfRoi,
@@ -64,6 +64,7 @@ interface ShelfCalibrationPanelProps {
   deleting?: boolean
   creatingAll?: boolean
   unsavedCount: number
+  persistedShelfRoiIds: Set<string>
   roiSaveStatus: Record<string, ShelfRoiSaveStatus>
   onReferenceChange: (fixtureId: string) => void
   onPreviewRoisChange: (rois: PreviewRoiLike[]) => void
@@ -246,6 +247,7 @@ export default function ShelfCalibrationPanel({
   deleting,
   creatingAll,
   unsavedCount,
+  persistedShelfRoiIds,
   roiSaveStatus,
   onReferenceChange,
   onPreviewRoisChange,
@@ -775,7 +777,7 @@ export default function ShelfCalibrationPanel({
                 <span className="text-sm font-medium text-white truncate">{selectedTemplateRoi.name}</span>
                 <SaveStatusBadge status={roiSaveStatus[selectedTemplateRoi.id]} />
               </div>
-              {!isPersistedShelfRoiId(selectedTemplateRoi.id) && (
+              {!isShelfRoiInLayout(selectedTemplateRoi.id, persistedShelfRoiIds) && (
                 <p className="text-[10px] text-amber-300">Not saved yet — finish editing to autosave</p>
               )}
             </div>

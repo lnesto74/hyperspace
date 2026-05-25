@@ -11,8 +11,20 @@ export type ShelfRoiSaveStatus = 'idle' | 'saving' | 'saved' | 'error'
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 
-export function isPersistedShelfRoiId(id: string): boolean {
-  return UUID_RE.test(id)
+/** Preview-only ids from client/backend before first save (not in DB). */
+export function isPreviewOnlyShelfRoiId(id: string): boolean {
+  return /^.+::(left|right|front)$/.test(id)
+}
+
+/** True when this id exists in loaded layout regions (actually in DB). */
+export function isShelfRoiInLayout(id: string, persistedIds: Set<string>): boolean {
+  return persistedIds.has(id)
+}
+
+/** @deprecated Use isShelfRoiInLayout — preview ROIs also use UUIDs before save. */
+export function isPersistedShelfRoiId(id: string, persistedIds?: Set<string>): boolean {
+  if (persistedIds) return persistedIds.has(id)
+  return UUID_RE.test(id) && !isPreviewOnlyShelfRoiId(id)
 }
 
 export function parseShelfRoiZoneType(roi: PreviewRoiLike): ShelfEngagementZoneType {
@@ -90,8 +102,33 @@ export function regionsToPreviewShelfRois(regions: ShelfRegionLike[]): PreviewRo
     }))
 }
 
-export function countUnsavedShelfRois(rois: PreviewRoiLike[]): number {
-  return rois.filter(r => !isPersistedShelfRoiId(r.id)).length
+export function countUnsavedShelfRois(rois: PreviewRoiLike[], persistedIds: Set<string>): number {
+  return rois.filter(r => !persistedIds.has(r.id)).length
+}
+
+export function mergeShelfPreviewWithLayoutRois(
+  preview: PreviewRoiLike[],
+  layout: PreviewRoiLike[],
+  fixtures: FixtureInfo[],
+): PreviewRoiLike[] {
+  const layoutByKey = new Map<string, PreviewRoiLike>()
+  for (const roi of layout) {
+    const fixtureId = parseShelfRoiFixtureId(roi, fixtures)
+    const zoneType = parseShelfRoiZoneType(roi)
+    if (fixtureId) layoutByKey.set(`${fixtureId}::${zoneType}`, roi)
+  }
+  return preview.map(p => {
+    const fixtureId = parseShelfRoiFixtureId(p, fixtures)
+    const zoneType = parseShelfRoiZoneType(p)
+    const saved = fixtureId ? layoutByKey.get(`${fixtureId}::${zoneType}`) : undefined
+    if (!saved) return p
+    return {
+      ...p,
+      id: saved.id,
+      vertices: saved.vertices,
+      metadata: saved.metadata ?? p.metadata,
+    }
+  })
 }
 
 export function applyZoneCalibrationToRoi(

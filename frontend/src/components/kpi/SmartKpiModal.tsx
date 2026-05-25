@@ -25,7 +25,8 @@ import {
   buildShelfRoiMetadata,
   copyZoneCalibrationToSimilarRois,
   countUnsavedShelfRois,
-  isPersistedShelfRoiId,
+  isShelfRoiInLayout,
+  mergeShelfPreviewWithLayoutRois,
   parseShelfRoiFixtureId,
   parseShelfRoiZoneType,
   resolveFixtureForShelfRoi,
@@ -448,15 +449,35 @@ export default function SmartKpiModal({ isOpen, onClose, dwgLayoutId: propDwgLay
       if (!res.ok) throw new Error('Failed to preview')
       
       const data = await res.json()
-      setPreviewRois(data.generatedRois || [])
-      return data.generatedRois || []
+      let rois = data.generatedRois || []
+      if (templateId === 'shelf-engagement') {
+        const template = availableTemplates.find(t => t.id === 'shelf-engagement')
+        const fixtures = (template?.detectedObjects ?? []).map(obj => ({
+          id: obj.id,
+          name: obj.name,
+          position: obj.position,
+          rotation: obj.rotation,
+          scale: obj.scale,
+          source: obj.source,
+          footprintPoints: obj.footprintPoints,
+        }))
+        if (fixtures.length > 0) {
+          rois = mergeShelfPreviewWithLayoutRois(
+            rois,
+            regionsToPreviewShelfRois(regions),
+            fixtures,
+          )
+        }
+      }
+      setPreviewRois(rois)
+      return rois
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to preview')
       return []
     } finally {
       setLoading(false)
     }
-  }, [venue?.id, isDwgMode, dwgLayoutId, minShelfSize])
+  }, [venue?.id, isDwgMode, dwgLayoutId, minShelfSize, regions, availableTemplates])
 
   const handleSelectTemplate = (templateId: string) => {
     setSelectedTemplate(templateId)
@@ -587,10 +608,31 @@ export default function SmartKpiModal({ isOpen, onClose, dwgLayoutId: propDwgLay
 
   const activeShelfTemplateRoiCount = previewRois.length
 
-  const unsavedShelfRoiCount = useMemo(
-    () => countUnsavedShelfRois(previewRois),
-    [previewRois],
+  const persistedShelfRoiIds = useMemo(
+    () => new Set(regionsToPreviewShelfRois(regions).map(r => r.id)),
+    [regions],
   )
+
+  const unsavedShelfRoiCount = useMemo(
+    () => countUnsavedShelfRois(previewRois, persistedShelfRoiIds),
+    [previewRois, persistedShelfRoiIds],
+  )
+
+  const createShelfRoiInLayout = useCallback(async (roi: PreviewRoi) => {
+    if (!venue?.id) return null
+    const fixture = resolveFixtureForShelfRoi(roi, shelfFixtures)
+    if (!fixture) throw new Error('Missing fixture for zone')
+    const zoneType = parseShelfRoiZoneType(roi)
+    const metadata = buildShelfRoiMetadata(fixture, shelfFixtures, zoneType)
+    return createRegion(
+      venue.id,
+      roi.name,
+      roi.vertices,
+      roi.color,
+      dwgLayoutId,
+      { opacity: roi.opacity ?? 0.3, metadata },
+    )
+  }, [venue?.id, shelfFixtures, dwgLayoutId, createRegion])
 
   const persistShelfTemplateRoi = useCallback(async (roiId: string, roisSnapshot?: PreviewRoi[]) => {
     if (!venue?.id) return
@@ -600,28 +642,19 @@ export default function SmartKpiModal({ isOpen, onClose, dwgLayoutId: propDwgLay
 
     setRoiSaveStatus(s => ({ ...s, [roiId]: 'saving' }))
     try {
-      if (isPersistedShelfRoiId(roiId)) {
-        await updateRegion(roiId, { vertices: roi.vertices })
-        setRoiSaveStatus(s => ({ ...s, [roiId]: 'saved' }))
-        return
+      if (isShelfRoiInLayout(roiId, persistedShelfRoiIds)) {
+        const updated = await updateRegion(roiId, { vertices: roi.vertices })
+        if (updated) {
+          setRoiSaveStatus(s => ({ ...s, [roiId]: 'saved' }))
+          return
+        }
       }
 
-      const fixture = resolveFixtureForShelfRoi(roi, shelfFixtures)
-      if (!fixture) throw new Error('Missing fixture for zone')
-      const zoneType = parseShelfRoiZoneType(roi)
-      const metadata = buildShelfRoiMetadata(fixture, shelfFixtures, zoneType)
-      const created = await createRegion(
-        venue.id,
-        roi.name,
-        roi.vertices,
-        roi.color,
-        dwgLayoutId,
-        { opacity: roi.opacity ?? 0.3, metadata },
-      )
+      const created = await createShelfRoiInLayout(roi)
       if (!created) throw new Error('Failed to create zone')
 
       setPreviewRois(prev => prev.map(r => (
-        r.id === roiId ? { ...r, id: created.id, metadata } : r
+        r.id === roiId ? { ...r, id: created.id, metadata: created.metadata as Record<string, unknown> | undefined } : r
       )))
       setRoiSaveStatus(s => {
         const next = { ...s, [created.id]: 'saved' as const }
@@ -632,7 +665,7 @@ export default function SmartKpiModal({ isOpen, onClose, dwgLayoutId: propDwgLay
     } catch {
       setRoiSaveStatus(s => ({ ...s, [roiId]: 'error' }))
     }
-  }, [venue?.id, previewRois, shelfFixtures, dwgLayoutId, updateRegion, createRegion])
+  }, [venue?.id, previewRois, persistedShelfRoiIds, updateRegion, createShelfRoiInLayout])
 
   const handlePreviewRoisChange = useCallback((rois: PreviewRoiLike[]) => {
     setPreviewRois(rois as PreviewRoi[])
@@ -644,7 +677,7 @@ export default function SmartKpiModal({ isOpen, onClose, dwgLayoutId: propDwgLay
 
   const handleDeleteTemplateRois = useCallback(async (roiIds: string[]) => {
     for (const id of roiIds) {
-      if (isPersistedShelfRoiId(id)) {
+      if (isShelfRoiInLayout(id, persistedShelfRoiIds)) {
         await deleteRegion(id)
       }
     }
@@ -654,7 +687,7 @@ export default function SmartKpiModal({ isOpen, onClose, dwgLayoutId: propDwgLay
       for (const id of roiIds) delete next[id]
       return next
     })
-  }, [deleteRegion])
+  }, [deleteRegion, persistedShelfRoiIds])
 
   const handleCopyZoneToAllSimilar = useCallback(async (sourceRoiId: string) => {
     const sourceRoi = previewRois.find(r => r.id === sourceRoiId)
@@ -675,23 +708,12 @@ export default function SmartKpiModal({ isOpen, onClose, dwgLayoutId: propDwgLay
     setError(null)
     try {
       let working = [...previewRois]
-      const toSave = working.filter(r => !isPersistedShelfRoiId(r.id))
+      const toSave = working.filter(r => !persistedShelfRoiIds.has(r.id))
       for (const roi of toSave) {
         setRoiSaveStatus(s => ({ ...s, [roi.id]: 'saving' }))
-        const fixture = resolveFixtureForShelfRoi(roi, shelfFixtures)
-        if (!fixture) throw new Error(`Missing fixture for ${roi.name}`)
-        const zoneType = parseShelfRoiZoneType(roi)
-        const metadata = buildShelfRoiMetadata(fixture, shelfFixtures, zoneType)
-        const created = await createRegion(
-          venue.id,
-          roi.name,
-          roi.vertices,
-          roi.color,
-          dwgLayoutId,
-          { opacity: roi.opacity ?? 0.3, metadata },
-        )
+        const created = await createShelfRoiInLayout(roi)
         if (!created) throw new Error(`Failed to save ${roi.name}`)
-        working = working.map(r => (r.id === roi.id ? { ...r, id: created.id, metadata } : r))
+        working = working.map(r => (r.id === roi.id ? { ...r, id: created.id, metadata: created.metadata as Record<string, unknown> | undefined } : r))
         setPreviewRois(working)
         setRoiSaveStatus(s => {
           const next = { ...s, [created.id]: 'saved' as const }
@@ -708,7 +730,7 @@ export default function SmartKpiModal({ isOpen, onClose, dwgLayoutId: propDwgLay
     } finally {
       setCreatingAllShelfZones(false)
     }
-  }, [venue?.id, previewRois, shelfFixtures, dwgLayoutId, createRegion, loadRegions])
+  }, [venue?.id, previewRois, persistedShelfRoiIds, createShelfRoiInLayout, loadRegions, dwgLayoutId])
 
   const syncCalibrationFromPreview = useCallback((fixtureId: string, rois: PreviewRoi[]) => {
     if (!fixtureId || rois.length === 0) return
@@ -750,7 +772,7 @@ export default function SmartKpiModal({ isOpen, onClose, dwgLayoutId: propDwgLay
     calibrationInitializedRef.current = false
 
     if (selectedTemplate === 'shelf-engagement' && shelfFixtures.length > 0) {
-      if (previewRois.some(r => isPersistedShelfRoiId(r.id)) && !window.confirm('Reset all zones to auto-generated sizes? Saved zones will be updated in the layout.')) {
+      if (persistedShelfRoiIds.size > 0 && !window.confirm('Reset all zones to auto-generated sizes? Saved zones will be updated in the layout.')) {
         return
       }
       const ref = shelfFixtures.find(f => f.id === referenceFixtureId) ?? shelfFixtures[0]
@@ -768,7 +790,7 @@ export default function SmartKpiModal({ isOpen, onClose, dwgLayoutId: propDwgLay
       })
       setPreviewRois(merged)
       calibrationInitializedRef.current = true
-      for (const roi of merged.filter(r => isPersistedShelfRoiId(r.id))) {
+      for (const roi of merged.filter(r => persistedShelfRoiIds.has(r.id))) {
         await persistShelfTemplateRoi(roi.id, merged)
       }
       return
@@ -1179,6 +1201,7 @@ export default function SmartKpiModal({ isOpen, onClose, dwgLayoutId: propDwgLay
               deleting={deletingShelfZones}
               creatingAll={creatingAllShelfZones}
               unsavedCount={unsavedShelfRoiCount}
+              persistedShelfRoiIds={persistedShelfRoiIds}
               roiSaveStatus={roiSaveStatus}
               onReferenceChange={handleReferenceFixtureChange}
               onPreviewRoisChange={handlePreviewRoisChange}

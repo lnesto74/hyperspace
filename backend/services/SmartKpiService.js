@@ -692,6 +692,7 @@ export class SmartKpiService {
     const color = zoneType === 'right' ? (config.colorBack || config.color) : config.color;
 
     return this.createRectangularRoi({
+      id: `${shelf.id}::${zoneType}`,
       name: `${uniqueName} - Engagement (${label})`,
       centerX,
       centerZ,
@@ -824,7 +825,7 @@ export class SmartKpiService {
   }
 
   // Create a rectangular ROI with rotation support
-  createRectangularRoi({ name, centerX, centerZ, width, depth, rotation = 0, color, opacity, metadata }) {
+  createRectangularRoi({ id, name, centerX, centerZ, width, depth, rotation = 0, color, opacity, metadata }) {
     const halfW = width / 2;
     const halfD = depth / 2;
     
@@ -846,7 +847,7 @@ export class SmartKpiService {
     }));
 
     return {
-      id: uuidv4(),
+      id: id || uuidv4(),
       name,
       vertices,
       color,
