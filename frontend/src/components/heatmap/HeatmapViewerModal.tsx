@@ -113,6 +113,8 @@ export default function HeatmapViewerModal({ isOpen, onClose }: HeatmapViewerMod
 
   const [selectedZoneIds, setSelectedZoneIds] = useState<Set<string>>(new Set())
   const [showZoneDropdown, setShowZoneDropdown] = useState(false)
+  const [showDwgWireframe, setShowDwgWireframe] = useState(true)
+  const [dwgWireframeOpacity, setDwgWireframeOpacity] = useState(0.55)
   
   const canvasRef = useRef<HTMLDivElement>(null)
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null)
