@@ -8,9 +8,33 @@ const MAX_TRAIL_LENGTH = 50 // ~5 seconds at 10Hz (reduced from 100 to save memo
 const TRACK_TTL_MS = 20000 // 20s — generous margin to survive backend event-loop stalls without removing tracks
 const SNAPSHOT_GRACE_MS = 1000 // brief re-ID gap; don't hold stale positions
 const CLEANUP_INTERVAL_MS = 1000 // Cleanup stale tracks every 1 second
-const INTERP_MAX_TRACKS = 120 // Emergency off above this — reconciler keeps ~40 live
+const INTERP_MAX_TRACKS = 200 // Cap rendered interp targets — never stop the loop entirely
 const MAX_CLIENT_TRACKS = 150 // Emergency cap only — reconciler keeps count low
 const EMERGENCY_CAP_THRESHOLD = 150 // Only sticky-cap above this
+
+function capInterpTargetsForFrame<T extends Track>(
+  targets: Map<string, T>,
+  tsMap: Map<string, number>,
+  prev: Map<string, unknown>,
+  max = INTERP_MAX_TRACKS,
+): Map<string, T> {
+  if (targets.size <= max) return targets
+  const result = new Map<string, T>()
+  for (const key of prev.keys()) {
+    const t = targets.get(key)
+    if (t) result.set(key, t)
+  }
+  if (result.size < max) {
+    const rest = [...targets.entries()]
+      .filter(([k]) => !result.has(k))
+      .sort((a, b) => (tsMap.get(b[0]) ?? 0) - (tsMap.get(a[0]) ?? 0))
+    for (const [k, t] of rest) {
+      if (result.size >= max) break
+      result.set(k, t)
+    }
+  }
+  return result
+}
 
 function capTrackMap<T extends { timestamp?: number }>(source: Map<string, T>): Map<string, T> {
   if (source.size <= MAX_CLIENT_TRACKS) return source
@@ -307,7 +331,7 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
         // Remove targets missing from this full snapshot for longer than the
         // aggregator TTL (6s) + a small buffer.  The aggregator emits a complete
         // set every 100ms, so a track absent for >7s is genuinely gone.
-        const INTERP_MISSING_GRACE_MS = 7000
+        const INTERP_MISSING_GRACE_MS = 2500
         for (const key of targetTracksRef.current.keys()) {
           if (!incomingKeys.has(key)) {
             const lastSeen = trackLastSeenRef.current.get(key) ?? 0
@@ -486,12 +510,6 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
     if (!interpEnabledRef.current) return
 
     const targets = targetTracksRef.current
-    if (targets.size > INTERP_MAX_TRACKS) {
-      // Emergency: skip frames but keep loop alive so motion recovers when count drops
-      interpRAFRef.current = requestAnimationFrame(interpLoop)
-      return
-    }
-    
     const now = Date.now()
 
     // Prune stale targets that haven't received an update within TTL
@@ -541,6 +559,7 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
     
     setLiveTracks(prev => {
       const next = new Map<string, TrackWithTrail>()
+      const frameTargets = capInterpTargetsForFrame(targets, interpTsRef.current, prev)
 
       if (DIAG) {
         const countDiff = prev.size - diagLastTrackCount
@@ -548,11 +567,13 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
           console.warn(`[DIAG] Track count JUMP  ${diagLastTrackCount} → ${prev.size}  (${countDiff > 0 ? '+' : ''}${countDiff})  t=${now}`)
         }
         diagLastTrackCount = prev.size
+        if (targets.size > INTERP_MAX_TRACKS && diagInterpFrameCount % 300 === 0) {
+          console.warn(`[DIAG] Interp cap  targets=${targets.size}  rendering=${frameTargets.size}  t=${now}`)
+        }
       }
       
-      // Only include tracks that exist in targetTracksRef — this is the
-      // authoritative set of active tracks when interpolation is on.
-      for (const [key, target] of targets) {
+      // Only include tracks that exist in frameTargets — capped sticky set when over limit.
+      for (const [key, target] of frameTargets) {
         const baseX = target.venuePosition?.x ?? 0
         const baseZ = target.venuePosition?.z ?? 0
         const vx = target.velocity?.x ?? 0
@@ -602,8 +623,7 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
     const shouldInterp =
       enabled &&
       !historicalReplay &&
-      !mqttReplayActiveRef.current &&
-      trackCount <= INTERP_MAX_TRACKS
+      !mqttReplayActiveRef.current
     if (DIAG) {
       console.log(
         `[DIAG] setInterpolation  enabled=${enabled}  active=${shouldInterp}  historicalReplay=${historicalReplay}  mqttReplay=${mqttReplayActiveRef.current}  tracks=${trackCount}  t=${Date.now()}`
