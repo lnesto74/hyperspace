@@ -4,7 +4,6 @@ import { Track, TrackWithTrail, LidarStatus } from '../types'
 import { useVenue } from './VenueContext'
 import { API_BASE } from '../config/api'
 import { appendTrailPoint, isFiniteTrackPos } from '../lib/trackTrail'
-import { isTrackInLiveFrame } from '../lib/frameOccupancy'
 
 const MAX_TRAIL_LENGTH = 50 // ~5 seconds at 10Hz (reduced from 100 to save memory)
 const MAX_EXTRAP_MS = 250 // Cap velocity extrapolation — stale targets must not run away
@@ -140,9 +139,13 @@ export interface LiveMetricsSnapshot {
 
 const LiveMetricsRefContext = createContext<React.MutableRefObject<LiveMetricsSnapshot> | null>(null)
 
-function isLiveForDisplay(track: Track, liveFrameTs: number | null): boolean {
-  if (track.trackKey?.startsWith('replay-')) return true
-  return isTrackInLiveFrame(track, liveFrameTs)
+const VtlModeRefContext = createContext<React.MutableRefObject<boolean> | null>(null)
+
+interface VisualTrackEntityPayload extends Track {
+  visualId?: string
+  state?: string
+  opacity?: number
+  trail?: { x: number; y: number; z: number }[]
 }
 
 export function TrackingProvider({ children }: { children: ReactNode }) {
@@ -183,7 +186,8 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
   const smoothMotionRequestedRef = useRef(true)
   const setInterpolationRef = useRef<(enabled: boolean) => void>(() => {})
   const liveMetricsRef = useRef<LiveMetricsSnapshot>({ frameOccupancy: 0, liveFrameTs: null })
-  const liveFrameTsRef = useRef<number | null>(null)
+  const vtlModeRef = useRef(false)
+  const vtlPlaybackLagRef = useRef(10000)
   
   // Historical timeline/insight replay uses DB snapshots; MQTT JSONL replay uses live socket.
   const useHistoricalTracks = isReplayMode && !mqttReplayActive
@@ -210,6 +214,20 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
   }, [])
 
   subscribeRef.current = subscribe
+
+  // Load reconciler state so VTL vs raw is known before first socket frame.
+  useEffect(() => {
+    if (!venue?.id) return
+    let cancelled = false
+    fetch(`${API_BASE}/api/venues/${venue.id}/reconciler-config`)
+      .then(res => (res.ok ? res.json() : null))
+      .then(data => {
+        if (cancelled) return
+        vtlModeRef.current = data?.reconciler?.enabled === true
+      })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [venue?.id])
 
   // Restore demo session + replay flag after page refresh (server-side replay survives reload).
   useEffect(() => {
@@ -298,7 +316,6 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
         // Brief grace: reconciler re-ID can drop a track from one snapshot then restore it
         for (const [key, track] of prev) {
           if (next.has(key)) continue
-          if (!isLiveForDisplay(track, liveFrameTsRef.current)) continue
           const lastSeen = trackLastSeenRef.current.get(key) ?? 0
           if (now - lastSeen < SNAPSHOT_GRACE_MS) {
             next.set(key, track)
@@ -316,22 +333,85 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
       })
     }
     
-    socket.on('tracks', (data: { venueId: string, tracks: Track[], frameOccupancy?: number, liveFrameTs?: number | null }) => {
+    const applyVisualizationMode = (mode: 'vtl' | 'raw', playbackLagMs?: number) => {
+      const nextVtl = mode === 'vtl'
+      if (playbackLagMs != null) vtlPlaybackLagRef.current = playbackLagMs
+      if (vtlModeRef.current === nextVtl) return
+      vtlModeRef.current = nextVtl
+      setLiveTracks(new Map())
+      targetTracksRef.current.clear()
+      interpTsRef.current.clear()
+      trackLastSeenRef.current.clear()
+      liveMetricsRef.current = { frameOccupancy: 0, liveFrameTs: null }
+      if (nextVtl) {
+        if (interpRAFRef.current) {
+          cancelAnimationFrame(interpRAFRef.current)
+          interpRAFRef.current = null
+        }
+        interpEnabledRef.current = false
+      } else {
+        setInterpolationRef.current(smoothMotionRequestedRef.current)
+      }
+      if (DIAG) console.log(`[DIAG] visualization mode → ${mode}  lag=${vtlPlaybackLagRef.current}ms  t=${Date.now()}`)
+    }
+
+    socket.on('visualization_mode', (data: { venueId: string; mode: string; playbackLagMs?: number }) => {
+      if (data.venueId !== subscribedVenueRef.current) return
+      applyVisualizationMode(data.mode === 'vtl' ? 'vtl' : 'raw', data.playbackLagMs)
+    })
+
+    socket.on('venue:reconciler-updated', (data: { venueId: string; reconciler?: { enabled?: boolean } | null }) => {
+      if (data.venueId !== subscribedVenueRef.current) return
+      applyVisualizationMode(data.reconciler?.enabled === true ? 'vtl' : 'raw')
+    })
+
+    socket.on('visual_tracks', (data: {
+      venueId: string
+      entities: VisualTrackEntityPayload[]
+      frameOccupancy?: number
+      playbackLagMs?: number
+    }) => {
+      if (data.venueId !== subscribedVenueRef.current) return
+      if (!vtlModeRef.current) return
+      if (isReplayModeRef.current && !mqttReplayActiveRef.current) return
+
+      liveMetricsRef.current = {
+        frameOccupancy: data.frameOccupancy ?? data.entities.length,
+        liveFrameTs: null,
+      }
+
+      setLiveTracks(() => {
+        const next = new Map<string, TrackWithTrail>()
+        for (const entity of data.entities) {
+          if (!isFiniteTrackPos(entity.venuePosition)) continue
+          const trail = (entity.trail || []).map(p => ({ x: p.x, y: p.y ?? 0, z: p.z }))
+          next.set(entity.trackKey, {
+            id: entity.id || entity.visualId || entity.trackKey,
+            trackKey: entity.trackKey,
+            deviceId: entity.deviceId || 'edge',
+            timestamp: entity.timestamp || Date.now(),
+            position: entity.venuePosition,
+            venuePosition: entity.venuePosition,
+            velocity: entity.velocity || { x: 0, y: 0, z: 0 },
+            objectType: entity.objectType || 'person',
+            color: entity.color,
+            trail,
+          })
+        }
+        return next
+      })
+    })
+
+    socket.on('tracks', (data: { venueId: string, tracks: Track[] }) => {
       if (data.venueId !== subscribedVenueRef.current) {
         if (DIAG) console.warn(`[DIAG] tracks IGNORED  eventVenue=${data.venueId}  subscribed=${subscribedVenueRef.current}  n=${data.tracks.length}  t=${Date.now()}`)
         return
       }
       if (isReplayModeRef.current && !mqttReplayActiveRef.current) return
+      // VTL mode: canvas fed by visual_tracks only — raw aggregator stream is analytics-only.
+      if (vtlModeRef.current) return
 
       const now = Date.now()
-      const lfts = data.liveFrameTs ?? null
-      liveFrameTsRef.current = lfts
-      liveMetricsRef.current = {
-        frameOccupancy: typeof data.frameOccupancy === 'number' ? data.frameOccupancy : 0,
-        liveFrameTs: lfts,
-      }
-
-      const displayTracks = data.tracks.filter(t => isLiveForDisplay(t, lfts))
 
       if (DIAG) {
         const gap = diagLastSocketTs ? now - diagLastSocketTs : 0
@@ -341,15 +421,15 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
         }
         diagTrackRecvCount += 1
         if (diagTrackRecvCount <= 3 || diagTrackRecvCount % 300 === 0) {
-          const sample = displayTracks[0]
-          console.log(`[DIAG] tracks recv  n=${displayTracks.length}/${data.tracks.length}  frameOcc=${data.frameOccupancy ?? '?'}  sample=${sample?.trackKey}  pos=(${sample?.venuePosition?.x?.toFixed(2)},${sample?.venuePosition?.z?.toFixed(2)})  #=${diagTrackRecvCount}  t=${now}`)
+          const sample = data.tracks[0]
+          console.log(`[DIAG] tracks recv  n=${data.tracks.length}  sample=${sample?.trackKey}  pos=(${sample?.venuePosition?.x?.toFixed(2)},${sample?.venuePosition?.z?.toFixed(2)})  #=${diagTrackRecvCount}  t=${now}`)
         }
       }
       
       if (interpEnabledRef.current && !mqttReplayActiveRef.current) {
         // Build a Set of trackKeys in this snapshot to prune stale targets
         const incomingKeys = new Set<string>()
-        for (const track of displayTracks) {
+        for (const track of data.tracks) {
           targetTracksRef.current.set(track.trackKey, track)
           interpTsRef.current.set(track.trackKey, now)
           trackLastSeenRef.current.set(track.trackKey, now)
@@ -371,7 +451,7 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
           }
         }
       } else {
-        pendingBatches.push(displayTracks)
+        pendingBatches.push(data.tracks)
         requestAnimationFrame(flushTrackUpdates)
       }
     })
@@ -534,7 +614,7 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
   const INTERP_MIN_INTERVAL = 33 // ~30fps cap
   
   const interpLoop = useCallback(() => {
-    if (!interpEnabledRef.current) return
+    if (!interpEnabledRef.current || vtlModeRef.current) return
 
     const targets = targetTracksRef.current
     const now = Date.now()
@@ -651,6 +731,7 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
     const trackCount = liveTracksRef.current.size
     const shouldInterp =
       enabled &&
+      !vtlModeRef.current &&
       !historicalReplay &&
       !mqttReplayActiveRef.current
     if (DIAG) {
@@ -809,11 +890,13 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
   return (
     <TracksRefContext.Provider value={stableTracksRef}>
       <LiveMetricsRefContext.Provider value={liveMetricsRef}>
+      <VtlModeRefContext.Provider value={vtlModeRef}>
       <TrackingActionsContext.Provider value={actionsValue}>
         <TrackingContext.Provider value={contextValue}>
           {children}
         </TrackingContext.Provider>
       </TrackingActionsContext.Provider>
+      </VtlModeRefContext.Provider>
       </LiveMetricsRefContext.Provider>
     </TracksRefContext.Provider>
   )
@@ -859,6 +942,15 @@ export function useLiveMetricsRef() {
   const ref = useContext(LiveMetricsRefContext)
   if (!ref) {
     throw new Error('useLiveMetricsRef must be used within a TrackingProvider')
+  }
+  return ref
+}
+
+/** True when Trajectory Quality reconciler preset is active (VTL visualization). */
+export function useVtlModeRef() {
+  const ref = useContext(VtlModeRefContext)
+  if (!ref) {
+    throw new Error('useVtlModeRef must be used within a TrackingProvider')
   }
   return ref
 }

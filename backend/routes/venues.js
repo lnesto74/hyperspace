@@ -52,7 +52,7 @@ function ensureDefaultCategories(db, companyId) {
   tx();
 }
 
-export default function venuesRoutes(db, { mqttService, io } = {}) {
+export default function venuesRoutes(db, { mqttService, io, visualTrackService } = {}) {
   const router = Router();
 
   // Get all venues
@@ -573,7 +573,17 @@ export default function venuesRoutes(db, { mqttService, io } = {}) {
       `).run(JSON.stringify(nextJson), venueId);
 
       if (mqttService) mqttService.setVenueReconcilerConfig(venueId, normalized);
-      if (io) io.of('/tracking').to(`venue:${venueId}`).emit('venue:reconciler-updated', { venueId, reconciler: normalized });
+      if (mqttService) mqttService.syncVisualTrackLayer(venueId);
+      const vtlOn = normalized?.enabled === true;
+      if (io) {
+        io.of('/tracking').to(`venue:${venueId}`).emit('venue:reconciler-updated', { venueId, reconciler: normalized });
+        io.of('/tracking').to(`venue:${venueId}`).emit('visualization_mode', {
+          venueId,
+          mode: vtlOn ? 'vtl' : 'raw',
+          playbackLagMs: visualTrackService?.options?.playbackLagMs ?? 10000,
+          reconcilerEnabled: vtlOn,
+        });
+      }
 
       res.json({ success: true, venueId, reconciler: normalized });
     } catch (error) {

@@ -40,6 +40,8 @@ class MqttTrajectoryService {
     this.reconciler = new TrajectoryReconciler((vid) => this.venueReconcilerConfigs.get(vid) || RECONCILER_DEFAULT)
     /** Per-frame occupancy (matches edge fast3dis object count). */
     this.frameOccupancy = new FrameOccupancyTracker()
+    /** Visual Track Layer — only active when reconciler enabled per venue. */
+    this.visualTrackService = null
     // Periodic housekeeping (active → lost → expire)
     this.reconcilerSweepInterval = setInterval(() => {
       const events = this.reconciler.sweep()
@@ -116,13 +118,17 @@ class MqttTrajectoryService {
       this.venueReconcilerConfigs.set(venueId, normalizeReconcilerConfig(config))
     }
     this.reconciler.setVenueConfig(venueId, this.venueReconcilerConfigs.get(venueId) || RECONCILER_DEFAULT)
+    this.syncVisualTrackLayer(venueId)
     console.log(`[Reconciler] Updated config for venue ${venueId}:`, this.venueReconcilerConfigs.get(venueId) || 'defaults')
   }
 
   loadVenueReconcilerConfigs(entries) {
     if (!Array.isArray(entries)) return
     for (const { venueId, config } of entries) {
-      if (venueId && config) this.venueReconcilerConfigs.set(venueId, normalizeReconcilerConfig(config))
+      if (venueId && config) {
+        this.venueReconcilerConfigs.set(venueId, normalizeReconcilerConfig(config))
+        this.syncVisualTrackLayer(venueId)
+      }
     }
     console.log(`[Reconciler] Loaded ${this.venueReconcilerConfigs.size} venue reconciler configs`)
   }
@@ -143,8 +149,19 @@ class MqttTrajectoryService {
     return this.frameOccupancy.isInLiveFrame(venueId, perceptionId, trackTimestamp)
   }
 
-  getVenueReconcilerConfig(venueId) {
-    return this.venueReconcilerConfigs.get(venueId) || RECONCILER_DEFAULT
+  setVisualTrackService(vtl) {
+    this.visualTrackService = vtl
+  }
+
+  /** True only when venue explicitly saved reconciler with enabled: true (preset active). */
+  isReconcilerEnabled(venueId) {
+    const cfg = this.venueReconcilerConfigs.get(venueId)
+    return cfg?.enabled === true
+  }
+
+  syncVisualTrackLayer(venueId) {
+    if (!this.visualTrackService) return
+    this.visualTrackService.setVenueActive(venueId, this.isReconcilerEnabled(venueId))
   }
 
   getColorForTrack(trackKey) {
@@ -294,13 +311,16 @@ class MqttTrajectoryService {
 
         this.tracks.set(processedTrack.trackKey, processedTrack)
 
+        if (this.isReconcilerEnabled(venueId) && this.visualTrackService) {
+          this.visualTrackService.ingest(venueId, processedTrack)
+        }
+
         // Update stats
         this.stats.messagesReceived++
         this.stats.tracksReceived++
         this.stats.lastMessageTs = Date.now()
         this._updateVenueStats(venueId, 1)
 
-        // Emit to TrackAggregator pattern
         if (this.trackAggregator) {
           this.trackAggregator.addTrack(processedTrack)
         } else {
@@ -365,6 +385,9 @@ class MqttTrajectoryService {
         if (!reconciled) continue
         const processedTrack = { ...reconciled, color: reconciled.color || color }
         this.tracks.set(processedTrack.trackKey, processedTrack)
+        if (this.isReconcilerEnabled(venueId) && this.visualTrackService) {
+          this.visualTrackService.ingest(venueId, processedTrack)
+        }
         processedTracks.push(processedTrack)
       }
 

@@ -13,6 +13,7 @@ import { LidarConnectionManager } from './services/LidarConnectionManager.js';
 import { TrackAggregator } from './services/TrackAggregator.js';
 import { MockLidarGenerator } from './services/MockLidarGenerator.js';
 import MqttTrajectoryService from './services/MqttTrajectoryService.js';
+import VisualTrackService from './services/VisualTrackService.js';
 import { TrajectoryStorageService } from './services/TrajectoryStorageService.js';
 import { KPICalculator } from './services/KPICalculator.js';
 
@@ -123,6 +124,8 @@ console.log(`⏱️ STARTUP: seedProviders ${Date.now() - _startupT1}ms`);
 const tailscaleService = new TailscaleService();
 const lidarConnectionManager = new LidarConnectionManager();
 const trackAggregator = new TrackAggregator();
+const visualTrackService = new VisualTrackService({ playbackLagMs: Number(process.env.VTL_PLAYBACK_LAG_MS) || 10000 });
+visualTrackService.start();
 
 // Initialize trajectory storage and KPI services
 const trajectoryStorage = new TrajectoryStorageService(db);
@@ -160,6 +163,7 @@ let mqttService = null;
 if (MQTT_ENABLED) {
   mqttService = new MqttTrajectoryService(io);
   mqttService.setTrackAggregator(trackAggregator);
+  mqttService.setVisualTrackService(visualTrackService);
 
   // Load saved perceptionTransforms from venues.dwg_transform_json so live tracks are
   // remapped from the very first MQTT message (no UI interaction required).
@@ -266,20 +270,16 @@ trackAggregator.on('tracks', (data) => {
     console.log(`[DIAG] emit tracks  n=${data.tracks.length}  gap=${gap}ms  emit#=${diagEmitCount}  t=${now}`);
   }
 
-  // Socket emission is always immediate — never block this
-  const frameOccupancy = mqttService?.getFrameOccupancy?.(data.venueId) ?? 0;
-  const liveFrameTs = mqttService?.getLiveFrameTimestamp?.(data.venueId) ?? null;
-  const tracks = data.tracks.map((t) => {
-    const perceptionId = t.originalPerceptionId || t.id;
-    const inLiveFrame = mqttService?.isInLiveFrame?.(data.venueId, perceptionId, t.timestamp) ?? false;
-    return { ...t, inLiveFrame };
-  });
-  io.of('/tracking').to(`venue:${data.venueId}`).emit('tracks', {
-    ...data,
-    tracks,
-    frameOccupancy,
-    liveFrameTs,
-  });
+  // Socket emission — raw bypass unchanged; VTL uses separate visual_tracks channel
+  const vtlOn = mqttService?.isReconcilerEnabled?.(data.venueId);
+  if (vtlOn) {
+    io.of('/tracking').to(`venue:${data.venueId}`).emit('tracks', {
+      ...data,
+      visualization: 'analytics',
+    });
+  } else {
+    io.of('/tracking').to(`venue:${data.venueId}`).emit('tracks', data);
+  }
   
   // Throttle KPI recording: only process every 2s instead of every 50ms emission.
   // This reduces event loop load from ~20 heavy batches/s to ~0.5/s.
@@ -349,6 +349,10 @@ trackAggregator.on('tracks', (data) => {
   });
 });
 
+visualTrackService.on('visual_tracks', (data) => {
+  io.of('/tracking').to(`venue:${data.venueId}`).emit('visual_tracks', data);
+});
+
 trackAggregator.on('track_removed', (data) => {
   if (data.trackKey?.startsWith('replay-')) {
     for (const venueId of demoSessionService.venueSessions.keys()) {
@@ -388,6 +392,14 @@ trackingNamespace.on('connection', (socket) => {
     
     // Start track aggregator
     trackAggregator.start(venueId);
+
+    const vtlOn = mqttService?.isReconcilerEnabled?.(venueId) ?? false;
+    socket.emit('visualization_mode', {
+      venueId,
+      mode: vtlOn ? 'vtl' : 'raw',
+      playbackLagMs: visualTrackService.options.playbackLagMs,
+      reconcilerEnabled: vtlOn,
+    });
     
     // Start Profit Radar pipeline (additive)
     const profitRois = db.prepare('SELECT id, name, vertices, color FROM regions_of_interest WHERE venue_id = ?').all(venueId);
@@ -439,7 +451,7 @@ app.use('/api/models-static', (req, res, next) => {
 app.use('/api/auth', authRoutes(db));
 app.use('/api/companies', companiesRoutes(db));
 app.use('/api/discovery', discoveryRoutes(tailscaleService, mockGenerator));
-app.use('/api/venues', venuesRoutes(db, { mqttService, io }));
+app.use('/api/venues', venuesRoutes(db, { mqttService, io, visualTrackService }));
 const replayDir = process.env.REPLAY_DIR || '/data/replay';
 const replayService = new ReplayService({ mqttService, replayDir, trackAggregator });
 const mqttRecordService = new MqttRecordService({ replayDir });
