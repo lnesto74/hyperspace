@@ -156,6 +156,54 @@ const PRESETS: ReconcilerPreset[] = [
       trail_max_length: 32,
     },
   },
+  {
+    id: 'raj_v1_conservative',
+    label: 'Raj v1.0.1 — Conservative (recommended)',
+    description: 'Tuned for Raj perception — tight re-ID, tp/1k stays near raw. Best for live Treviglio with Raj v1.0.1.',
+    metrics: { stable: 8529, fragX: 1.7, lifetime_s: 25.6, displacement_m: 7.9, teleports_per_1k: 4.51 },
+    config: {
+      enabled: true,
+      ghost_max_speed_m_s: 3.5,
+      ghost_min_promotion_lifetime_ms: 200,
+      ghost_min_promotion_displacement_m: 0.05,
+      ghost_static_timeout_s: 90,
+      ghost_static_displacement_m: 0.3,
+      reid_max_gap_s: 8,
+      reid_max_distance_m: 4.0,
+      reid_max_implied_speed_m_s: 2.0,
+      reid_velocity_cosine_min: 0.0,
+      reid_weight_distance: 1.0,
+      reid_weight_velocity: 0.5,
+      reid_weight_time: 0.1,
+      smoothing_alpha: 0.7,
+      active_to_lost_timeout_ms: 1500,
+      trail_max_length: 32,
+    },
+  },
+  {
+    id: 'raj_v1_balanced',
+    label: 'Raj v1.0.1 — Balanced',
+    description: 'More re-ID merge than Raj Conservative — longer trajectories (~34 s mean). Use when tp/1k headroom allows.',
+    metrics: { stable: 6714, fragX: 2.2, lifetime_s: 34.3, displacement_m: 11.1, teleports_per_1k: 5.95 },
+    config: {
+      enabled: true,
+      ghost_max_speed_m_s: 3.5,
+      ghost_min_promotion_lifetime_ms: 200,
+      ghost_min_promotion_displacement_m: 0.05,
+      ghost_static_timeout_s: 90,
+      ghost_static_displacement_m: 0.3,
+      reid_max_gap_s: 10,
+      reid_max_distance_m: 5.0,
+      reid_max_implied_speed_m_s: 2.2,
+      reid_velocity_cosine_min: -0.2,
+      reid_weight_distance: 1.0,
+      reid_weight_velocity: 0.5,
+      reid_weight_time: 0.1,
+      smoothing_alpha: 0.7,
+      active_to_lost_timeout_ms: 1500,
+      trail_max_length: 32,
+    },
+  },
 ]
 
 /** Match a saved config against a preset; returns 'custom' when nothing fits. */
@@ -170,6 +218,7 @@ function detectActivePresetId(cfg: ReconcilerConfig): string {
         && close(cfg.reid_max_gap_s, c.reid_max_gap_s)
         && close(cfg.reid_max_distance_m, c.reid_max_distance_m)
         && close(cfg.reid_max_implied_speed_m_s, c.reid_max_implied_speed_m_s)
+        && close(cfg.reid_velocity_cosine_min, c.reid_velocity_cosine_min)
         && close(cfg.smoothing_alpha, c.smoothing_alpha)) {
       return p.id
     }

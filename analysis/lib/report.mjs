@@ -15,6 +15,7 @@ export function writeReport(runDir, scorecard) {
   const r = scorecard.layers?.reconciler || {};
   const s = scorecard.layers?.structural || {};
   const gb = r.GROCERY_BALANCED || {};
+  const raj = r.RAJ_v1_CONSERVATIVE || {};
   const raw = r.BYPASS_RAW || {};
   const fc = s.fragmentation_cause_pct || {};
 
@@ -49,7 +50,11 @@ export function writeReport(runDir, scorecard) {
     '|--------|-------:|-------:|-------------:|---------:|------:|--------:|-----:|',
   ];
 
-  for (const name of ['BYPASS_RAW', 'BASELINE_DEFAULT', 'GROCERY_BALANCED', 'GROCERY_AGGRESSIVE', 'GROCERY_CONSERVATIVE']) {
+  for (const name of [
+    'BYPASS_RAW', 'BASELINE_DEFAULT',
+    'GROCERY_BALANCED', 'GROCERY_AGGRESSIVE', 'GROCERY_CONSERVATIVE',
+    'RAJ_v1_CONSERVATIVE', 'RAJ_v1_BALANCED',
+  ]) {
     const c = r[name];
     if (!c) continue;
     lines.push(
@@ -61,9 +66,11 @@ export function writeReport(runDir, scorecard) {
     '',
     '### Recommended operating point',
     '',
-    gb.mean_lifetime_s != null
-      ? `**GROCERY_BALANCED** — ${fmt(gb.mean_lifetime_s)}s mean lifetime, ${fmt(gb.teleports_per_1k, 2)} teleports/1k, ${fmt(gb.ghost_pct, 1)}% ghosts.`
-      : '_Reconciler sweep not run._',
+    raj.mean_lifetime_s != null
+      ? `**RAJ_v1_CONSERVATIVE** (Raj v1.0.1) — ${fmt(raj.mean_lifetime_s)}s mean lifetime, ${fmt(raj.teleports_per_1k, 2)} teleports/1k, ${fmt(raj.ghost_pct, 1)}% ghosts.`
+      : gb.mean_lifetime_s != null
+        ? `**GROCERY_BALANCED** — ${fmt(gb.mean_lifetime_s)}s mean lifetime, ${fmt(gb.teleports_per_1k, 2)} teleports/1k, ${fmt(gb.ghost_pct, 1)}% ghosts.`
+        : '_Reconciler sweep not run._',
     '',
     '## Layer 3 — Structural / spatial',
     '',

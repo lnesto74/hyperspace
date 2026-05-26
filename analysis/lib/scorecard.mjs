@@ -48,7 +48,11 @@ function pickReconciled(verifyRows) {
   if (!verifyRows?.length) return null;
   const byName = Object.fromEntries(verifyRows.map((r) => [r.name, r]));
   const out = {};
-  for (const name of ['BYPASS_RAW', 'BASELINE_DEFAULT', 'GROCERY_BALANCED', 'GROCERY_AGGRESSIVE', 'GROCERY_CONSERVATIVE']) {
+  for (const name of [
+    'BYPASS_RAW', 'BASELINE_DEFAULT',
+    'GROCERY_BALANCED', 'GROCERY_AGGRESSIVE', 'GROCERY_CONSERVATIVE',
+    'RAJ_v1_CONSERVATIVE', 'RAJ_v1_BALANCED',
+  ]) {
     const r = byName[name];
     if (!r) continue;
     out[name] = {

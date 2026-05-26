@@ -6,6 +6,8 @@ const CONFIGS = [
   'GROCERY_BALANCED',
   'GROCERY_AGGRESSIVE',
   'GROCERY_CONSERVATIVE',
+  'RAJ_v1_CONSERVATIVE',
+  'RAJ_v1_BALANCED',
 ] as const
 
 function fmt(n: number | undefined | null, d = 1) {
@@ -18,7 +20,7 @@ interface Props {
   highlight?: string
 }
 
-export default function ReconcilerCompareTable({ reconciler, highlight = 'GROCERY_BALANCED' }: Props) {
+export default function ReconcilerCompareTable({ reconciler, highlight = 'RAJ_v1_CONSERVATIVE' }: Props) {
   if (!reconciler || !Object.keys(reconciler).length) {
     return (
       <div className="text-sm text-gray-500 py-8 text-center border border-dashed border-gray-700 rounded-xl">

@@ -191,9 +191,13 @@ export type TrackViewMode =
   | 'GROCERY_BALANCED'
   | 'GROCERY_AGGRESSIVE'
   | 'GROCERY_CONSERVATIVE'
+  | 'RAJ_v1_CONSERVATIVE'
+  | 'RAJ_v1_BALANCED'
   | 'overlay_GROCERY_BALANCED'
   | 'overlay_GROCERY_AGGRESSIVE'
   | 'overlay_GROCERY_CONSERVATIVE'
+  | 'overlay_RAJ_v1_CONSERVATIVE'
+  | 'overlay_RAJ_v1_BALANCED'
 
 export interface FloorplanContext {
   available: boolean

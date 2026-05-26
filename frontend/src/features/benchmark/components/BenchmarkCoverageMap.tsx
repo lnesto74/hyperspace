@@ -51,8 +51,12 @@ const TRACK_VIEW_OPTIONS: { id: TrackViewMode; label: string }[] = [
   { id: 'GROCERY_BALANCED', label: 'After — Grocery Balanced only' },
   { id: 'overlay_GROCERY_AGGRESSIVE', label: 'Before + After (Aggressive)' },
   { id: 'GROCERY_AGGRESSIVE', label: 'After — Aggressive only' },
-  { id: 'overlay_GROCERY_CONSERVATIVE', label: 'Before + After (Conservative)' },
-  { id: 'GROCERY_CONSERVATIVE', label: 'After — Conservative only' },
+  { id: 'overlay_GROCERY_CONSERVATIVE', label: 'Before + After (Grocery Conservative)' },
+  { id: 'GROCERY_CONSERVATIVE', label: 'After — Grocery Conservative only' },
+  { id: 'overlay_RAJ_v1_CONSERVATIVE', label: 'Before + After (Raj v1 Conservative)' },
+  { id: 'RAJ_v1_CONSERVATIVE', label: 'After — Raj v1 Conservative only' },
+  { id: 'overlay_RAJ_v1_BALANCED', label: 'Before + After (Raj v1 Balanced)' },
+  { id: 'RAJ_v1_BALANCED', label: 'After — Raj v1 Balanced only' },
 ]
 
 function reconciledConfigFor(view: TrackViewMode): string | null {
@@ -109,7 +113,7 @@ export default function BenchmarkCoverageMap({ runId, compareRunId, compareLabel
   const [calibration, setCalibration] = useState<MapCalibration>(DEFAULT_MAP_CALIBRATION)
   const [showAlignPanel, setShowAlignPanel] = useState(false)
 
-  const [trackView, setTrackView] = useState<TrackViewMode>('overlay_GROCERY_BALANCED')
+  const [trackView, setTrackView] = useState<TrackViewMode>('overlay_RAJ_v1_CONSERVATIVE')
   const [reconciled, setReconciled] = useState<ReconciledSpatial | null>(null)
 
   const [layers, setLayers] = useState<Record<LayerKey, boolean>>({
