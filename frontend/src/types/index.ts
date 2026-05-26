@@ -78,6 +78,9 @@ export interface Track {
   objectType: TrackObjectType;
   boundingBox?: BoundingBox; // For person/object dimensions
   color?: string; // Unique color per track
+  /** Set by server when track belongs to the current perception frame. */
+  inLiveFrame?: boolean;
+  originalPerceptionId?: string;
 }
 
 export interface BoundingBox {
@@ -116,6 +119,9 @@ export interface DiscoveryScanResult {
 export interface TracksEvent {
   venueId: string;
   tracks: Track[];
+  /** Unique perception IDs in the current frame — matches fast3dis object count. */
+  frameOccupancy?: number;
+  liveFrameTs?: number | null;
 }
 
 export interface LidarStatusEvent {

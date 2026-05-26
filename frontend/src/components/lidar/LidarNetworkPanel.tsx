@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { Wifi, WifiOff, Radio, Server, ExternalLink, ChevronDown, ChevronUp } from 'lucide-react'
 import { useLidar } from '../../context/LidarContext'
-import { useTracking, useTracksRef } from '../../context/TrackingContext'
+import { useTracking, useTracksRef, useLiveMetricsRef } from '../../context/TrackingContext'
 import { useVenue } from '../../context/VenueContext'
 import { LidarDevice } from '../../types'
 import { API_BASE } from '../../config/api'
@@ -23,9 +23,13 @@ export default function LidarNetworkPanel({ onOpenEdgeCommissioning }: LidarNetw
   const { devices, placements } = useLidar()
   const { isConnected } = useTracking()
   const tracksRef = useTracksRef()
+  const liveMetricsRef = useLiveMetricsRef()
   const [trackCount, setTrackCount] = useState(0)
   useEffect(() => {
-    const id = setInterval(() => setTrackCount(tracksRef.current.size), 1000)
+    const id = setInterval(() => {
+      const occ = liveMetricsRef.current.frameOccupancy
+      setTrackCount(occ > 0 ? occ : tracksRef.current.size)
+    }, 1000)
     return () => clearInterval(id)
   }, [])
   const { venue } = useVenue()

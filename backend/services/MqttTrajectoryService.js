@@ -8,6 +8,7 @@ import {
   perceptionToFloor,
 } from './PerceptionTransform.js'
 import { TrajectoryReconciler, normalizeReconcilerConfig, DEFAULT_CONFIG as RECONCILER_DEFAULT } from './TrajectoryReconciler.js'
+import { FrameOccupancyTracker } from './FrameOccupancyTracker.js'
 
 // Color palette for different tracks
 const TRACK_COLORS = [
@@ -37,6 +38,8 @@ class MqttTrajectoryService {
     // Per-venue reconciler configs (ghost filter + re-ID).
     this.venueReconcilerConfigs = new Map() // venueId -> reconciler config
     this.reconciler = new TrajectoryReconciler((vid) => this.venueReconcilerConfigs.get(vid) || RECONCILER_DEFAULT)
+    /** Per-frame occupancy (matches edge fast3dis object count). */
+    this.frameOccupancy = new FrameOccupancyTracker()
     // Periodic housekeeping (active → lost → expire)
     this.reconcilerSweepInterval = setInterval(() => {
       const events = this.reconciler.sweep()
@@ -126,6 +129,18 @@ class MqttTrajectoryService {
 
   getReconcilerStats(venueId = null) {
     return this.reconciler.getStats(venueId)
+  }
+
+  getFrameOccupancy(venueId) {
+    return venueId ? this.frameOccupancy.getOccupancy(venueId) : 0
+  }
+
+  getLiveFrameTimestamp(venueId) {
+    return venueId ? this.frameOccupancy.getLiveFrameTimestamp(venueId) : null
+  }
+
+  isInLiveFrame(venueId, perceptionId, trackTimestamp) {
+    return this.frameOccupancy.isInLiveFrame(venueId, perceptionId, trackTimestamp)
   }
 
   getVenueReconcilerConfig(venueId) {
@@ -244,12 +259,15 @@ class MqttTrajectoryService {
           ? applyTransformToVelocity(transform, floorVel)
           : floorVel
 
+        const frameTs = data.timestamp || Date.now()
+        this.frameOccupancy.ingest(venueId, data.id || trackKey, frameTs)
+
         const incomingTrack = {
           id: data.id || uuidv4(),
           trackKey,
           deviceId: data.deviceId || deviceId,
           venueId,
-          timestamp: data.timestamp || Date.now(),
+          timestamp: frameTs,
           position: floorPos,
           venuePosition,
           velocity: venueVelocity,
@@ -322,12 +340,15 @@ class MqttTrajectoryService {
           ? rawVelocity
           : (transform ? applyTransformToVelocity(transform, rawVelocity) : rawVelocity)
 
+        const frameTs = track.timestamp || Date.now()
+        this.frameOccupancy.ingest(venueId, track.id || trackKey, frameTs)
+
         const incomingTrack = {
           id: track.id || uuidv4(),
           trackKey,
           deviceId,
           venueId,
-          timestamp: track.timestamp || Date.now(),
+          timestamp: frameTs,
           position: rawPosition,
           venuePosition,
           velocity: venueVelocity,
@@ -402,6 +423,7 @@ class MqttTrajectoryService {
     
     if (venueId) {
       const vs = this.stats.venueStats.get(venueId)
+      const frameOccupancy = this.getFrameOccupancy(venueId)
       if (vs) {
         return {
           ...baseStatus,
@@ -409,6 +431,8 @@ class MqttTrajectoryService {
           venueTracksReceived: vs.tracksReceived,
           venueLastTrackTs: vs.lastTrackTs,
           venueTracksLast10s: vs.tracksLast10s,
+          frameOccupancy,
+          liveFrameTs: this.getLiveFrameTimestamp(venueId),
         }
       } else {
         return {
@@ -417,6 +441,8 @@ class MqttTrajectoryService {
           venueTracksReceived: 0,
           venueLastTrackTs: null,
           venueTracksLast10s: 0,
+          frameOccupancy,
+          liveFrameTs: this.getLiveFrameTimestamp(venueId),
         }
       }
     }

@@ -6,7 +6,7 @@
  */
 
 import { useMemo, useRef, useEffect, useState } from 'react'
-import { useTracksRef } from '../../context/TrackingContext'
+import { useTracksRef, useLiveMetricsRef } from '../../context/TrackingContext'
 import { useVenue } from '../../context/VenueContext'
 import Tooltip from './Tooltip'
 
@@ -20,6 +20,7 @@ interface ActivityMatrixProps {
 
 export default function ActivityMatrix({ monochrome = false }: ActivityMatrixProps) {
   const tracksRef = useTracksRef()
+  const liveMetricsRef = useLiveMetricsRef()
   const { venue } = useVenue()
   const canvasRef = useRef<HTMLCanvasElement>(null)
   
@@ -38,11 +39,14 @@ export default function ActivityMatrix({ monochrome = false }: ActivityMatrixPro
   const [gridData, setGridData] = useState<number[][]>(() =>
     Array(GRID_ROWS).fill(null).map(() => Array(GRID_COLS).fill(0))
   )
+  const [displayTrackCount, setDisplayTrackCount] = useState(0)
 
   useEffect(() => {
     const rebuild = () => {
       const currentTracks = tracksRef.current
-      const currentCount = currentTracks.size
+      const frameOcc = liveMetricsRef.current.frameOccupancy
+      const currentCount = frameOcc > 0 ? frameOcc : currentTracks.size
+      setDisplayTrackCount(currentCount)
       
       if (currentCount === 0 && prevTrackCountRef.current > 0 && cachedGridRef.current) {
         setGridData(cachedGridRef.current)
@@ -139,7 +143,7 @@ export default function ActivityMatrix({ monochrome = false }: ActivityMatrixPro
           </Tooltip>
         </div>
         <Tooltip text="Number of people currently being tracked">
-          <span className="text-[10px] text-white/45 tabular-nums cursor-help">{tracksRef.current.size} tracks</span>
+          <span className="text-[10px] text-white/45 tabular-nums cursor-help">{displayTrackCount} tracks</span>
         </Tooltip>
       </div>
       

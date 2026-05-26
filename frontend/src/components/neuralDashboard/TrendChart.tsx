@@ -6,7 +6,7 @@
  */
 
 import { useState, useEffect, useRef } from 'react'
-import { useTracksRef } from '../../context/TrackingContext'
+import { useTracksRef, useLiveMetricsRef } from '../../context/TrackingContext'
 import Tooltip from './Tooltip'
 
 const CHART_POINTS = 60 // 60 data points (last 60 seconds)
@@ -20,6 +20,7 @@ interface DataPoint {
 
 export default function TrendChart() {
   const tracksRef = useTracksRef()
+  const liveMetricsRef = useLiveMetricsRef()
   const [history, setHistory] = useState<DataPoint[]>([])
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const prevTracksRef = useRef(0)
@@ -27,7 +28,8 @@ export default function TrendChart() {
   // Stable interval that reads tracks via ref — never resets on tracks change
   useEffect(() => {
     const interval = setInterval(() => {
-      const currentCount = tracksRef.current.size
+      const frameOcc = liveMetricsRef.current.frameOccupancy
+      const currentCount = frameOcc > 0 ? frameOcc : tracksRef.current.size
       
       if (currentCount === 0 && prevTracksRef.current > 0) {
         return

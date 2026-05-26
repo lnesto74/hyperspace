@@ -4,6 +4,7 @@ import { Track, TrackWithTrail, LidarStatus } from '../types'
 import { useVenue } from './VenueContext'
 import { API_BASE } from '../config/api'
 import { appendTrailPoint, isFiniteTrackPos } from '../lib/trackTrail'
+import { isTrackInLiveFrame } from '../lib/frameOccupancy'
 
 const MAX_TRAIL_LENGTH = 50 // ~5 seconds at 10Hz (reduced from 100 to save memory)
 const MAX_EXTRAP_MS = 250 // Cap velocity extrapolation — stale targets must not run away
@@ -132,6 +133,18 @@ const TrackingActionsContext = createContext<TrackingActionsType | null>(null)
  */
 const TracksRefContext = createContext<React.MutableRefObject<Map<string, TrackWithTrail>> | null>(null)
 
+export interface LiveMetricsSnapshot {
+  frameOccupancy: number
+  liveFrameTs: number | null
+}
+
+const LiveMetricsRefContext = createContext<React.MutableRefObject<LiveMetricsSnapshot> | null>(null)
+
+function isLiveForDisplay(track: Track, liveFrameTs: number | null): boolean {
+  if (track.trackKey?.startsWith('replay-')) return true
+  return isTrackInLiveFrame(track, liveFrameTs)
+}
+
 export function TrackingProvider({ children }: { children: ReactNode }) {
   const { venue } = useVenue()
   const [liveTracks, setLiveTracks] = useState<Map<string, TrackWithTrail>>(new Map())
@@ -169,6 +182,8 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
   const removalFlushTimerRef = useRef<number | null>(null)
   const smoothMotionRequestedRef = useRef(true)
   const setInterpolationRef = useRef<(enabled: boolean) => void>(() => {})
+  const liveMetricsRef = useRef<LiveMetricsSnapshot>({ frameOccupancy: 0, liveFrameTs: null })
+  const liveFrameTsRef = useRef<number | null>(null)
   
   // Historical timeline/insight replay uses DB snapshots; MQTT JSONL replay uses live socket.
   const useHistoricalTracks = isReplayMode && !mqttReplayActive
@@ -283,6 +298,7 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
         // Brief grace: reconciler re-ID can drop a track from one snapshot then restore it
         for (const [key, track] of prev) {
           if (next.has(key)) continue
+          if (!isLiveForDisplay(track, liveFrameTsRef.current)) continue
           const lastSeen = trackLastSeenRef.current.get(key) ?? 0
           if (now - lastSeen < SNAPSHOT_GRACE_MS) {
             next.set(key, track)
@@ -300,7 +316,7 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
       })
     }
     
-    socket.on('tracks', (data: { venueId: string, tracks: Track[] }) => {
+    socket.on('tracks', (data: { venueId: string, tracks: Track[], frameOccupancy?: number, liveFrameTs?: number | null }) => {
       if (data.venueId !== subscribedVenueRef.current) {
         if (DIAG) console.warn(`[DIAG] tracks IGNORED  eventVenue=${data.venueId}  subscribed=${subscribedVenueRef.current}  n=${data.tracks.length}  t=${Date.now()}`)
         return
@@ -308,6 +324,14 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
       if (isReplayModeRef.current && !mqttReplayActiveRef.current) return
 
       const now = Date.now()
+      const lfts = data.liveFrameTs ?? null
+      liveFrameTsRef.current = lfts
+      liveMetricsRef.current = {
+        frameOccupancy: typeof data.frameOccupancy === 'number' ? data.frameOccupancy : 0,
+        liveFrameTs: lfts,
+      }
+
+      const displayTracks = data.tracks.filter(t => isLiveForDisplay(t, lfts))
 
       if (DIAG) {
         const gap = diagLastSocketTs ? now - diagLastSocketTs : 0
@@ -317,15 +341,15 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
         }
         diagTrackRecvCount += 1
         if (diagTrackRecvCount <= 3 || diagTrackRecvCount % 300 === 0) {
-          const sample = data.tracks[0]
-          console.log(`[DIAG] tracks recv  n=${data.tracks.length}  sample=${sample?.trackKey}  pos=(${sample?.venuePosition?.x?.toFixed(2)},${sample?.venuePosition?.z?.toFixed(2)})  #=${diagTrackRecvCount}  t=${now}`)
+          const sample = displayTracks[0]
+          console.log(`[DIAG] tracks recv  n=${displayTracks.length}/${data.tracks.length}  frameOcc=${data.frameOccupancy ?? '?'}  sample=${sample?.trackKey}  pos=(${sample?.venuePosition?.x?.toFixed(2)},${sample?.venuePosition?.z?.toFixed(2)})  #=${diagTrackRecvCount}  t=${now}`)
         }
       }
       
       if (interpEnabledRef.current && !mqttReplayActiveRef.current) {
         // Build a Set of trackKeys in this snapshot to prune stale targets
         const incomingKeys = new Set<string>()
-        for (const track of data.tracks) {
+        for (const track of displayTracks) {
           targetTracksRef.current.set(track.trackKey, track)
           interpTsRef.current.set(track.trackKey, now)
           trackLastSeenRef.current.set(track.trackKey, now)
@@ -347,7 +371,7 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
           }
         }
       } else {
-        pendingBatches.push(data.tracks)
+        pendingBatches.push(displayTracks)
         requestAnimationFrame(flushTrackUpdates)
       }
     })
@@ -784,11 +808,13 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
 
   return (
     <TracksRefContext.Provider value={stableTracksRef}>
+      <LiveMetricsRefContext.Provider value={liveMetricsRef}>
       <TrackingActionsContext.Provider value={actionsValue}>
         <TrackingContext.Provider value={contextValue}>
           {children}
         </TrackingContext.Provider>
       </TrackingActionsContext.Provider>
+      </LiveMetricsRefContext.Provider>
     </TracksRefContext.Provider>
   )
 }
@@ -824,6 +850,15 @@ export function useTracksRef() {
   const ref = useContext(TracksRefContext)
   if (!ref) {
     throw new Error('useTracksRef must be used within a TrackingProvider')
+  }
+  return ref
+}
+
+/** Frame-accurate occupancy (matches fast3dis / edge activePeopleCount). */
+export function useLiveMetricsRef() {
+  const ref = useContext(LiveMetricsRefContext)
+  if (!ref) {
+    throw new Error('useLiveMetricsRef must be used within a TrackingProvider')
   }
   return ref
 }

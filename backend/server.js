@@ -267,7 +267,19 @@ trackAggregator.on('tracks', (data) => {
   }
 
   // Socket emission is always immediate — never block this
-  io.of('/tracking').to(`venue:${data.venueId}`).emit('tracks', data);
+  const frameOccupancy = mqttService?.getFrameOccupancy?.(data.venueId) ?? 0;
+  const liveFrameTs = mqttService?.getLiveFrameTimestamp?.(data.venueId) ?? null;
+  const tracks = data.tracks.map((t) => {
+    const perceptionId = t.originalPerceptionId || t.id;
+    const inLiveFrame = mqttService?.isInLiveFrame?.(data.venueId, perceptionId, t.timestamp) ?? false;
+    return { ...t, inLiveFrame };
+  });
+  io.of('/tracking').to(`venue:${data.venueId}`).emit('tracks', {
+    ...data,
+    tracks,
+    frameOccupancy,
+    liveFrameTs,
+  });
   
   // Throttle KPI recording: only process every 2s instead of every 50ms emission.
   // This reduces event loop load from ~20 heavy batches/s to ~0.5/s.
@@ -890,6 +902,8 @@ app.get('/api/tracking/venue/:venueId/status', (req, res) => {
       tracksLast10s: mqttStatus.venueTracksLast10s || 0,
       totalTracksReceived: mqttStatus.venueTracksReceived || 0,
       aggregatorActiveTracks: trackAggregator.getActiveTrackCount(),
+      frameOccupancy: mqttStatus.frameOccupancy ?? 0,
+      liveFrameTs: mqttStatus.liveFrameTs ?? null,
       subscribedVenueId: trackAggregator.venueId || null,
     });
   } catch (err) {

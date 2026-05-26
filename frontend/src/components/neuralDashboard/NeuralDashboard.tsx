@@ -17,7 +17,7 @@
  */
 
 import React, { useRef, useState, useEffect, memo, createContext, useContext } from 'react'
-import { useTrackingActions, useTracksRef } from '../../context/TrackingContext'
+import { useTrackingActions, useTracksRef, useLiveMetricsRef } from '../../context/TrackingContext'
 import { useRoi } from '../../context/RoiContext'
 import LiveMetricsPanel from './LiveMetricsPanel'
 import ActivityMatrix from './ActivityMatrix'
@@ -59,6 +59,7 @@ interface NeuralDashboardProps {
 export default function NeuralDashboard({ children, enabled = true, leftOffset = 0, isReplayMode = false }: NeuralDashboardProps) {
   const { setInterpolation } = useTrackingActions()
   const tracksRef = useTracksRef()
+  const liveMetricsRef = useLiveMetricsRef()
   const { regions } = useRoi()
   const [monoMode, setMonoMode] = useState(false)
   const [xrayMode, setXrayMode] = useState(false)
@@ -91,7 +92,8 @@ export default function NeuralDashboard({ children, enabled = true, leftOffset =
     const interval = setInterval(() => {
       const currentTracks = tracksRef.current
       const currentRegions = regionsRef.current
-      const totalPax = currentTracks.size
+      const frameOcc = liveMetricsRef.current.frameOccupancy
+      const totalPax = frameOcc > 0 ? frameOcc : currentTracks.size
       
       if (totalPax === 0) return // keep last known values
 
