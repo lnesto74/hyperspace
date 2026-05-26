@@ -3,7 +3,7 @@ import { io, Socket } from 'socket.io-client'
 import { Track, TrackWithTrail, LidarStatus } from '../types'
 import { useVenue } from './VenueContext'
 import { API_BASE } from '../config/api'
-import { appendTrailPoint, isFiniteTrackPos } from '../lib/trackTrail'
+import { appendTrailPoint, isFiniteTrackPos, sanitizeTrailPoints } from '../lib/trackTrail'
 
 const MAX_TRAIL_LENGTH = 50 // ~5 seconds at 10Hz (reduced from 100 to save memory)
 const MAX_EXTRAP_MS = 250 // Cap velocity extrapolation — stale targets must not run away
@@ -99,6 +99,7 @@ interface TrackingContextType {
   setReplayTracks: (tracks: Map<string, TrackWithTrail>) => void
   setTrackVisibility: (visible: boolean) => void
   setInterpolation: (enabled: boolean) => void
+  setVisualizationMode: (mode: 'vtl' | 'raw', opts?: { forceClear?: boolean }) => void
   setMqttReplayActive: (active: boolean) => void
   clearReplayTracks: () => void
 }
@@ -118,6 +119,7 @@ interface TrackingActionsType {
   setReplayTracks: (tracks: Map<string, TrackWithTrail>) => void
   setTrackVisibility: (visible: boolean) => void
   setInterpolation: (enabled: boolean) => void
+  setVisualizationMode: (mode: 'vtl' | 'raw', opts?: { forceClear?: boolean }) => void
   setMqttReplayActive: (active: boolean) => void
   clearReplayTracks: () => void
   startDemoSession: (venueId: string) => Promise<string | null>
@@ -188,6 +190,40 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
   const liveMetricsRef = useRef<LiveMetricsSnapshot>({ frameOccupancy: 0, liveFrameTs: null })
   const vtlModeRef = useRef(false)
   const vtlPlaybackLagRef = useRef(10000)
+
+  const applyVisualizationMode = useCallback((
+    mode: 'vtl' | 'raw',
+    playbackLagMs?: number,
+    opts?: { forceClear?: boolean },
+  ) => {
+    const nextVtl = mode === 'vtl'
+    if (playbackLagMs != null) vtlPlaybackLagRef.current = playbackLagMs
+    if (!opts?.forceClear && vtlModeRef.current === nextVtl) return
+    vtlModeRef.current = nextVtl
+    setLiveTracks(new Map())
+    targetTracksRef.current.clear()
+    interpTsRef.current.clear()
+    trackLastSeenRef.current.clear()
+    liveMetricsRef.current = { frameOccupancy: 0, liveFrameTs: null }
+    if (nextVtl) {
+      if (interpRAFRef.current) {
+        cancelAnimationFrame(interpRAFRef.current)
+        interpRAFRef.current = null
+      }
+      interpEnabledRef.current = false
+    } else {
+      setInterpolationRef.current(smoothMotionRequestedRef.current)
+    }
+    window.dispatchEvent(new CustomEvent('hyperspace:visualization-mode', { detail: { mode } }))
+    if (DIAG) console.log(`[DIAG] visualization mode → ${mode}  lag=${vtlPlaybackLagRef.current}ms  t=${Date.now()}`)
+  }, [])
+
+  const setVisualizationMode = useCallback((
+    mode: 'vtl' | 'raw',
+    opts?: { forceClear?: boolean },
+  ) => {
+    applyVisualizationMode(mode, undefined, opts)
+  }, [applyVisualizationMode])
   
   // Historical timeline/insight replay uses DB snapshots; MQTT JSONL replay uses live socket.
   const useHistoricalTracks = isReplayMode && !mqttReplayActive
@@ -223,11 +259,11 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
       .then(res => (res.ok ? res.json() : null))
       .then(data => {
         if (cancelled) return
-        vtlModeRef.current = data?.reconciler?.enabled === true
+        applyVisualizationMode(data?.reconciler?.enabled === true ? 'vtl' : 'raw')
       })
       .catch(() => {})
     return () => { cancelled = true }
-  }, [venue?.id])
+  }, [venue?.id, applyVisualizationMode])
 
   // Restore demo session + replay flag after page refresh (server-side replay survives reload).
   useEffect(() => {
@@ -333,36 +369,18 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
       })
     }
     
-    const applyVisualizationMode = (mode: 'vtl' | 'raw', playbackLagMs?: number) => {
-      const nextVtl = mode === 'vtl'
-      if (playbackLagMs != null) vtlPlaybackLagRef.current = playbackLagMs
-      if (vtlModeRef.current === nextVtl) return
-      vtlModeRef.current = nextVtl
-      setLiveTracks(new Map())
-      targetTracksRef.current.clear()
-      interpTsRef.current.clear()
-      trackLastSeenRef.current.clear()
-      liveMetricsRef.current = { frameOccupancy: 0, liveFrameTs: null }
-      if (nextVtl) {
-        if (interpRAFRef.current) {
-          cancelAnimationFrame(interpRAFRef.current)
-          interpRAFRef.current = null
-        }
-        interpEnabledRef.current = false
-      } else {
-        setInterpolationRef.current(smoothMotionRequestedRef.current)
-      }
-      if (DIAG) console.log(`[DIAG] visualization mode → ${mode}  lag=${vtlPlaybackLagRef.current}ms  t=${Date.now()}`)
+    const applyModeFromSocket = (mode: 'vtl' | 'raw', playbackLagMs?: number, forceClear = false) => {
+      applyVisualizationMode(mode, playbackLagMs, { forceClear })
     }
 
     socket.on('visualization_mode', (data: { venueId: string; mode: string; playbackLagMs?: number }) => {
       if (data.venueId !== subscribedVenueRef.current) return
-      applyVisualizationMode(data.mode === 'vtl' ? 'vtl' : 'raw', data.playbackLagMs)
+      applyModeFromSocket(data.mode === 'vtl' ? 'vtl' : 'raw', data.playbackLagMs, true)
     })
 
     socket.on('venue:reconciler-updated', (data: { venueId: string; reconciler?: { enabled?: boolean } | null }) => {
       if (data.venueId !== subscribedVenueRef.current) return
-      applyVisualizationMode(data.reconciler?.enabled === true ? 'vtl' : 'raw')
+      applyModeFromSocket(data.reconciler?.enabled === true ? 'vtl' : 'raw', undefined, true)
     })
 
     socket.on('visual_tracks', (data: {
@@ -384,7 +402,9 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
         const next = new Map<string, TrackWithTrail>()
         for (const entity of data.entities) {
           if (!isFiniteTrackPos(entity.venuePosition)) continue
-          const trail = (entity.trail || []).map(p => ({ x: p.x, y: p.y ?? 0, z: p.z }))
+          const trail = sanitizeTrailPoints(
+            (entity.trail || []).map(p => ({ x: p.x, y: p.y ?? 0, z: p.z })),
+          )
           next.set(entity.trackKey, {
             id: entity.id || entity.visualId || entity.trackKey,
             trackKey: entity.trackKey,
@@ -570,7 +590,7 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
       trackLastSeenRef.current.clear()
       pendingRemovalsRef.current.clear()
     }
-  }, [])
+  }, [applyVisualizationMode])
 
   useEffect(() => {
     if (venue?.id && isConnected) {
@@ -867,12 +887,13 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
     setReplayTracks,
     setTrackVisibility,
     setInterpolation,
+    setVisualizationMode,
     setMqttReplayActive,
     clearReplayTracks,
     mqttReplayActive,
     useHistoricalTracks,
     demoSessionId,
-  }), [tracks, isConnected, isReplayMode, mqttReplayActive, useHistoricalTracks, demoSessionId, subscribe, unsubscribe, setReplayMode, setReplayTracks, setTrackVisibility, setInterpolation, setMqttReplayActive, clearReplayTracks])
+  }), [tracks, isConnected, isReplayMode, mqttReplayActive, useHistoricalTracks, demoSessionId, subscribe, unsubscribe, setReplayMode, setReplayTracks, setTrackVisibility, setInterpolation, setVisualizationMode, setMqttReplayActive, clearReplayTracks])
 
   const actionsValue = useMemo(() => ({
     subscribe,
@@ -881,11 +902,12 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
     setReplayTracks,
     setTrackVisibility,
     setInterpolation,
+    setVisualizationMode,
     setMqttReplayActive,
     clearReplayTracks,
     startDemoSession,
     stopDemoSession,
-  }), [subscribe, unsubscribe, setReplayMode, setReplayTracks, setTrackVisibility, setInterpolation, setMqttReplayActive, clearReplayTracks, startDemoSession, stopDemoSession])
+  }), [subscribe, unsubscribe, setReplayMode, setReplayTracks, setTrackVisibility, setInterpolation, setVisualizationMode, setMqttReplayActive, clearReplayTracks, startDemoSession, stopDemoSession])
 
   return (
     <TracksRefContext.Provider value={stableTracksRef}>

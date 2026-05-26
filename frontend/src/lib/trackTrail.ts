@@ -11,7 +11,23 @@ export function isFiniteTrackPos(p?: { x?: number; z?: number } | null): p is { 
  * Append a trail point, resetting history when the track teleports or coords are invalid.
  * Raw MQTT positions are fine — bad segments come from stale client state or re-ID jumps.
  */
-export function appendTrailPoint(
+export function sanitizeTrailPoints(
+  trail: TrailPoint[] | undefined,
+  jumpResetM = TRAIL_JUMP_RESET_M,
+): TrailPoint[] {
+  if (!trail?.length) return []
+  const out: TrailPoint[] = []
+  for (const p of trail) {
+    if (!isFiniteTrackPos(p)) continue
+    const last = out[out.length - 1]
+    if (last && isFiniteTrackPos(last)) {
+      const d = Math.hypot(p.x - last.x, p.z - last.z)
+      if (d > jumpResetM) out.length = 0
+    }
+    out.push({ x: p.x, y: p.y ?? 0, z: p.z })
+  }
+  return out
+}
   oldTrail: TrailPoint[] | undefined,
   point: TrailPoint,
   maxLength: number,

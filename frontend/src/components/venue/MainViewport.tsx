@@ -8,7 +8,8 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import { Hand, Move3D, RotateCcw, Save, Download, Layers, Eye, EyeOff, Move, RotateCw } from 'lucide-react'
 import { useVenue } from '../../context/VenueContext'
 import { useLidar } from '../../context/LidarContext'
-import { useTrackingActions, useTracksRef } from '../../context/TrackingContext'
+import { useTrackingActions, useTracksRef, useVtlModeRef } from '../../context/TrackingContext'
+import { sanitizeTrailPoints } from '../../lib/trackTrail'
 import { useRoi } from '../../context/RoiContext'
 import { useReplayInsight } from '../../context/ReplayInsightContext'
 import { useProfitRadar } from '../../context/ProfitRadarContext'
@@ -773,6 +774,14 @@ export default function MainViewport({
   const { venue, objects, selectedObjectId, selectedObjectIds, hoveredObjectId, selectObject, selectObjects, hoverObject, updateObject, removeObject, removeObjects, snapToGrid, copySelectedObjects, pasteObjects } = useVenue()
   const { placements, selectedPlacementId, selectPlacement, updatePlacement, removePlacement, getDeviceById } = useLidar()
   const tracksRef = useTracksRef()
+  const vtlModeRef = useVtlModeRef()
+  const forcePurgeMeshesRef = useRef(false)
+
+  useEffect(() => {
+    const handler = () => { forcePurgeMeshesRef.current = true }
+    window.addEventListener('hyperspace:visualization-mode', handler)
+    return () => window.removeEventListener('hyperspace:visualization-mode', handler)
+  }, [])
 
   // Ghost overlay — listens for events from MatchingTunerPanel and renders a
   // textured plane on the venue floor. Stale loads (when slider drags fire
@@ -3939,6 +3948,48 @@ export default function MainViewport({
     const syncTrackMeshes = () => {
       if (!sceneRef.current) return
       const scene = sceneRef.current
+      const vtlActive = vtlModeRef.current
+
+      if (forcePurgeMeshesRef.current) {
+        forcePurgeMeshesRef.current = false
+        trackMeshesRef.current.forEach((group, key) => {
+          scene.remove(group)
+          group.traverse(child => {
+            if (child instanceof THREE.Mesh || child instanceof THREE.Line || child instanceof THREE.Points || child instanceof THREE.LineSegments) {
+              child.geometry.dispose()
+              if (Array.isArray(child.material)) {
+                child.material.forEach(m => { if (m.map) m.map.dispose(); m.dispose() })
+              } else {
+                if ((child.material as any).map) (child.material as any).map.dispose()
+                child.material.dispose()
+              }
+            }
+            if (child instanceof THREE.Sprite) {
+              const mat = child.material as THREE.SpriteMaterial
+              if (mat.map) mat.map.dispose()
+              mat.dispose()
+            }
+          })
+          const trail = trailLinesRef.current.get(key)
+          if (trail) {
+            scene.remove(trail)
+            trail.geometry.dispose()
+            ;(trail.material as THREE.Material).dispose()
+            trailLinesRef.current.delete(key)
+          }
+        })
+        trackMeshesRef.current.clear()
+        trailLinesRef.current.forEach((trail) => {
+          scene.remove(trail)
+          trail.geometry.dispose()
+          ;(trail.material as THREE.Material).dispose()
+        })
+        trailLinesRef.current.clear()
+        trackGraceRef.current.clear()
+        sezEntryTimesRef.current.clear()
+        emptyTracksSinceRef.current = null
+      }
+
       const allTracks = tracksRef.current
       const refCount = allTracks.size
       syncIntervalMs = refCount > 200 ? 200 : refCount > RENDER_EMERGENCY_THRESHOLD ? 66 : refCount > 40 ? 50 : 33
@@ -3953,6 +4004,8 @@ export default function MainViewport({
       const currentTracking = trackingRef.current
       const now = Date.now()
       const SEZ_LABEL_DURATION_MS = 60 * 1000
+      const hideDelayMs = vtlActive ? 100 : TRACK_HIDE_DELAY_MS
+      const graceMs = vtlActive ? 400 : TRACK_GRACE_MS
 
       diagSyncCount++
       const meshCount = trackMeshesRef.current.size
@@ -4010,12 +4063,12 @@ export default function MainViewport({
             trackGraceRef.current.set(key, now)
           }
           const graceAge = now - (trackGraceRef.current.get(key) ?? now)
-          if (graceAge > TRACK_HIDE_DELAY_MS) {
+          if (graceAge > hideDelayMs) {
             group.visible = false
             const trail = trailLinesRef.current.get(key)
             if (trail) trail.visible = false
           }
-          if (graceAge > TRACK_GRACE_MS) {
+          if (graceAge > graceMs) {
             // Grace period expired — dispose
             trackGraceRef.current.delete(key)
             scene.remove(group)
@@ -4272,6 +4325,14 @@ export default function MainViewport({
         }
 
         if (track.trail && track.trail.length > 1) {
+          const renderTrail = sanitizeTrailPoints(track.trail)
+          if (renderTrail.length <= 1) {
+            const trailLine = trailLinesRef.current.get(key)
+            if (trailLine) {
+              trailLine.geometry.setDrawRange(0, 0)
+              trailLine.visible = false
+            }
+          } else {
           let trailLine = trailLinesRef.current.get(key)
 
           if (!trailLine) {
@@ -4295,18 +4356,19 @@ export default function MainViewport({
           const posAttr = trailLine.geometry.getAttribute('position') as THREE.BufferAttribute
           const buf = posAttr.array as Float32Array
           const maxPts = buf.length / 3
-          const count = Math.min(track.trail.length, maxPts)
+          const count = Math.min(renderTrail.length, maxPts)
 
           for (let i = 0; i < count; i++) {
-            buf[i * 3]     = track.trail[i].x
+            buf[i * 3]     = renderTrail[i].x
             buf[i * 3 + 1] = 0.02
-            buf[i * 3 + 2] = track.trail[i].z
+            buf[i * 3 + 2] = renderTrail[i].z
           }
 
           posAttr.needsUpdate = true
           trailLine.geometry.setDrawRange(0, count)
           ;(trailLine.material as THREE.LineBasicMaterial).color.set(color as any)
           trailLine.visible = showTracksRef.current
+          }
         } else {
           // Trail reset or too short — clear stale geometry (prevents long "spoke" lines from old buffer)
           const trailLine = trailLinesRef.current.get(key)

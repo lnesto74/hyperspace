@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { Sparkles, RefreshCw, X, ChevronDown, ChevronUp, Loader2, Check, Activity, Filter, Layers, Wand2, GripVertical } from 'lucide-react'
 import { API_BASE } from '../../config/api'
 import { useDraggablePanel } from '../../hooks/useDraggablePanel'
+import { useTrackingActions } from '../../context/TrackingContext'
 
 interface TrajectoryQualityPanelProps {
   venueId: string
@@ -240,6 +241,7 @@ export default function TrajectoryQualityPanel({ venueId, onClose }: TrajectoryQ
   const [collapsed, setCollapsed] = useState(false)
   const [activeSection, setActiveSection] = useState<'stats' | 'ghost' | 'reid' | 'smoothing'>('stats')
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const { setVisualizationMode } = useTrackingActions()
 
   const { panelRef, panelStyle, dragging, headerProps } = useDraggablePanel({
     storageKey: 'hyperspace.panel.trajectory-quality.position',
@@ -278,6 +280,7 @@ export default function TrajectoryQualityPanel({ venueId, onClose }: TrajectoryQ
   }, [venueId])
 
   const scheduleSave = useCallback((next: ReconcilerConfig) => {
+    setVisualizationMode(next.enabled ? 'vtl' : 'raw', { forceClear: true })
     if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current)
     saveTimeoutRef.current = setTimeout(async () => {
       setSaving(true)
@@ -296,7 +299,7 @@ export default function TrajectoryQualityPanel({ venueId, onClose }: TrajectoryQ
         setSaving(false)
       }
     }, 250)
-  }, [venueId])
+  }, [venueId, setVisualizationMode])
 
   useEffect(() => () => { if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current) }, [])
 

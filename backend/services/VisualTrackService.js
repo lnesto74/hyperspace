@@ -21,6 +21,9 @@ const DEFAULTS = Object.freeze({
   reacquireMaxDistM: 8,
   maxSpeedM_s: 2.5,
   maxTrailPoints: 48,
+  maxExtrapMs: 2000,
+  trailJumpResetM: 4.0,
+  maxEntitiesPerVenue: 120,
 });
 
 /** @typedef {'incubating'|'active'|'coasting'|'reacquiring'|'fading'} VtlState */
@@ -58,13 +61,19 @@ export class VisualTrackService extends EventEmitter {
   }
 
   setVenueActive(venueId, active) {
-    if (active) this.activeVenues.add(venueId);
-    else {
+    if (active) {
+      this.activeVenues.add(venueId);
+      this.resetVenue(venueId);
+    } else {
       this.activeVenues.delete(venueId);
-      this.venues.delete(venueId);
-      for (const [sid, ref] of this.stableIndex) {
-        if (ref.venueId === venueId) this.stableIndex.delete(sid);
-      }
+      this.resetVenue(venueId);
+    }
+  }
+
+  resetVenue(venueId) {
+    this.venues.delete(venueId);
+    for (const [sid, ref] of this.stableIndex) {
+      if (ref.venueId === venueId) this.stableIndex.delete(sid);
     }
   }
 
@@ -91,6 +100,7 @@ export class VisualTrackService extends EventEmitter {
 
     const now = Date.now();
     const pos = track.venuePosition;
+    if (!pos || !Number.isFinite(pos.x) || !Number.isFinite(pos.z)) return;
     const vel = track.velocity || { x: 0, y: 0, z: 0 };
     const stableId = track.stableId || track.id;
     const sample = {
@@ -141,10 +151,11 @@ export class VisualTrackService extends EventEmitter {
 
   _createEntity(venueId, track, stableId) {
     const visualId = randomUUID();
+    const deviceId = track.deviceId || 'edge';
     const entity = {
       visualId,
-      trackKey: `vtl:${visualId}`,
-      deviceId: track.deviceId || 'edge',
+      trackKey: `${deviceId}:${stableId}`,
+      deviceId,
       stableIds: new Set([stableId]),
       perceptionIds: new Set(track.originalPerceptionId ? [String(track.originalPerceptionId)] : []),
       state: /** @type {VtlState} */ ('incubating'),
@@ -196,13 +207,12 @@ export class VisualTrackService extends EventEmitter {
     const samples = entity.samples;
     if (samples.length === 0) return null;
 
-    if (displayT <= samples[0].t) {
-      return { x: samples[0].x, z: samples[0].z, vx: samples[0].vx, vz: samples[0].vz };
-    }
+    // Playback clock hasn't reached this entity's history — don't show at current position.
+    if (displayT < samples[0].t) return null;
 
     const last = samples[samples.length - 1];
     if (displayT >= last.t) {
-      const dt = displayT - last.t;
+      const dt = Math.min(displayT - last.t, this.options.maxExtrapMs);
       const capped = clampSpeed(last.x, last.z, last.x + last.vx * (dt / 1000), last.z + last.vz * (dt / 1000), dt, this.options.maxSpeedM_s);
       return { x: capped.x, z: capped.z, vx: last.vx, vz: last.vz };
     }
@@ -226,9 +236,21 @@ export class VisualTrackService extends EventEmitter {
   }
 
   _buildTrail(entity, displayT) {
-    const trail = [];
+    const raw = [];
     for (const s of entity.samples) {
-      if (s.t <= displayT) trail.push({ x: s.x, y: 0, z: s.z });
+      if (s.t <= displayT && Number.isFinite(s.x) && Number.isFinite(s.z)) {
+        raw.push({ x: s.x, y: 0, z: s.z });
+      }
+    }
+    const trail = [];
+    const jumpM = this.options.trailJumpResetM;
+    for (const p of raw) {
+      const last = trail[trail.length - 1];
+      if (last) {
+        const d = Math.hypot(p.x - last.x, p.z - last.z);
+        if (d > jumpM) trail.length = 0;
+      }
+      trail.push(p);
     }
     const max = this.options.maxTrailPoints;
     if (trail.length > max) return trail.slice(trail.length - max);
@@ -295,6 +317,12 @@ export class VisualTrackService extends EventEmitter {
         color: entity.color,
         trail,
       });
+    }
+
+    const maxN = this.options.maxEntitiesPerVenue;
+    if (entities.length > maxN) {
+      entities.sort((a, b) => (b.opacity ?? 1) - (a.opacity ?? 1));
+      entities.length = maxN;
     }
 
     return { entities, occupancy: entities.filter(e => e.opacity > 0.2).length };
