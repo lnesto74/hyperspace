@@ -161,7 +161,8 @@ class MqttTrajectoryService {
 
   syncVisualTrackLayer(venueId) {
     if (!this.visualTrackService) return
-    this.visualTrackService.setVenueActive(venueId, this.isReconcilerEnabled(venueId))
+    // Canvas uses live reconciled tracks (same path as bypass). VTL delayed playback is off.
+    this.visualTrackService.setVenueActive(venueId, false)
   }
 
   getColorForTrack(trackKey) {

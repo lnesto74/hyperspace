@@ -438,9 +438,11 @@ export class TrajectoryReconciler {
       stableId: stableState.stableId,
       originalPerceptionId: perceptionId,
       trackKey,
-      venuePosition: { ...stableState.smoothedPos },
-      velocity: { ...stableState.smoothedVel },
-      // Keep the raw values too for forensics
+      // Live canvas uses raw perception motion; smoothed kept for analytics forensics.
+      venuePosition: { ...stableState.position },
+      velocity: { ...stableState.velocity },
+      smoothedPosition: { ...stableState.smoothedPos },
+      smoothedVelocity: { ...stableState.smoothedVel },
       rawPosition: originalTrack.venuePosition || originalTrack.position,
       rawVelocity: originalTrack.velocity || { x: 0, y: 0, z: 0 },
       // Track quality hints for the UI

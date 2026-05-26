@@ -270,12 +270,12 @@ trackAggregator.on('tracks', (data) => {
     console.log(`[DIAG] emit tracks  n=${data.tracks.length}  gap=${gap}ms  emit#=${diagEmitCount}  t=${now}`);
   }
 
-  // Socket emission — raw bypass unchanged; VTL uses separate visual_tracks channel
+  // Socket emission — reconciler-on uses same live tracks feed; ghost filter + re-ID only.
   const vtlOn = mqttService?.isReconcilerEnabled?.(data.venueId);
   if (vtlOn) {
     io.of('/tracking').to(`venue:${data.venueId}`).emit('tracks', {
       ...data,
-      visualization: 'analytics',
+      visualization: 'reconcile_live',
     });
   } else {
     io.of('/tracking').to(`venue:${data.venueId}`).emit('tracks', data);

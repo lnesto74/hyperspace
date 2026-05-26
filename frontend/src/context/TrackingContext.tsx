@@ -3,12 +3,14 @@ import { io, Socket } from 'socket.io-client'
 import { Track, TrackWithTrail, LidarStatus } from '../types'
 import { useVenue } from './VenueContext'
 import { API_BASE } from '../config/api'
-import { appendTrailPoint, isFiniteTrackPos, sanitizeTrailPoints } from '../lib/trackTrail'
+import { appendTrailPoint, isFiniteTrackPos } from '../lib/trackTrail'
 
-const MAX_TRAIL_LENGTH = 50 // ~5 seconds at 10Hz (reduced from 100 to save memory)
+const MAX_TRAIL_LENGTH = 50 // ~5s at 10Hz in raw bypass mode
+const RECONCILE_TRAIL_LENGTH = 100 // ~10s at 10Hz when preset active
 const MAX_EXTRAP_MS = 250 // Cap velocity extrapolation — stale targets must not run away
 const TRACK_TTL_MS = 20000 // 20s — generous margin to survive backend event-loop stalls without removing tracks
-const SNAPSHOT_GRACE_MS = 1000 // brief re-ID gap; don't hold stale positions
+const SNAPSHOT_GRACE_MS = 1000 // brief re-ID gap in bypass
+const RECONCILE_GRACE_MS = 2500 // hold through reconciler re-ID gaps
 const CLEANUP_INTERVAL_MS = 1000 // Cleanup stale tracks every 1 second
 const INTERP_MAX_TRACKS = 200 // Cap rendered interp targets — never stop the loop entirely
 const MAX_CLIENT_TRACKS = 150 // Emergency cap only — reconciler keeps count low
@@ -205,15 +207,8 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
     interpTsRef.current.clear()
     trackLastSeenRef.current.clear()
     liveMetricsRef.current = { frameOccupancy: 0, liveFrameTs: null }
-    if (nextVtl) {
-      if (interpRAFRef.current) {
-        cancelAnimationFrame(interpRAFRef.current)
-        interpRAFRef.current = null
-      }
-      interpEnabledRef.current = false
-    } else {
-      setInterpolationRef.current(smoothMotionRequestedRef.current)
-    }
+    // Reconcile preset uses the same live interp pipeline as bypass — longer trails only.
+    setInterpolationRef.current(smoothMotionRequestedRef.current)
     window.dispatchEvent(new CustomEvent('hyperspace:visualization-mode', { detail: { mode } }))
     if (DIAG) console.log(`[DIAG] visualization mode → ${mode}  lag=${vtlPlaybackLagRef.current}ms  t=${Date.now()}`)
   }, [])
@@ -233,6 +228,9 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
   // won't re-render when tracks change
   const stableTracksRef = useRef(tracks)
   stableTracksRef.current = tracks
+
+  const maxTrailLength = () => (vtlModeRef.current ? RECONCILE_TRAIL_LENGTH : MAX_TRAIL_LENGTH)
+  const snapshotGraceMs = () => (vtlModeRef.current ? RECONCILE_GRACE_MS : SNAPSHOT_GRACE_MS)
 
   const subscribe = useCallback((venueId: string, { force = false }: { force?: boolean } = {}) => {
     // Socket.io drops room membership on reconnect — must re-emit subscribe for the same venue.
@@ -342,7 +340,7 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
           const trail = appendTrailPoint(
             existing?.trail,
             { ...track.venuePosition, y: track.venuePosition.y ?? 0 },
-            MAX_TRAIL_LENGTH,
+            maxTrailLength(),
           )
 
           next.set(key, { ...track, trail })
@@ -353,7 +351,7 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
         for (const [key, track] of prev) {
           if (next.has(key)) continue
           const lastSeen = trackLastSeenRef.current.get(key) ?? 0
-          if (now - lastSeen < SNAPSHOT_GRACE_MS) {
+          if (now - lastSeen < snapshotGraceMs()) {
             next.set(key, track)
           }
         }
@@ -383,43 +381,13 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
       applyModeFromSocket(data.reconciler?.enabled === true ? 'vtl' : 'raw', undefined, true)
     })
 
-    socket.on('visual_tracks', (data: {
+    socket.on('visual_tracks', (_data: {
       venueId: string
       entities: VisualTrackEntityPayload[]
       frameOccupancy?: number
       playbackLagMs?: number
     }) => {
-      if (data.venueId !== subscribedVenueRef.current) return
-      if (!vtlModeRef.current) return
-      if (isReplayModeRef.current && !mqttReplayActiveRef.current) return
-
-      liveMetricsRef.current = {
-        frameOccupancy: data.frameOccupancy ?? data.entities.length,
-        liveFrameTs: null,
-      }
-
-      setLiveTracks(() => {
-        const next = new Map<string, TrackWithTrail>()
-        for (const entity of data.entities) {
-          if (!isFiniteTrackPos(entity.venuePosition)) continue
-          const trail = sanitizeTrailPoints(
-            (entity.trail || []).map(p => ({ x: p.x, y: p.y ?? 0, z: p.z })),
-          )
-          next.set(entity.trackKey, {
-            id: entity.id || entity.visualId || entity.trackKey,
-            trackKey: entity.trackKey,
-            deviceId: entity.deviceId || 'edge',
-            timestamp: entity.timestamp || Date.now(),
-            position: entity.venuePosition,
-            venuePosition: entity.venuePosition,
-            velocity: entity.velocity || { x: 0, y: 0, z: 0 },
-            objectType: entity.objectType || 'person',
-            color: entity.color,
-            trail,
-          })
-        }
-        return next
-      })
+      // Delayed VTL channel disabled — canvas uses live reconciled `tracks` instead.
     })
 
     socket.on('tracks', (data: { venueId: string, tracks: Track[] }) => {
@@ -428,8 +396,6 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
         return
       }
       if (isReplayModeRef.current && !mqttReplayActiveRef.current) return
-      // VTL mode: canvas fed by visual_tracks only — raw aggregator stream is analytics-only.
-      if (vtlModeRef.current) return
 
       const now = Date.now()
 
@@ -485,7 +451,7 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
       const now = Date.now()
       const toRemove = keys.filter((key) => {
         const lastSeen = trackLastSeenRef.current.get(key) ?? 0
-        return now - lastSeen >= SNAPSHOT_GRACE_MS
+        return now - lastSeen >= snapshotGraceMs()
       })
       if (toRemove.length === 0) return
 
@@ -522,7 +488,7 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
       if (removalFlushTimerRef.current != null) {
         window.clearTimeout(removalFlushTimerRef.current)
       }
-      removalFlushTimerRef.current = window.setTimeout(flushPendingRemovals, SNAPSHOT_GRACE_MS)
+      removalFlushTimerRef.current = window.setTimeout(flushPendingRemovals, snapshotGraceMs())
     })
 
     socket.on('tracks_cleared', () => {
@@ -634,7 +600,7 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
   const INTERP_MIN_INTERVAL = 33 // ~30fps cap
   
   const interpLoop = useCallback(() => {
-    if (!interpEnabledRef.current || vtlModeRef.current) return
+    if (!interpEnabledRef.current) return
 
     const targets = targetTracksRef.current
     const now = Date.now()
@@ -723,7 +689,7 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
           
           let trail = existing.trail || []
           if (addTrail) {
-            trail = appendTrailPoint(trail, { x: nx, y: 0, z: nz }, MAX_TRAIL_LENGTH)
+            trail = appendTrailPoint(trail, { x: nx, y: 0, z: nz }, maxTrailLength())
           }
           
           next.set(key, {
@@ -751,7 +717,6 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
     const trackCount = liveTracksRef.current.size
     const shouldInterp =
       enabled &&
-      !vtlModeRef.current &&
       !historicalReplay &&
       !mqttReplayActiveRef.current
     if (DIAG) {
