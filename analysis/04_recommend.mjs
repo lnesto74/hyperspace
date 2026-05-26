@@ -9,7 +9,21 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const OUT_DIR = path.join(__dirname, 'out');
+
+function parseArgs(argv) {
+  let outDir = path.join(__dirname, 'out');
+  for (let i = 2; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === '--out-dir' || a === '-o') outDir = path.resolve(argv[++i]);
+    else if (a === '--help' || a === '-h') {
+      console.log('Usage: node analysis/04_recommend.mjs [--out-dir DIR]');
+      process.exit(0);
+    }
+  }
+  return { outDir };
+}
+
+const { outDir: OUT_DIR } = parseArgs(process.argv);
 const data = JSON.parse(fs.readFileSync(path.join(OUT_DIR, '03_backtest.json'), 'utf8'));
 
 // Z-score normalization helpers

@@ -7,12 +7,38 @@ import readline from 'readline';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { TrajectoryReconciler, normalizeReconcilerConfig, DEFAULT_CONFIG } from '../backend/services/TrajectoryReconciler.js';
+import { parseWhen } from './lib/load_jsonl.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
-const RAW = path.join(ROOT, 'raw_tracks.jsonl');
-const OUT_DIR = path.join(__dirname, 'out');
-if (!fs.existsSync(OUT_DIR)) fs.mkdirSync(OUT_DIR, { recursive: true });
+
+function parseArgs(argv) {
+  const out = {
+    file: path.join(ROOT, 'raw_tracks.jsonl'),
+    outDir: path.join(__dirname, 'out'),
+    after: null,
+    before: null,
+  };
+  for (let i = 2; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === '--file' || a === '-f') out.file = path.resolve(argv[++i]);
+    else if (a === '--out-dir' || a === '-o') out.outDir = path.resolve(argv[++i]);
+    else if (a === '--after') out.after = argv[++i];
+    else if (a === '--before') out.before = argv[++i];
+    else if (a === '--help' || a === '-h') {
+      console.log(`Usage: node analysis/03_backtest.mjs [--file CAPTURE.jsonl] [--out-dir DIR] [--after ISO] [--before ISO]`);
+      process.exit(0);
+    }
+  }
+  return out;
+}
+
+const args = parseArgs(process.argv);
+const RAW = args.file;
+const OUT_DIR = args.outDir;
+const afterMs = parseWhen(args.after);
+const beforeMs = parseWhen(args.before);
+fs.mkdirSync(OUT_DIR, { recursive: true });
 
 function buildIncoming(d) {
   const p = d.position || { x: 0, y: 0, z: 0 };
@@ -31,7 +57,13 @@ function buildIncoming(d) {
 }
 
 async function loadAll() {
-  console.log('Loading raw_tracks.jsonl ...');
+  if (!fs.existsSync(RAW)) {
+    throw new Error(`Missing capture file: ${RAW}`);
+  }
+  const window = (afterMs != null || beforeMs != null)
+    ? ` (window ${args.after || '…'} → ${args.before || '…'})`
+    : '';
+  console.log(`Loading ${RAW}${window} ...`);
   const rl = readline.createInterface({ input: fs.createReadStream(RAW), crlfDelay: Infinity });
   const out = [];
   for await (const line of rl) {
@@ -40,6 +72,9 @@ async function loadAll() {
     try {
       const d = JSON.parse(line.slice(idx + 1));
       if (!d.position) continue;
+      const ts = Number(d.timestamp) || 0;
+      if (afterMs != null && ts < afterMs) continue;
+      if (beforeMs != null && ts >= beforeMs) continue;
       out.push(buildIncoming(d));
     } catch { }
   }
@@ -204,6 +239,10 @@ function buildConfigs() {
   out.push({ name: 'PRESET_grocery_dwell', config: { ...base, ghost_min_promotion_displacement_m: 0.05, ghost_min_promotion_lifetime_ms: 200, reid_max_gap_s: 15, reid_max_distance_m: 5, reid_max_implied_speed_m_s: 2.5, smoothing_alpha: 0.5, ghost_static_timeout_s: 90 } });
   out.push({ name: 'PRESET_aggressive_merge', config: { ...base, reid_max_gap_s: 25, reid_max_distance_m: 8, reid_max_implied_speed_m_s: 3.5, reid_velocity_cosine_min: -0.6 } });
   out.push({ name: 'PRESET_smooth_human', config: { ...base, smoothing_alpha: 0.3, reid_max_implied_speed_m_s: 2.0, ghost_max_speed_m_s: 3.0, ghost_min_promotion_lifetime_ms: 300 } });
+  // Raj v1.0.1 — tighter re-ID (improved native track continuity)
+  out.push({ name: 'PRESET_raj_conservative', config: { ...base, reid_max_gap_s: 8, reid_max_distance_m: 4, reid_max_implied_speed_m_s: 2.0, reid_velocity_cosine_min: 0.0, smoothing_alpha: 0.7, ghost_min_promotion_displacement_m: 0.05 } });
+  out.push({ name: 'PRESET_raj_balanced', config: { ...base, reid_max_gap_s: 10, reid_max_distance_m: 5, reid_max_implied_speed_m_s: 2.2, reid_velocity_cosine_min: -0.2, smoothing_alpha: 0.7, ghost_min_promotion_displacement_m: 0.05, ghost_static_timeout_s: 90 } });
+  out.push({ name: 'PRESET_raj_light_reid', config: { ...base, reid_max_gap_s: 12, reid_max_distance_m: 6, reid_max_implied_speed_m_s: 2.5, reid_velocity_cosine_min: -0.3, smoothing_alpha: 0.7, ghost_min_promotion_displacement_m: 0.05 } });
   return out;
 }
 
