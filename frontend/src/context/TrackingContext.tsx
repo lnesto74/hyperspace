@@ -542,7 +542,7 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
     // Single interval to cleanup stale tracks (instead of per-track timeouts)
     const cleanupInterval = setInterval(() => {
       const now = Date.now()
-      const staleKeys: string[] = []
+      let staleKeys: string[] = []
       
       trackLastSeenRef.current.forEach((lastSeen, key) => {
         if (now - lastSeen > TRACK_TTL_MS) {
