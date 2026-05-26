@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Sparkles, RefreshCw, X, ChevronDown, ChevronUp, Loader2, Check, Activity, Filter, Layers, Wand2 } from 'lucide-react'
+import { Sparkles, RefreshCw, X, ChevronDown, ChevronUp, Loader2, Check, Activity, Filter, Layers, Wand2, GripVertical } from 'lucide-react'
 import { API_BASE } from '../../config/api'
+import { useDraggablePanel } from '../../hooks/useDraggablePanel'
 
 interface TrajectoryQualityPanelProps {
   venueId: string
@@ -191,6 +192,12 @@ export default function TrajectoryQualityPanel({ venueId, onClose }: TrajectoryQ
   const [activeSection, setActiveSection] = useState<'stats' | 'ghost' | 'reid' | 'smoothing'>('stats')
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
+  const { panelRef, panelStyle, dragging, headerProps } = useDraggablePanel({
+    storageKey: 'hyperspace.panel.trajectory-quality.position',
+    defaultX: 64,
+    defaultY: 420,
+  })
+
   // Load config
   useEffect(() => {
     if (!venueId) return
@@ -266,9 +273,20 @@ export default function TrajectoryQualityPanel({ venueId, onClose }: TrajectoryQ
   const activePresetId = detectActivePresetId(config)
 
   return (
-    <div className="absolute top-4 left-16 z-30 w-[26rem] bg-gray-900/95 backdrop-blur border border-emerald-700/60 rounded-xl shadow-2xl text-gray-200 text-xs">
+    <div
+      ref={panelRef}
+      className="absolute z-30 w-[26rem] bg-gray-900/95 backdrop-blur border border-emerald-700/60 rounded-xl shadow-2xl text-gray-200 text-xs"
+      style={panelStyle}
+    >
       {/* Header */}
-      <div className="flex items-center gap-2 px-3 py-2 border-b border-gray-700/80">
+      <div
+        {...headerProps}
+        className={`flex items-center gap-2 px-3 py-2 border-b border-gray-700/80 select-none touch-none ${
+          dragging ? 'cursor-grabbing' : 'cursor-grab'
+        }`}
+        title="Drag to move"
+      >
+        <GripVertical className="w-3.5 h-3.5 text-gray-500 shrink-0" />
         <Sparkles className="w-4 h-4 text-emerald-400" />
         <span className="font-semibold text-white">Trajectory Quality</span>
         <label className="ml-2 flex items-center gap-1.5 cursor-pointer">

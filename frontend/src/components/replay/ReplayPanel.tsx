@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { History, Play, Square, X, ChevronDown, ChevronUp, RefreshCw, Loader2, Circle } from 'lucide-react'
+import { History, Play, Square, X, ChevronDown, ChevronUp, RefreshCw, Loader2, Circle, GripVertical } from 'lucide-react'
 import { API_BASE } from '../../config/api'
 import { useTrackingActions, useTracking } from '../../context/TrackingContext'
 import { useVenue } from '../../context/VenueContext'
+import { useDraggablePanel } from '../../hooks/useDraggablePanel'
 
 interface ReplayFile {
   name: string
@@ -116,6 +117,12 @@ export default function ReplayPanel({ onClose }: ReplayPanelProps) {
   const startingReplayRef = useRef(false)
   const scrubbingRef = useRef(false)
   selectedRef.current = selected
+
+  const { panelRef, panelStyle, dragging, headerProps } = useDraggablePanel({
+    storageKey: 'hyperspace.panel.replay.position',
+    defaultX: 64,
+    defaultY: 16,
+  })
 
   const readSelectedFile = () => {
     const fromDom = selectRef.current?.value?.trim()
@@ -352,8 +359,19 @@ export default function ReplayPanel({ onClose }: ReplayPanelProps) {
   } : null)
 
   return (
-    <div className="absolute top-4 left-16 z-30 w-[26rem] bg-gray-900/95 backdrop-blur border border-amber-700/60 rounded-xl shadow-2xl text-gray-200 text-xs">
-      <div className="flex items-center gap-2 px-3 py-2 border-b border-gray-700/80">
+    <div
+      ref={panelRef}
+      className="absolute z-30 w-[26rem] bg-gray-900/95 backdrop-blur border border-amber-700/60 rounded-xl shadow-2xl text-gray-200 text-xs"
+      style={panelStyle}
+    >
+      <div
+        {...headerProps}
+        className={`flex items-center gap-2 px-3 py-2 border-b border-gray-700/80 select-none touch-none ${
+          dragging ? 'cursor-grabbing' : 'cursor-grab'
+        }`}
+        title="Drag to move"
+      >
+        <GripVertical className="w-3.5 h-3.5 text-gray-500 shrink-0" />
         <History className="w-4 h-4 text-amber-400" />
         <span className="font-semibold text-white">MQTT Replay</span>
         {running && <span className="ml-2 text-[10px] uppercase tracking-wider text-amber-400 animate-pulse">replaying</span>}
