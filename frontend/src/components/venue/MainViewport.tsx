@@ -4306,6 +4306,14 @@ export default function MainViewport({
           posAttr.needsUpdate = true
           trailLine.geometry.setDrawRange(0, count)
           ;(trailLine.material as THREE.LineBasicMaterial).color.set(color as any)
+          trailLine.visible = showTracksRef.current
+        } else {
+          // Trail reset or too short — clear stale geometry (prevents long "spoke" lines from old buffer)
+          const trailLine = trailLinesRef.current.get(key)
+          if (trailLine) {
+            trailLine.geometry.setDrawRange(0, 0)
+            trailLine.visible = false
+          }
         }
 
         const isCylinderMode = currentTracking.trackDisplayMode === 'cylinder'

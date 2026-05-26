@@ -3,8 +3,10 @@ import { io, Socket } from 'socket.io-client'
 import { Track, TrackWithTrail, LidarStatus } from '../types'
 import { useVenue } from './VenueContext'
 import { API_BASE } from '../config/api'
+import { appendTrailPoint, isFiniteTrackPos } from '../lib/trackTrail'
 
 const MAX_TRAIL_LENGTH = 50 // ~5 seconds at 10Hz (reduced from 100 to save memory)
+const MAX_EXTRAP_MS = 250 // Cap velocity extrapolation — stale targets must not run away
 const TRACK_TTL_MS = 20000 // 20s — generous margin to survive backend event-loop stalls without removing tracks
 const SNAPSHOT_GRACE_MS = 1000 // brief re-ID gap; don't hold stale positions
 const CLEANUP_INTERVAL_MS = 1000 // Cleanup stale tracks every 1 second
@@ -266,12 +268,13 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
         const next = new Map<string, TrackWithTrail>()
 
         for (const [key, track] of cappedKeys) {
+          if (!isFiniteTrackPos(track.venuePosition)) continue
           const existing = prev.get(key)
-          const oldTrail = existing?.trail || []
-          let trail = [...oldTrail, { ...track.venuePosition }]
-          if (trail.length > MAX_TRAIL_LENGTH) {
-            trail = trail.slice(trail.length - MAX_TRAIL_LENGTH)
-          }
+          const trail = appendTrailPoint(
+            existing?.trail,
+            { ...track.venuePosition, y: track.venuePosition.y ?? 0 },
+            MAX_TRAIL_LENGTH,
+          )
 
           next.set(key, { ...track, trail })
           trackLastSeenRef.current.set(key, now)
@@ -574,13 +577,15 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
       
       // Only include tracks that exist in frameTargets — capped sticky set when over limit.
       for (const [key, target] of frameTargets) {
-        const baseX = target.venuePosition?.x ?? 0
-        const baseZ = target.venuePosition?.z ?? 0
+        if (!isFiniteTrackPos(target.venuePosition)) continue
+        const baseX = target.venuePosition.x
+        const baseZ = target.venuePosition.z
         const vx = target.velocity?.x ?? 0
         const vz = target.velocity?.z ?? 0
         
         const receivedAt = interpTsRef.current.get(key) ?? now
-        const dt = (now - receivedAt) * EXTRAP_FACTOR
+        const extrapMs = Math.min(now - receivedAt, MAX_EXTRAP_MS)
+        const dt = extrapMs * EXTRAP_FACTOR
         const tx = baseX + vx * dt
         const tz = baseZ + vz * dt
         
@@ -592,12 +597,9 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
           const nx = cx + (tx - cx) * LERP_SPEED
           const nz = cz + (tz - cz) * LERP_SPEED
           
-          let trail: { x: number; y: number; z: number }[]
+          let trail = existing.trail || []
           if (addTrail) {
-            trail = existing.trail ? [...existing.trail, { x: nx, y: 0, z: nz }] : [{ x: nx, y: 0, z: nz }]
-            if (trail.length > MAX_TRAIL_LENGTH) trail = trail.slice(trail.length - MAX_TRAIL_LENGTH)
-          } else {
-            trail = existing.trail || []
+            trail = appendTrailPoint(trail, { x: nx, y: 0, z: nz }, MAX_TRAIL_LENGTH)
           }
           
           next.set(key, {
@@ -606,7 +608,10 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
             trail,
           })
         } else {
-          next.set(key, { ...target, trail: [{ x: baseX, y: 0, z: baseZ }] })
+          next.set(key, {
+            ...target,
+            trail: [{ x: baseX, y: 0, z: baseZ }],
+          })
         }
       }
       
