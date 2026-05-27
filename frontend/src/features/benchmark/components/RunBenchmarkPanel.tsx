@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Loader2, Play, AlertCircle } from 'lucide-react'
 import { API_BASE } from '../../../config/api'
 
@@ -29,18 +29,26 @@ const STAGE_LABELS: Record<string, string> = {
   failed: 'Failed',
 }
 
-interface Props {
-  onStarted?: () => void
+function captureIdFromFile(name: string): string {
+  return name.replace(/\.jsonl$/i, '').replace(/[^a-zA-Z0-9._-]+/g, '_').slice(0, 80)
 }
 
-export default function RunBenchmarkPanel({ onStarted }: Props) {
+interface Props {
+  onStarted?: () => void
+  onCompleted?: (captureId: string) => void
+  existingRunIds?: string[]
+}
+
+export default function RunBenchmarkPanel({ onStarted, onCompleted, existingRunIds = [] }: Props) {
   const [files, setFiles] = useState<CaptureFile[]>([])
   const [file, setFile] = useState('')
-  const [captureId, setCaptureId] = useState('baseline_v0_overnight_2026-05-23')
+  const [captureId, setCaptureId] = useState('')
+  const [captureIdTouched, setCaptureIdTouched] = useState(false)
   const [job, setJob] = useState<BenchmarkJob | null>(null)
   const [logTail, setLogTail] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const prevJobStatusRef = useRef<string | null>(null)
 
   const fetchFiles = useCallback(async () => {
     try {
@@ -50,10 +58,17 @@ export default function RunBenchmarkPanel({ onStarted }: Props) {
       setFiles(data.files || [])
       if (!file && data.files?.length) {
         const trimmed = data.files.find((f: CaptureFile) => f.name.includes('trimmed'))
-        setFile(trimmed?.name || data.files[0].name)
+        const pick = trimmed?.name || data.files[0].name
+        setFile(pick)
+        if (!captureIdTouched) setCaptureId(captureIdFromFile(pick))
       }
     } catch { /* ignore */ }
-  }, [file])
+  }, [file, captureIdTouched])
+
+  useEffect(() => {
+    if (!file || captureIdTouched) return
+    setCaptureId(captureIdFromFile(file))
+  }, [file, captureIdTouched])
 
   const pollJob = useCallback(async () => {
     try {
@@ -71,6 +86,17 @@ export default function RunBenchmarkPanel({ onStarted }: Props) {
     const id = window.setInterval(pollJob, job?.status === 'running' ? 3000 : 15000)
     return () => window.clearInterval(id)
   }, [pollJob, job?.status])
+
+  useEffect(() => {
+    const prev = prevJobStatusRef.current
+    const next = job?.status ?? null
+    if (prev === 'running' && next === 'completed' && job?.captureId) {
+      onCompleted?.(job.captureId)
+    }
+    prevJobStatusRef.current = next
+  }, [job?.status, job?.captureId, onCompleted])
+
+  const willOverwrite = captureId.length > 0 && existingRunIds.includes(captureId)
 
   const start = async () => {
     setLoading(true)
@@ -105,7 +131,13 @@ export default function RunBenchmarkPanel({ onStarted }: Props) {
           </span>
         )}
         {job?.status === 'completed' && (
-          <span className="text-xs text-emerald-400">Last run completed — hit Refresh</span>
+          <button
+            type="button"
+            onClick={() => job.captureId && onCompleted?.(job.captureId)}
+            className="text-xs text-emerald-400 hover:text-emerald-300 underline"
+          >
+            Run complete — refresh list & open
+          </button>
         )}
       </div>
 
@@ -130,10 +162,19 @@ export default function RunBenchmarkPanel({ onStarted }: Props) {
           Capture ID (run name)
           <input
             value={captureId}
-            onChange={(e) => setCaptureId(e.target.value)}
+            onChange={(e) => {
+              setCaptureIdTouched(true)
+              setCaptureId(e.target.value)
+            }}
             disabled={isRunning}
+            placeholder="auto from filename"
             className="mt-1 w-full bg-gray-900 border border-gray-600 rounded-lg px-3 py-2 text-sm text-white font-mono"
           />
+          {willOverwrite && (
+            <p className="mt-1 text-[10px] text-amber-400/90">
+              This ID already exists — run will overwrite that folder (same sidebar entry, updated scorecard).
+            </p>
+          )}
         </label>
       </div>
 

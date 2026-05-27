@@ -62,7 +62,7 @@ export default function BenchmarkPage({ onClose }: BenchmarkPageProps) {
   const [showCompare, setShowCompare] = useState(false)
   const [coverageTrackView, setCoverageTrackView] = useState<TrackViewMode | undefined>()
 
-  const fetchRuns = useCallback(async () => {
+  const fetchRuns = useCallback(async (selectId?: string) => {
     setLoading(true)
     setError(null)
     try {
@@ -71,7 +71,11 @@ export default function BenchmarkPage({ onClose }: BenchmarkPageProps) {
       const data: BenchmarkRunsResponse = await res.json()
       setRuns(data.runs)
       if (data.runs.length) {
-        setSelectedId((prev) => prev ?? data.runs[0].id)
+        if (selectId && data.runs.some(r => r.id === selectId)) {
+          setSelectedId(selectId)
+        } else {
+          setSelectedId((prev) => prev ?? data.runs[0].id)
+        }
         setBaselineId((prev) => prev ?? data.runs[data.runs.length - 1]?.id ?? data.runs[0].id)
       }
     } catch (e) {
@@ -251,7 +255,11 @@ export default function BenchmarkPage({ onClose }: BenchmarkPageProps) {
 
           <ProtocolGuide />
 
-          <RunBenchmarkPanel onStarted={fetchRuns} />
+          <RunBenchmarkPanel
+            onStarted={() => { void fetchRuns() }}
+            onCompleted={(captureId) => { void fetchRuns(captureId) }}
+            existingRunIds={runs.map(r => r.id)}
+          />
 
           {showCompare && baselineRun && currentRun && baselineRun.id !== currentRun.id && (
             <RunComparePanel baseline={baselineRun} current={currentRun} />
