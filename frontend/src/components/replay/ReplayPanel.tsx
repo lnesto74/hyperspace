@@ -50,6 +50,10 @@ interface RecordStatus {
   startedAt: number | null
   lastMessageAt: number | null
   error: string | null
+  durationMinutes?: number | null
+  stopsAt?: number | null
+  remainingMs?: number | null
+  autoStop?: boolean
   mqtt?: {
     connected: boolean
     active: boolean
@@ -89,6 +93,26 @@ const tsAtProgress = (meta: FileMeta | null, progress: number) => {
 }
 
 const RECORD_SOFT_CAP_BYTES = 500 * 1024 * 1024
+const RECORD_DURATION_STORAGE_KEY = 'hyperspace.replay.recordDurationMinutes'
+
+const formatCountdown = (ms: number) => {
+  const totalSec = Math.max(0, Math.ceil(ms / 1000))
+  const h = Math.floor(totalSec / 3600)
+  const m = Math.floor((totalSec % 3600) / 60)
+  const s = totalSec % 60
+  if (h > 0) return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
+  return `${m}:${String(s).padStart(2, '0')}`
+}
+
+const readStoredDuration = () => {
+  try {
+    const v = localStorage.getItem(RECORD_DURATION_STORAGE_KEY)
+    if (v == null || v === '') return '35'
+    return v
+  } catch {
+    return '35'
+  }
+}
 
 export default function ReplayPanel({ onClose }: ReplayPanelProps) {
   const { venue } = useVenue()
@@ -104,8 +128,10 @@ export default function ReplayPanel({ onClose }: ReplayPanelProps) {
   const [replayDir, setReplayDir] = useState<string>('')
 
   const [recordLabel, setRecordLabel] = useState('grocery_capture')
+  const [recordDurationMinutes, setRecordDurationMinutes] = useState(readStoredDuration)
   const [recordStatus, setRecordStatus] = useState<RecordStatus | null>(null)
   const [recordBusy, setRecordBusy] = useState(false)
+  const [countdownTick, setCountdownTick] = useState(Date.now())
   const [scrubPct, setScrubPct] = useState(0)
   const [fileMeta, setFileMeta] = useState<FileMeta | null>(null)
   const [seeking, setSeeking] = useState(false)
@@ -116,6 +142,7 @@ export default function ReplayPanel({ onClose }: ReplayPanelProps) {
   const selectedRef = useRef<string>('')
   const startingReplayRef = useRef(false)
   const scrubbingRef = useRef(false)
+  const prevRecordingRef = useRef(false)
   selectedRef.current = selected
 
   const { panelRef, panelStyle, dragging, headerProps } = useDraggablePanel({
@@ -177,9 +204,21 @@ export default function ReplayPanel({ onClose }: ReplayPanelProps) {
       const res = await fetch(`${API_BASE}/api/replay/record/status`)
       if (!res.ok) return
       const data = await res.json()
-      setRecordStatus(data.status || null)
+      const next: RecordStatus | null = data.status || null
+      setRecordStatus(next)
+      if (prevRecordingRef.current && next && !next.recording) {
+        if (next.file) {
+          setSelected(next.file)
+          selectedRef.current = next.file
+        }
+        await refreshFiles(true)
+        if (next.autoStop) {
+          setError(null)
+        }
+      }
+      prevRecordingRef.current = !!next?.recording
     } catch { /* ignore */ }
-  }, [])
+  }, [refreshFiles])
 
   useEffect(() => {
     refreshFiles()
@@ -213,24 +252,42 @@ export default function ReplayPanel({ onClose }: ReplayPanelProps) {
     }
   }, [status?.progress, seeking])
 
+  useEffect(() => {
+    if (!recording) return
+    const iv = window.setInterval(() => setCountdownTick(Date.now()), 1000)
+    return () => window.clearInterval(iv)
+  }, [recording])
+
+  const scheduledDurationMinutes = Number(recordDurationMinutes)
+  const hasAutoStop = Number.isFinite(scheduledDurationMinutes) && scheduledDurationMinutes > 0
+  const remainingMs = recording && recordStatus?.stopsAt
+    ? Math.max(0, recordStatus.stopsAt - countdownTick)
+    : recordStatus?.remainingMs ?? null
+  const timerProgress = recording && recordStatus?.startedAt && recordStatus.durationMinutes
+    ? Math.min(100, ((countdownTick - recordStatus.startedAt) / (recordStatus.durationMinutes * 60 * 1000)) * 100)
+    : 0
+
   const startRecord = useCallback(async () => {
     setRecordBusy(true)
     setError(null)
     try {
+      localStorage.setItem(RECORD_DURATION_STORAGE_KEY, recordDurationMinutes)
+      const durationMinutes = hasAutoStop ? scheduledDurationMinutes : undefined
       const res = await fetch(`${API_BASE}/api/replay/record/start`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ label: recordLabel }),
+        body: JSON.stringify({ label: recordLabel, durationMinutes }),
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`)
       setRecordStatus(data.status)
+      prevRecordingRef.current = true
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : String(err))
     } finally {
       setRecordBusy(false)
     }
-  }, [recordLabel])
+  }, [recordLabel, recordDurationMinutes, hasAutoStop, scheduledDurationMinutes])
 
   const stopRecord = useCallback(async () => {
     setRecordBusy(true)
@@ -416,6 +473,27 @@ export default function ReplayPanel({ onClose }: ReplayPanelProps) {
               />
             </div>
 
+            <div>
+              <div className="text-gray-400 mb-1">Auto-stop after (minutes)</div>
+              <div className="flex items-center gap-2">
+                <input
+                  type="number"
+                  min={0}
+                  max={720}
+                  step={1}
+                  value={recordDurationMinutes}
+                  onChange={e => setRecordDurationMinutes(e.target.value)}
+                  disabled={recording || recordBusy}
+                  placeholder="0 = manual stop"
+                  className="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-white"
+                />
+                <span className="text-[10px] text-gray-500 shrink-0">0 = off</span>
+              </div>
+              <p className="text-[10px] text-gray-600 mt-1">
+                Server stops the capture when the timer ends (~1 GB / 35 min). Max 720 min.
+              </p>
+            </div>
+
             <div className="flex items-center gap-3 text-[10px]">
               <div className="flex items-center gap-1">
                 <span className={`inline-block w-2 h-2 rounded-full ${mqttActive ? 'bg-emerald-400' : 'bg-gray-600'}`} />
@@ -441,7 +519,9 @@ export default function ReplayPanel({ onClose }: ReplayPanelProps) {
                 className="w-full px-3 py-2 rounded bg-red-700 hover:bg-red-600 text-white font-medium disabled:bg-gray-700 disabled:text-gray-500 flex items-center justify-center gap-2"
               >
                 {recordBusy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Circle className="w-3 h-3 fill-current" />}
-                Start recording
+                {hasAutoStop
+                  ? `Start recording (${scheduledDurationMinutes} min timer)`
+                  : 'Start recording'}
               </button>
             ) : (
               <button
@@ -468,6 +548,22 @@ export default function ReplayPanel({ onClose }: ReplayPanelProps) {
                   <span className="text-gray-500">Messages</span>
                   <span className="font-mono">{recordStatus.messagesRecorded.toLocaleString()}</span>
                 </div>
+                {recordStatus.stopsAt != null && remainingMs != null && (
+                  <>
+                    <div className="flex justify-between text-[11px]">
+                      <span className="text-gray-500">Auto-stop</span>
+                      <span className="font-mono text-amber-300">
+                        {remainingMs > 0 ? formatCountdown(remainingMs) : 'stopping…'}
+                      </span>
+                    </div>
+                    <div className="h-1.5 bg-gray-800 rounded overflow-hidden">
+                      <div
+                        className="h-full bg-amber-500 transition-all duration-1000"
+                        style={{ width: `${timerProgress}%` }}
+                      />
+                    </div>
+                  </>
+                )}
                 <div className="h-2 bg-gray-800 rounded overflow-hidden">
                   <div className="h-full bg-red-500 transition-all duration-500" style={{ width: `${recordProgress}%` }} />
                 </div>

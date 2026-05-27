@@ -123,8 +123,8 @@ export default function replayRoutes({ replayService, mqttRecordService, mqttSer
   router.post('/record/start', (req, res) => {
     try {
       if (!mqttRecordService) return res.status(503).json({ error: 'Recording not available' });
-      const { label } = req.body || {};
-      const status = mqttRecordService.start({ label: label || 'capture' });
+      const { label, durationMinutes } = req.body || {};
+      mqttRecordService.start({ label: label || 'capture', durationMinutes });
       res.json({ success: true, status: mqttRecordService.getStatus(mqttService) });
     } catch (err) {
       res.status(400).json({ error: err.message });

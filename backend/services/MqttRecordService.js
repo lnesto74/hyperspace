@@ -13,6 +13,16 @@ function sanitizeName(name) {
     .slice(0, 80) || 'capture';
 }
 
+/** Max scheduled capture length (12 h). */
+const MAX_DURATION_MINUTES = 720;
+
+function parseDurationMinutes(value) {
+  if (value == null || value === '') return null;
+  const mins = Number(value);
+  if (!Number.isFinite(mins) || mins <= 0) return null;
+  return Math.min(MAX_DURATION_MINUTES, Math.round(mins));
+}
+
 export default class MqttRecordService {
   constructor({ replayDir } = {}) {
     this.replayDir = replayDir || process.env.REPLAY_DIR || '/data/replay';
@@ -20,6 +30,7 @@ export default class MqttRecordService {
     this.state = this._emptyState();
     this._recordLines = [];
     this._recordFlushTimer = null;
+    this._autoStopTimer = null;
     fs.mkdirSync(this.replayDir, { recursive: true });
   }
 
@@ -33,6 +44,9 @@ export default class MqttRecordService {
       startedAt: null,
       lastMessageAt: null,
       error: null,
+      durationMinutes: null,
+      stopsAt: null,
+      autoStop: false,
     };
   }
 
@@ -54,8 +68,12 @@ export default class MqttRecordService {
     if (this.state.recording) this._syncFileSize();
     const mqtt = mqttService?.getStatus?.() || null;
     const mqttActive = mqtt?.lastMessageTs && (Date.now() - mqtt.lastMessageTs) < 5000;
+    const remainingMs = this.state.stopsAt
+      ? Math.max(0, this.state.stopsAt - Date.now())
+      : null;
     return {
       ...this.state,
+      remainingMs,
       mqtt: mqtt ? {
         connected: mqtt.connected,
         lastMessageTs: mqtt.lastMessageTs,
@@ -106,10 +124,36 @@ export default class MqttRecordService {
     this._recordLines = [];
   }
 
-  start({ label } = {}) {
+  _clearAutoStopTimer() {
+    if (this._autoStopTimer) {
+      clearTimeout(this._autoStopTimer);
+      this._autoStopTimer = null;
+    }
+  }
+
+  _scheduleAutoStop(durationMinutes) {
+    this._clearAutoStopTimer();
+    if (!durationMinutes) return;
+
+    const durationMs = durationMinutes * 60 * 1000;
+    this._autoStopTimer = setTimeout(() => {
+      this._autoStopTimer = null;
+      if (!this.state.recording) return;
+      console.log(`[MqttRecord] Auto-stop after ${durationMinutes} min`);
+      this.stop({ autoStop: true }).catch((err) => {
+        console.error('[MqttRecord] Auto-stop failed:', err.message);
+      });
+    }, durationMs);
+  }
+
+  start({ label, durationMinutes } = {}) {
     if (this.state.recording) {
       throw new Error('Recording already in progress');
     }
+
+    const mins = parseDurationMinutes(durationMinutes);
+    const startedAt = Date.now();
+    const stopsAt = mins ? startedAt + mins * 60 * 1000 : null;
 
     const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
     const file = `${sanitizeName(label)}_${stamp}.jsonl`;
@@ -117,22 +161,31 @@ export default class MqttRecordService {
 
     this.writeStream = fs.createWriteStream(filePath, { flags: 'a' });
     this._clearRecordBuffer();
+    this._clearAutoStopTimer();
     this.state = {
       ...this._emptyState(),
       recording: true,
       file,
       filePath,
-      startedAt: Date.now(),
+      startedAt,
+      durationMinutes: mins,
+      stopsAt,
+      autoStop: false,
     };
 
-    console.log(`[MqttRecord] Started → ${filePath}`);
+    this._scheduleAutoStop(mins);
+
+    const durationNote = mins ? ` (auto-stop in ${mins} min)` : '';
+    console.log(`[MqttRecord] Started → ${filePath}${durationNote}`);
     return this.getStatus();
   }
 
-  stop() {
+  stop({ autoStop = false } = {}) {
     if (!this.state.recording) {
       return Promise.resolve(this.getStatus());
     }
+
+    this._clearAutoStopTimer();
 
     return new Promise((resolve) => {
       const finalize = () => {
@@ -144,6 +197,8 @@ export default class MqttRecordService {
           ...this.state,
           recording: false,
           stoppedAt: Date.now(),
+          autoStop: !!autoStop,
+          remainingMs: 0,
         };
         if (result.messagesRecorded > 0 && result.bytesWritten === 0) {
           result.error = 'Recording stopped but file is 0 bytes — discard this capture and record again after server restart.';
