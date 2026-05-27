@@ -86,6 +86,18 @@ let diagTrackRecvCount = 0
 let diagInterpFrameCount = 0
 let diagInterpDrops = 0
 
+export type LiveTrackDelivery = 'direct' | 'buffered'
+
+const LIVE_TRACK_DELIVERY_KEY = 'hyperspace-live-track-delivery'
+
+export function readLiveTrackDelivery(): LiveTrackDelivery {
+  try {
+    return localStorage.getItem(LIVE_TRACK_DELIVERY_KEY) === 'buffered' ? 'buffered' : 'direct'
+  } catch {
+    return 'direct'
+  }
+}
+
 interface TrackingContextType {
   tracks: Map<string, TrackWithTrail>
   isConnected: boolean
@@ -93,6 +105,7 @@ interface TrackingContextType {
   mqttReplayActive: boolean
   useHistoricalTracks: boolean
   demoSessionId: string | null
+  liveTrackDelivery: LiveTrackDelivery
   subscribe: (venueId: string) => void
   unsubscribe: (venueId: string) => void
   setReplayMode: (enabled: boolean) => void
@@ -122,6 +135,8 @@ interface TrackingActionsType {
   setVisualizationMode: (mode: 'vtl' | 'raw', opts?: { forceClear?: boolean }) => void
   setMqttReplayActive: (active: boolean) => void
   clearReplayTracks: () => void
+  setLiveTrackDelivery: (mode: LiveTrackDelivery) => void
+  applyLiveTrackDelivery: () => void
   startDemoSession: (venueId: string) => Promise<string | null>
   stopDemoSession: () => Promise<void>
 }
@@ -162,6 +177,7 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
   const [isReplayMode, setIsReplayMode] = useState(false)
   const [mqttReplayActive, setMqttReplayActiveState] = useState(false)
   const [demoSessionId, setDemoSessionId] = useState<string | null>(null)
+  const [liveTrackDelivery, setLiveTrackDeliveryState] = useState<LiveTrackDelivery>(readLiveTrackDelivery)
   const demoSessionIdRef = useRef<string | null>(null)
   demoSessionIdRef.current = demoSessionId
   const mqttReplayActiveRef = useRef(false)
@@ -175,7 +191,7 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
   venueIdRef.current = venue?.id ?? null
   isReplayModeRef.current = isReplayMode
   
-  // Interpolation state (only active when Neural Dashboard enables it)
+  // Client delivery path for live MQTT: direct snapshots (default) vs buffered RAF loop.
   const interpEnabledRef = useRef(false)
   const interpRAFRef = useRef<number | null>(null)
   const interpFrameRef = useRef(0)
@@ -185,7 +201,7 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
   const interpTsRef = useRef<Map<string, number>>(new Map())
   const pendingRemovalsRef = useRef<Set<string>>(new Set())
   const removalFlushTimerRef = useRef<number | null>(null)
-  const smoothMotionRequestedRef = useRef(true)
+  const smoothMotionRequestedRef = useRef(readLiveTrackDelivery() === 'buffered')
   const setInterpolationRef = useRef<(enabled: boolean) => void>(() => {})
   const liveMetricsRef = useRef<LiveMetricsSnapshot>({ frameOccupancy: 0, liveFrameTs: null })
   const vtlModeRef = useRef(false)
@@ -638,7 +654,7 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
     }
   }, [])
 
-  // Interpolation RAF loop — only runs when Neural Dashboard enables it
+  // Interpolation RAF loop — optional buffered delivery for live MQTT (off by default).
   // Throttled to ~30fps to halve React reconciliation load while staying visually smooth
   const interpLastFlushRef = useRef(0)
   const INTERP_MIN_INTERVAL = 33 // ~30fps cap
@@ -809,6 +825,22 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
   }, [interpLoop, seedInterpolationTargets])
   setInterpolationRef.current = setInterpolation
 
+  const applyLiveTrackDelivery = useCallback(() => {
+    const mode = readLiveTrackDelivery()
+    smoothMotionRequestedRef.current = mode === 'buffered'
+    setLiveTrackDeliveryState(mode)
+    setInterpolation(mode === 'buffered')
+  }, [setInterpolation])
+
+  const setLiveTrackDelivery = useCallback((mode: LiveTrackDelivery) => {
+    try {
+      localStorage.setItem(LIVE_TRACK_DELIVERY_KEY, mode)
+    } catch { /* private mode */ }
+    smoothMotionRequestedRef.current = mode === 'buffered'
+    setLiveTrackDeliveryState(mode)
+    setInterpolation(mode === 'buffered')
+  }, [setInterpolation])
+
   const setMqttReplayActive = useCallback((active: boolean) => {
     mqttReplayActiveRef.current = active
     setMqttReplayActiveState(active)
@@ -932,7 +964,8 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
     mqttReplayActive,
     useHistoricalTracks,
     demoSessionId,
-  }), [tracks, isConnected, isReplayMode, mqttReplayActive, useHistoricalTracks, demoSessionId, subscribe, unsubscribe, setReplayMode, setReplayTracks, setTrackVisibility, setInterpolation, setVisualizationMode, setMqttReplayActive, clearReplayTracks])
+    liveTrackDelivery,
+  }), [tracks, isConnected, isReplayMode, mqttReplayActive, useHistoricalTracks, demoSessionId, liveTrackDelivery, subscribe, unsubscribe, setReplayMode, setReplayTracks, setTrackVisibility, setInterpolation, setVisualizationMode, setMqttReplayActive, clearReplayTracks])
 
   const actionsValue = useMemo(() => ({
     subscribe,
@@ -944,9 +977,11 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
     setVisualizationMode,
     setMqttReplayActive,
     clearReplayTracks,
+    setLiveTrackDelivery,
+    applyLiveTrackDelivery,
     startDemoSession,
     stopDemoSession,
-  }), [subscribe, unsubscribe, setReplayMode, setReplayTracks, setTrackVisibility, setInterpolation, setVisualizationMode, setMqttReplayActive, clearReplayTracks, startDemoSession, stopDemoSession])
+  }), [subscribe, unsubscribe, setReplayMode, setReplayTracks, setTrackVisibility, setInterpolation, setVisualizationMode, setMqttReplayActive, clearReplayTracks, setLiveTrackDelivery, applyLiveTrackDelivery, startDemoSession, stopDemoSession])
 
   return (
     <TracksRefContext.Provider value={stableTracksRef}>

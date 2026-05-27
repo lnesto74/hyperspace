@@ -17,7 +17,7 @@
  */
 
 import React, { useRef, useState, useEffect, memo, createContext, useContext } from 'react'
-import { useTrackingActions, useTracksRef, useLiveMetricsRef } from '../../context/TrackingContext'
+import { useTracksRef, useLiveMetricsRef } from '../../context/TrackingContext'
 import { useRoi } from '../../context/RoiContext'
 import { countLiveFrameTracks } from '../../lib/frameOccupancy'
 import LiveMetricsPanel from './LiveMetricsPanel'
@@ -58,7 +58,6 @@ interface NeuralDashboardProps {
 }
 
 export default function NeuralDashboard({ children, enabled = true, leftOffset = 0, isReplayMode = false }: NeuralDashboardProps) {
-  const { setInterpolation } = useTrackingActions()
   const tracksRef = useTracksRef()
   const liveMetricsRef = useLiveMetricsRef()
   const { regions } = useRoi()
@@ -67,14 +66,7 @@ export default function NeuralDashboard({ children, enabled = true, leftOffset =
   const [xrayFilters, setXrayFilters] = useState<XRayFilters>(defaultFilters)
   const xrayData = useXRayData(enabled && xrayMode)
   
-  // Toggle track interpolation — base smooth motion is always on via TrackingProvider.
-  // Re-seed targets when Neural Dashboard opens so motion picks up immediately.
-  useEffect(() => {
-    if (enabled && !isReplayMode) {
-      setInterpolation(true)
-    }
-  }, [enabled, isReplayMode, setInterpolation])
-  
+  // Live track delivery is controlled via MQTT Replay panel (direct vs buffered RAF).
   // Throttled metrics — recompute at most once per second to avoid lag
   const [metrics, setMetrics] = useState({
     totalPax: 0,

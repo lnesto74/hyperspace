@@ -167,8 +167,8 @@ const readStoredDuration = () => {
 
 export default function ReplayPanel({ onClose }: ReplayPanelProps) {
   const { venue } = useVenue()
-  const { demoSessionId } = useTracking()
-  const { clearReplayTracks, setMqttReplayActive, setReplayMode, startDemoSession, stopDemoSession } = useTrackingActions()
+  const { demoSessionId, liveTrackDelivery } = useTracking()
+  const { clearReplayTracks, setMqttReplayActive, setReplayMode, startDemoSession, stopDemoSession, setLiveTrackDelivery } = useTrackingActions()
   const [files, setFiles] = useState<ReplayFile[]>([])
   const [selected, setSelected] = useState<string>('')
   const [speed, setSpeed] = useState<number>(4)
@@ -678,6 +678,38 @@ export default function ReplayPanel({ onClose }: ReplayPanelProps) {
 
       {!collapsed && (
         <div className="p-3 space-y-3 max-h-[80vh] overflow-y-auto">
+          <div className="space-y-2 pb-3 border-b border-gray-800">
+            <div className="font-medium text-white">Live track delivery</div>
+            <p className="text-[10px] text-gray-500 leading-relaxed">
+              <strong className="text-gray-400">Direct</strong> (default): MQTT snapshots ~10&nbsp;Hz, no client buffer.
+              {' '}<strong className="text-gray-400">Buffered</strong>: legacy RAF path — can fight raw ID churn in dense stores.
+            </p>
+            <div className="grid grid-cols-2 gap-1">
+              <button
+                type="button"
+                onClick={() => setLiveTrackDelivery('direct')}
+                className={`py-1.5 rounded text-xs font-medium ${
+                  liveTrackDelivery === 'direct'
+                    ? 'bg-amber-600 text-white'
+                    : 'bg-gray-800 hover:bg-gray-700 text-gray-200'
+                }`}
+              >
+                Direct
+              </button>
+              <button
+                type="button"
+                onClick={() => setLiveTrackDelivery('buffered')}
+                className={`py-1.5 rounded text-xs font-medium ${
+                  liveTrackDelivery === 'buffered'
+                    ? 'bg-amber-600 text-white'
+                    : 'bg-gray-800 hover:bg-gray-700 text-gray-200'
+                }`}
+              >
+                Buffered
+              </button>
+            </div>
+          </div>
+
           {/* Record on main server */}
           <div className="space-y-2 pb-3 border-b border-gray-800">
             <div className="flex items-center gap-2">
