@@ -35,10 +35,34 @@ export class OfflineReconcileService {
     this._runningJobId = null;
     this._cancelledJobs = new Set();
     fs.mkdirSync(this.artifactDir, { recursive: true });
-    this._recoverStaleJobs();
+    this._recoverInterruptedJobs();
+    this._recoverTimedOutJobs();
   }
 
-  _recoverStaleJobs() {
+  /** Jobs left running/pending in DB have no in-process worker after restart. */
+  _recoverInterruptedJobs() {
+    const rows = this.db.prepare(`
+      SELECT id, progress, status FROM offline_reconcile_jobs
+      WHERE status IN ('running', 'pending')
+    `).all();
+    for (const row of rows) {
+      const pct = Math.round((row.progress || 0) * 100);
+      this.db.prepare(`
+        UPDATE offline_reconcile_jobs
+        SET status = 'failed',
+            error = ?,
+            finished_at = ?
+        WHERE id = ?
+      `).run(
+        `interrupted — backend restarted (was ${pct}%, no worker). Cancel and re-run post-process.`,
+        new Date().toISOString(),
+        row.id,
+      );
+      console.warn(`[OfflineReconcile] Recovered interrupted job ${row.id} (${row.status} @ ${pct}%)`);
+    }
+  }
+
+  _recoverTimedOutJobs() {
     const staleMs = 45 * 60 * 1000;
     const cutoff = new Date(Date.now() - staleMs).toISOString();
     const rows = this.db.prepare(`
