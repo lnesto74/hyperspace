@@ -59,8 +59,18 @@ const LERP_SPEED_RAW = 1.0 // Raw bypass: MQTT positions are authoritative — n
 const EXTRAP_FACTOR = 0.001 // Velocity extrapolation: m/s → m/frame (tuned for ~30fps)
 const INTERP_TRAIL_INTERVAL = 3 // Add trail point every N interpolation frames
 
-// Diagnostic logging — off in production; set localStorage hyperspace-diag=1 to enable
-const DIAG = import.meta.env.DEV || localStorage.getItem('hyperspace-diag') === '1'
+// Diagnostic logging — production: localStorage hyperspace-diag=1 or ?diag=1 on URL
+function isTrackingDiag(): boolean {
+  try {
+    if (import.meta.env.DEV) return true
+    if (localStorage.getItem('hyperspace-diag') === '1') return true
+    if (typeof window !== 'undefined') {
+      const q = new URLSearchParams(window.location.search)
+      if (q.get('diag') === '1' || q.get('hyperspace-diag') === '1') return true
+    }
+  } catch { /* private mode / blocked storage */ }
+  return false
+}
 
 /** Live canvas stays raw unless user explicitly enables experimental live reconciler. */
 function isExperimentalLiveReconciler() {
@@ -198,7 +208,7 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
     // Reconcile preset uses the same live interp pipeline as bypass — longer trails only.
     setInterpolationRef.current(smoothMotionRequestedRef.current)
     window.dispatchEvent(new CustomEvent('hyperspace:visualization-mode', { detail: { mode } }))
-    if (DIAG) console.log(`[DIAG] visualization mode → ${mode}  lag=${vtlPlaybackLagRef.current}ms  t=${Date.now()}`)
+    if (isTrackingDiag()) console.log(`[DIAG] visualization mode → ${mode}  lag=${vtlPlaybackLagRef.current}ms  t=${Date.now()}`)
   }, [])
 
   const setVisualizationMode = useCallback((
@@ -230,7 +240,7 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
     }
     const venueChanged = subscribedVenueRef.current !== venueId
     subscribedVenueRef.current = venueId
-    if (DIAG) console.log(`[DIAG] subscribe venue=${venueId}  force=${force}  connected=${!!socketRef.current?.connected}  t=${Date.now()}`)
+    if (isTrackingDiag()) console.log(`[DIAG] subscribe venue=${venueId}  force=${force}  connected=${!!socketRef.current?.connected}  t=${Date.now()}`)
     socketRef.current?.emit('subscribe', { venueId })
     if (venueChanged) setLiveTracks(new Map())
   }, [])
@@ -259,13 +269,19 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
   }, [venue?.id])
 
   useEffect(() => {
+    if (isTrackingDiag()) {
+      console.info('[DIAG] Hyperspace tracking diagnostics ENABLED — filter console by [DIAG]')
+    }
+  }, [])
+
+  useEffect(() => {
     const socket = io(`${API_BASE}/tracking`, {
       transports: ['websocket', 'polling'],
       autoConnect: true,
     })
 
     socket.on('connect', () => {
-      if (DIAG) console.log(`[DIAG] Socket CONNECTED  id=${socket.id}  t=${Date.now()}`)
+      if (isTrackingDiag()) console.log(`[DIAG] Socket CONNECTED  id=${socket.id}  t=${Date.now()}`)
       setIsConnected(true)
       const targetVenue = subscribedVenueRef.current || venueIdRef.current
       if (targetVenue) {
@@ -274,13 +290,13 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
     })
 
     socket.on('disconnect', (reason) => {
-      if (DIAG) console.warn(`[DIAG] Socket DISCONNECTED  reason="${reason}"  t=${Date.now()}`)
+      if (isTrackingDiag()) console.warn(`[DIAG] Socket DISCONNECTED  reason="${reason}"  t=${Date.now()}`)
       setIsConnected(false)
       subscribedVenueRef.current = null
     })
 
     socket.io.on('reconnect_attempt', (attempt) => {
-      if (DIAG) console.warn(`[DIAG] Socket RECONNECT attempt #${attempt}  t=${Date.now()}`)
+      if (isTrackingDiag()) console.warn(`[DIAG] Socket RECONNECT attempt #${attempt}  t=${Date.now()}`)
     })
 
     // When interpolation is on, socket updates only feed targets — keep flush fast as fallback.
@@ -338,7 +354,7 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
           }
         }
 
-        if (DIAG && prev.size !== next.size) {
+        if (isTrackingDiag() && prev.size !== next.size) {
           const removed = [...prev.keys()].filter(k => !next.has(k))
           if (removed.length > 0) {
             console.log(`[DIAG] Snapshot reconciliation removed ${removed.length} stale tracks: ${removed.join(', ')}  t=${now}`)
@@ -376,14 +392,14 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
 
     socket.on('tracks', (data: { venueId: string, tracks: Track[] }) => {
       if (data.venueId !== subscribedVenueRef.current) {
-        if (DIAG) console.warn(`[DIAG] tracks IGNORED  eventVenue=${data.venueId}  subscribed=${subscribedVenueRef.current}  n=${data.tracks.length}  t=${Date.now()}`)
+        if (isTrackingDiag()) console.warn(`[DIAG] tracks IGNORED  eventVenue=${data.venueId}  subscribed=${subscribedVenueRef.current}  n=${data.tracks.length}  t=${Date.now()}`)
         return
       }
       if (isReplayModeRef.current && !mqttReplayActiveRef.current && replayTracksRef.current.size > 0) return
 
       const now = Date.now()
 
-      if (DIAG) {
+      if (isTrackingDiag()) {
         const gap = diagLastSocketTs ? now - diagLastSocketTs : 0
         diagLastSocketTs = now
         if (gap > 2000) {
@@ -415,7 +431,7 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
               targetTracksRef.current.delete(key)
               interpTsRef.current.delete(key)
               trackLastSeenRef.current.delete(key)
-              if (DIAG) console.log(`[DIAG] Interp removed missing target  key=${key}  age=${now - lastSeen}ms  t=${now}`)
+              if (isTrackingDiag()) console.log(`[DIAG] Interp removed missing target  key=${key}  age=${now - lastSeen}ms  t=${now}`)
             }
           }
         }
@@ -441,7 +457,7 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
       })
       if (toRemove.length === 0) return
 
-      if (DIAG) {
+      if (isTrackingDiag()) {
         console.log(
           `[DIAG] track_removed batch flush  n=${toRemove.length}  t=${now}`
         )
@@ -481,7 +497,7 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
       // With interpolation on, full snapshots every 100ms are authoritative — track_removed
       // from aggregator prune/re-ID churn only causes frozen grace meshes.
       if (interpEnabledRef.current) {
-        if (DIAG && pendingRemovalsRef.current.size === 0) {
+        if (isTrackingDiag() && pendingRemovalsRef.current.size === 0) {
           // Throttle: log once per burst
           console.log(`[DIAG] track_removed ignored (interp snapshots authoritative)  key=${data.trackKey}  t=${Date.now()}`)
         }
@@ -495,7 +511,7 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
     })
 
     socket.on('tracks_cleared', () => {
-      if (DIAG) console.log(`[DIAG] tracks_cleared event  t=${Date.now()}`)
+      if (isTrackingDiag()) console.log(`[DIAG] tracks_cleared event  t=${Date.now()}`)
       setLiveTracks(new Map())
       trackLastSeenRef.current.clear()
       targetTracksRef.current.clear()
@@ -521,7 +537,7 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
       if (staleKeys.length > 0) {
         // Remove at most 40 stale keys per tick to avoid one-frame mass wipe
         if (staleKeys.length > 40) staleKeys = staleKeys.slice(0, 40)
-        if (DIAG) {
+        if (isTrackingDiag()) {
           const total = trackLastSeenRef.current.size
           console.warn(`[DIAG] TTL cleanup  removing=${staleKeys.length}  remaining=${total - staleKeys.length}  t=${now}`)
         }
@@ -533,7 +549,7 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
         setLiveTracks(prev => {
           const next = new Map(prev)
           staleKeys.forEach(key => next.delete(key))
-          if (DIAG && next.size === 0 && prev.size > 0) {
+          if (isTrackingDiag() && next.size === 0 && prev.size > 0) {
             console.error(`[DIAG] ALL TRACKS REMOVED by TTL cleanup!  was=${prev.size}  t=${Date.now()}`)
           }
           return next
@@ -640,7 +656,7 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
         targets.delete(key)
         interpTsRef.current.delete(key)
         trackLastSeenRef.current.delete(key)
-        if (DIAG) console.log(`[DIAG] Interp pruned stale target  key=${key}  t=${now}`)
+        if (isTrackingDiag()) console.log(`[DIAG] Interp pruned stale target  key=${key}  t=${now}`)
       }
     }
 
@@ -661,7 +677,7 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
       return
     }
 
-      if (DIAG) {
+      if (isTrackingDiag()) {
         const frameDelta = interpLastFlushRef.current > 0 ? now - interpLastFlushRef.current : 0
         diagInterpFrameCount++
         if (frameDelta > 200) {
@@ -685,7 +701,7 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
       const frameTargets = targets
       const lerpSpeed = vtlModeRef.current ? LERP_SPEED : LERP_SPEED_RAW
 
-      if (DIAG) {
+      if (isTrackingDiag()) {
         const countDiff = prev.size - diagLastTrackCount
         if (Math.abs(countDiff) > 5) {
           console.warn(`[DIAG] Track count JUMP  ${diagLastTrackCount} → ${prev.size}  (${countDiff > 0 ? '+' : ''}${countDiff})  t=${now}`)
@@ -768,7 +784,7 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
       enabled &&
       !historicalReplay &&
       !mqttReplayActiveRef.current
-    if (DIAG) {
+    if (isTrackingDiag()) {
       console.log(
         `[DIAG] setInterpolation  enabled=${enabled}  active=${shouldInterp}  historicalReplay=${historicalReplay}  mqttReplay=${mqttReplayActiveRef.current}  tracks=${trackCount}  t=${Date.now()}`
       )
