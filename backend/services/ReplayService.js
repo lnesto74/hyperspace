@@ -513,9 +513,10 @@ export default class ReplayService {
     const YIELD_EVERY = 40;
 
     try {
-      // Pass 1: read meta + count batches without holding every batch in memory.
+      // Pass 1: read meta (+ optional footer batch count) without holding batches in memory.
       let meta = null;
       let totalBatches = 0;
+      let footerBatchCount = null;
       const rlCount = readline.createInterface({
         input: fs.createReadStream(fullPath),
         crlfDelay: Infinity,
@@ -527,7 +528,15 @@ export default class ReplayService {
         let row;
         try { row = JSON.parse(raw); } catch { continue; }
         if (row._type === 'meta') { meta = row; continue; }
+        if (row._type === 'meta_footer' && row.batchCount != null) {
+          footerBatchCount = Number(row.batchCount);
+          continue;
+        }
         if (row._type === 'batch' && row.tracks?.length) totalBatches++;
+      }
+
+      if (footerBatchCount != null && footerBatchCount > 0) {
+        totalBatches = footerBatchCount;
       }
 
       if (abort.aborted || token !== this._playbackToken) return;

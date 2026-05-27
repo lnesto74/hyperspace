@@ -66,6 +66,43 @@ replay_files() {
 }
 
 replay_status_block() {
+  section "Reconciled artifact sample (first batch)"
+  SAMPLE=$(ls /opt/hyperspace/replay/reconciled/*GROCERY_BALANCED*.jsonl 2>/dev/null | head -1)
+  if [[ -n "$SAMPLE" ]]; then
+    python3 - <<'PY' "$SAMPLE"
+import json, sys
+path = sys.argv[1]
+meta = batch = None
+with open(path, "r", encoding="utf-8") as f:
+    for line in f:
+        line = line.strip()
+        if not line: continue
+        try: row = json.loads(line)
+        except: continue
+        if row.get("_type") == "meta" and meta is None:
+            meta = row
+        elif row.get("_type") == "batch" and row.get("tracks"):
+            batch = row
+            break
+print(f"file: {path}")
+if meta:
+    print(f"  meta venueId: {meta.get('venueId')}")
+    print(f"  span: {meta.get('firstTs')} → {meta.get('lastTs')}")
+if batch:
+    t = batch["tracks"][0]
+    vp = t.get("venuePosition") or {}
+    print(f"  first batch: {len(batch['tracks'])} tracks @ ts={batch.get('timestamp')}")
+    print(f"  sample trackKey: {t.get('trackKey')}")
+    print(f"  sample venuePosition: x={vp.get('x')} z={vp.get('z')}")
+    if not all(isinstance(vp.get(k), (int, float)) for k in ("x", "z")):
+        print("  >>> INVALID coords — tracks will not render (re-run post-process)")
+else:
+    print("  >>> No batch rows found")
+PY
+  else
+    echo "(no reconciled artifact)"
+  fi
+
   section "Replay API status"
   print_status
   python3 - <<'PY'

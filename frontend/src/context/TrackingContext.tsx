@@ -773,6 +773,14 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
   const setMqttReplayActive = useCallback((active: boolean) => {
     mqttReplayActiveRef.current = active
     setMqttReplayActiveState(active)
+    if (active) {
+      // JSONL/reconciled replay uses live socket snapshots — insight/timeline DB tracks must not block.
+      setReplayTracksState(new Map())
+    } else if (isReplayModeRef.current) {
+      // After MQTT replay stops, resume live edge tracks (don't leave historical snapshot blocking socket).
+      setIsReplayMode(false)
+      setReplayTracksState(new Map())
+    }
     setInterpolationRef.current(smoothMotionRequestedRef.current)
   }, [])
 

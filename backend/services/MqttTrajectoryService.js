@@ -424,9 +424,14 @@ class MqttTrajectoryService {
     if (!tracks?.length) return
     const processed = []
     if (this.trackAggregator) {
+      if (this.trackAggregator.venueId !== venueId) {
+        this.trackAggregator.start(venueId)
+      }
       for (const raw of tracks) {
         const stableId = raw.stableId || raw.id
         const trackKey = raw.trackKey || `replay-offline-${stableId}`
+        const vp = raw.venuePosition
+        if (!vp || !Number.isFinite(vp.x) || !Number.isFinite(vp.z)) continue
         const track = {
           ...raw,
           id: stableId,
@@ -434,11 +439,26 @@ class MqttTrajectoryService {
           trackKey,
           deviceId: raw.deviceId || 'replay-offline',
           venueId,
+          venuePosition: vp,
+          color: raw.color || this.getColorForTrack(trackKey),
+          objectType: raw.objectType || 'person',
+          boundingBox: raw.boundingBox || { width: 0.5, height: 1.7, depth: 0.5 },
           _offlineReconciled: true,
         }
         this.tracks.set(trackKey, track)
         processed.push(track)
         this.trackAggregator.addTrack(track)
+      }
+      if (processed.length === 0) return
+      if (!this._reconciledReplayDiag) {
+        const s = processed[0]
+        console.log(
+          `[MQTT] Reconciled replay batch → venue=${venueId}`
+          + ` trackKey=${s.trackKey}`
+          + ` pos=(${s.venuePosition.x.toFixed(2)}, ${s.venuePosition.z.toFixed(2)})`
+          + ` n=${processed.length}`,
+        )
+        this._reconciledReplayDiag = true
       }
       this.trackAggregator.emitTracks()
     } else {
@@ -526,6 +546,7 @@ class MqttTrajectoryService {
 
   /** Drop replay-* tracks from the live snapshot (after JSONL playback stops). */
   flushReplayTracks() {
+    this._reconciledReplayDiag = false
     let n = 0
     for (const key of [...this.tracks.keys()]) {
       if (key.startsWith('replay-')) {

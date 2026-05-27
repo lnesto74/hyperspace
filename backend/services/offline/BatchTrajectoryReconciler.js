@@ -372,7 +372,13 @@ export async function runBatchReconciliationToFile({
   mergedRaw.clear();
 
   const ws = fs.createWriteStream(artifactPath, { flags: 'w' });
-  await writeStreamLine(ws, `${JSON.stringify({ _type: 'meta', ...meta, firstTs, lastTs })}\n`);
+  await writeStreamLine(ws, `${JSON.stringify({
+    _type: 'meta',
+    ...meta,
+    firstTs,
+    lastTs,
+    venueId: venueId || meta.venueId || null,
+  })}\n`);
 
   if (onProgress) onProgress({ phase: 'write', progress: 0.9 });
 
@@ -390,6 +396,8 @@ export async function runBatchReconciliationToFile({
   );
 
   if (onProgress) onProgress({ phase: 'write', progress: 0.995, batches: batchCount });
+
+  await writeStreamLine(ws, `${JSON.stringify({ _type: 'meta_footer', batchCount })}\n`);
 
   console.log(`[OfflineReconcile] stream write done — ${batchCount} batches, closing ${artifactPath}`);
   ws.end();

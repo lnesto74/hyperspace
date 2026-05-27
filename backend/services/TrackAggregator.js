@@ -126,9 +126,11 @@ export class TrackAggregator extends EventEmitter {
     });
     while (this.tracks.size > MAX_AGGREGATOR_TRACKS && entries.length > 0) {
       const [key, entry] = entries.shift();
-      // Never evict fresh tracks — only drop stale replay ghosts
-      if (now - entry.lastUpdate < STALE_MS && !key.startsWith('replay-')) break;
-      if (now - entry.lastUpdate < STALE_MS && key.startsWith('replay-')) continue;
+      const isReplay = key.startsWith('replay-');
+      const isFresh = now - entry.lastUpdate < STALE_MS;
+      // Never evict fresh live tracks — but still drop oldest replay when over cap
+      if (isFresh && !isReplay) break;
+      if (isFresh && isReplay && this.tracks.size <= MAX_AGGREGATOR_TRACKS) continue;
       this.tracks.delete(key);
     }
   }

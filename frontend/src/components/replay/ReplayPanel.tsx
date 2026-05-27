@@ -168,7 +168,7 @@ const readStoredDuration = () => {
 export default function ReplayPanel({ onClose }: ReplayPanelProps) {
   const { venue } = useVenue()
   const { demoSessionId } = useTracking()
-  const { clearReplayTracks, setMqttReplayActive, startDemoSession, stopDemoSession } = useTrackingActions()
+  const { clearReplayTracks, setMqttReplayActive, setReplayMode, startDemoSession, stopDemoSession } = useTrackingActions()
   const [files, setFiles] = useState<ReplayFile[]>([])
   const [selected, setSelected] = useState<string>('')
   const [speed, setSpeed] = useState<number>(4)
@@ -512,6 +512,7 @@ export default function ReplayPanel({ onClose }: ReplayPanelProps) {
     if (!fileToPlay) return
     const progress = startProgress ?? scrubPct / 100
     startingReplayRef.current = true
+    setReplayMode(false)
     setMqttReplayActive(true)
     setError(null)
     try {
@@ -565,7 +566,7 @@ export default function ReplayPanel({ onClose }: ReplayPanelProps) {
     } finally {
       startingReplayRef.current = false
     }
-  }, [speed, refreshStatus, waitForReplayStopped, scrubPct, setMqttReplayActive, venue?.id, startDemoSession, playbackSource, selectedReconcileJobId])
+  }, [speed, refreshStatus, waitForReplayStopped, scrubPct, setMqttReplayActive, setReplayMode, venue?.id, startDemoSession, playbackSource, selectedReconcileJobId])
 
   const seekTo = useCallback(async (pct: number) => {
     const fileToPlay = readSelectedFile() || status?.file
