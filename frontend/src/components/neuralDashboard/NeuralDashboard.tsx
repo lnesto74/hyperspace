@@ -19,6 +19,7 @@
 import React, { useRef, useState, useEffect, memo, createContext, useContext } from 'react'
 import { useTrackingActions, useTracksRef, useLiveMetricsRef } from '../../context/TrackingContext'
 import { useRoi } from '../../context/RoiContext'
+import { countLiveFrameTracks } from '../../lib/frameOccupancy'
 import LiveMetricsPanel from './LiveMetricsPanel'
 import ActivityMatrix from './ActivityMatrix'
 import JourneyFlowStream from './JourneyFlowStream'
@@ -93,7 +94,8 @@ export default function NeuralDashboard({ children, enabled = true, leftOffset =
       const currentTracks = tracksRef.current
       const currentRegions = regionsRef.current
       const frameOcc = liveMetricsRef.current.frameOccupancy
-      const totalPax = frameOcc > 0 ? frameOcc : currentTracks.size
+      const liveFrameTs = liveMetricsRef.current.liveFrameTs
+      const totalPax = countLiveFrameTracks(currentTracks, liveFrameTs, frameOcc)
       
       if (totalPax === 0) return // keep last known values
 

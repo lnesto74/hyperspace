@@ -7,6 +7,7 @@
 
 import { useState, useEffect, useRef } from 'react'
 import { useTracksRef, useLiveMetricsRef } from '../../context/TrackingContext'
+import { countLiveFrameTracks } from '../../lib/frameOccupancy'
 import Tooltip from './Tooltip'
 
 const CHART_POINTS = 60 // 60 data points (last 60 seconds)
@@ -29,7 +30,8 @@ export default function TrendChart() {
   useEffect(() => {
     const interval = setInterval(() => {
       const frameOcc = liveMetricsRef.current.frameOccupancy
-      const currentCount = frameOcc > 0 ? frameOcc : tracksRef.current.size
+      const liveFrameTs = liveMetricsRef.current.liveFrameTs
+      const currentCount = countLiveFrameTracks(tracksRef.current, liveFrameTs, frameOcc)
       
       if (currentCount === 0 && prevTracksRef.current > 0) {
         return

@@ -250,6 +250,18 @@ export default class ReplayService {
     return { base, fullPath };
   }
 
+  /** Fail fast before replay — empty captures exit instantly and look like a start failure. */
+  validateCaptureFile(file) {
+    const { base, fullPath } = this.resolveCaptureFile(file);
+    const stat = fs.statSync(fullPath);
+    if (stat.size === 0) {
+      throw new Error(
+        `Capture "${base}" is empty (0 bytes). The recording did not flush to disk — discard it, deploy the recording fix, record again, then replay.`,
+      );
+    }
+    return { base, fullPath, size: stat.size, mtimeMs: stat.mtimeMs };
+  }
+
   async _ensureClient() {
     if (this.client && this.client.connected) return;
     this.client = mqtt.connect(this.brokerUrl, { reconnectPeriod: 5000 });
@@ -303,8 +315,8 @@ export default class ReplayService {
   async start({ file, speed = 1, rewriteTimestamps = true, devicePrefix = 'replay-', startProgress = 0 } = {}) {
     await this.stop();
 
-    const { base, fullPath } = this.resolveCaptureFile(file);
-    const stat = fs.statSync(fullPath);
+    const { base, fullPath, size: fileSize, mtimeMs: fileMtimeMs } = this.validateCaptureFile(file);
+    const stat = { size: fileSize, mtimeMs: fileMtimeMs };
     const token = this._playbackToken;
     const progress = Math.max(0, Math.min(1, Number(startProgress) || 0));
     const byteOffset = this._byteOffsetForProgress(fullPath, progress);
@@ -430,6 +442,9 @@ export default class ReplayService {
       this._abort = null;
       this._tearDownPlayback();
       this.trackAggregator?.flushReplayTracks?.();
+      if (!this.state.lastError && this.state.messagesPublished === 0 && this.state.totalBytes > 0) {
+        this.state.lastError = `No playable messages in "${base}" (missing timestamps or invalid JSONL lines).`;
+      }
       resolvePlayback?.();
       if (this._playbackDone) this._playbackDone = null;
     }

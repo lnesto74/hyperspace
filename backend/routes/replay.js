@@ -34,7 +34,7 @@ export default function replayRoutes({ replayService, mqttRecordService, mqttSer
       if (!file) return res.status(400).json({ error: 'file is required' });
       const requested = path.basename(String(file));
       try {
-        replayService.resolveCaptureFile(requested);
+        replayService.validateCaptureFile(requested);
       } catch (err) {
         return res.status(400).json({ error: err.message });
       }
@@ -51,9 +51,17 @@ export default function replayRoutes({ replayService, mqttRecordService, mqttSer
         status = replayService.status();
       }
       if (!status.running || status.file !== requested) {
-        return res.status(400).json({
-          error: status.lastError || `Replay failed to start "${requested}" (got "${status.file || 'none'}")`,
-        });
+        let error = status.lastError;
+        if (!error) {
+          if (status.file === requested && (status.fileSize === 0 || status.messagesPublished === 0)) {
+            error = `Capture "${requested}" has no playable data (empty or corrupt). Re-record after updating the server.`;
+          } else if (status.file !== requested) {
+            error = `Replay failed to start "${requested}" (server has "${status.file || 'none'}").`;
+          } else {
+            error = `Replay ended immediately for "${requested}". The capture may be empty or corrupt — re-record.`;
+          }
+        }
+        return res.status(400).json({ error });
       }
       res.json({ success: true, status, requestedFile: requested });
     } catch (err) {
@@ -123,10 +131,10 @@ export default function replayRoutes({ replayService, mqttRecordService, mqttSer
     }
   });
 
-  router.post('/record/stop', (_req, res) => {
+  router.post('/record/stop', async (_req, res) => {
     try {
       if (!mqttRecordService) return res.status(503).json({ error: 'Recording not available' });
-      const stopped = mqttRecordService.stop();
+      const stopped = await mqttRecordService.stop();
       res.json({
         success: true,
         stopped,

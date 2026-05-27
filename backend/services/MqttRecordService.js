@@ -18,6 +18,8 @@ export default class MqttRecordService {
     this.replayDir = replayDir || process.env.REPLAY_DIR || '/data/replay';
     this.writeStream = null;
     this.state = this._emptyState();
+    this._recordLines = [];
+    this._recordFlushTimer = null;
     fs.mkdirSync(this.replayDir, { recursive: true });
   }
 
@@ -41,11 +43,14 @@ export default class MqttRecordService {
   _syncFileSize() {
     if (!this.state.filePath) return;
     try {
-      this.state.bytesWritten = fs.statSync(this.state.filePath).size;
+      const diskSize = fs.statSync(this.state.filePath).size;
+      // WriteStream buffers — disk stat lags behind in-memory counter during recording.
+      this.state.bytesWritten = Math.max(this.state.bytesWritten, diskSize);
     } catch { /* ignore */ }
   }
 
   getStatus(mqttService = null) {
+    // Keep in-memory byte counter while recording; sync only picks up flushed bytes.
     if (this.state.recording) this._syncFileSize();
     const mqtt = mqttService?.getStatus?.() || null;
     const mqttActive = mqtt?.lastMessageTs && (Date.now() - mqtt.lastMessageTs) < 5000;
@@ -66,14 +71,39 @@ export default class MqttRecordService {
     if (!this.state.recording || !this.writeStream) return;
     try {
       const line = `${topic} ${payloadUtf8}\n`;
-      this.writeStream.write(line);
+      const lineBytes = Buffer.byteLength(line);
+      this._recordLines.push(line);
       this.state.messagesRecorded++;
-      this.state.bytesWritten += Buffer.byteLength(line);
+      this.state.bytesWritten += lineBytes;
       this.state.lastMessageAt = Date.now();
+      this._scheduleRecordFlush();
     } catch (err) {
       console.error('[MqttRecord] write error:', err.message);
       this.state.error = err.message;
     }
+  }
+
+  _scheduleRecordFlush() {
+    if (this._recordFlushTimer) return;
+    this._recordFlushTimer = setTimeout(() => {
+      this._recordFlushTimer = null;
+      this._flushRecordBuffer();
+    }, 100);
+  }
+
+  _flushRecordBuffer() {
+    if (!this.writeStream || this._recordLines.length === 0) return;
+    const chunk = this._recordLines.join('');
+    this._recordLines = [];
+    this.writeStream.write(chunk);
+  }
+
+  _clearRecordBuffer() {
+    if (this._recordFlushTimer) {
+      clearTimeout(this._recordFlushTimer);
+      this._recordFlushTimer = null;
+    }
+    this._recordLines = [];
   }
 
   start({ label } = {}) {
@@ -86,6 +116,7 @@ export default class MqttRecordService {
     const filePath = path.join(this.replayDir, file);
 
     this.writeStream = fs.createWriteStream(filePath, { flags: 'a' });
+    this._clearRecordBuffer();
     this.state = {
       ...this._emptyState(),
       recording: true,
@@ -100,22 +131,34 @@ export default class MqttRecordService {
 
   stop() {
     if (!this.state.recording) {
-      return this.getStatus();
+      return Promise.resolve(this.getStatus());
     }
 
-    if (this.writeStream) {
-      this.writeStream.end();
-      this.writeStream = null;
-    }
+    return new Promise((resolve) => {
+      const finalize = () => {
+        this._flushRecordBuffer();
+        this._clearRecordBuffer();
+        this.writeStream = null;
+        this._syncFileSize();
+        const result = {
+          ...this.state,
+          recording: false,
+          stoppedAt: Date.now(),
+        };
+        if (result.messagesRecorded > 0 && result.bytesWritten === 0) {
+          result.error = 'Recording stopped but file is 0 bytes — discard this capture and record again after server restart.';
+          console.error(`[MqttRecord] ${result.error} (${result.messagesRecorded} msgs counted)`);
+        }
+        this.state = { ...result, recording: false };
+        console.log(`[MqttRecord] Stopped — ${result.file} (${result.bytesWritten} bytes, ${result.messagesRecorded} msgs)`);
+        resolve(result);
+      };
 
-    this._syncFileSize();
-    const result = {
-      ...this.state,
-      recording: false,
-      stoppedAt: Date.now(),
-    };
-    this.state = { ...result, recording: false };
-    console.log(`[MqttRecord] Stopped — ${result.file} (${result.bytesWritten} bytes, ${result.messagesRecorded} msgs)`);
-    return result;
+      if (this.writeStream) {
+        this.writeStream.end(finalize);
+      } else {
+        finalize();
+      }
+    });
   }
 }

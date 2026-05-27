@@ -8,6 +8,7 @@
 import { useMemo, useRef, useEffect, useState } from 'react'
 import { useTracksRef, useLiveMetricsRef } from '../../context/TrackingContext'
 import { useVenue } from '../../context/VenueContext'
+import { countLiveFrameTracks } from '../../lib/frameOccupancy'
 import Tooltip from './Tooltip'
 
 const DOT_SIZE = 8
@@ -45,7 +46,8 @@ export default function ActivityMatrix({ monochrome = false }: ActivityMatrixPro
     const rebuild = () => {
       const currentTracks = tracksRef.current
       const frameOcc = liveMetricsRef.current.frameOccupancy
-      const currentCount = frameOcc > 0 ? frameOcc : currentTracks.size
+      const liveFrameTs = liveMetricsRef.current.liveFrameTs
+      const currentCount = countLiveFrameTracks(currentTracks, liveFrameTs, frameOcc)
       setDisplayTrackCount(currentCount)
       
       if (currentCount === 0 && prevTrackCountRef.current > 0 && cachedGridRef.current) {

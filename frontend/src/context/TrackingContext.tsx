@@ -4,6 +4,7 @@ import { Track, TrackWithTrail, LidarStatus } from '../types'
 import { useVenue } from './VenueContext'
 import { API_BASE } from '../config/api'
 import { appendTrailPoint, isFiniteTrackPos } from '../lib/trackTrail'
+import { countLiveFrameTracks } from '../lib/frameOccupancy'
 
 const MAX_TRAIL_LENGTH = 50 // ~5s at 10Hz in raw bypass mode
 const RECONCILE_TRAIL_LENGTH = 100 // ~10s at 10Hz when preset active
@@ -563,6 +564,26 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
       subscribe(venue.id)
     }
   }, [venue?.id, isConnected, subscribe])
+
+  // Frame-accurate occupancy from backend (not capped client track map size).
+  useEffect(() => {
+    if (!venue?.id || !isConnected) return
+    let cancelled = false
+    const poll = async () => {
+      try {
+        const res = await fetch(`${API_BASE}/api/tracking/venue/${venue.id}/status`)
+        if (!res.ok || cancelled) return
+        const data = await res.json()
+        liveMetricsRef.current = {
+          frameOccupancy: Number(data.frameOccupancy) || 0,
+          liveFrameTs: data.liveFrameTs ?? null,
+        }
+      } catch { /* ignore */ }
+    }
+    poll()
+    const iv = window.setInterval(poll, 1000)
+    return () => { cancelled = true; window.clearInterval(iv) }
+  }, [venue?.id, isConnected])
 
   const unsubscribe = useCallback((venueId: string) => {
     if (subscribedVenueRef.current === venueId) {
