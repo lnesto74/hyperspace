@@ -532,6 +532,7 @@ export default function ReplayPanel({ onClose }: ReplayPanelProps) {
       if (useReconciled) {
         body.jobId = selectedReconcileJobId
         body.reconciled = true
+        if (venue?.id) body.venueId = venue.id
       } else {
         body.file = fileToPlay
       }

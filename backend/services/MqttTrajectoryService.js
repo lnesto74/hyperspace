@@ -450,10 +450,15 @@ class MqttTrajectoryService {
    */
   injectReconciledBatch(venueId, tracks) {
     if (!tracks?.length) return
+    const targetVenueId = (venueId && venueId !== 'default')
+      ? venueId
+      : (this.trackAggregator?.venueId && this.trackAggregator.venueId !== 'default'
+        ? this.trackAggregator.venueId
+        : venueId || 'default')
     const processed = []
     if (this.trackAggregator) {
-      if (this.trackAggregator.venueId !== venueId) {
-        this.trackAggregator.start(venueId)
+      if (this.trackAggregator.venueId !== targetVenueId) {
+        this.trackAggregator.start(targetVenueId)
       }
       for (const raw of tracks) {
         const stableId = raw.stableId || raw.id
@@ -466,7 +471,7 @@ class MqttTrajectoryService {
           stableId,
           trackKey,
           deviceId: raw.deviceId || 'replay-offline',
-          venueId,
+          venueId: targetVenueId,
           venuePosition: vp,
           color: raw.color || this.getColorForTrack(trackKey),
           objectType: raw.objectType || 'person',
@@ -481,7 +486,7 @@ class MqttTrajectoryService {
       if (!this._reconciledReplayDiag) {
         const s = processed[0]
         console.log(
-          `[MQTT] Reconciled replay batch → venue=${venueId}`
+          `[MQTT] Reconciled replay batch → venue=${targetVenueId}`
           + ` trackKey=${s.trackKey}`
           + ` pos=(${s.venuePosition.x.toFixed(2)}, ${s.venuePosition.z.toFixed(2)})`
           + ` n=${processed.length}`,
@@ -499,7 +504,7 @@ class MqttTrajectoryService {
           stableId,
           trackKey,
           deviceId: raw.deviceId || 'replay-offline',
-          venueId,
+          venueId: targetVenueId,
           _offlineReconciled: true,
         }
         this.tracks.set(trackKey, track)
@@ -507,7 +512,7 @@ class MqttTrajectoryService {
       }
     }
     if (!this.trackAggregator && processed.length && this.io) {
-      this.io.of('/tracking').to(`venue:${venueId}`).emit('tracks', { venueId, tracks: processed })
+      this.io.of('/tracking').to(`venue:${targetVenueId}`).emit('tracks', { venueId: targetVenueId, tracks: processed })
     }
   }
   

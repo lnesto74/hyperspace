@@ -29,13 +29,14 @@ export default function replayRoutes({ replayService, mqttRecordService, mqttSer
   });
 
   router.post('/start', async (req, res) => {
-    const { file, speed, rewriteTimestamps, devicePrefix, startProgress, reconciled, jobId, artifactPath } = req.body || {};
+    const { file, speed, rewriteTimestamps, devicePrefix, startProgress, reconciled, jobId, artifactPath, venueId: bodyVenueId } = req.body || {};
     try {
       if (!file && !artifactPath && !jobId) return res.status(400).json({ error: 'file, artifactPath, or jobId is required' });
 
       let playFile = file ? path.basename(String(file)) : null;
       let playReconciled = !!reconciled;
       let resolvedArtifact = artifactPath ? String(artifactPath) : null;
+      let playbackVenueId = bodyVenueId ? String(bodyVenueId) : null;
 
       if (jobId && offlineReconcileService) {
         const job = offlineReconcileService.getJob(String(jobId));
@@ -53,6 +54,7 @@ export default function replayRoutes({ replayService, mqttRecordService, mqttSer
         }
         playReconciled = true;
         playFile = job.artifactName;
+        playbackVenueId = playbackVenueId || job.venueId || null;
       }
 
       if (playReconciled || resolvedArtifact) {
@@ -71,6 +73,7 @@ export default function replayRoutes({ replayService, mqttRecordService, mqttSer
           speed,
           startProgress,
           rewriteTimestamps,
+          venueId: playbackVenueId || replayService.trackAggregator?.venueId || null,
         });
         playPromise.catch((err) => { console.error('[Replay] reconciled playback failed:', err.message); });
 

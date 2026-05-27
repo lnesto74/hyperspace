@@ -302,6 +302,17 @@ export default class ReplayService {
     this.trackAggregator?.setReplayIsolateLive?.(false);
   }
 
+  /** Prefer a real subscribed venue over artifact placeholders like "default". */
+  _resolvePlaybackVenueId(...candidates) {
+    for (const v of candidates) {
+      if (v && String(v) !== 'default') return String(v);
+    }
+    for (const v of candidates) {
+      if (v) return String(v);
+    }
+    return 'default';
+  }
+
   async stop() {
     this._playbackToken++;
     if (this._abort) this._abort.aborted = true;
@@ -470,7 +481,7 @@ export default class ReplayService {
    * Replay a post-processed reconciled artifact (.reconciled.jsonl).
    * Batches are injected directly — no live reconciler, same client path as raw replay.
    */
-  async startReconciledArtifact({ file, speed = 1, startProgress = 0, rewriteTimestamps = true } = {}) {
+  async startReconciledArtifact({ file, speed = 1, startProgress = 0, rewriteTimestamps = true, venueId: venueIdHint = null } = {}) {
     await this.stop();
 
     const fullPath = path.isAbsolute(file) ? file : path.join(this.replayDir, 'reconciled', path.basename(String(file)));
@@ -562,6 +573,12 @@ export default class ReplayService {
       this.state.presetId = meta?.presetId || null;
       this.state.sourceFile = meta?.sourceFile || null;
 
+      const playbackVenueId = this._resolvePlaybackVenueId(
+        venueIdHint,
+        meta?.venueId,
+        this.trackAggregator?.venueId,
+      );
+
       console.log(
         `[Replay] Starting reconciled artifact ${path.basename(fullPath)}`
         + ` (${playbackCount}/${totalBatches} batches from ${(progress * 100).toFixed(1)}%)`
@@ -637,6 +654,7 @@ export default class ReplayService {
     } finally {
       this.state.running = false;
       this._abort = null;
+      this._endReplayIsolation();
       this.trackAggregator?.flushReplayTracks?.();
       this.mqttService?.flushReplayTracks?.();
       resolvePlayback?.();
