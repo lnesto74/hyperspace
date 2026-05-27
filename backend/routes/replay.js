@@ -233,11 +233,33 @@ export default function replayRoutes({ replayService, mqttRecordService, mqttSer
     }
   });
 
+  router.post('/reconcile/jobs/clear-failed', (req, res) => {
+    try {
+      if (!offlineReconcileService) return res.status(503).json({ error: 'Offline reconciliation not available' });
+      const { sourceFile } = req.body || {};
+      if (!sourceFile) return res.status(400).json({ error: 'sourceFile is required' });
+      const result = offlineReconcileService.clearFailedJobs(String(sourceFile));
+      res.json({ success: true, ...result });
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
   router.post('/reconcile/jobs/:id/cancel', (req, res) => {
     try {
       if (!offlineReconcileService) return res.status(503).json({ error: 'Offline reconciliation not available' });
       const job = offlineReconcileService.cancelJob(req.params.id);
       res.json({ success: true, job });
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  router.delete('/reconcile/jobs/:id', (req, res) => {
+    try {
+      if (!offlineReconcileService) return res.status(503).json({ error: 'Offline reconciliation not available' });
+      const result = offlineReconcileService.deleteJob(req.params.id);
+      res.json({ success: true, ...result });
     } catch (err) {
       res.status(400).json({ error: err.message });
     }

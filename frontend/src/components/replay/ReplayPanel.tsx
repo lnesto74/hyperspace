@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { History, Play, Square, X, ChevronDown, ChevronUp, RefreshCw, Loader2, Circle, GripVertical, Sparkles, Wand2, AlertTriangle } from 'lucide-react'
+import { History, Play, Square, X, ChevronDown, ChevronUp, RefreshCw, Loader2, Circle, GripVertical, Sparkles, Wand2, AlertTriangle, Trash2 } from 'lucide-react'
 import { API_BASE } from '../../config/api'
 import { useTrackingActions, useTracking } from '../../context/TrackingContext'
 import { useVenue } from '../../context/VenueContext'
@@ -195,6 +195,7 @@ export default function ReplayPanel({ onClose }: ReplayPanelProps) {
   const [reconcileBusy, setReconcileBusy] = useState(false)
   const [reconcileError, setReconcileError] = useState<string | null>(null)
   const [reconcileCancelBusy, setReconcileCancelBusy] = useState(false)
+  const [reconcileDeleteBusy, setReconcileDeleteBusy] = useState<string | null>(null)
 
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const recordPollRef = useRef<ReturnType<typeof setInterval> | null>(null)
@@ -465,6 +466,47 @@ export default function ReplayPanel({ onClose }: ReplayPanelProps) {
     }
   }, [refreshReconcileJobs])
 
+  const deleteReconcileJob = useCallback(async (jobId: string) => {
+    setReconcileDeleteBusy(jobId)
+    setReconcileError(null)
+    try {
+      const res = await fetch(`${API_BASE}/api/replay/reconcile/jobs/${encodeURIComponent(jobId)}`, {
+        method: 'DELETE',
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`)
+      if (selectedReconcileJobId === jobId) setSelectedReconcileJobId('')
+      await refreshReconcileJobs(selectedRef.current)
+    } catch (err: unknown) {
+      setReconcileError(friendlyReconcileError(err instanceof Error ? err.message : String(err)))
+    } finally {
+      setReconcileDeleteBusy(null)
+    }
+  }, [refreshReconcileJobs, selectedReconcileJobId])
+
+  const clearFailedReconcileJobs = useCallback(async () => {
+    const file = readSelectedFile()
+    if (!file) return
+    setReconcileDeleteBusy('all')
+    setReconcileError(null)
+    try {
+      const res = await fetch(`${API_BASE}/api/replay/reconcile/jobs/clear-failed`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sourceFile: file }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`)
+      const failedSelected = reconcileJobs.find(j => j.status === 'failed' && j.id === selectedReconcileJobId)
+      if (failedSelected) setSelectedReconcileJobId('')
+      await refreshReconcileJobs(file)
+    } catch (err: unknown) {
+      setReconcileError(friendlyReconcileError(err instanceof Error ? err.message : String(err)))
+    } finally {
+      setReconcileDeleteBusy(null)
+    }
+  }, [refreshReconcileJobs, reconcileJobs, selectedReconcileJobId])
+
   const start = useCallback(async (startProgress?: number) => {
     const fileToPlay = readSelectedFile()
     if (!fileToPlay) return
@@ -564,9 +606,11 @@ export default function ReplayPanel({ onClose }: ReplayPanelProps) {
     : 0
 
   const activeReconcileJob = reconcileJobs.find(j => j.status === 'running' || j.status === 'pending') ?? null
-  const latestFailedReconcileJob = reconcileJobs.find(j => j.status === 'failed') ?? null
+  const failedReconcileJobs = reconcileJobs.filter(j => j.status === 'failed')
+  const latestFailedReconcileJob = failedReconcileJobs[0] ?? null
   const latestCompleteReconcileJob = reconcileJobs.find(j => j.status === 'complete') ?? null
   const reconcileProgressPct = Math.min(100, Math.max(0, (activeReconcileJob?.progress ?? 0) * 100))
+  const showFailedBanner = !activeReconcileJob && (reconcileError || latestFailedReconcileJob?.error)
 
   const scrubProgress = scrubPct / 100
   const displayRecordedTs = running && status?.recordedCurrentTs
@@ -886,18 +930,40 @@ export default function ReplayPanel({ onClose }: ReplayPanelProps) {
               </div>
             )}
 
-            {(reconcileError || latestFailedReconcileJob?.error) && (
+            {showFailedBanner && (
               <div className="rounded-lg border border-red-800/60 bg-red-950/30 px-2 py-2 space-y-1">
                 <div className="flex items-start gap-1.5 text-[11px] text-red-300">
                   <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
-                  <div className="min-w-0">
+                  <div className="min-w-0 flex-1">
                     <div className="font-medium">Reconcile error</div>
                     <div className="text-red-200/90 break-words font-mono text-[10px] mt-0.5">
                       {friendlyReconcileError(reconcileError || latestFailedReconcileJob?.error || '')}
                     </div>
                   </div>
+                  <div className="flex flex-col gap-1 shrink-0">
+                    {latestFailedReconcileJob && (
+                      <button
+                        type="button"
+                        onClick={() => void deleteReconcileJob(latestFailedReconcileJob.id)}
+                        disabled={!!reconcileDeleteBusy || running}
+                        className="px-2 py-0.5 rounded bg-gray-800 hover:bg-gray-700 text-red-200 disabled:opacity-50 text-[10px]"
+                      >
+                        {reconcileDeleteBusy === latestFailedReconcileJob.id ? '…' : 'Delete'}
+                      </button>
+                    )}
+                    {failedReconcileJobs.length > 1 && (
+                      <button
+                        type="button"
+                        onClick={() => void clearFailedReconcileJobs()}
+                        disabled={reconcileDeleteBusy === 'all' || running}
+                        className="px-2 py-0.5 rounded bg-gray-800 hover:bg-gray-700 text-red-200 disabled:opacity-50 text-[10px]"
+                      >
+                        Clear all
+                      </button>
+                    )}
+                  </div>
                 </div>
-                {latestFailedReconcileJob && (
+                {latestFailedReconcileJob && !reconcileError && (
                   <div className="text-[10px] text-red-300/70 font-mono pl-5 space-y-0.5">
                     <div>job: {latestFailedReconcileJob.id}</div>
                     <div>preset: {latestFailedReconcileJob.presetId}</div>
@@ -914,7 +980,20 @@ export default function ReplayPanel({ onClose }: ReplayPanelProps) {
 
             {reconcileJobs.length > 0 && (
               <div className="space-y-1">
-                <div className="text-gray-400 text-[10px] uppercase tracking-wide">Jobs for this capture</div>
+                <div className="flex items-center justify-between gap-2">
+                  <div className="text-gray-400 text-[10px] uppercase tracking-wide">Jobs for this capture</div>
+                  {failedReconcileJobs.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => void clearFailedReconcileJobs()}
+                      disabled={reconcileDeleteBusy === 'all' || running}
+                      className="text-[10px] text-red-300/80 hover:text-red-200 disabled:opacity-40 flex items-center gap-1"
+                    >
+                      <Trash2 className="w-3 h-3" />
+                      Clear {failedReconcileJobs.length} failed
+                    </button>
+                  )}
+                </div>
                 {reconcileJobs.slice(0, 5).map(job => (
                   <div key={job.id} className="flex justify-between items-center gap-2 text-[10px] bg-gray-800/60 rounded px-2 py-1">
                     <span className="text-gray-300 truncate min-w-0">{job.presetLabel || job.presetId}</span>
@@ -936,6 +1015,19 @@ export default function ReplayPanel({ onClose }: ReplayPanelProps) {
                           ? `${Math.round((job.progress || 0) * 100)}%`
                           : job.status}
                       </span>
+                      {job.status === 'failed' && (
+                        <button
+                          type="button"
+                          title="Delete failed job"
+                          onClick={() => void deleteReconcileJob(job.id)}
+                          disabled={!!reconcileDeleteBusy || running}
+                          className="p-0.5 rounded hover:bg-gray-700 text-red-300/80 hover:text-red-200 disabled:opacity-40"
+                        >
+                          {reconcileDeleteBusy === job.id
+                            ? <Loader2 className="w-3 h-3 animate-spin" />
+                            : <Trash2 className="w-3 h-3" />}
+                        </button>
+                      )}
                     </div>
                   </div>
                 ))}

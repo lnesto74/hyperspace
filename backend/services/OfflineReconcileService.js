@@ -109,6 +109,44 @@ export class OfflineReconcileService {
     return this.getJob(id);
   }
 
+  deleteJob(id) {
+    const job = this.getJob(id);
+    if (!job) throw new Error('Job not found');
+    if (job.status === 'pending' || job.status === 'running') {
+      throw new Error('Cannot delete an active job — cancel it first');
+    }
+    this._removeArtifactIfIncomplete(job);
+    this.db.prepare('DELETE FROM offline_reconcile_jobs WHERE id = ?').run(id);
+    console.log(`[OfflineReconcile] Deleted job ${id}`);
+    return { deleted: id };
+  }
+
+  clearFailedJobs(sourceFile) {
+    const base = path.basename(String(sourceFile));
+    const rows = this.db.prepare(`
+      SELECT id, artifact_path, status FROM offline_reconcile_jobs
+      WHERE source_file = ? AND status = 'failed'
+    `).all(base);
+    for (const row of rows) {
+      this._removeArtifactIfIncomplete({
+        artifactPath: row.artifact_path,
+        status: row.status,
+      });
+    }
+    const result = this.db.prepare(`
+      DELETE FROM offline_reconcile_jobs WHERE source_file = ? AND status = 'failed'
+    `).run(base);
+    console.log(`[OfflineReconcile] Cleared ${result.changes} failed job(s) for ${base}`);
+    return { deleted: result.changes };
+  }
+
+  _removeArtifactIfIncomplete(job) {
+    if (!job?.artifactPath || job.status === 'complete') return;
+    try {
+      if (fs.existsSync(job.artifactPath)) fs.unlinkSync(job.artifactPath);
+    } catch { /* ignore */ }
+  }
+
   async startJob({ sourceFile, presetId, venueId }) {
     const base = path.basename(String(sourceFile));
     const fullPath = path.join(this.replayDir, base);
