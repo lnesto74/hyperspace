@@ -391,8 +391,10 @@ export async function runBatchReconciliationToFile({
 
   if (onProgress) onProgress({ phase: 'write', progress: 0.995, batches: batchCount });
 
+  console.log(`[OfflineReconcile] stream write done — ${batchCount} batches, closing ${artifactPath}`);
   ws.end();
   await finished(ws);
+  console.log(`[OfflineReconcile] artifact closed — ${artifactPath} (${fs.statSync(artifactPath).size} bytes)`);
 
   mergedTracks.clear();
   const stats = reconciler.getStats(venueId) || {};

@@ -233,6 +233,8 @@ export class OfflineReconcileService {
             this.db.prepare(`
               UPDATE offline_reconcile_jobs SET progress = ?, error = NULL WHERE id = ?
             `).run(mapProgress(payload), id);
+          } else if (payload.phase === 'write' && payload.progress >= 0.995) {
+            console.log(`[OfflineReconcile] ${id} finalizing artifact (${payload.batches ?? '?'} batches)`);
           }
         },
       });
