@@ -1,6 +1,9 @@
 /** Max segment length before we reset the trail (avoids straight "spoke" artifacts). */
 export const TRAIL_JUMP_RESET_M = 4.0
 
+/** Max plausible grocery shopper speed for client-side extrapolation. */
+export const MAX_PLANAR_SPEED_M_S = 2.5
+
 export type TrailPoint = { x: number; y: number; z: number }
 
 export function isFiniteTrackPos(p?: { x?: number; z?: number } | null): p is { x: number; z: number } {
@@ -46,4 +49,18 @@ export function appendTrailPoint(
   let trail = [...(oldTrail ?? []), { x: point.x, y: point.y ?? 0, z: point.z }]
   if (trail.length > maxLength) trail = trail.slice(trail.length - maxLength)
   return trail
+}
+
+/** Clamp velocity used for interpolation — raw MQTT often has teleport spikes. */
+export function clampPlanarVelocity(
+  vel: { x?: number; y?: number; z?: number } | undefined,
+  maxSpeed = MAX_PLANAR_SPEED_M_S,
+) {
+  const vx = Number(vel?.x ?? 0)
+  const vz = Number(vel?.z ?? 0)
+  if (!Number.isFinite(vx) || !Number.isFinite(vz)) return { x: 0, y: 0, z: 0 }
+  const speed = Math.hypot(vx, vz)
+  if (speed <= maxSpeed || speed === 0) return { x: vx, y: vel?.y ?? 0, z: vz }
+  const s = maxSpeed / speed
+  return { x: vx * s, y: vel?.y ?? 0, z: vz * s }
 }

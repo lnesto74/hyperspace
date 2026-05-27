@@ -50,8 +50,8 @@ const COLORS = {
   sezInfluenced: 0xff3333, // Red for people influenced by digital displays
 }
 
-const MAX_RENDER_TRACKS_CAP = 120
-const RENDER_EMERGENCY_THRESHOLD = 150
+const MAX_RENDER_TRACKS_CAP = 220
+const RENDER_EMERGENCY_THRESHOLD = 200
 
 function capTracksForRender<T extends { timestamp?: number }>(
   source: Map<string, T>,
@@ -3992,7 +3992,8 @@ export default function MainViewport({
 
       const allTracks = tracksRef.current
       const refCount = allTracks.size
-      syncIntervalMs = refCount > 200 ? 200 : refCount > RENDER_EMERGENCY_THRESHOLD ? 66 : refCount > 40 ? 50 : 33
+      // Never throttle below ~20fps — old 200ms interval made live tracks feel frozen.
+      syncIntervalMs = refCount > RENDER_EMERGENCY_THRESHOLD ? 50 : 33
 
       // Sticky cap: prefer tracks that already have meshes so IDs don't swap every frame
       let tracksToRender = allTracks
@@ -4111,6 +4112,18 @@ export default function MainViewport({
           if (trail) trail.visible = showTracksRef.current
         }
       })
+
+      // Hide meshes dropped by render cap — otherwise they freeze at stale positions (spoke artifacts).
+      if (refCount > RENDER_EMERGENCY_THRESHOLD) {
+        const renderKeys = new Set(tracksToRender.keys())
+        trackMeshesRef.current.forEach((group, key) => {
+          if (allTrackKeys.has(key) && !renderKeys.has(key)) {
+            group.visible = false
+            const trail = trailLinesRef.current.get(key)
+            if (trail) trail.visible = false
+          }
+        })
+      }
 
       // Phase 2: Add/update tracks (create new meshes only within render cap)
       tracksToRender.forEach((track, key) => {

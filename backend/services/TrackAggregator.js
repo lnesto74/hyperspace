@@ -3,7 +3,7 @@ import { EventEmitter } from 'events';
 const EMIT_INTERVAL_MS = 100; // 10 fps — sufficient for smooth visualization, halves event loop load
 const TRACK_TTL_MS = 6000; // 6 seconds
 const MAX_TRAIL_LENGTH = 100; // ~10 seconds of trail at 10Hz
-const MAX_AGGREGATOR_TRACKS = 100; // Cap in-memory tracks — replay ID churn can exceed 600 without this
+const MAX_AGGREGATOR_TRACKS = 250 // Grocery peak ~200; was 100 — evicting caused snapshot churn
 
 export class TrackAggregator extends EventEmitter {
   constructor() {

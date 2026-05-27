@@ -6,6 +6,7 @@ import {
   applyTransformToPoint,
   applyTransformToVelocity,
   perceptionToFloor,
+  clampPlanarVelocity,
 } from './PerceptionTransform.js'
 import { TrajectoryReconciler, normalizeReconcilerConfig, DEFAULT_CONFIG as RECONCILER_DEFAULT } from './TrajectoryReconciler.js'
 import { FrameOccupancyTracker } from './FrameOccupancyTracker.js'
@@ -273,9 +274,9 @@ class MqttTrajectoryService {
         const venuePosition = transform
           ? applyTransformToPoint(transform, floorPos)
           : floorPos
-        const venueVelocity = transform
+        const venueVelocity = clampPlanarVelocity(transform
           ? applyTransformToVelocity(transform, floorVel)
-          : floorVel
+          : floorVel)
 
         const frameTs = data.timestamp || Date.now()
         this.frameOccupancy.ingest(venueId, data.id || trackKey, frameTs)
@@ -357,9 +358,11 @@ class MqttTrajectoryService {
         // Honor venuePosition if the publisher already supplied it; otherwise transform raw.
         const venuePosition = track.venuePosition
           || (transform ? applyTransformToPoint(transform, rawPosition) : rawPosition)
-        const venueVelocity = track.venuePosition
-          ? rawVelocity
-          : (transform ? applyTransformToVelocity(transform, rawVelocity) : rawVelocity)
+        const venueVelocity = clampPlanarVelocity(
+          track.venuePosition
+            ? rawVelocity
+            : (transform ? applyTransformToVelocity(transform, rawVelocity) : rawVelocity)
+        )
 
         const frameTs = track.timestamp || Date.now()
         this.frameOccupancy.ingest(venueId, track.id || trackKey, frameTs)

@@ -3,43 +3,20 @@ import { io, Socket } from 'socket.io-client'
 import { Track, TrackWithTrail, LidarStatus } from '../types'
 import { useVenue } from './VenueContext'
 import { API_BASE } from '../config/api'
-import { appendTrailPoint, isFiniteTrackPos } from '../lib/trackTrail'
+import { appendTrailPoint, isFiniteTrackPos, clampPlanarVelocity, TRAIL_JUMP_RESET_M } from '../lib/trackTrail'
 import { countLiveFrameTracks } from '../lib/frameOccupancy'
 
 const MAX_TRAIL_LENGTH = 50 // ~5s at 10Hz in raw bypass mode
 const RECONCILE_TRAIL_LENGTH = 100 // ~10s at 10Hz when preset active
-const MAX_EXTRAP_MS = 250 // Cap velocity extrapolation — stale targets must not run away
-const TRACK_TTL_MS = 20000 // 20s — generous margin to survive backend event-loop stalls without removing tracks
-const SNAPSHOT_GRACE_MS = 1000 // brief re-ID gap in bypass
-const RECONCILE_GRACE_MS = 2500 // hold through reconciler re-ID gaps
+const MAX_EXTRAP_MS = 120 // Short extrap only — long gaps snap to latest MQTT position
+const TRACK_TTL_MS = 12000 // Drop stale client tracks sooner under raw-ID churn
+const SNAPSHOT_GRACE_MS = 400 // Brief flicker hold when reconciler bypassed
+const RECONCILE_GRACE_MS = 2000 // hold through reconciler re-ID gaps
 const CLEANUP_INTERVAL_MS = 1000 // Cleanup stale tracks every 1 second
-const INTERP_MAX_TRACKS = 200 // Cap rendered interp targets — never stop the loop entirely
-const MAX_CLIENT_TRACKS = 150 // Emergency cap only — reconciler keeps count low
-const EMERGENCY_CAP_THRESHOLD = 150 // Only sticky-cap above this
-
-function capInterpTargetsForFrame<T extends Track>(
-  targets: Map<string, T>,
-  tsMap: Map<string, number>,
-  prev: Map<string, unknown>,
-  max = INTERP_MAX_TRACKS,
-): Map<string, T> {
-  if (targets.size <= max) return targets
-  const result = new Map<string, T>()
-  for (const key of prev.keys()) {
-    const t = targets.get(key)
-    if (t) result.set(key, t)
-  }
-  if (result.size < max) {
-    const rest = [...targets.entries()]
-      .filter(([k]) => !result.has(k))
-      .sort((a, b) => (tsMap.get(b[0]) ?? 0) - (tsMap.get(a[0]) ?? 0))
-    for (const [k, t] of rest) {
-      if (result.size >= max) break
-      result.set(k, t)
-    }
-  }
-  return result
-}
+const INTERP_MAX_TRACKS = 220 // Match render cap — never drop tracks from interp state (see interp loop)
+const MAX_CLIENT_TRACKS = 220 // Emergency cap only — reconciler keeps count low
+const EMERGENCY_CAP_THRESHOLD = 200 // Only sticky-cap above this
+const INTERP_MISSING_GRACE_MS = 600 // Drop ghost targets faster when ID churns
 
 function capTrackMap<T extends { timestamp?: number }>(source: Map<string, T>): Map<string, T> {
   if (source.size <= MAX_CLIENT_TRACKS) return source
@@ -77,8 +54,9 @@ function stickyCapTrackMap<T extends { timestamp?: number }>(
   }
   return result
 }
-const LERP_SPEED = 0.18 // Exponential smoothing factor per frame
-const EXTRAP_FACTOR = 0.001 // Velocity extrapolation: m/s → m/frame (tuned for 60fps)
+const LERP_SPEED = 0.32 // Reconciler/VTL smoothing
+const LERP_SPEED_RAW = 1.0 // Raw bypass: MQTT positions are authoritative — no lag
+const EXTRAP_FACTOR = 0.001 // Velocity extrapolation: m/s → m/frame (tuned for ~30fps)
 const INTERP_TRAIL_INTERVAL = 3 // Add trail point every N interpolation frames
 
 // Diagnostic logging — off in production; set localStorage hyperspace-diag=1 to enable
@@ -422,14 +400,12 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
           trackLastSeenRef.current.set(track.trackKey, now)
           incomingKeys.add(track.trackKey)
         }
-        // Remove targets missing from this full snapshot for longer than the
-        // aggregator TTL (6s) + a small buffer.  The aggregator emits a complete
-        // set every 100ms, so a track absent for >7s is genuinely gone.
-        const INTERP_MISSING_GRACE_MS = 2500
+        // Remove targets missing from this full snapshot quickly under raw ID churn.
+        const INTERP_MISSING_GRACE_MS_LOCAL = INTERP_MISSING_GRACE_MS
         for (const key of targetTracksRef.current.keys()) {
           if (!incomingKeys.has(key)) {
             const lastSeen = trackLastSeenRef.current.get(key) ?? 0
-            if (now - lastSeen > INTERP_MISSING_GRACE_MS) {
+            if (now - lastSeen > INTERP_MISSING_GRACE_MS_LOCAL) {
               targetTracksRef.current.delete(key)
               interpTsRef.current.delete(key)
               trackLastSeenRef.current.delete(key)
@@ -537,13 +513,18 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
           return next
         })
       }
-      // Prevent trackLastSeen map from growing unbounded during replay ID churn
+      // Prevent trackLastSeen map from growing without bound (raw MQTT ID churn).
       if (trackLastSeenRef.current.size > MAX_CLIENT_TRACKS * 2) {
+        const liveKeys = new Set(liveTracksRef.current.keys())
         const sorted = [...trackLastSeenRef.current.entries()]
+          .filter(([k]) => !liveKeys.has(k))
           .sort((a, b) => a[1] - b[1])
-        const drop = sorted.length - MAX_CLIENT_TRACKS
+        const drop = Math.min(sorted.length, trackLastSeenRef.current.size - MAX_CLIENT_TRACKS)
         for (let i = 0; i < drop; i++) {
-          trackLastSeenRef.current.delete(sorted[i][0])
+          const k = sorted[i][0]
+          trackLastSeenRef.current.delete(k)
+          targetTracksRef.current.delete(k)
+          interpTsRef.current.delete(k)
         }
       }
     }, CLEANUP_INTERVAL_MS)
@@ -673,7 +654,10 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
     
     setLiveTracks(prev => {
       const next = new Map<string, TrackWithTrail>()
-      const frameTargets = capInterpTargetsForFrame(targets, interpTsRef.current, prev)
+      // Do NOT cap here — dropping tracks from React state caused cyclic vanish/reappear
+      // and spoke artifacts when occupancy > INTERP_MAX_TRACKS. MainViewport caps meshes.
+      const frameTargets = targets
+      const lerpSpeed = vtlModeRef.current ? LERP_SPEED : LERP_SPEED_RAW
 
       if (DIAG) {
         const countDiff = prev.size - diagLastTrackCount
@@ -691,28 +675,45 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
         if (!isFiniteTrackPos(target.venuePosition)) continue
         const baseX = target.venuePosition.x
         const baseZ = target.venuePosition.z
-        const vx = target.velocity?.x ?? 0
-        const vz = target.velocity?.z ?? 0
-        
-        const receivedAt = interpTsRef.current.get(key) ?? now
-        const extrapMs = Math.min(now - receivedAt, MAX_EXTRAP_MS)
-        const dt = extrapMs * EXTRAP_FACTOR
-        const tx = baseX + vx * dt
-        const tz = baseZ + vz * dt
-        
         const existing = prev.get(key)
-        
+
+        // Teleport / re-ID — snap instead of lerping across the store (spoke trails).
+        const jumpResetM = vtlModeRef.current ? TRAIL_JUMP_RESET_M : 2.5
+        if (existing && isFiniteTrackPos(existing.venuePosition)) {
+          const jump = Math.hypot(baseX - existing.venuePosition.x, baseZ - existing.venuePosition.z)
+          if (jump > jumpResetM) {
+            next.set(key, {
+              ...target,
+              venuePosition: { x: baseX, y: 0, z: baseZ },
+              trail: [{ x: baseX, y: 0, z: baseZ }],
+            })
+            continue
+          }
+        }
+
+        // Raw bypass: no velocity extrap (MQTT positions are authoritative at 10 Hz).
+        let tx = baseX
+        let tz = baseZ
+        if (vtlModeRef.current) {
+          const { x: vx, z: vz } = clampPlanarVelocity(target.velocity)
+          const receivedAt = interpTsRef.current.get(key) ?? now
+          const extrapMs = Math.min(now - receivedAt, MAX_EXTRAP_MS)
+          const dt = extrapMs * EXTRAP_FACTOR
+          tx = baseX + vx * dt
+          tz = baseZ + vz * dt
+        }
+
         if (existing) {
           const cx = existing.venuePosition.x
           const cz = existing.venuePosition.z
-          const nx = cx + (tx - cx) * LERP_SPEED
-          const nz = cz + (tz - cz) * LERP_SPEED
-          
+          const nx = cx + (tx - cx) * lerpSpeed
+          const nz = cz + (tz - cz) * lerpSpeed
+
           let trail = existing.trail || []
           if (addTrail) {
             trail = appendTrailPoint(trail, { x: nx, y: 0, z: nz }, maxTrailLength())
           }
-          
+
           next.set(key, {
             ...target,
             venuePosition: { x: nx, y: 0, z: nz },
@@ -721,6 +722,7 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
         } else {
           next.set(key, {
             ...target,
+            venuePosition: { x: baseX, y: 0, z: baseZ },
             trail: [{ x: baseX, y: 0, z: baseZ }],
           })
         }

@@ -149,6 +149,19 @@ export function applyTransformToVelocity(transform, velocity) {
   return { x: rx, y: vy, z: rz };
 }
 
+/** Cap planar speed before socket emit — raw perception often spikes on ID teleports. */
+export function clampPlanarVelocity(velocity, maxSpeed = 2.5) {
+  if (!velocity) return { x: 0, y: 0, z: 0 };
+  const vx = Number(velocity.x ?? 0);
+  const vz = Number(velocity.z ?? 0);
+  const vy = Number(velocity.y ?? 0);
+  if (!Number.isFinite(vx) || !Number.isFinite(vz)) return { x: 0, y: vy, z: 0 };
+  const speed = Math.hypot(vx, vz);
+  if (speed <= maxSpeed || speed === 0) return { x: vx, y: vy, z: vz };
+  const s = maxSpeed / speed;
+  return { x: vx * s, y: vy, z: vz * s };
+}
+
 /**
  * Solve a 2D similarity transform (rotation + translation + uniform scale)
  * from two correspondences. Used by the "two-point calibration" helper.
