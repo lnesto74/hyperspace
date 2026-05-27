@@ -128,6 +128,8 @@ export default function replayRoutes({ replayService, mqttRecordService, mqttSer
   router.post('/stop', async (_req, res) => {
     try {
       await replayService.stop();
+      // Ensure clients get a live-only track snapshot after replay-* keys are flushed.
+      replayService.trackAggregator?.emitTracks?.();
       res.json({ success: true, status: replayService.status() });
     } catch (err) {
       res.status(500).json({ error: err.message });

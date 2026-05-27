@@ -76,10 +76,33 @@ class MqttTrajectoryService {
 
     /** Optional raw MQTT recorder (main-server JSONL capture). */
     this.mqttRecorder = null
+    /** Rolling pipeline latency / rate metrics (DO backend). */
+    this.pipelineMetrics = null
+  }
+
+  setPipelineMetrics(metrics) {
+    this.pipelineMetrics = metrics
   }
 
   setMqttRecorder(recorder) {
     this.mqttRecorder = recorder
+  }
+
+  _recordPipelineSample(payloadTs, publishedAt) {
+    if (!this.pipelineMetrics) return
+    this.pipelineMetrics.recordMqttMessage({ payloadTs, publishedAt })
+    if (process.env.MQTT_PIPELINE_DIAG === '1') {
+      this._pipeDiagCount = (this._pipeDiagCount || 0) + 1
+      const now = Date.now()
+      if (!this._pipeDiagLast || now - this._pipeDiagLast > 5000) {
+        const snap = this.pipelineMetrics.getSnapshot().current
+        console.log(
+          `[Pipeline] mqtt=${snap.mqtt.msgPerSec?.toFixed(1)}/s gap_p95=${snap.mqtt.interArrivalMs.p95}ms `
+          + `emit=${snap.socketEmit.batchesPerSec?.toFixed(1)}/s bridge_p95=${snap.mqtt.bridgeLatencyMs.p95}ms`
+        )
+        this._pipeDiagLast = now
+      }
+    }
   }
 
   /** Replace the transform used for a venue. Falsy value clears it. */
@@ -300,9 +323,10 @@ class MqttTrajectoryService {
         const reconciled = this.reconciler.process(incomingTrack)
         if (!reconciled) {
           // Still update raw stats so users can see ingestion volume vs filtered ratio
-          this.stats.messagesReceived++
-          this.stats.lastMessageTs = Date.now()
-          return
+        this.stats.messagesReceived++
+        this.stats.lastMessageTs = Date.now()
+        this._recordPipelineSample(frameTs, data.publishedAt)
+        return
         }
 
         // Use the stable trackKey for downstream consumers
@@ -322,6 +346,7 @@ class MqttTrajectoryService {
         this.stats.tracksReceived++
         this.stats.lastMessageTs = Date.now()
         this._updateVenueStats(venueId, 1)
+        this._recordPipelineSample(frameTs, data.publishedAt)
 
         if (this.trackAggregator) {
           this.trackAggregator.addTrack(processedTrack)
@@ -400,12 +425,15 @@ class MqttTrajectoryService {
       this.stats.tracksReceived += processedTracks.length
       this.stats.lastMessageTs = Date.now()
       this._updateVenueStats(venueId, processedTracks.length)
+      const batchTs = processedTracks[0]?.timestamp || data.timestamp
+      this._recordPipelineSample(batchTs, data.publishedAt)
 
       // Emit to all connected clients subscribed to this venue
       this.io.of('/tracking').to(`venue:${venueId}`).emit('tracks', {
         venueId,
         tracks: processedTracks
       })
+      this.pipelineMetrics?.recordSocketEmit({ trackCount: processedTracks.length })
 
     } catch (err) {
       console.error('[MQTT] Error parsing message:', err)

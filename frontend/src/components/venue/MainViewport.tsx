@@ -783,6 +783,52 @@ export default function MainViewport({
     return () => window.removeEventListener('hyperspace:visualization-mode', handler)
   }, [])
 
+  const disposeTrackMesh = useCallback((scene: THREE.Scene, key: string) => {
+    const group = trackMeshesRef.current.get(key)
+    if (group) {
+      scene.remove(group)
+      group.traverse(child => {
+        if (child instanceof THREE.Mesh || child instanceof THREE.Line || child instanceof THREE.Points || child instanceof THREE.LineSegments) {
+          child.geometry.dispose()
+          if (Array.isArray(child.material)) {
+            child.material.forEach(m => { if (m.map) m.map.dispose(); m.dispose() })
+          } else {
+            if ((child.material as any).map) (child.material as any).map.dispose()
+            child.material.dispose()
+          }
+        }
+        if (child instanceof THREE.Sprite) {
+          const mat = child.material as THREE.SpriteMaterial
+          if (mat.map) mat.map.dispose()
+          mat.dispose()
+        }
+      })
+      trackMeshesRef.current.delete(key)
+    }
+    const trail = trailLinesRef.current.get(key)
+    if (trail) {
+      scene.remove(trail)
+      trail.geometry.dispose()
+      ;(trail.material as THREE.Material).dispose()
+      trailLinesRef.current.delete(key)
+    }
+    trackGraceRef.current.delete(key)
+    sezEntryTimesRef.current.delete(key)
+  }, [])
+
+  useEffect(() => {
+    const purgeReplayMeshes = () => {
+      const scene = sceneRef.current
+      if (!scene) return
+      const replayKeys = [...trackMeshesRef.current.keys()].filter(k => k.startsWith('replay-'))
+      for (const key of replayKeys) {
+        disposeTrackMesh(scene, key)
+      }
+    }
+    window.addEventListener('hyperspace:replay-tracks-cleared', purgeReplayMeshes)
+    return () => window.removeEventListener('hyperspace:replay-tracks-cleared', purgeReplayMeshes)
+  }, [disposeTrackMesh])
+
   // Ghost overlay — listens for events from MatchingTunerPanel and renders a
   // textured plane on the venue floor. Stale loads (when slider drags fire
   // multiple requests) are discarded by tracking the latest URL.
@@ -4060,6 +4106,10 @@ export default function MainViewport({
       // Phase 1: hide only when track is truly gone from server snapshot (not just render-capped)
       trackMeshesRef.current.forEach((group, key) => {
         if (!allTrackKeys.has(key)) {
+          if (key.startsWith('replay-')) {
+            disposeTrackMesh(scene, key)
+            return
+          }
           if (!trackGraceRef.current.has(key)) {
             trackGraceRef.current.set(key, now)
           }
@@ -4444,7 +4494,7 @@ export default function MainViewport({
     }
     scheduleSync()
     return () => { if (timer) clearTimeout(timer) }
-  }, []) // Stable — reads everything via refs
+  }, [disposeTrackMesh]) // Stable — reads everything via refs
 
   // Render ROIs (regions of interest) as polygons
   useEffect(() => {

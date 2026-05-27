@@ -143,6 +143,9 @@ export class PerceptionAdapter {
           color: colorForId(obj.id || 'unknown'),
           boundingBox: obj.boundingBox || { width: 0.5, height: 1.7, depth: 0.5 },
         };
+        if (process.env.PIPELINE_DIAG === '1') {
+          message.publishedAt = Date.now();
+        }
 
         this.client.publish(outTopic, JSON.stringify(message), { qos: 0 });
         this.stats.tracksForwarded++;

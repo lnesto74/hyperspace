@@ -13,6 +13,7 @@ import { LidarConnectionManager } from './services/LidarConnectionManager.js';
 import { TrackAggregator } from './services/TrackAggregator.js';
 import { MockLidarGenerator } from './services/MockLidarGenerator.js';
 import MqttTrajectoryService from './services/MqttTrajectoryService.js';
+import { PipelineMetrics } from './services/PipelineMetrics.js';
 import VisualTrackService from './services/VisualTrackService.js';
 import { TrajectoryStorageService } from './services/TrajectoryStorageService.js';
 import { KPICalculator } from './services/KPICalculator.js';
@@ -161,10 +162,12 @@ if (MOCK_LIDAR) {
 
 // MQTT trajectory service for receiving trajectories from edge devices
 let mqttService = null;
+const pipelineMetrics = new PipelineMetrics(10000);
 if (MQTT_ENABLED) {
   mqttService = new MqttTrajectoryService(io);
   mqttService.setTrackAggregator(trackAggregator);
   mqttService.setVisualTrackService(visualTrackService);
+  mqttService.setPipelineMetrics(pipelineMetrics);
 
   // Load saved perceptionTransforms from venues.dwg_transform_json so live tracks are
   // remapped from the very first MQTT message (no UI interaction required).
@@ -264,6 +267,7 @@ const lastKpiRecordTime = new Map();
 
 trackAggregator.on('tracks', (data) => {
   const now = Date.now();
+  pipelineMetrics.recordSocketEmit({ trackCount: data.tracks?.length || 0, emitAt: now });
   diagEmitCount++;
   const gap = diagLastEmitTs ? now - diagLastEmitTs : 0;
   diagLastEmitTs = now;
@@ -360,11 +364,20 @@ trackAggregator.on('track_removed', (data) => {
       const demoStorage = demoSessionService.getTrajectoryStorage(venueId);
       demoStorage?.endTrackSessions(data.trackKey);
     }
+    const venueId = trackAggregator.venueId;
+    if (venueId) {
+      io.of('/tracking').to(`venue:${venueId}`).emit('track_removed', data);
+    }
     return;
   }
 
   io.of('/tracking').emit('track_removed', data);
   trajectoryStorage.endTrackSessions(data.trackKey);
+});
+
+trackAggregator.on('replay_tracks_flushed', ({ venueId, count }) => {
+  if (!venueId) return;
+  io.of('/tracking').to(`venue:${venueId}`).emit('replay_tracks_cleared', { venueId, count });
 });
 
 trackAggregator.on('tracks_cleared', () => {
@@ -922,6 +935,33 @@ app.get('/api/tracking/venue/:venueId/status', (req, res) => {
     });
   } catch (err) {
     console.error('❌ Failed to get tracking status:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.get('/api/tracking/venue/:venueId/pipeline', (req, res) => {
+  const { venueId } = req.params;
+  try {
+    const snapshot = pipelineMetrics.getSnapshot();
+    const diagnosis = pipelineMetrics.diagnose(snapshot.current);
+    const mqttStatus = mqttService ? mqttService.getStatus(venueId) : null;
+    res.json({
+      success: true,
+      venueId,
+      mqttConnected: mqttStatus?.connected ?? false,
+      frameOccupancy: mqttStatus?.frameOccupancy ?? 0,
+      aggregatorActiveTracks: trackAggregator.getActiveTrackCount(),
+      pipeline: snapshot,
+      diagnosis,
+      howTo: {
+        edgeProbe: 'curl http://EDGE:8080/api/edge/mqtt/record/probe?durationMs=8000&detailed=1',
+        fullMeasure: `python3 scripts/measure_mqtt_pipeline.py --venue ${venueId} --edge http://EDGE:8080`,
+        browserDiag: "localStorage.setItem('hyperspace-diag','1') then watch [DIAG] tracks GAP in console",
+        edgeStamp: 'Set PIPELINE_DIAG=1 on edge perception adapter for publishedAt bridge latency',
+      },
+    });
+  } catch (err) {
+    console.error('❌ Failed to get pipeline metrics:', err.message);
     res.status(500).json({ success: false, error: err.message });
   }
 });

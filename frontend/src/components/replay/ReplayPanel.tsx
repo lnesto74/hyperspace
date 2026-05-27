@@ -592,15 +592,16 @@ export default function ReplayPanel({ onClose }: ReplayPanelProps) {
   }, [speed, refreshStatus, status?.file])
 
   const stop = useCallback(async () => {
-    setMqttReplayActive(false)
-    clearReplayTracks()
     try {
       await fetch(`${API_BASE}/api/replay/stop`, { method: 'POST' })
-      await stopDemoSession()
       clearReplayTracks()
+      await stopDemoSession()
+      setMqttReplayActive(false)
       await refreshStatus()
     } catch (err) {
       console.error(err)
+      clearReplayTracks()
+      setMqttReplayActive(false)
     }
   }, [refreshStatus, clearReplayTracks, setMqttReplayActive, stopDemoSession])
 

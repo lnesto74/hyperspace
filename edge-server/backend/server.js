@@ -22,6 +22,7 @@ import { initHerManager, deployHer, stopHer, getHerStatus, getMode, isHerActive 
 
 // Perception Adapter (Fast3D → Hyperspace format bridge)
 import { PerceptionAdapter } from './perception-adapter.js';
+import { MqttRecorder } from './mqtt-recorder.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -39,6 +40,7 @@ if (!fs.existsSync(DATA_DIR)) {
   fs.mkdirSync(DATA_DIR, { recursive: true });
 }
 const CONFIG_FILE = join(DATA_DIR, 'config.json');
+const RECORDINGS_DIR = join(DATA_DIR, 'recordings');
 
 // Default configuration
 const defaultConfig = {
@@ -96,6 +98,11 @@ try {
 if (process.env.MQTT_BROKER) {
   config.mqttBroker = process.env.MQTT_BROKER;
 }
+
+const mqttRecorder = new MqttRecorder({
+  recordDir: RECORDINGS_DIR,
+  brokerUrl: config.mqttBroker,
+});
 
 // Save config to file (including backendUrl and mqttBroker for production use)
 const saveConfig = () => {
@@ -1338,6 +1345,56 @@ app.post('/api/mqtt-bridge', async (req, res) => {
   } catch (err) {
     console.error('[MQTT Bridge] Failed to update config:', err);
     res.status(500).json({ error: err.message });
+  }
+});
+
+// ============ MQTT TRAJECTORY RECORDING (for main-server remote control) ============
+
+app.get('/api/edge/mqtt/record/status', (_req, res) => {
+  res.json({ ok: true, status: mqttRecorder.getStatus(), files: mqttRecorder.listFiles() });
+});
+
+app.get('/api/edge/mqtt/record/probe', async (req, res) => {
+  try {
+    mqttRecorder.brokerUrl = config.mqttBroker;
+    const durationMs = Math.min(10000, Math.max(1000, Number(req.query.durationMs) || 3000));
+    const detailed = req.query.detailed === '1' || req.query.detailed === 'true';
+    const probe = await mqttRecorder.probe({ durationMs, detailed });
+    res.json({ ok: true, probe, brokerUrl: config.mqttBroker, detailed });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+app.post('/api/edge/mqtt/record/start', (req, res) => {
+  try {
+    mqttRecorder.brokerUrl = config.mqttBroker;
+    if (mqttRecorder.getStatus().recording) {
+      return res.status(409).json({ ok: false, error: 'Recording already in progress on this edge' });
+    }
+    const { label, topics } = req.body || {};
+    const status = mqttRecorder.start({ label, topics });
+    res.json({ ok: true, status });
+  } catch (err) {
+    res.status(400).json({ ok: false, error: err.message });
+  }
+});
+
+app.post('/api/edge/mqtt/record/stop', async (_req, res) => {
+  try {
+    const status = await mqttRecorder.stop();
+    res.json({ ok: true, ...status });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+app.get('/api/edge/mqtt/record/download/:filename', (req, res) => {
+  try {
+    const fp = mqttRecorder.resolveFile(req.params.filename);
+    res.download(fp);
+  } catch (err) {
+    res.status(404).json({ ok: false, error: err.message });
   }
 });
 

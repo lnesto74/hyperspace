@@ -305,6 +305,7 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
       const lastBatch = pendingBatches[pendingBatches.length - 1]
       const latestByKey = new Map<string, Track>()
       for (const track of lastBatch) {
+        if (!mqttReplayActiveRef.current && track.trackKey.startsWith('replay-')) continue
         latestByKey.set(track.trackKey, track)
       }
       pendingBatches = []
@@ -330,6 +331,7 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
         // Brief grace: reconciler re-ID can drop a track from one snapshot then restore it
         for (const [key, track] of prev) {
           if (next.has(key)) continue
+          if (key.startsWith('replay-') && !mqttReplayActiveRef.current) continue
           const lastSeen = trackLastSeenRef.current.get(key) ?? 0
           if (now - lastSeen < snapshotGraceMs()) {
             next.set(key, track)
@@ -398,6 +400,7 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
         // Build a Set of trackKeys in this snapshot to prune stale targets
         const incomingKeys = new Set<string>()
         for (const track of data.tracks) {
+          if (!mqttReplayActiveRef.current && track.trackKey.startsWith('replay-')) continue
           targetTracksRef.current.set(track.trackKey, track)
           interpTsRef.current.set(track.trackKey, now)
           trackLastSeenRef.current.set(track.trackKey, now)
@@ -417,7 +420,10 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
           }
         }
       } else {
-        pendingBatches.push(data.tracks)
+        const batch = mqttReplayActiveRef.current
+          ? data.tracks
+          : data.tracks.filter(t => !t.trackKey.startsWith('replay-'))
+        pendingBatches.push(batch)
         requestAnimationFrame(flushTrackUpdates)
       }
     })
@@ -454,7 +460,24 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
       })
     }
 
-    socket.on('track_removed', (data: { trackKey: string }) => {
+    const removeTrackKeyImmediately = (trackKey: string) => {
+      pendingRemovalsRef.current.delete(trackKey)
+      trackLastSeenRef.current.delete(trackKey)
+      targetTracksRef.current.delete(trackKey)
+      interpTsRef.current.delete(trackKey)
+      setLiveTracks(prev => {
+        if (!prev.has(trackKey)) return prev
+        const next = new Map(prev)
+        next.delete(trackKey)
+        return next
+      })
+    }
+
+    socket.on('track_removed', (data: { trackKey: string; replay?: boolean }) => {
+      if (data.replay || data.trackKey?.startsWith('replay-')) {
+        removeTrackKeyImmediately(data.trackKey)
+        return
+      }
       // With interpolation on, full snapshots every 100ms are authoritative — track_removed
       // from aggregator prune/re-ID churn only causes frozen grace meshes.
       if (interpEnabledRef.current) {
@@ -874,6 +897,7 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
       }
       return changed ? next : prev
     })
+    window.dispatchEvent(new CustomEvent('hyperspace:replay-tracks-cleared'))
   }, [])
 
   const contextValue = useMemo(() => ({ 

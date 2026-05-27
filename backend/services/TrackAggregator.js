@@ -58,9 +58,12 @@ export class TrackAggregator extends EventEmitter {
     if (keys.length === 0) return 0;
     for (const trackKey of keys) {
       this.tracks.delete(trackKey);
-      this.emit('track_removed', { trackKey });
+      this.emit('track_removed', { trackKey, replay: true });
     }
     console.log(`📊 Track aggregator flushed ${keys.length} replay tracks`);
+    // Push live-only snapshot immediately so clients drop replay meshes without waiting.
+    this.emitTracks();
+    this.emit('replay_tracks_flushed', { venueId: this.venueId, count: keys.length });
     return keys.length;
   }
 
