@@ -507,50 +507,76 @@ export default class ReplayService {
       sourceFile: null,
     };
 
-    console.log(`[Replay] Loading reconciled artifact ${path.basename(fullPath)}…`);
+    console.log(`[Replay] Loading reconciled artifact ${path.basename(fullPath)} (${(stat.size / 1024 / 1024).toFixed(1)} MB)…`);
 
-    const replayStartTs = Date.now();
     const SLEEP_SLACK_MS = 5;
+    const YIELD_EVERY = 40;
 
     try {
-      const batches = [];
+      // Pass 1: read meta + count batches without holding every batch in memory.
       let meta = null;
-      const rlMeta = readline.createInterface({
+      let totalBatches = 0;
+      const rlCount = readline.createInterface({
         input: fs.createReadStream(fullPath),
         crlfDelay: Infinity,
       });
-      for await (const line of rlMeta) {
+      for await (const line of rlCount) {
         if (abort.aborted || token !== this._playbackToken) break;
         const raw = line.trim();
         if (!raw) continue;
         let row;
         try { row = JSON.parse(raw); } catch { continue; }
         if (row._type === 'meta') { meta = row; continue; }
-        if (row._type === 'batch' && row.tracks?.length) {
-          batches.push({ venueId: row.venueId, timestamp: row.timestamp, tracks: row.tracks });
-        }
+        if (row._type === 'batch' && row.tracks?.length) totalBatches++;
       }
 
       if (abort.aborted || token !== this._playbackToken) return;
 
-      if (!batches.length) throw new Error('Reconciled artifact has no playback batches — re-run post-process job');
+      if (!totalBatches) throw new Error('Reconciled artifact has no playback batches — re-run post-process job');
 
-      const startIdx = Math.floor(progress * batches.length);
-      const playbackBatches = batches.slice(startIdx);
-      const firstTs = playbackBatches[0]?.timestamp || 0;
-      const lastTs = playbackBatches[playbackBatches.length - 1]?.timestamp || firstTs;
+      const startIdx = Math.floor(progress * totalBatches);
+      const playbackCount = Math.max(0, totalBatches - startIdx);
 
-      this.state.firstRecordedTs = meta?.firstTs ?? firstTs;
-      this.state.lastRecordedTs = meta?.lastTs ?? lastTs;
+      this.state.firstRecordedTs = meta?.firstTs ?? null;
+      this.state.lastRecordedTs = meta?.lastTs ?? null;
       this.state.presetId = meta?.presetId || null;
       this.state.sourceFile = meta?.sourceFile || null;
 
-      console.log(`[Replay] Starting reconciled artifact ${path.basename(fullPath)} (${playbackBatches.length} batches) at ${this.state.speed}×`);
+      console.log(
+        `[Replay] Starting reconciled artifact ${path.basename(fullPath)}`
+        + ` (${playbackCount}/${totalBatches} batches from ${(progress * 100).toFixed(1)}%)`
+        + ` at ${this.state.speed}×`,
+      );
 
-      for (let i = 0; i < playbackBatches.length; i++) {
+      // Pass 2: stream batches one at a time (avoids OOM on large grocery captures).
+      let batchIndex = 0;
+      let played = 0;
+      let firstPlayedTs = null;
+      let replayStartTs = Date.now();
+      let sinceYield = 0;
+      const rlPlay = readline.createInterface({
+        input: fs.createReadStream(fullPath),
+        crlfDelay: Infinity,
+      });
+
+      for await (const line of rlPlay) {
         if (abort.aborted || token !== this._playbackToken) break;
-        const batch = playbackBatches[i];
-        const recordedDelta = batch.timestamp - firstTs;
+        const raw = line.trim();
+        if (!raw) continue;
+        let row;
+        try { row = JSON.parse(raw); } catch { continue; }
+        if (row._type !== 'batch' || !row.tracks?.length) continue;
+
+        batchIndex++;
+        if (batchIndex <= startIdx) continue;
+
+        const batch = { venueId: row.venueId, timestamp: row.timestamp, tracks: row.tracks };
+        if (firstPlayedTs === null) {
+          firstPlayedTs = batch.timestamp;
+          replayStartTs = Date.now();
+        }
+
+        const recordedDelta = batch.timestamp - firstPlayedTs;
         const targetWallTime = replayStartTs + recordedDelta / this.state.speed;
         const waitMs = targetWallTime - Date.now();
         if (waitMs > SLEEP_SLACK_MS) {
@@ -565,15 +591,25 @@ export default class ReplayService {
           for (const t of batch.tracks) {
             this.trackAggregator.addTrack({ ...t, venueId });
           }
+          this.trackAggregator.emitTracks();
         }
 
-        this.state.messagesPublished++;
+        played++;
+        this.state.messagesPublished = played;
         this.state.recordedCurrentTs = batch.timestamp;
         this.state.currentTs = rewriteTimestamps ? Date.now() : batch.timestamp;
-        this.state.progress = (startIdx + i + 1) / batches.length;
+        this.state.progress = batchIndex / totalBatches;
         this.state.bytesRead = Math.floor(this.state.progress * stat.size);
 
-        if (i % 40 === 0) await new Promise(r => setImmediate(r));
+        sinceYield++;
+        if (sinceYield >= YIELD_EVERY) {
+          sinceYield = 0;
+          await new Promise(r => setImmediate(r));
+        }
+
+        if (played === 1 || played % 500 === 0) {
+          console.log(`[Replay] Reconciled progress ${(this.state.progress * 100).toFixed(1)}% (${played}/${playbackCount} batches)`);
+        }
       }
     } catch (err) {
       this.state.lastError = err.message;

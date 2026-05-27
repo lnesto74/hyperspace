@@ -555,6 +555,7 @@ export default function ReplayPanel({ onClose }: ReplayPanelProps) {
       }
       setSelected(fileToPlay)
       selectedRef.current = fileToPlay
+      startingReplayRef.current = false
       await refreshStatus()
     } catch (err: unknown) {
       setMqttReplayActive(false)

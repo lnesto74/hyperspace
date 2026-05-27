@@ -423,22 +423,39 @@ class MqttTrajectoryService {
   injectReconciledBatch(venueId, tracks) {
     if (!tracks?.length) return
     const processed = []
-    for (const raw of tracks) {
-      const stableId = raw.stableId || raw.id
-      const trackKey = raw.trackKey || `replay-offline-${stableId}`
-      const track = {
-        ...raw,
-        id: stableId,
-        stableId,
-        trackKey,
-        deviceId: raw.deviceId || 'replay-offline',
-        venueId,
-        _offlineReconciled: true,
-      }
-      this.tracks.set(trackKey, track)
-      processed.push(track)
-      if (this.trackAggregator) {
+    if (this.trackAggregator) {
+      for (const raw of tracks) {
+        const stableId = raw.stableId || raw.id
+        const trackKey = raw.trackKey || `replay-offline-${stableId}`
+        const track = {
+          ...raw,
+          id: stableId,
+          stableId,
+          trackKey,
+          deviceId: raw.deviceId || 'replay-offline',
+          venueId,
+          _offlineReconciled: true,
+        }
+        this.tracks.set(trackKey, track)
+        processed.push(track)
         this.trackAggregator.addTrack(track)
+      }
+      this.trackAggregator.emitTracks()
+    } else {
+      for (const raw of tracks) {
+        const stableId = raw.stableId || raw.id
+        const trackKey = raw.trackKey || `replay-offline-${stableId}`
+        const track = {
+          ...raw,
+          id: stableId,
+          stableId,
+          trackKey,
+          deviceId: raw.deviceId || 'replay-offline',
+          venueId,
+          _offlineReconciled: true,
+        }
+        this.tracks.set(trackKey, track)
+        processed.push(track)
       }
     }
     if (!this.trackAggregator && processed.length && this.io) {
