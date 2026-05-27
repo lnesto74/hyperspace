@@ -465,48 +465,30 @@ export default class ReplayService {
 
     const fullPath = path.isAbsolute(file) ? file : path.join(this.replayDir, 'reconciled', path.basename(String(file)));
     if (!fs.existsSync(fullPath)) {
-      throw new Error(`Reconciled artifact not found: ${path.basename(fullPath)}`);
+      const msg = `Reconciled artifact not found: ${path.basename(fullPath)}`;
+      this.state.lastError = msg;
+      throw new Error(msg);
     }
 
     const token = this._playbackToken;
     const progress = Math.max(0, Math.min(1, Number(startProgress) || 0));
     const stat = fs.statSync(fullPath);
 
-    const batches = [];
-    let meta = null;
-    const rlMeta = readline.createInterface({
-      input: fs.createReadStream(fullPath),
-      crlfDelay: Infinity,
-    });
-    for await (const line of rlMeta) {
-      const raw = line.trim();
-      if (!raw) continue;
-      let row;
-      try { row = JSON.parse(raw); } catch { continue; }
-      if (row._type === 'meta') { meta = row; continue; }
-      if (row._type === 'batch' && row.tracks?.length) {
-        batches.push({ venueId: row.venueId, timestamp: row.timestamp, tracks: row.tracks });
-      }
-    }
-
-    if (!batches.length) throw new Error('Reconciled artifact has no playback batches — re-run post-process job');
-
-    const startIdx = Math.floor(progress * batches.length);
-    const playbackBatches = batches.slice(startIdx);
-    const firstTs = playbackBatches[0]?.timestamp || 0;
-    const lastTs = playbackBatches[playbackBatches.length - 1]?.timestamp || firstTs;
-
     const abort = { aborted: false };
     this._abort = abort;
 
+    let resolvePlayback;
+    this._playbackDone = new Promise((resolve) => { resolvePlayback = resolve; });
+
+    // Mark running before loading batches so /api/replay/start can confirm startup while the artifact is parsed.
     this.state = {
       running: true,
       file: path.basename(fullPath),
       requestedFile: path.basename(fullPath),
       fileSize: stat.size,
       fileMtimeMs: stat.mtimeMs,
-      firstRecordedTs: meta?.firstTs ?? firstTs,
-      lastRecordedTs: meta?.lastTs ?? lastTs,
+      firstRecordedTs: null,
+      lastRecordedTs: null,
       recordedCurrentTs: null,
       startProgress: progress,
       startedAt: Date.now(),
@@ -521,18 +503,50 @@ export default class ReplayService {
       delivery: 'reconciled-direct',
       playbackToken: token,
       reconciled: true,
-      presetId: meta?.presetId || null,
-      sourceFile: meta?.sourceFile || null,
+      presetId: null,
+      sourceFile: null,
     };
 
-    console.log(`[Replay] Starting reconciled artifact ${path.basename(fullPath)} (${playbackBatches.length} batches) at ${this.state.speed}×`);
+    console.log(`[Replay] Loading reconciled artifact ${path.basename(fullPath)}…`);
 
-    let resolvePlayback;
-    this._playbackDone = new Promise((resolve) => { resolvePlayback = resolve; });
     const replayStartTs = Date.now();
     const SLEEP_SLACK_MS = 5;
 
     try {
+      const batches = [];
+      let meta = null;
+      const rlMeta = readline.createInterface({
+        input: fs.createReadStream(fullPath),
+        crlfDelay: Infinity,
+      });
+      for await (const line of rlMeta) {
+        if (abort.aborted || token !== this._playbackToken) break;
+        const raw = line.trim();
+        if (!raw) continue;
+        let row;
+        try { row = JSON.parse(raw); } catch { continue; }
+        if (row._type === 'meta') { meta = row; continue; }
+        if (row._type === 'batch' && row.tracks?.length) {
+          batches.push({ venueId: row.venueId, timestamp: row.timestamp, tracks: row.tracks });
+        }
+      }
+
+      if (abort.aborted || token !== this._playbackToken) return;
+
+      if (!batches.length) throw new Error('Reconciled artifact has no playback batches — re-run post-process job');
+
+      const startIdx = Math.floor(progress * batches.length);
+      const playbackBatches = batches.slice(startIdx);
+      const firstTs = playbackBatches[0]?.timestamp || 0;
+      const lastTs = playbackBatches[playbackBatches.length - 1]?.timestamp || firstTs;
+
+      this.state.firstRecordedTs = meta?.firstTs ?? firstTs;
+      this.state.lastRecordedTs = meta?.lastTs ?? lastTs;
+      this.state.presetId = meta?.presetId || null;
+      this.state.sourceFile = meta?.sourceFile || null;
+
+      console.log(`[Replay] Starting reconciled artifact ${path.basename(fullPath)} (${playbackBatches.length} batches) at ${this.state.speed}×`);
+
       for (let i = 0; i < playbackBatches.length; i++) {
         if (abort.aborted || token !== this._playbackToken) break;
         const batch = playbackBatches[i];

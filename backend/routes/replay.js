@@ -49,12 +49,13 @@ export default function replayRoutes({ replayService, mqttRecordService, mqttSer
 
       if (playReconciled || resolvedArtifact) {
         await replayService.stop();
-        replayService.startReconciledArtifact({
+        const playPromise = replayService.startReconciledArtifact({
           file: resolvedArtifact || playFile,
           speed,
           startProgress,
           rewriteTimestamps,
-        }).catch((err) => { console.error('[Replay] reconciled playback failed:', err.message); });
+        });
+        playPromise.catch((err) => { console.error('[Replay] reconciled playback failed:', err.message); });
 
         let status = replayService.status();
         for (let i = 0; i < 30 && !status.running; i++) {
@@ -62,6 +63,8 @@ export default function replayRoutes({ replayService, mqttRecordService, mqttSer
           status = replayService.status();
         }
         if (!status.running) {
+          await playPromise.catch(() => {});
+          status = replayService.status();
           return res.status(400).json({ error: status.lastError || 'Reconciled replay failed to start' });
         }
         return res.json({ success: true, status, reconciled: true });

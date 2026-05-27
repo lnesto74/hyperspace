@@ -544,14 +544,20 @@ export default function ReplayPanel({ onClose }: ReplayPanelProps) {
       if (!res.ok) {
         throw new Error(data.error || `HTTP ${res.status}`)
       }
-      const playing = data.status?.file || data.requestedFile
-      if (playing && playing !== fileToPlay) {
-        throw new Error(`Server started "${playing}" instead of "${fileToPlay}"`)
+      // Reconciled replay plays the artifact file, not the raw capture selected in the dropdown.
+      if (!useReconciled) {
+        const playing = data.status?.file || data.requestedFile
+        if (playing && playing !== fileToPlay) {
+          throw new Error(`Server started "${playing}" instead of "${fileToPlay}"`)
+        }
+      } else if (!data.status?.running) {
+        throw new Error(data.error || 'Reconciled replay failed to start')
       }
       setSelected(fileToPlay)
       selectedRef.current = fileToPlay
       await refreshStatus()
     } catch (err: unknown) {
+      setMqttReplayActive(false)
       setError(err instanceof Error ? err.message : String(err))
     } finally {
       startingReplayRef.current = false
