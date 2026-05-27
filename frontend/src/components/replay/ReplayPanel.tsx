@@ -880,7 +880,7 @@ export default function ReplayPanel({ onClose }: ReplayPanelProps) {
             )}
             {mqttActive && running && (
               <div className="mt-1 text-[10px] text-sky-400">
-                Live edge tracks are also visible — replay tracks use the replay- prefix.
+                Live edge tracks hidden — only replay capture tracks are shown.
               </div>
             )}
           </div>

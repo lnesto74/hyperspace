@@ -12,6 +12,21 @@ export class TrackAggregator extends EventEmitter {
     this.placements = new Map(); // deviceId -> placement (for coordinate transforms)
     this.emitInterval = null;
     this.venueId = null;
+    /** When true, socket snapshots include only replay-* tracks (live edge still ingested). */
+    this.replayIsolateLive = false;
+  }
+
+  setReplayIsolateLive(active) {
+    const next = !!active;
+    if (next === this.replayIsolateLive) return;
+    this.replayIsolateLive = next;
+    if (next) {
+      for (const trackKey of this.tracks.keys()) {
+        if (!trackKey.startsWith('replay-')) {
+          this.emit('track_removed', { trackKey, liveSuppressed: true });
+        }
+      }
+    }
   }
 
   start(venueId) {
@@ -165,6 +180,7 @@ export class TrackAggregator extends EventEmitter {
     const tracksBatch = [];
     
     for (const [trackKey, entry] of this.tracks) {
+      if (this.replayIsolateLive && !trackKey.startsWith('replay-')) continue;
       tracksBatch.push({
         ...entry.track,
         trail: entry.trail,

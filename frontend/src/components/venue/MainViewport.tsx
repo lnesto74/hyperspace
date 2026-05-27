@@ -825,8 +825,20 @@ export default function MainViewport({
         disposeTrackMesh(scene, key)
       }
     }
+    const purgeLiveMeshes = () => {
+      const scene = sceneRef.current
+      if (!scene) return
+      const liveKeys = [...trackMeshesRef.current.keys()].filter(k => !k.startsWith('replay-'))
+      for (const key of liveKeys) {
+        disposeTrackMesh(scene, key)
+      }
+    }
     window.addEventListener('hyperspace:replay-tracks-cleared', purgeReplayMeshes)
-    return () => window.removeEventListener('hyperspace:replay-tracks-cleared', purgeReplayMeshes)
+    window.addEventListener('hyperspace:live-tracks-hidden', purgeLiveMeshes)
+    return () => {
+      window.removeEventListener('hyperspace:replay-tracks-cleared', purgeReplayMeshes)
+      window.removeEventListener('hyperspace:live-tracks-hidden', purgeLiveMeshes)
+    }
   }, [disposeTrackMesh])
 
   // Ghost overlay — listens for events from MatchingTunerPanel and renders a

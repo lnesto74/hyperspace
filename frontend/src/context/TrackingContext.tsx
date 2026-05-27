@@ -337,7 +337,11 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
       const lastBatch = pendingBatches[pendingBatches.length - 1]
       const latestByKey = new Map<string, Track>()
       for (const track of lastBatch) {
-        if (!mqttReplayActiveRef.current && track.trackKey.startsWith('replay-')) continue
+        if (mqttReplayActiveRef.current) {
+          if (!track.trackKey.startsWith('replay-')) continue
+        } else if (track.trackKey.startsWith('replay-')) {
+          continue
+        }
         latestByKey.set(track.trackKey, track)
       }
       pendingBatches = []
@@ -363,6 +367,7 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
         // Brief grace: reconciler re-ID can drop a track from one snapshot then restore it
         for (const [key, track] of prev) {
           if (next.has(key)) continue
+          if (mqttReplayActiveRef.current && !key.startsWith('replay-')) continue
           if (key.startsWith('replay-') && !mqttReplayActiveRef.current) continue
           const lastSeen = trackLastSeenRef.current.get(key) ?? 0
           if (now - lastSeen < snapshotGraceMs()) {
@@ -453,7 +458,7 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
         }
       } else {
         const batch = mqttReplayActiveRef.current
-          ? data.tracks
+          ? data.tracks.filter(t => t.trackKey.startsWith('replay-'))
           : data.tracks.filter(t => !t.trackKey.startsWith('replay-'))
         pendingBatches.push(batch)
         requestAnimationFrame(flushTrackUpdates)
@@ -505,8 +510,12 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
       })
     }
 
-    socket.on('track_removed', (data: { trackKey: string; replay?: boolean }) => {
+    socket.on('track_removed', (data: { trackKey: string; replay?: boolean; liveSuppressed?: boolean }) => {
       if (data.replay || data.trackKey?.startsWith('replay-')) {
+        removeTrackKeyImmediately(data.trackKey)
+        return
+      }
+      if (mqttReplayActiveRef.current || data.liveSuppressed) {
         removeTrackKeyImmediately(data.trackKey)
         return
       }
@@ -841,19 +850,48 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
     setInterpolation(mode === 'buffered')
   }, [setInterpolation])
 
+  const purgeLiveEdgeTracks = useCallback(() => {
+    for (const key of [...trackLastSeenRef.current.keys()]) {
+      if (!key.startsWith('replay-')) trackLastSeenRef.current.delete(key)
+    }
+    for (const key of [...targetTracksRef.current.keys()]) {
+      if (!key.startsWith('replay-')) targetTracksRef.current.delete(key)
+    }
+    for (const key of [...interpTsRef.current.keys()]) {
+      if (!key.startsWith('replay-')) interpTsRef.current.delete(key)
+    }
+    setLiveTracks(prev => {
+      let hasLive = false
+      for (const key of prev.keys()) {
+        if (!key.startsWith('replay-')) {
+          hasLive = true
+          break
+        }
+      }
+      if (!hasLive) return prev
+      const next = new Map<string, TrackWithTrail>()
+      for (const [key, track] of prev) {
+        if (key.startsWith('replay-')) next.set(key, track)
+      }
+      return next
+    })
+    window.dispatchEvent(new CustomEvent('hyperspace:live-tracks-hidden'))
+  }, [])
+
   const setMqttReplayActive = useCallback((active: boolean) => {
     mqttReplayActiveRef.current = active
     setMqttReplayActiveState(active)
     if (active) {
       // JSONL/reconciled replay uses live socket snapshots — insight/timeline DB tracks must not block.
       setReplayTracksState(new Map())
+      purgeLiveEdgeTracks()
     } else if (isReplayModeRef.current) {
       // After MQTT replay stops, resume live edge tracks (don't leave historical snapshot blocking socket).
       setIsReplayMode(false)
       setReplayTracksState(new Map())
     }
     setInterpolationRef.current(smoothMotionRequestedRef.current)
-  }, [])
+  }, [purgeLiveEdgeTracks])
 
   // Keep mqttReplayActive in sync when replay runs server-side (ReplayPanel may be closed).
   useEffect(() => {

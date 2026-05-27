@@ -4,8 +4,8 @@
  * Streams a recorded MQTT capture (JSONL: "topic {json}\n" per line) back into
  * the live perception pipeline at a configurable speed. Each replayed message
  * has its deviceId prefixed with `replay-` so its trackKey can never collide
- * with a live perception track — the frontend can therefore keep showing live
- * tracks while replay is running.
+ * with a live perception track. During replay, live edge tracks are hidden
+ * from socket snapshots so the canvas shows only the capture replay.
  *
  * Two delivery modes:
  *   - direct injection (preferred): hand the parsed message straight to
@@ -294,10 +294,19 @@ export default class ReplayService {
     }
   }
 
+  _beginReplayIsolation() {
+    this.trackAggregator?.setReplayIsolateLive?.(true);
+  }
+
+  _endReplayIsolation() {
+    this.trackAggregator?.setReplayIsolateLive?.(false);
+  }
+
   async stop() {
     this._playbackToken++;
     if (this._abort) this._abort.aborted = true;
     this.state.running = false;
+    this._endReplayIsolation();
     this._tearDownPlayback();
     this.trackAggregator?.flushReplayTracks?.();
     this.mqttService?.flushReplayTracks?.();
@@ -359,6 +368,7 @@ export default class ReplayService {
     };
 
     console.log(`[Replay] Starting ${base} (${this.state.totalBytes} bytes) at ${this.state.speed}× from ${(progress * 100).toFixed(1)}% (byte ${byteOffset})`);
+    this._beginReplayIsolation();
 
     let resolvePlayback;
     this._playbackDone = new Promise((resolve) => { resolvePlayback = resolve; });
@@ -506,6 +516,7 @@ export default class ReplayService {
       presetId: null,
       sourceFile: null,
     };
+    this._beginReplayIsolation();
 
     console.log(`[Replay] Loading reconciled artifact ${path.basename(fullPath)} (${(stat.size / 1024 / 1024).toFixed(1)} MB)…`);
 
