@@ -559,7 +559,9 @@ export default function ReplayPanel({ onClose }: ReplayPanelProps) {
       await refreshStatus()
     } catch (err: unknown) {
       setMqttReplayActive(false)
-      setError(err instanceof Error ? err.message : String(err))
+      const msg = err instanceof Error ? err.message : String(err)
+      console.error('[MQTT Replay] start failed:', msg)
+      setError(msg)
     } finally {
       startingReplayRef.current = false
     }
