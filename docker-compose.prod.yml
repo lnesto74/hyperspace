@@ -67,6 +67,7 @@ services:
     environment:
       - PORT=3001
       - NODE_ENV=production
+      - NODE_OPTIONS=--max-old-space-size=4096
       - DB_PATH=/data/db/hyperspace.db
       - MOCK_LIDAR=${MOCK_LIDAR:-false}
       - MQTT_ENABLED=${MQTT_ENABLED:-true}

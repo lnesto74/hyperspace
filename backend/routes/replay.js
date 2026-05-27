@@ -233,6 +233,16 @@ export default function replayRoutes({ replayService, mqttRecordService, mqttSer
     }
   });
 
+  router.post('/reconcile/jobs/:id/cancel', (req, res) => {
+    try {
+      if (!offlineReconcileService) return res.status(503).json({ error: 'Offline reconciliation not available' });
+      const job = offlineReconcileService.cancelJob(req.params.id);
+      res.json({ success: true, job });
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
   router.get('/preview-image', async (req, res) => {
     try {
       const { file, venueId, t } = req.query;

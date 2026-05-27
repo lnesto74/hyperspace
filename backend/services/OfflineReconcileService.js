@@ -6,7 +6,7 @@ import fs from 'fs';
 import path from 'path';
 import { randomUUID } from 'crypto';
 import { getOfflinePreset, listOfflinePresets } from '../config/offlineReconcilePresets.js';
-import { runBatchReconciliation, writeReconciledArtifact } from './offline/BatchTrajectoryReconciler.js';
+import { runBatchReconciliationToFile } from './offline/BatchTrajectoryReconciler.js';
 import { normalizePerceptionTransform, IDENTITY_TRANSFORM } from './PerceptionTransform.js';
 import { venueQueries } from '../database/schema.js';
 
@@ -19,13 +19,40 @@ function parseDwgTransform(json) {
   }
 }
 
+function mapProgress({ phase, messages, fragments, merged, progress, batches }) {
+  if (phase === 'forward') return 0.1 + Math.min(0.7, (messages || 0) / 2_000_000);
+  if (phase === 'merge') return 0.82;
+  if (phase === 'smooth') return 0.86;
+  if (phase === 'write') return progress ?? 0.9;
+  return 0.01;
+}
+
 export class OfflineReconcileService {
   constructor({ db, replayDir } = {}) {
     this.db = db;
     this.replayDir = replayDir || process.env.REPLAY_DIR || '/data/replay';
     this.artifactDir = path.join(this.replayDir, 'reconciled');
     this._runningJobId = null;
+    this._cancelledJobs = new Set();
     fs.mkdirSync(this.artifactDir, { recursive: true });
+    this._recoverStaleJobs();
+  }
+
+  _recoverStaleJobs() {
+    const staleMs = 2 * 60 * 60 * 1000;
+    const cutoff = new Date(Date.now() - staleMs).toISOString();
+    const rows = this.db.prepare(`
+      SELECT id FROM offline_reconcile_jobs
+      WHERE status = 'running' AND started_at < ?
+    `).all(cutoff);
+    for (const row of rows) {
+      this.db.prepare(`
+        UPDATE offline_reconcile_jobs
+        SET status = 'failed', error = 'stale — exceeded 2h without completion', finished_at = ?
+        WHERE id = ?
+      `).run(new Date().toISOString(), row.id);
+      console.warn(`[OfflineReconcile] Recovered stale job ${row.id}`);
+    }
   }
 
   listPresets() {
@@ -57,6 +84,23 @@ export class OfflineReconcileService {
       ORDER BY finished_at DESC LIMIT 1
     `).get(path.basename(String(sourceFile)), presetId);
     return row ? this._rowToJob(row) : null;
+  }
+
+  cancelJob(id) {
+    const job = this.getJob(id);
+    if (!job) throw new Error('Job not found');
+    if (job.status !== 'pending' && job.status !== 'running') {
+      throw new Error(`Job is ${job.status}, cannot cancel`);
+    }
+    this._cancelledJobs.add(id);
+    this.db.prepare(`
+      UPDATE offline_reconcile_jobs
+      SET status = 'failed', error = 'cancelled', finished_at = ?
+      WHERE id = ?
+    `).run(new Date().toISOString(), id);
+    if (this._runningJobId === id) this._runningJobId = null;
+    console.log(`[OfflineReconcile] Cancelled ${id}`);
+    return this.getJob(id);
   }
 
   async startJob({ sourceFile, presetId, venueId }) {
@@ -93,6 +137,12 @@ export class OfflineReconcileService {
     return this.getJob(id);
   }
 
+  _isCancelled(id) {
+    if (this._cancelledJobs.has(id)) return true;
+    const row = this.db.prepare('SELECT status FROM offline_reconcile_jobs WHERE id = ?').get(id);
+    return row?.status === 'failed';
+  }
+
   async _runJob(id, ctx) {
     if (this._runningJobId) {
       await new Promise(r => setTimeout(r, 500));
@@ -113,43 +163,60 @@ export class OfflineReconcileService {
         }
       }
 
-      const result = await runBatchReconciliation({
+      console.log(`[OfflineReconcile] Start ${id} preset=${ctx.preset.id} file=${ctx.base}`);
+
+      const result = await runBatchReconciliationToFile({
         filePath: ctx.fullPath,
+        artifactPath: ctx.artifactPath,
         venueId: ctx.venueId,
         transform,
         configOverrides: ctx.preset.config,
-        onProgress: ({ phase, messages, fragments }) => {
-          const p = phase === 'forward' ? 0.1 + Math.min(0.7, (messages || 0) / 2_000_000) : 0.85;
+        meta: {
+          jobId: id,
+          sourceFile: ctx.base,
+          presetId: ctx.preset.id,
+          presetLabel: ctx.preset.label,
+          venueId: ctx.venueId,
+        },
+        onProgress: (payload) => {
+          if (this._isCancelled(id)) throw new Error('cancelled');
+          const p = mapProgress(payload);
           this.db.prepare('UPDATE offline_reconcile_jobs SET progress = ? WHERE id = ?').run(p, id);
+          if (payload.phase === 'merge') {
+            console.log(`[OfflineReconcile] ${id} merge (${payload.fragments} fragments)`);
+          } else if (payload.phase === 'write' && payload.batches) {
+            console.log(`[OfflineReconcile] ${id} writing batches (${payload.batches})`);
+          }
         },
       });
 
-      await writeReconciledArtifact(ctx.artifactPath, result.batches, {
-        jobId: id,
-        sourceFile: ctx.base,
-        presetId: ctx.preset.id,
-        presetLabel: ctx.preset.label,
-        venueId: ctx.venueId,
-        metrics: result.metrics,
-        firstTs: result.meta.firstTs,
-        lastTs: result.meta.lastTs,
-      });
+      if (this._isCancelled(id)) throw new Error('cancelled');
 
       const finished = new Date().toISOString();
-      const metaJson = JSON.stringify({ metrics: result.metrics, batchCount: result.batches.length });
+      const metaJson = JSON.stringify({
+        metrics: result.metrics,
+        batchCount: result.metrics.batch_count,
+      });
       this.db.prepare(`
         UPDATE offline_reconcile_jobs
         SET status = 'complete', progress = 1, finished_at = ?, meta_json = ?, error = NULL
         WHERE id = ?
       `).run(finished, metaJson, id);
 
-      console.log(`[OfflineReconcile] Complete ${id} → ${ctx.artifactPath} (${result.metrics.merged_tracks} tracks)`);
+      console.log(
+        `[OfflineReconcile] Complete ${id} → ${ctx.artifactPath}`
+        + ` (${result.metrics.merged_tracks} tracks, ${result.metrics.batch_count} batches)`,
+      );
     } catch (err) {
-      this.db.prepare(`
-        UPDATE offline_reconcile_jobs SET status = 'failed', error = ?, finished_at = ? WHERE id = ?
-      `).run(String(err.message || err), new Date().toISOString(), id);
+      const msg = String(err.message || err);
+      if (msg !== 'cancelled') {
+        this.db.prepare(`
+          UPDATE offline_reconcile_jobs SET status = 'failed', error = ?, finished_at = ? WHERE id = ?
+        `).run(msg, new Date().toISOString(), id);
+      }
       throw err;
     } finally {
+      this._cancelledJobs.delete(id);
       if (this._runningJobId === id) this._runningJobId = null;
     }
   }

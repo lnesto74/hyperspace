@@ -6,6 +6,7 @@
  * geometry (impossible in real-time).
  */
 import fs from 'fs';
+import path from 'path';
 import readline from 'readline';
 import { TrajectoryReconciler, normalizeReconcilerConfig } from '../TrajectoryReconciler.js';
 import {
@@ -203,36 +204,36 @@ function smoothSamples(samples, alpha) {
   return out;
 }
 
-function buildBatchTimeline(mergedTracks, venueId, devicePrefix = 'offline-') {
-  const events = [];
-  for (const [stableId, track] of mergedTracks) {
-    for (const s of track.samples) {
-      events.push({ stableId, ...s });
-    }
+function streamBatchTimelineToFile(mergedTracks, venueId, ws, devicePrefix = 'replay-offline-', onBatch = null) {
+  let firstTs = Infinity;
+  let lastTs = -Infinity;
+  for (const track of mergedTracks.values()) {
+    if (!track.samples?.length) continue;
+    firstTs = Math.min(firstTs, track.samples[0].t);
+    lastTs = Math.max(lastTs, track.samples[track.samples.length - 1].t);
   }
-  events.sort((a, b) => a.t - b.t);
-  if (!events.length) return [];
+  if (!Number.isFinite(firstTs) || !Number.isFinite(lastTs)) return 0;
 
-  const firstTs = events[0].t;
-  const lastTs = events[events.length - 1].t;
-  const batches = [];
-  const active = new Map();
-  let eventIdx = 0;
+  const trackList = [...mergedTracks.values()]
+    .filter(t => t.samples?.length)
+    .map(t => ({ stableId: t.stableId, samples: t.samples, idx: 0, last: null }));
 
+  let batchCount = 0;
   for (let t0 = firstTs; t0 <= lastTs; t0 += BATCH_MS) {
     const t1 = t0 + BATCH_MS;
-    while (eventIdx < events.length && events[eventIdx].t < t1) {
-      const e = events[eventIdx++];
-      active.set(e.stableId, e);
-    }
-    if (active.size === 0) continue;
     const tracks = [];
-    for (const [stableId, s] of active) {
+    for (const tr of trackList) {
+      while (tr.idx < tr.samples.length && tr.samples[tr.idx].t < t1) {
+        tr.last = tr.samples[tr.idx];
+        tr.idx++;
+      }
+      if (!tr.last) continue;
+      const s = tr.last;
       tracks.push({
-        id: stableId,
-        stableId,
-        trackKey: `${devicePrefix}${stableId}`,
-        deviceId: devicePrefix.replace(/-$/, '') || 'offline',
+        id: tr.stableId,
+        stableId: tr.stableId,
+        trackKey: `${devicePrefix}${tr.stableId}`,
+        deviceId: devicePrefix.replace(/-$/, '') || 'replay-offline',
         venueId,
         timestamp: t0,
         venuePosition: { x: s.x, y: 0, z: s.z },
@@ -242,20 +243,24 @@ function buildBatchTimeline(mergedTracks, venueId, devicePrefix = 'offline-') {
         _offlineReconciled: true,
       });
     }
-    batches.push({ venueId, timestamp: t0, tracks });
+    if (tracks.length === 0) continue;
+    ws.write(`${JSON.stringify({ _type: 'batch', venueId, timestamp: t0, tracks })}\n`);
+    batchCount++;
+    if (onBatch && batchCount % 400 === 0) onBatch(batchCount, t0, lastTs);
   }
-  return batches;
+  return batchCount;
 }
 
 /**
- * Run full offline reconciliation on a capture file.
- * @returns {{ batches, metrics, meta }}
+ * Run reconciliation and stream artifact directly to disk (memory-safe for 30+ min captures).
  */
-export async function runBatchReconciliation({
+export async function runBatchReconciliationToFile({
   filePath,
+  artifactPath,
   venueId,
   transform = IDENTITY_TRANSFORM,
   configOverrides = {},
+  meta = {},
   onProgress,
 }) {
   const cfg = normalizeReconcilerConfig({ ...configOverrides, enabled: true });
@@ -292,12 +297,10 @@ export async function runBatchReconciliation({
     if (!out) continue;
 
     const sid = out.stableId || out.id;
-    const x = out.venuePosition.x;
-    const z = out.venuePosition.z;
     const sample = {
       t: out.timestamp,
-      x,
-      z,
+      x: out.venuePosition.x,
+      z: out.venuePosition.z,
       vx: out.velocity?.x || 0,
       vz: out.velocity?.z || 0,
       perceptionId: out.originalPerceptionId || incoming.id,
@@ -322,10 +325,17 @@ export async function runBatchReconciliation({
     const frag = summarizeFragment(samples);
     if (frag) fragments.set(sid, frag);
   }
+  fragmentSamples.clear();
 
-  if (onProgress) onProgress({ phase: 'merge', fragments: fragments.size });
+  const forwardFragmentCount = fragments.size;
+
+  if (onProgress) onProgress({ phase: 'merge', fragments: forwardFragmentCount });
 
   const mergedRaw = mergeFragments(fragments, cfg);
+  fragments.clear();
+
+  if (onProgress) onProgress({ phase: 'smooth', merged: mergedRaw.size });
+
   const mergedTracks = new Map();
   for (const [sid, track] of mergedRaw) {
     mergedTracks.set(sid, {
@@ -333,31 +343,75 @@ export async function runBatchReconciliation({
       samples: smoothSamples(track.samples, cfg.smoothing_alpha),
     });
   }
+  const mergedTrackCount = mergedTracks.size;
+  mergedRaw.clear();
 
-  const batches = buildBatchTimeline(mergedTracks, venueId || 'default');
+  const ws = fs.createWriteStream(artifactPath, { flags: 'w' });
+  ws.write(`${JSON.stringify({ _type: 'meta', ...meta, firstTs, lastTs })}\n`);
+
+  if (onProgress) onProgress({ phase: 'write', progress: 0.9 });
+
+  const batchCount = streamBatchTimelineToFile(
+    mergedTracks,
+    venueId || 'default',
+    ws,
+    'replay-offline-',
+    (n, t0, tEnd) => {
+      if (onProgress) {
+        const frac = tEnd > firstTs ? (t0 - firstTs) / (tEnd - firstTs) : 0;
+        onProgress({ phase: 'write', progress: 0.9 + frac * 0.09, batches: n });
+      }
+    },
+  );
+
+  await new Promise((resolve, reject) => {
+    ws.on('error', reject);
+    ws.end(resolve);
+  });
+
+  mergedTracks.clear();
   const stats = reconciler.getStats(venueId) || {};
 
   const metrics = {
     raw_messages: totalRaw,
-    forward_fragments: fragments.size,
-    merged_tracks: mergedTracks.size,
-    batch_count: batches.length,
+    forward_fragments: forwardFragmentCount,
+    merged_tracks: mergedTrackCount,
+    batch_count: batchCount,
     span_ms: firstTs != null && lastTs != null ? lastTs - firstTs : 0,
     ghost_dropped: stats.ghost_dropped || 0,
     reid_count: stats.reid_count || 0,
-    merge_reduction: fragments.size - mergedTracks.size,
+    merge_reduction: forwardFragmentCount - mergedTrackCount,
   };
 
-  return {
-    batches,
-    metrics,
-    meta: {
+  return { metrics, meta: { venueId, firstTs, lastTs, presetConfig: cfg } };
+}
+
+/**
+ * Run full offline reconciliation on a capture file (in-memory batches — small files only).
+ * @returns {{ batches, metrics, meta }}
+ */
+export async function runBatchReconciliation({
+  filePath,
+  venueId,
+  transform = IDENTITY_TRANSFORM,
+  configOverrides = {},
+  onProgress,
+}) {
+  const { default: os } = await import('os');
+  const tmpPath = path.join(os.tmpdir(), `hyperspace-reconcile-${Date.now()}.jsonl`);
+  try {
+    const { metrics, meta } = await runBatchReconciliationToFile({
+      filePath,
+      artifactPath: tmpPath,
       venueId,
-      firstTs,
-      lastTs,
-      presetConfig: cfg,
-    },
-  };
+      transform,
+      configOverrides,
+      onProgress,
+    });
+    return { batches: [], metrics, meta };
+  } finally {
+    try { fs.unlinkSync(tmpPath); } catch { /* ignore */ }
+  }
 }
 
 /** Write reconciled batches to JSONL artifact (replay-ready). */
