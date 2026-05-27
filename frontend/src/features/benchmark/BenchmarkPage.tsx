@@ -14,13 +14,14 @@ import ArtifactPanel from './components/ArtifactPanel'
 import RunComparePanel from './components/RunComparePanel'
 import BenchmarkCoverageMap from './components/BenchmarkCoverageMap'
 import BenchmarkExecutiveTab from './components/BenchmarkExecutiveTab'
-import RunBenchmarkPanel from './components/RunBenchmarkPanel'
+import RawVsReconciledTab from './components/RawVsReconciledTab'
+import type { TrackViewMode } from './types'
 
 interface BenchmarkPageProps {
   onClose: () => void
 }
 
-type Tab = 'executive' | 'overview' | 'reconciler' | 'coverage' | 'spatial' | 'artifacts'
+type Tab = 'executive' | 'raw_vs' | 'overview' | 'reconciler' | 'coverage' | 'spatial' | 'artifacts'
 
 function fmt(n: number | undefined | null, d = 1) {
   if (n == null || Number.isNaN(n)) return '—'
@@ -55,9 +56,10 @@ export default function BenchmarkPage({ onClose }: BenchmarkPageProps) {
   const [loading, setLoading] = useState(true)
   const [detailLoading, setDetailLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [tab, setTab] = useState<Tab>('executive')
+  const [tab, setTab] = useState<Tab>('raw_vs')
   const [selectedImage, setSelectedImage] = useState<string | null>(null)
   const [showCompare, setShowCompare] = useState(false)
+  const [coverageTrackView, setCoverageTrackView] = useState<TrackViewMode | undefined>()
 
   const fetchRuns = useCallback(async () => {
     setLoading(true)
@@ -117,10 +119,11 @@ export default function BenchmarkPage({ onClose }: BenchmarkPageProps) {
   const fc = s?.fragmentation_cause_pct
 
   const tabs: { id: Tab; label: string }[] = [
+    { id: 'raw_vs', label: 'Raw vs reconciled' },
     { id: 'executive', label: 'Executive' },
     { id: 'overview', label: 'Overview' },
     { id: 'coverage', label: 'Venue map' },
-    { id: 'reconciler', label: 'Reconciler' },
+    { id: 'reconciler', label: 'Reconciler sweep' },
     { id: 'spatial', label: 'Spatial stats' },
     { id: 'artifacts', label: 'Artifacts' },
   ]
@@ -294,6 +297,16 @@ export default function BenchmarkPage({ onClose }: BenchmarkPageProps) {
                 ))}
               </div>
 
+              {tab === 'raw_vs' && detail && (
+                <RawVsReconciledTab
+                  detail={detail}
+                  onOpenCoverage={(trackView) => {
+                    setCoverageTrackView(trackView)
+                    setTab('coverage')
+                  }}
+                />
+              )}
+
               {tab === 'executive' && detail && (
                 <BenchmarkExecutiveTab
                   detail={detail}
@@ -335,6 +348,7 @@ export default function BenchmarkPage({ onClose }: BenchmarkPageProps) {
                     runId={selectedId}
                     compareRunId={showCompare && baselineId !== selectedId ? baselineId : null}
                     compareLabel={baselineRun?.capture_id}
+                    initialTrackView={coverageTrackView}
                   />
                 </div>
               )}

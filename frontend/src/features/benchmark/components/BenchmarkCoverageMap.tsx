@@ -73,6 +73,7 @@ interface Props {
   runId: string
   compareRunId?: string | null
   compareLabel?: string
+  initialTrackView?: TrackViewMode
 }
 
 function mapPoint(
@@ -90,7 +91,7 @@ function mapPoint(
   return { x, z }
 }
 
-export default function BenchmarkCoverageMap({ runId, compareRunId, compareLabel }: Props) {
+export default function BenchmarkCoverageMap({ runId, compareRunId, compareLabel, initialTrackView }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const dragRef = useRef<{ x: number; y: number; panX: number; panY: number } | null>(null)
@@ -113,8 +114,12 @@ export default function BenchmarkCoverageMap({ runId, compareRunId, compareLabel
   const [calibration, setCalibration] = useState<MapCalibration>(DEFAULT_MAP_CALIBRATION)
   const [showAlignPanel, setShowAlignPanel] = useState(false)
 
-  const [trackView, setTrackView] = useState<TrackViewMode>('overlay_RAJ_v1_CONSERVATIVE')
+  const [trackView, setTrackView] = useState<TrackViewMode>(initialTrackView ?? 'overlay_RAJ_v1_CONSERVATIVE')
   const [reconciled, setReconciled] = useState<ReconciledSpatial | null>(null)
+
+  useEffect(() => {
+    if (initialTrackView) setTrackView(initialTrackView)
+  }, [initialTrackView])
 
   const [layers, setLayers] = useState<Record<LayerKey, boolean>>({
     floorplan: true,
