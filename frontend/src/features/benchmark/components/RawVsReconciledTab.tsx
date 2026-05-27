@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { ArrowRight, MapPin, Sparkles, TrendingDown, TrendingUp } from 'lucide-react'
 import { API_BASE } from '../../../config/api'
-import type { BenchmarkRunDetail, TrackViewMode } from '../types'
+import type { BenchmarkRunDetail, ReconciledSpatial, TrackViewMode } from '../types'
 import {
   RECONCILER_CONFIG_OPTIONS,
   buildRawVsReconciledRows,
@@ -171,7 +171,7 @@ export default function RawVsReconciledTab({ detail, onOpenCoverage }: Props) {
           >
             {availableConfigs.map(c => (
               <option key={c.id} value={c.id}>
-                {c.label}{c.recommended ? ' ★' : ''}
+                {c.label}{'recommended' in c && c.recommended ? ' ★' : ''}
               </option>
             ))}
           </select>

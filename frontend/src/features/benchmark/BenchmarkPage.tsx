@@ -14,6 +14,7 @@ import ArtifactPanel from './components/ArtifactPanel'
 import RunComparePanel from './components/RunComparePanel'
 import BenchmarkCoverageMap from './components/BenchmarkCoverageMap'
 import BenchmarkExecutiveTab from './components/BenchmarkExecutiveTab'
+import RunBenchmarkPanel from './components/RunBenchmarkPanel'
 import RawVsReconciledTab from './components/RawVsReconciledTab'
 import type { TrackViewMode } from './types'
 
