@@ -39,15 +39,32 @@ export default function replayRoutes({ replayService, mqttRecordService, mqttSer
 
       if (jobId && offlineReconcileService) {
         const job = offlineReconcileService.getJob(String(jobId));
-        if (!job || job.status !== 'complete') {
+        if (!job) {
+          return res.status(400).json({ error: 'Reconciliation job not found' });
+        }
+        if (job.status !== 'complete') {
           return res.status(400).json({ error: 'Reconciliation job not complete — wait for post-process to finish' });
         }
-        resolvedArtifact = job.artifactPath;
+        resolvedArtifact = offlineReconcileService.resolveArtifactPath(job);
+        if (!resolvedArtifact) {
+          return res.status(400).json({
+            error: `Reconciled artifact missing on disk (${job.artifactName || job.sourceFile}). Re-run post-process for this capture.`,
+          });
+        }
         playReconciled = true;
         playFile = job.artifactName;
       }
 
       if (playReconciled || resolvedArtifact) {
+        if (resolvedArtifact && offlineReconcileService) {
+          const verified = offlineReconcileService.resolveArtifactPath(resolvedArtifact);
+          if (!verified) {
+            return res.status(400).json({
+              error: `Reconciled artifact missing on disk (${path.basename(resolvedArtifact)}). Re-run post-process for this capture.`,
+            });
+          }
+          resolvedArtifact = verified;
+        }
         await replayService.stop();
         const playPromise = replayService.startReconciledArtifact({
           file: resolvedArtifact || playFile,

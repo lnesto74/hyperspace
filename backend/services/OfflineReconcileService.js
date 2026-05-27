@@ -37,6 +37,7 @@ export class OfflineReconcileService {
     fs.mkdirSync(this.artifactDir, { recursive: true });
     this._recoverInterruptedJobs();
     this._recoverTimedOutJobs();
+    this._recoverOrphanedCompleteJobs();
   }
 
   /** Jobs left running/pending in DB have no in-process worker after restart. */
@@ -83,6 +84,57 @@ export class OfflineReconcileService {
       );
       console.warn(`[OfflineReconcile] Recovered stale job ${row.id}`);
     }
+  }
+
+  /** DB says complete but artifact file is missing (deleted, volume loss, bad path). */
+  _recoverOrphanedCompleteJobs() {
+    const rows = this.db.prepare(`
+      SELECT id, artifact_path FROM offline_reconcile_jobs WHERE status = 'complete'
+    `).all();
+    for (const row of rows) {
+      const artifactPath = row.artifact_path;
+      const artifactName = artifactPath ? path.basename(artifactPath) : null;
+      if (this._resolveExistingArtifactPath({ artifactPath, artifactName })) continue;
+      this.db.prepare(`
+        UPDATE offline_reconcile_jobs
+        SET status = 'failed',
+            error = ?,
+            finished_at = ?
+        WHERE id = ?
+      `).run(
+        'artifact missing on disk — re-run post-process for this capture',
+        new Date().toISOString(),
+        row.id,
+      );
+      console.warn(`[OfflineReconcile] Recovered orphaned complete job ${row.id} (artifact missing)`);
+    }
+  }
+
+  _artifactCandidates(artifactPath, artifactName) {
+    const names = new Set();
+    if (artifactName) names.add(path.basename(String(artifactName)));
+    if (artifactPath) names.add(path.basename(String(artifactPath)));
+    const candidates = [];
+    for (const name of names) {
+      candidates.push(path.join(this.artifactDir, name));
+    }
+    if (artifactPath) {
+      const p = String(artifactPath);
+      candidates.unshift(p);
+      if (!path.isAbsolute(p)) {
+        candidates.push(path.join(this.replayDir, p));
+      }
+    }
+    return [...new Set(candidates)];
+  }
+
+  _resolveExistingArtifactPath({ artifactPath, artifactName } = {}) {
+    for (const candidate of this._artifactCandidates(artifactPath, artifactName)) {
+      try {
+        if (fs.existsSync(candidate) && fs.statSync(candidate).size > 0) return candidate;
+      } catch { /* ignore */ }
+    }
+    return null;
   }
 
   listPresets() {
@@ -265,6 +317,10 @@ export class OfflineReconcileService {
 
       if (this._isCancelled(id)) throw new Error('cancelled');
 
+      if (!this._resolveExistingArtifactPath({ artifactPath: ctx.artifactPath, artifactName: path.basename(ctx.artifactPath) })) {
+        throw new Error('Artifact file missing after reconcile write — check disk space and replay volume mount');
+      }
+
       const finished = new Date().toISOString();
       const metaJson = JSON.stringify({
         metrics: result.metrics,
@@ -296,18 +352,23 @@ export class OfflineReconcileService {
 
   resolveArtifactPath(jobOrPath) {
     if (!jobOrPath) return null;
-    if (jobOrPath.includes('.reconciled.jsonl')) {
-      const p = path.isAbsolute(jobOrPath) ? jobOrPath : path.join(this.artifactDir, path.basename(jobOrPath));
-      return fs.existsSync(p) ? p : null;
+    if (typeof jobOrPath === 'string' && jobOrPath.includes('.reconciled.jsonl')) {
+      return this._resolveExistingArtifactPath({
+        artifactPath: jobOrPath,
+        artifactName: path.basename(jobOrPath),
+      });
     }
-    const job = this.getJob(jobOrPath);
+    const job = typeof jobOrPath === 'string' ? this.getJob(jobOrPath) : jobOrPath;
     if (!job?.artifactPath || job.status !== 'complete') return null;
-    return fs.existsSync(job.artifactPath) ? job.artifactPath : null;
+    return this._resolveExistingArtifactPath({
+      artifactPath: job.artifactPath,
+      artifactName: job.artifactName,
+    });
   }
 
   listArtifactsForSource(sourceFile) {
     const base = path.basename(String(sourceFile));
-    return this.listJobs({ sourceFile: base }).filter(j => j.status === 'complete');
+    return this.listJobs({ sourceFile: base }).filter(j => j.status === 'complete' && this.resolveArtifactPath(j));
   }
 
   _rowToJob(row) {
