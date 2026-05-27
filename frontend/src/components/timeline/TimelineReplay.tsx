@@ -61,11 +61,12 @@ export default function TimelineReplay({ venueId, isOpen, onTimeChange }: Timeli
   const playIntervalRef = useRef<NodeJS.Timeout | null>(null)
   const timelineRef = useRef<HTMLDivElement>(null)
 
-  // Historical timeline replay — only after slots load; never block MQTT JSONL replay.
+  // Only replace the live canvas while actively scrubbing or playing historical KPI replay.
+  const historicalCanvasActive = isOpen && timelineData.length > 0 && (isPlaying || isDragging)
   useEffect(() => {
-    setReplayMode(isOpen && timelineData.length > 0)
+    setReplayMode(historicalCanvasActive)
     return () => setReplayMode(false)
-  }, [isOpen, timelineData.length, setReplayMode])
+  }, [historicalCanvasActive, setReplayMode])
 
   // Fetch ROIs/zones for the venue (all layouts — includes DWG smart-kpi shelf zones)
   useEffect(() => {

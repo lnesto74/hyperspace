@@ -209,7 +209,7 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
   }, [applyVisualizationMode])
   
   // Historical timeline/insight replay uses DB snapshots; MQTT JSONL replay uses live socket.
-  const useHistoricalTracks = isReplayMode && !mqttReplayActive
+  const useHistoricalTracks = isReplayMode && !mqttReplayActive && replayTracks.size > 0
   const tracks = useHistoricalTracks ? replayTracks : liveTracks
   
   // Stable ref always points to latest tracks — consumers using useTracksRef() 
@@ -377,7 +377,7 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
         if (DIAG) console.warn(`[DIAG] tracks IGNORED  eventVenue=${data.venueId}  subscribed=${subscribedVenueRef.current}  n=${data.tracks.length}  t=${Date.now()}`)
         return
       }
-      if (isReplayModeRef.current && !mqttReplayActiveRef.current) return
+      if (isReplayModeRef.current && !mqttReplayActiveRef.current && replayTracksRef.current.size > 0) return
 
       const now = Date.now()
 
