@@ -8,6 +8,7 @@
 import fs from 'fs';
 import path from 'path';
 import readline from 'readline';
+import { finished } from 'node:stream/promises';
 import { TrajectoryReconciler, normalizeReconcilerConfig } from '../TrajectoryReconciler.js';
 import {
   perceptionToFloor,
@@ -19,6 +20,8 @@ import {
 import { GROCERY_MOTION } from '../../config/offlineReconcilePresets.js';
 
 const BATCH_MS = 100;
+/** Offline artifacts use coarser buckets — fewer batches, same replay semantics. */
+const OFFLINE_BATCH_MS = 250;
 const SWEEP_MS = 250;
 
 function parseCaptureLine(line) {
@@ -204,7 +207,21 @@ function smoothSamples(samples, alpha) {
   return out;
 }
 
-function streamBatchTimelineToFile(mergedTracks, venueId, ws, devicePrefix = 'replay-offline-', onBatch = null) {
+async function writeStreamLine(ws, line) {
+  if (ws.write(line)) return;
+  await new Promise((resolve, reject) => {
+    const cleanup = () => {
+      ws.off('drain', onDrain);
+      ws.off('error', onError);
+    };
+    const onDrain = () => { cleanup(); resolve(); };
+    const onError = (err) => { cleanup(); reject(err); };
+    ws.on('drain', onDrain);
+    ws.on('error', onError);
+  });
+}
+
+async function streamBatchTimelineToFile(mergedTracks, venueId, ws, devicePrefix = 'replay-offline-', onBatch = null) {
   let firstTs = Infinity;
   let lastTs = -Infinity;
   for (const track of mergedTracks.values()) {
@@ -219,13 +236,16 @@ function streamBatchTimelineToFile(mergedTracks, venueId, ws, devicePrefix = 're
     .map(t => ({ stableId: t.stableId, samples: t.samples, idx: 0, last: null }));
 
   let batchCount = 0;
-  for (let t0 = firstTs; t0 <= lastTs; t0 += BATCH_MS) {
-    const t1 = t0 + BATCH_MS;
+  for (let t0 = firstTs; t0 <= lastTs; t0 += OFFLINE_BATCH_MS) {
+    const t1 = t0 + OFFLINE_BATCH_MS;
     const tracks = [];
     for (const tr of trackList) {
-      while (tr.idx < tr.samples.length && tr.samples[tr.idx].t < t1) {
-        tr.last = tr.samples[tr.idx];
-        tr.idx++;
+      if (tr.samples) {
+        while (tr.idx < tr.samples.length && tr.samples[tr.idx].t < t1) {
+          tr.last = tr.samples[tr.idx];
+          tr.idx++;
+        }
+        if (tr.idx >= tr.samples.length) tr.samples = null;
       }
       if (!tr.last) continue;
       const s = tr.last;
@@ -244,9 +264,14 @@ function streamBatchTimelineToFile(mergedTracks, venueId, ws, devicePrefix = 're
       });
     }
     if (tracks.length === 0) continue;
-    ws.write(`${JSON.stringify({ _type: 'batch', venueId, timestamp: t0, tracks })}\n`);
+    await writeStreamLine(ws, `${JSON.stringify({ _type: 'batch', venueId, timestamp: t0, tracks })}\n`);
     batchCount++;
-    if (onBatch && batchCount % 400 === 0) onBatch(batchCount, t0, lastTs);
+    if (onBatch && (batchCount % 200 === 0 || t0 + OFFLINE_BATCH_MS > lastTs)) {
+      onBatch(batchCount, t0, lastTs);
+    }
+    if (batchCount % 500 === 0) {
+      await new Promise(r => setImmediate(r));
+    }
   }
   return batchCount;
 }
@@ -347,11 +372,11 @@ export async function runBatchReconciliationToFile({
   mergedRaw.clear();
 
   const ws = fs.createWriteStream(artifactPath, { flags: 'w' });
-  ws.write(`${JSON.stringify({ _type: 'meta', ...meta, firstTs, lastTs })}\n`);
+  await writeStreamLine(ws, `${JSON.stringify({ _type: 'meta', ...meta, firstTs, lastTs })}\n`);
 
   if (onProgress) onProgress({ phase: 'write', progress: 0.9 });
 
-  const batchCount = streamBatchTimelineToFile(
+  const batchCount = await streamBatchTimelineToFile(
     mergedTracks,
     venueId || 'default',
     ws,
@@ -359,15 +384,15 @@ export async function runBatchReconciliationToFile({
     (n, t0, tEnd) => {
       if (onProgress) {
         const frac = tEnd > firstTs ? (t0 - firstTs) / (tEnd - firstTs) : 0;
-        onProgress({ phase: 'write', progress: 0.9 + frac * 0.09, batches: n });
+        onProgress({ phase: 'write', progress: 0.9 + frac * 0.095, batches: n });
       }
     },
   );
 
-  await new Promise((resolve, reject) => {
-    ws.on('error', reject);
-    ws.end(resolve);
-  });
+  if (onProgress) onProgress({ phase: 'write', progress: 0.995, batches: batchCount });
+
+  ws.end();
+  await finished(ws);
 
   mergedTracks.clear();
   const stats = reconciler.getStats(venueId) || {};

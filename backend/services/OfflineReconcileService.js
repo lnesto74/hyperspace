@@ -23,7 +23,7 @@ function mapProgress({ phase, messages, fragments, merged, progress, batches }) 
   if (phase === 'forward') return 0.1 + Math.min(0.7, (messages || 0) / 2_000_000);
   if (phase === 'merge') return 0.82;
   if (phase === 'smooth') return 0.86;
-  if (phase === 'write') return progress ?? 0.9;
+  if (phase === 'write') return Math.min(0.995, progress ?? 0.9);
   return 0.01;
 }
 
@@ -39,18 +39,24 @@ export class OfflineReconcileService {
   }
 
   _recoverStaleJobs() {
-    const staleMs = 2 * 60 * 60 * 1000;
+    const staleMs = 45 * 60 * 1000;
     const cutoff = new Date(Date.now() - staleMs).toISOString();
     const rows = this.db.prepare(`
-      SELECT id FROM offline_reconcile_jobs
+      SELECT id, progress FROM offline_reconcile_jobs
       WHERE status = 'running' AND started_at < ?
     `).all(cutoff);
     for (const row of rows) {
       this.db.prepare(`
         UPDATE offline_reconcile_jobs
-        SET status = 'failed', error = 'stale — exceeded 2h without completion', finished_at = ?
+        SET status = 'failed',
+            error = ?,
+            finished_at = ?
         WHERE id = ?
-      `).run(new Date().toISOString(), row.id);
+      `).run(
+        `stale — no completion after 45m (last progress ${Math.round((row.progress || 0) * 100)}%)`,
+        new Date().toISOString(),
+        row.id,
+      );
       console.warn(`[OfflineReconcile] Recovered stale job ${row.id}`);
     }
   }
@@ -186,6 +192,9 @@ export class OfflineReconcileService {
             console.log(`[OfflineReconcile] ${id} merge (${payload.fragments} fragments)`);
           } else if (payload.phase === 'write' && payload.batches) {
             console.log(`[OfflineReconcile] ${id} writing batches (${payload.batches})`);
+            this.db.prepare(`
+              UPDATE offline_reconcile_jobs SET progress = ?, error = NULL WHERE id = ?
+            `).run(mapProgress(payload), id);
           }
         },
       });

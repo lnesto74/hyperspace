@@ -92,13 +92,25 @@ interface ReconcileJob {
   finishedAt?: string | null
 }
 
-const reconcilePhaseLabel = (progress: number) => {
+const reconcilePhaseLabel = (progress: number, batches?: number) => {
   if (progress >= 1) return 'Complete'
-  if (progress >= 0.9) return 'Writing reconciled artifact to disk'
+  if (progress >= 0.995) return 'Finalizing artifact file…'
+  if (progress >= 0.9) {
+    return batches
+      ? `Writing reconciled artifact (${batches.toLocaleString()} batches so far — large captures can take several minutes)`
+      : 'Writing reconciled artifact to disk'
+  }
   if (progress >= 0.86) return 'Smoothing trajectories'
   if (progress >= 0.82) return 'Merging track fragments (global path merge)'
   if (progress >= 0.1) return 'Forward pass — reading capture & reconciling'
   return 'Starting job…'
+}
+
+const friendlyReconcileError = (msg: string) => {
+  if (/502|503|504|fetch failed|network/i.test(msg)) {
+    return `${msg} — backend may have restarted while the job was still running; check server logs and reconciled/ folder`
+  }
+  return msg
 }
 
 interface ReplayPanelProps {
@@ -239,7 +251,7 @@ export default function ReplayPanel({ onClose }: ReplayPanelProps) {
       else if (complete && !selectedReconcileJobId) setSelectedReconcileJobId(complete.id)
       if (!active && complete) setReconcileError(null)
     } catch (err: unknown) {
-      setReconcileError(err instanceof Error ? err.message : String(err))
+      setReconcileError(friendlyReconcileError(err instanceof Error ? err.message : String(err)))
     }
   }, [selectedReconcileJobId])
 
@@ -429,7 +441,7 @@ export default function ReplayPanel({ onClose }: ReplayPanelProps) {
       await refreshReconcileJobs(file)
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err)
-      setReconcileError(msg)
+      setReconcileError(friendlyReconcileError(msg))
       setError(msg)
     } finally {
       setReconcileBusy(false)
@@ -447,7 +459,7 @@ export default function ReplayPanel({ onClose }: ReplayPanelProps) {
       if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`)
       await refreshReconcileJobs(selectedRef.current)
     } catch (err: unknown) {
-      setReconcileError(err instanceof Error ? err.message : String(err))
+      setReconcileError(friendlyReconcileError(err instanceof Error ? err.message : String(err)))
     } finally {
       setReconcileCancelBusy(false)
     }
@@ -881,7 +893,7 @@ export default function ReplayPanel({ onClose }: ReplayPanelProps) {
                   <div className="min-w-0">
                     <div className="font-medium">Reconcile error</div>
                     <div className="text-red-200/90 break-words font-mono text-[10px] mt-0.5">
-                      {reconcileError || latestFailedReconcileJob?.error}
+                      {friendlyReconcileError(reconcileError || latestFailedReconcileJob?.error || '')}
                     </div>
                   </div>
                 </div>
