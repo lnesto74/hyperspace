@@ -312,7 +312,11 @@ export default class ReplayService {
    * (EOF or explicit stop). Caller usually doesn't await — the HTTP endpoint
    * returns immediately and polls `status()` afterwards.
    */
-  async start({ file, speed = 1, rewriteTimestamps = true, devicePrefix = 'replay-', startProgress = 0 } = {}) {
+  async start({ file, speed = 1, rewriteTimestamps = true, devicePrefix = 'replay-', startProgress = 0, reconciled = false, artifactPath = null } = {}) {
+    if (reconciled || artifactPath || String(file || '').endsWith('.reconciled.jsonl')) {
+      return this.startReconciledArtifact({ file: artifactPath || file, speed, startProgress, rewriteTimestamps });
+    }
+
     await this.stop();
 
     const { base, fullPath, size: fileSize, mtimeMs: fileMtimeMs } = this.validateCaptureFile(file);
@@ -450,6 +454,126 @@ export default class ReplayService {
     }
 
     console.log(`[Replay] Finished ${path.basename(fullPath)} — ${this.state.messagesPublished} msgs`);
+  }
+
+  /**
+   * Replay a post-processed reconciled artifact (.reconciled.jsonl).
+   * Batches are injected directly — no live reconciler, same client path as raw replay.
+   */
+  async startReconciledArtifact({ file, speed = 1, startProgress = 0, rewriteTimestamps = true } = {}) {
+    await this.stop();
+
+    const fullPath = path.isAbsolute(file) ? file : path.join(this.replayDir, 'reconciled', path.basename(String(file)));
+    if (!fs.existsSync(fullPath)) {
+      throw new Error(`Reconciled artifact not found: ${path.basename(fullPath)}`);
+    }
+
+    const token = this._playbackToken;
+    const progress = Math.max(0, Math.min(1, Number(startProgress) || 0));
+    const stat = fs.statSync(fullPath);
+
+    const batches = [];
+    let meta = null;
+    const rlMeta = readline.createInterface({
+      input: fs.createReadStream(fullPath),
+      crlfDelay: Infinity,
+    });
+    for await (const line of rlMeta) {
+      const raw = line.trim();
+      if (!raw) continue;
+      let row;
+      try { row = JSON.parse(raw); } catch { continue; }
+      if (row._type === 'meta') { meta = row; continue; }
+      if (row._type === 'batch' && row.tracks?.length) {
+        batches.push({ venueId: row.venueId, timestamp: row.timestamp, tracks: row.tracks });
+      }
+    }
+
+    if (!batches.length) throw new Error('Reconciled artifact has no playback batches — re-run post-process job');
+
+    const startIdx = Math.floor(progress * batches.length);
+    const playbackBatches = batches.slice(startIdx);
+    const firstTs = playbackBatches[0]?.timestamp || 0;
+    const lastTs = playbackBatches[playbackBatches.length - 1]?.timestamp || firstTs;
+
+    const abort = { aborted: false };
+    this._abort = abort;
+
+    this.state = {
+      running: true,
+      file: path.basename(fullPath),
+      requestedFile: path.basename(fullPath),
+      fileSize: stat.size,
+      fileMtimeMs: stat.mtimeMs,
+      firstRecordedTs: meta?.firstTs ?? firstTs,
+      lastRecordedTs: meta?.lastTs ?? lastTs,
+      recordedCurrentTs: null,
+      startProgress: progress,
+      startedAt: Date.now(),
+      speed: Math.max(0.1, Math.min(50, Number(speed) || 1)),
+      rewriteTimestamps: !!rewriteTimestamps,
+      messagesPublished: 0,
+      progress,
+      currentTs: 0,
+      lastError: null,
+      totalBytes: stat.size,
+      bytesRead: 0,
+      delivery: 'reconciled-direct',
+      playbackToken: token,
+      reconciled: true,
+      presetId: meta?.presetId || null,
+      sourceFile: meta?.sourceFile || null,
+    };
+
+    console.log(`[Replay] Starting reconciled artifact ${path.basename(fullPath)} (${playbackBatches.length} batches) at ${this.state.speed}×`);
+
+    let resolvePlayback;
+    this._playbackDone = new Promise((resolve) => { resolvePlayback = resolve; });
+    const replayStartTs = Date.now();
+    const SLEEP_SLACK_MS = 5;
+
+    try {
+      for (let i = 0; i < playbackBatches.length; i++) {
+        if (abort.aborted || token !== this._playbackToken) break;
+        const batch = playbackBatches[i];
+        const recordedDelta = batch.timestamp - firstTs;
+        const targetWallTime = replayStartTs + recordedDelta / this.state.speed;
+        const waitMs = targetWallTime - Date.now();
+        if (waitMs > SLEEP_SLACK_MS) {
+          await this._abortableSleep(waitMs, abort, token);
+        }
+        if (abort.aborted || token !== this._playbackToken) break;
+
+        const venueId = batch.venueId || meta?.venueId || 'default';
+        if (this.mqttService?.injectReconciledBatch) {
+          this.mqttService.injectReconciledBatch(venueId, batch.tracks);
+        } else if (this.trackAggregator) {
+          for (const t of batch.tracks) {
+            this.trackAggregator.addTrack({ ...t, venueId });
+          }
+        }
+
+        this.state.messagesPublished++;
+        this.state.recordedCurrentTs = batch.timestamp;
+        this.state.currentTs = rewriteTimestamps ? Date.now() : batch.timestamp;
+        this.state.progress = (startIdx + i + 1) / batches.length;
+        this.state.bytesRead = Math.floor(this.state.progress * stat.size);
+
+        if (i % 40 === 0) await new Promise(r => setImmediate(r));
+      }
+    } catch (err) {
+      this.state.lastError = err.message;
+      console.error('[Replay] Reconciled playback error:', err);
+    } finally {
+      this.state.running = false;
+      this._abort = null;
+      this.trackAggregator?.flushReplayTracks?.();
+      this.mqttService?.flushReplayTracks?.();
+      resolvePlayback?.();
+      if (this._playbackDone) this._playbackDone = null;
+    }
+
+    console.log(`[Replay] Finished reconciled ${path.basename(fullPath)} — ${this.state.messagesPublished} batches`);
   }
 
   /**

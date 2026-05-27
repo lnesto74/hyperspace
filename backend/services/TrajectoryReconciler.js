@@ -80,6 +80,7 @@ export function normalizeReconcilerConfig(raw) {
   merged.smoothing_alpha = Math.max(0, Math.min(1, num(raw.smoothing_alpha, DEFAULT_CONFIG.smoothing_alpha)));
   merged.active_to_lost_timeout_ms = num(raw.active_to_lost_timeout_ms, DEFAULT_CONFIG.active_to_lost_timeout_ms);
   merged.trail_max_length = num(raw.trail_max_length, DEFAULT_CONFIG.trail_max_length);
+  merged.offline_instant_promote = raw.offline_instant_promote === true;
   return merged;
 }
 
@@ -225,6 +226,29 @@ export class TrajectoryReconciler {
       }
       // Stale binding — drop it and treat as new perception ID
       state.perceptionToStable.delete(perceptionId);
+    }
+
+    // Offline batch post-process: full recording known — skip live probation gates.
+    if (cfg.offline_instant_promote) {
+      state.candidatePerceptions.delete(perceptionId);
+      const matched = this._tryReid(state, pos, vel, now, cfg);
+      let stableState;
+      if (matched) {
+        stableState = matched;
+        stableState.perceptionIds.add(perceptionId);
+        state.lostTracks.delete(stableState.stableId);
+        state.activeTracks.set(stableState.stableId, stableState);
+        state.perceptionToStable.set(perceptionId, stableState.stableId);
+        this._updateTrackState(stableState, pos, vel, now, cfg);
+        state.stats.reid_count++;
+      } else {
+        stableState = this._createTrackState(pos, vel, now, cfg);
+        state.activeTracks.set(stableState.stableId, stableState);
+        state.perceptionToStable.set(perceptionId, stableState.stableId);
+        stableState.perceptionIds.add(perceptionId);
+        state.stats.new_stable_ids++;
+      }
+      return this._emit(track, stableState, perceptionId);
     }
 
     // ---------- Stage 3: candidate gating (don't promote until proven) ----------

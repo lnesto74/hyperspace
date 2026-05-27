@@ -916,6 +916,26 @@ export function initDatabase() {
     );
 
     CREATE INDEX IF NOT EXISTS idx_fixture_name_dict_key ON fixture_name_dictionary(name_key);
+
+    -- Offline reconciliation jobs (post-process captures — never live canvas)
+    CREATE TABLE IF NOT EXISTS offline_reconcile_jobs (
+      id TEXT PRIMARY KEY,
+      venue_id TEXT,
+      source_file TEXT NOT NULL,
+      preset_id TEXT NOT NULL,
+      preset_label TEXT,
+      status TEXT NOT NULL DEFAULT 'pending',
+      progress REAL DEFAULT 0,
+      artifact_path TEXT,
+      meta_json TEXT,
+      error TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      started_at TEXT,
+      finished_at TEXT
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_offline_reconcile_source ON offline_reconcile_jobs(source_file);
+    CREATE INDEX IF NOT EXISTS idx_offline_reconcile_status ON offline_reconcile_jobs(status);
   `);
 
   // Migration: Add DWG-related columns to venues table if they don't exist

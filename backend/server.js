@@ -19,6 +19,7 @@ import { KPICalculator } from './services/KPICalculator.js';
 
 import discoveryRoutes from './routes/discovery.js';
 import replayRoutes from './routes/replay.js';
+import { OfflineReconcileService } from './services/OfflineReconcileService.js';
 import ReplayService from './services/ReplayService.js';
 import MqttRecordService from './services/MqttRecordService.js';
 import BenchmarkRunService from './services/BenchmarkRunService.js';
@@ -455,8 +456,9 @@ app.use('/api/venues', venuesRoutes(db, { mqttService, io, visualTrackService })
 const replayDir = process.env.REPLAY_DIR || '/data/replay';
 const replayService = new ReplayService({ mqttService, replayDir, trackAggregator });
 const mqttRecordService = new MqttRecordService({ replayDir });
+const offlineReconcileService = new OfflineReconcileService({ db, replayDir });
 if (mqttService) mqttService.setMqttRecorder(mqttRecordService);
-app.use('/api/replay', replayRoutes({ replayService, mqttRecordService, mqttService, db }));
+app.use('/api/replay', replayRoutes({ replayService, mqttRecordService, mqttService, db, offlineReconcileService }));
 const benchmarkRunService = new BenchmarkRunService();
 const benchmarkCoverageService = new BenchmarkCoverageService({
   benchmarkRunService,

@@ -415,6 +415,36 @@ class MqttTrajectoryService {
   setTrackAggregator(aggregator) {
     this.trackAggregator = aggregator
   }
+
+  /**
+   * Inject pre-reconciled replay batches — bypasses live reconciler entirely.
+   * Used only for offline post-process artifacts (.reconciled.jsonl).
+   */
+  injectReconciledBatch(venueId, tracks) {
+    if (!tracks?.length) return
+    const processed = []
+    for (const raw of tracks) {
+      const stableId = raw.stableId || raw.id
+      const trackKey = raw.trackKey || `replay-offline-${stableId}`
+      const track = {
+        ...raw,
+        id: stableId,
+        stableId,
+        trackKey,
+        deviceId: raw.deviceId || 'replay-offline',
+        venueId,
+        _offlineReconciled: true,
+      }
+      this.tracks.set(trackKey, track)
+      processed.push(track)
+      if (this.trackAggregator) {
+        this.trackAggregator.addTrack(track)
+      }
+    }
+    if (!this.trackAggregator && processed.length && this.io) {
+      this.io.of('/tracking').to(`venue:${venueId}`).emit('tracks', { venueId, tracks: processed })
+    }
+  }
   
   // Update per-venue stats
   _updateVenueStats(venueId, trackCount) {

@@ -2,7 +2,7 @@ import { Router } from 'express';
 import path from 'path';
 import { venueQueries } from '../database/schema.js';
 
-export default function replayRoutes({ replayService, mqttRecordService, mqttService, db }) {
+export default function replayRoutes({ replayService, mqttRecordService, mqttService, db, offlineReconcileService }) {
   const router = Router();
 
   router.get('/files', (_req, res) => {
@@ -29,10 +29,46 @@ export default function replayRoutes({ replayService, mqttRecordService, mqttSer
   });
 
   router.post('/start', async (req, res) => {
-    const { file, speed, rewriteTimestamps, devicePrefix, startProgress } = req.body || {};
+    const { file, speed, rewriteTimestamps, devicePrefix, startProgress, reconciled, jobId, artifactPath } = req.body || {};
     try {
-      if (!file) return res.status(400).json({ error: 'file is required' });
-      const requested = path.basename(String(file));
+      if (!file && !artifactPath && !jobId) return res.status(400).json({ error: 'file, artifactPath, or jobId is required' });
+
+      let playFile = file ? path.basename(String(file)) : null;
+      let playReconciled = !!reconciled;
+      let resolvedArtifact = artifactPath ? String(artifactPath) : null;
+
+      if (jobId && offlineReconcileService) {
+        const job = offlineReconcileService.getJob(String(jobId));
+        if (!job || job.status !== 'complete') {
+          return res.status(400).json({ error: 'Reconciliation job not complete — wait for post-process to finish' });
+        }
+        resolvedArtifact = job.artifactPath;
+        playReconciled = true;
+        playFile = job.artifactName;
+      }
+
+      if (playReconciled || resolvedArtifact) {
+        await replayService.stop();
+        replayService.startReconciledArtifact({
+          file: resolvedArtifact || playFile,
+          speed,
+          startProgress,
+          rewriteTimestamps,
+        }).catch((err) => { console.error('[Replay] reconciled playback failed:', err.message); });
+
+        let status = replayService.status();
+        for (let i = 0; i < 30 && !status.running; i++) {
+          await new Promise(r => setTimeout(r, 100));
+          status = replayService.status();
+        }
+        if (!status.running) {
+          return res.status(400).json({ error: status.lastError || 'Reconciled replay failed to start' });
+        }
+        return res.json({ success: true, status, reconciled: true });
+      }
+
+      if (!playFile) return res.status(400).json({ error: 'file is required' });
+      const requested = playFile;
       try {
         replayService.validateCaptureFile(requested);
       } catch (err) {
@@ -140,6 +176,58 @@ export default function replayRoutes({ replayService, mqttRecordService, mqttSer
         stopped,
         file: stopped.file ? { name: stopped.file, size: stopped.bytesWritten } : null,
       });
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  // ---- Offline post-process reconciliation (full recording — not live canvas) ----
+
+  router.get('/reconcile/presets', (_req, res) => {
+    try {
+      if (!offlineReconcileService) return res.status(503).json({ error: 'Offline reconciliation not available' });
+      res.json({ presets: offlineReconcileService.listPresets() });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  router.get('/reconcile/jobs', (req, res) => {
+    try {
+      if (!offlineReconcileService) return res.status(503).json({ error: 'Offline reconciliation not available' });
+      const { sourceFile } = req.query;
+      res.json({
+        jobs: offlineReconcileService.listJobs({
+          sourceFile: sourceFile ? String(sourceFile) : undefined,
+        }),
+      });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  router.get('/reconcile/jobs/:id', (req, res) => {
+    try {
+      if (!offlineReconcileService) return res.status(503).json({ error: 'Offline reconciliation not available' });
+      const job = offlineReconcileService.getJob(req.params.id);
+      if (!job) return res.status(404).json({ error: 'Job not found' });
+      res.json({ job });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  router.post('/reconcile/jobs', async (req, res) => {
+    try {
+      if (!offlineReconcileService) return res.status(503).json({ error: 'Offline reconciliation not available' });
+      const { sourceFile, presetId, venueId } = req.body || {};
+      if (!sourceFile || !presetId) return res.status(400).json({ error: 'sourceFile and presetId are required' });
+      const job = await offlineReconcileService.startJob({
+        sourceFile: path.basename(String(sourceFile)),
+        presetId: String(presetId),
+        venueId: venueId ? String(venueId) : null,
+      });
+      res.json({ success: true, job });
     } catch (err) {
       res.status(400).json({ error: err.message });
     }

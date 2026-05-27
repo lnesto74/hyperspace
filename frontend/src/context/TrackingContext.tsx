@@ -61,6 +61,15 @@ const INTERP_TRAIL_INTERVAL = 3 // Add trail point every N interpolation frames
 
 // Diagnostic logging — off in production; set localStorage hyperspace-diag=1 to enable
 const DIAG = import.meta.env.DEV || localStorage.getItem('hyperspace-diag') === '1'
+
+/** Live canvas stays raw unless user explicitly enables experimental live reconciler. */
+function isExperimentalLiveReconciler() {
+  try {
+    return localStorage.getItem('hyperspace-experimental-live-reconciler') === '1'
+  } catch {
+    return false
+  }
+}
 let diagLastTrackCount = 0
 let diagLastSocketTs = 0
 let diagTrackRecvCount = 0
@@ -228,18 +237,10 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
 
   subscribeRef.current = subscribe
 
-  // Load reconciler state so VTL vs raw is known before first socket frame.
+  // Live canvas is always raw — reconciler presets run offline in Replay panel.
   useEffect(() => {
     if (!venue?.id) return
-    let cancelled = false
-    fetch(`${API_BASE}/api/venues/${venue.id}/reconciler-config`)
-      .then(res => (res.ok ? res.json() : null))
-      .then(data => {
-        if (cancelled) return
-        applyVisualizationMode(data?.reconciler?.enabled === true ? 'vtl' : 'raw')
-      })
-      .catch(() => {})
-    return () => { cancelled = true }
+    applyVisualizationMode('raw')
   }, [venue?.id, applyVisualizationMode])
 
   // Restore demo session + replay flag after page refresh (server-side replay survives reload).
@@ -352,11 +353,13 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
 
     socket.on('visualization_mode', (data: { venueId: string; mode: string; playbackLagMs?: number }) => {
       if (data.venueId !== subscribedVenueRef.current) return
+      if (!isExperimentalLiveReconciler()) return
       applyModeFromSocket(data.mode === 'vtl' ? 'vtl' : 'raw', data.playbackLagMs, true)
     })
 
     socket.on('venue:reconciler-updated', (data: { venueId: string; reconciler?: { enabled?: boolean } | null }) => {
       if (data.venueId !== subscribedVenueRef.current) return
+      if (!isExperimentalLiveReconciler()) return
       applyModeFromSocket(data.reconciler?.enabled === true ? 'vtl' : 'raw', undefined, true)
     })
 

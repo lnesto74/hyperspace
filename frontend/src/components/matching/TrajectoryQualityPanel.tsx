@@ -252,8 +252,8 @@ function detectActivePresetId(cfg: ReconcilerConfig): string {
 }
 
 /**
- * Floating panel for tuning the TrajectoryReconciler in real time. Live stats
- * + sliders for every knob. Debounced PATCH so dragging is responsive.
+ * Trajectory quality — offline post-process presets live in Replay panel.
+ * Live canvas preset application is experimental only (hidden by default).
  */
 export default function TrajectoryQualityPanel({ venueId, onClose }: TrajectoryQualityPanelProps) {
   const [config, setConfig] = useState<ReconcilerConfig>(DEFAULT_CONFIG)
@@ -264,6 +264,9 @@ export default function TrajectoryQualityPanel({ venueId, onClose }: TrajectoryQ
   const [error, setError] = useState<string | null>(null)
   const [collapsed, setCollapsed] = useState(false)
   const [activeSection, setActiveSection] = useState<'stats' | 'ghost' | 'reid' | 'smoothing'>('stats')
+  const [experimentalLive, setExperimentalLive] = useState(() => {
+    try { return localStorage.getItem('hyperspace-experimental-live-reconciler') === '1' } catch { return false }
+  })
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const { setVisualizationMode } = useTrackingActions()
 
@@ -304,7 +307,9 @@ export default function TrajectoryQualityPanel({ venueId, onClose }: TrajectoryQ
   }, [venueId])
 
   const scheduleSave = useCallback((next: ReconcilerConfig) => {
-    setVisualizationMode(next.enabled ? 'vtl' : 'raw', { forceClear: true })
+    if (experimentalLive) {
+      setVisualizationMode(next.enabled ? 'vtl' : 'raw', { forceClear: true })
+    }
     if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current)
     saveTimeoutRef.current = setTimeout(async () => {
       setSaving(true)
@@ -323,7 +328,7 @@ export default function TrajectoryQualityPanel({ venueId, onClose }: TrajectoryQ
         setSaving(false)
       }
     }, 250)
-  }, [venueId, setVisualizationMode])
+  }, [venueId, setVisualizationMode, experimentalLive])
 
   useEffect(() => () => { if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current) }, [])
 
@@ -384,6 +389,38 @@ export default function TrajectoryQualityPanel({ venueId, onClose }: TrajectoryQ
 
       {!collapsed && (
         <>
+          <div className="px-3 py-2 border-b border-gray-800 bg-emerald-950/40 text-[11px] text-emerald-100/90">
+            <strong className="text-emerald-300">Recommended:</strong> record MQTT → open <strong>Replay</strong> panel →
+            post-process with a preset → replay the reconciled artifact. Live floor stays raw (no preset on canvas).
+          </div>
+
+          <div className="px-3 py-2 border-b border-gray-800">
+            <label className="flex items-start gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={experimentalLive}
+                onChange={e => {
+                  const on = e.target.checked
+                  setExperimentalLive(on)
+                  try { localStorage.setItem('hyperspace-experimental-live-reconciler', on ? '1' : '0') } catch { /* ignore */ }
+                  if (!on) setVisualizationMode('raw', { forceClear: false })
+                  else setVisualizationMode(config.enabled ? 'vtl' : 'raw', { forceClear: true })
+                }}
+                className="mt-0.5"
+              />
+              <span>
+                <span className="text-amber-300 font-medium">Experimental:</span>{' '}
+                apply preset to live canvas (may blank tracks — not recommended)
+              </span>
+            </label>
+          </div>
+
+          {!experimentalLive && (
+            <div className="px-3 py-2 border-b border-gray-800 text-[10px] text-gray-500">
+              Sliders below save venue config for benchmarks only. They do not change live visualization.
+            </div>
+          )}
+
           {/* Preset picker — one-click backtest-derived configurations.
               Selecting a preset writes its full ReconcilerConfig to the panel
               state and persists via the existing debounced save. The user can

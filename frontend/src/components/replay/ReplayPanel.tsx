@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { History, Play, Square, X, ChevronDown, ChevronUp, RefreshCw, Loader2, Circle, GripVertical } from 'lucide-react'
+import { History, Play, Square, X, ChevronDown, ChevronUp, RefreshCw, Loader2, Circle, GripVertical, Sparkles, Wand2 } from 'lucide-react'
 import { API_BASE } from '../../config/api'
 import { useTrackingActions, useTracking } from '../../context/TrackingContext'
 import { useVenue } from '../../context/VenueContext'
@@ -60,6 +60,25 @@ interface RecordStatus {
     ageMs: number | null
     messagesReceived: number
   }
+}
+
+interface ReconcilePreset {
+  id: string
+  label: string
+  description: string
+}
+
+interface ReconcileJob {
+  id: string
+  sourceFile: string
+  presetId: string
+  presetLabel: string
+  status: 'pending' | 'running' | 'complete' | 'failed'
+  progress: number
+  artifactName?: string | null
+  meta?: { metrics?: { merged_tracks?: number; raw_messages?: number } } | null
+  error?: string | null
+  finishedAt?: string | null
 }
 
 interface ReplayPanelProps {
@@ -136,6 +155,13 @@ export default function ReplayPanel({ onClose }: ReplayPanelProps) {
   const [fileMeta, setFileMeta] = useState<FileMeta | null>(null)
   const [seeking, setSeeking] = useState(false)
 
+  const [reconcilePresets, setReconcilePresets] = useState<ReconcilePreset[]>([])
+  const [reconcilePresetId, setReconcilePresetId] = useState('GROCERY_BALANCED')
+  const [reconcileJobs, setReconcileJobs] = useState<ReconcileJob[]>([])
+  const [selectedReconcileJobId, setSelectedReconcileJobId] = useState('')
+  const [playbackSource, setPlaybackSource] = useState<'raw' | 'reconciled'>('raw')
+  const [reconcileBusy, setReconcileBusy] = useState(false)
+
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const recordPollRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const selectRef = useRef<HTMLSelectElement>(null)
@@ -161,6 +187,32 @@ export default function ReplayPanel({ onClose }: ReplayPanelProps) {
 
   const recording = !!recordStatus?.recording
 
+  const refreshReconcilePresets = useCallback(async () => {
+    try {
+      const res = await fetch(`${API_BASE}/api/replay/reconcile/presets`)
+      if (!res.ok) return
+      const data = await res.json()
+      setReconcilePresets(data.presets || [])
+    } catch { /* ignore */ }
+  }, [])
+
+  const refreshReconcileJobs = useCallback(async (sourceFile?: string) => {
+    const file = sourceFile || selectedRef.current
+    if (!file) {
+      setReconcileJobs([])
+      return
+    }
+    try {
+      const res = await fetch(`${API_BASE}/api/replay/reconcile/jobs?sourceFile=${encodeURIComponent(file)}`)
+      if (!res.ok) return
+      const data = await res.json()
+      const jobs: ReconcileJob[] = data.jobs || []
+      setReconcileJobs(jobs)
+      const complete = jobs.find(j => j.status === 'complete')
+      if (complete && !selectedReconcileJobId) setSelectedReconcileJobId(complete.id)
+    } catch { /* ignore */ }
+  }, [selectedReconcileJobId])
+
   const refreshFiles = useCallback(async (preferNewest = false) => {
     setLoading(true)
     setError(null)
@@ -168,7 +220,7 @@ export default function ReplayPanel({ onClose }: ReplayPanelProps) {
       const res = await fetch(`${API_BASE}/api/replay/files`)
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const data = await res.json()
-      const list: ReplayFile[] = data.files || []
+      const list: ReplayFile[] = (data.files || []).filter((f: ReplayFile) => !f.name.endsWith('.reconciled.jsonl'))
       setFiles(list)
       setReplayDir(data.replayDir || '')
       setSelected(prev => {
@@ -224,13 +276,25 @@ export default function ReplayPanel({ onClose }: ReplayPanelProps) {
     refreshFiles()
     refreshStatus()
     refreshRecordStatus()
+    refreshReconcilePresets()
     pollRef.current = setInterval(refreshStatus, 1000)
     recordPollRef.current = setInterval(refreshRecordStatus, 1000)
     return () => {
       if (pollRef.current) clearInterval(pollRef.current)
       if (recordPollRef.current) clearInterval(recordPollRef.current)
     }
-  }, [refreshFiles, refreshStatus, refreshRecordStatus])
+  }, [refreshFiles, refreshStatus, refreshRecordStatus, refreshReconcilePresets])
+
+  useEffect(() => {
+    if (selected) void refreshReconcileJobs(selected)
+  }, [selected, refreshReconcileJobs])
+
+  useEffect(() => {
+    const runningJob = reconcileJobs.find(j => j.status === 'running' || j.status === 'pending')
+    if (!runningJob) return
+    const iv = window.setInterval(() => { void refreshReconcileJobs(selected) }, 2000)
+    return () => window.clearInterval(iv)
+  }, [reconcileJobs, selected, refreshReconcileJobs])
 
   useEffect(() => {
     if (!selected) {
@@ -317,6 +381,28 @@ export default function ReplayPanel({ onClose }: ReplayPanelProps) {
     return null
   }, [])
 
+  const startReconcileJob = useCallback(async () => {
+    const file = readSelectedFile()
+    if (!file || !reconcilePresetId) return
+    setReconcileBusy(true)
+    setError(null)
+    try {
+      const res = await fetch(`${API_BASE}/api/replay/reconcile/jobs`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sourceFile: file, presetId: reconcilePresetId, venueId: venue?.id }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`)
+      setSelectedReconcileJobId(data.job?.id || '')
+      await refreshReconcileJobs(file)
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setReconcileBusy(false)
+    }
+  }, [reconcilePresetId, venue?.id, refreshReconcileJobs])
+
   const start = useCallback(async (startProgress?: number) => {
     const fileToPlay = readSelectedFile()
     if (!fileToPlay) return
@@ -332,10 +418,23 @@ export default function ReplayPanel({ onClose }: ReplayPanelProps) {
         await startDemoSession(venue.id)
       }
 
+      const useReconciled = playbackSource === 'reconciled' && selectedReconcileJobId
+      const body: Record<string, unknown> = {
+        speed,
+        rewriteTimestamps: true,
+        startProgress: progress,
+      }
+      if (useReconciled) {
+        body.jobId = selectedReconcileJobId
+        body.reconciled = true
+      } else {
+        body.file = fileToPlay
+      }
+
       const res = await fetch(`${API_BASE}/api/replay/start`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ file: fileToPlay, speed, rewriteTimestamps: true, startProgress: progress }),
+        body: JSON.stringify(body),
       })
       const data = await res.json().catch(() => ({}))
       if (!res.ok) {
@@ -353,7 +452,7 @@ export default function ReplayPanel({ onClose }: ReplayPanelProps) {
     } finally {
       startingReplayRef.current = false
     }
-  }, [speed, refreshStatus, waitForReplayStopped, scrubPct, setMqttReplayActive, venue?.id, startDemoSession])
+  }, [speed, refreshStatus, waitForReplayStopped, scrubPct, setMqttReplayActive, venue?.id, startDemoSession, playbackSource, selectedReconcileJobId])
 
   const seekTo = useCallback(async (pct: number) => {
     const fileToPlay = readSelectedFile() || status?.file
@@ -627,6 +726,104 @@ export default function ReplayPanel({ onClose }: ReplayPanelProps) {
             )}
           </div>
 
+          {/* Offline post-process reconciliation */}
+          <div className="space-y-2 pb-3 border-b border-gray-800">
+            <div className="flex items-center gap-2">
+              <Sparkles className="w-3.5 h-3.5 text-emerald-400" />
+              <span className="font-medium text-white">Post-process reconciliation</span>
+            </div>
+            <p className="text-[10px] text-gray-500">
+              Full-session analysis with grocery-aware path merge. Does not affect live canvas.
+            </p>
+
+            <div>
+              <div className="text-gray-400 mb-1">Preset</div>
+              <select
+                value={reconcilePresetId}
+                onChange={e => setReconcilePresetId(e.target.value)}
+                disabled={reconcileBusy || running}
+                className="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-white"
+              >
+                {reconcilePresets.map(p => (
+                  <option key={p.id} value={p.id}>{p.label}</option>
+                ))}
+              </select>
+              {reconcilePresets.find(p => p.id === reconcilePresetId)?.description && (
+                <p className="text-[10px] text-gray-600 mt-1">
+                  {reconcilePresets.find(p => p.id === reconcilePresetId)?.description}
+                </p>
+              )}
+            </div>
+
+            <button
+              onClick={() => void startReconcileJob()}
+              disabled={!selected || reconcileBusy || running}
+              className="w-full px-3 py-2 rounded bg-emerald-800 hover:bg-emerald-700 text-white font-medium disabled:bg-gray-700 disabled:text-gray-500 flex items-center justify-center gap-2"
+            >
+              {reconcileBusy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Wand2 className="w-4 h-4" />}
+              Run post-process on selected capture
+            </button>
+
+            {reconcileJobs.length > 0 && (
+              <div className="space-y-1">
+                <div className="text-gray-400 text-[10px] uppercase tracking-wide">Jobs for this capture</div>
+                {reconcileJobs.slice(0, 5).map(job => (
+                  <div key={job.id} className="flex justify-between items-center text-[10px] bg-gray-800/60 rounded px-2 py-1">
+                    <span className="text-gray-300 truncate">{job.presetLabel || job.presetId}</span>
+                    <span className={
+                      job.status === 'complete' ? 'text-emerald-400'
+                        : job.status === 'failed' ? 'text-red-400'
+                          : job.status === 'running' ? 'text-amber-300' : 'text-gray-500'
+                    }>
+                      {job.status === 'running' ? `${Math.round((job.progress || 0) * 100)}%` : job.status}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div>
+              <div className="text-gray-400 mb-1">Playback source</div>
+              <div className="grid grid-cols-2 gap-1">
+                <button
+                  type="button"
+                  onClick={() => setPlaybackSource('raw')}
+                  disabled={running}
+                  className={`py-1.5 rounded text-xs ${playbackSource === 'raw' ? 'bg-amber-700 text-white' : 'bg-gray-800 hover:bg-gray-700'}`}
+                >
+                  Raw capture
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPlaybackSource('reconciled')}
+                  disabled={running}
+                  className={`py-1.5 rounded text-xs ${playbackSource === 'reconciled' ? 'bg-emerald-700 text-white' : 'bg-gray-800 hover:bg-gray-700'}`}
+                >
+                  Reconciled
+                </button>
+              </div>
+            </div>
+
+            {playbackSource === 'reconciled' && (
+              <div>
+                <div className="text-gray-400 mb-1">Reconciled artifact (complete jobs only)</div>
+                <select
+                  value={selectedReconcileJobId}
+                  onChange={e => setSelectedReconcileJobId(e.target.value)}
+                  disabled={running}
+                  className="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-white"
+                >
+                  <option value="">Select a completed job…</option>
+                  {reconcileJobs.filter(j => j.status === 'complete').map(j => (
+                    <option key={j.id} value={j.id}>
+                      {j.presetLabel} — {j.meta?.metrics?.merged_tracks ?? '?'} tracks
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+          </div>
+
           <div>
             <div className="text-gray-400 mb-1">Playback speed</div>
             <div className="grid grid-cols-5 gap-1">
@@ -646,10 +843,14 @@ export default function ReplayPanel({ onClose }: ReplayPanelProps) {
           {!running ? (
             <button
               onClick={() => start()}
-              disabled={!selected || loading || seeking}
+              disabled={
+                !selected || loading || seeking
+                || (playbackSource === 'reconciled' && !selectedReconcileJobId)
+              }
               className="w-full px-3 py-2 rounded bg-amber-600 hover:bg-amber-500 text-white font-medium disabled:bg-gray-700 disabled:text-gray-500 flex items-center justify-center gap-2"
             >
-              <Play className="w-4 h-4" /> Start replay
+              <Play className="w-4 h-4" />
+              {playbackSource === 'reconciled' ? 'Start reconciled replay' : 'Start raw replay'}
             </button>
           ) : (
             <button
