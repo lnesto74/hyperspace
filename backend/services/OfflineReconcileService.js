@@ -141,13 +141,22 @@ export class OfflineReconcileService {
     return listOfflinePresets();
   }
 
+  _sourceFileFilter(sourceFile) {
+    let base = path.basename(String(sourceFile));
+    if (base.endsWith('.reconciled.jsonl')) {
+      const m = base.match(/^(.+)__.+\.reconciled\.jsonl$/);
+      if (m) base = `${m[1]}.jsonl`;
+    }
+    return base;
+  }
+
   listJobs({ sourceFile } = {}) {
     let sql = 'SELECT * FROM offline_reconcile_jobs ORDER BY created_at DESC LIMIT 100';
     let rows;
     if (sourceFile) {
       rows = this.db.prepare(
         'SELECT * FROM offline_reconcile_jobs WHERE source_file = ? ORDER BY created_at DESC LIMIT 50'
-      ).all(path.basename(String(sourceFile)));
+      ).all(this._sourceFileFilter(sourceFile));
     } else {
       rows = this.db.prepare(sql).all();
     }

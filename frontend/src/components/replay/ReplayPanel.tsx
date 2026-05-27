@@ -12,10 +12,16 @@ interface ReplayFile {
   mtimeMs?: number
 }
 
+function isReconciledArtifactName(name: string) {
+  return name.endsWith('.reconciled.jsonl')
+}
+
 interface ReplayStatus {
   running: boolean
   file: string | null
   requestedFile?: string | null
+  reconciled?: boolean
+  sourceFile?: string | null
   fileSize?: number
   fileMtimeMs?: number
   firstRecordedTs?: number | null
@@ -201,6 +207,8 @@ export default function ReplayPanel({ onClose }: ReplayPanelProps) {
   const recordPollRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const selectRef = useRef<HTMLSelectElement>(null)
   const selectedRef = useRef<string>('')
+  /** Raw .jsonl capture — never the reconciled artifact (status poll used to overwrite this). */
+  const sourceCaptureRef = useRef<string>('')
   const startingReplayRef = useRef(false)
   const scrubbingRef = useRef(false)
   const prevRecordingRef = useRef(false)
@@ -212,11 +220,18 @@ export default function ReplayPanel({ onClose }: ReplayPanelProps) {
     defaultY: 16,
   })
 
-  const readSelectedFile = () => {
+  const resolveSourceCapture = () => {
+    if (sourceCaptureRef.current && !isReconciledArtifactName(sourceCaptureRef.current)) {
+      return sourceCaptureRef.current
+    }
     const fromDom = selectRef.current?.value?.trim()
-    if (fromDom) return fromDom
-    return selectedRef.current
+    if (fromDom && !isReconciledArtifactName(fromDom)) return fromDom
+    const sel = selectedRef.current
+    if (sel && !isReconciledArtifactName(sel)) return sel
+    return sourceCaptureRef.current || sel || ''
   }
+
+  const readSelectedFile = () => resolveSourceCapture()
 
   const selectedMeta = files.find(f => f.name === selected)
 
@@ -267,9 +282,14 @@ export default function ReplayPanel({ onClose }: ReplayPanelProps) {
       setFiles(list)
       setReplayDir(data.replayDir || '')
       setSelected(prev => {
-        if (preferNewest && list[0]?.name) return list[0].name
-        if (prev && list.some(f => f.name === prev)) return prev
-        return list[0]?.name || ''
+        let next = prev
+        if (preferNewest && list[0]?.name) next = list[0].name
+        else if (prev && list.some(f => f.name === prev) && !isReconciledArtifactName(prev)) next = prev
+        else if (sourceCaptureRef.current && list.some(f => f.name === sourceCaptureRef.current)) {
+          next = sourceCaptureRef.current
+        } else next = list[0]?.name || ''
+        if (next && !isReconciledArtifactName(next)) sourceCaptureRef.current = next
+        return next
       })
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : String(err))
@@ -286,10 +306,24 @@ export default function ReplayPanel({ onClose }: ReplayPanelProps) {
       const next: ReplayStatus = await res.json()
       setStatus(next)
       setMqttReplayActive(!!next.running)
-      // Only mirror the active file into the dropdown while playback is running.
-      if (next.running && next.file) {
+      const reconciledPlayback = !!(next.reconciled || (next.file && isReconciledArtifactName(next.file)))
+      // Raw replay: mirror active capture. Reconciled replay: keep raw capture selected (never the artifact).
+      if (next.running && next.file && !reconciledPlayback) {
         setSelected(next.file)
         selectedRef.current = next.file
+        sourceCaptureRef.current = next.file
+      } else if (next.running && reconciledPlayback && next.sourceFile) {
+        sourceCaptureRef.current = next.sourceFile
+        if (isReconciledArtifactName(selectedRef.current) || selectedRef.current !== next.sourceFile) {
+          setSelected(next.sourceFile)
+          selectedRef.current = next.sourceFile
+        }
+      } else if (!next.running && selectedRef.current && isReconciledArtifactName(selectedRef.current)) {
+        const heal = sourceCaptureRef.current || next.sourceFile
+        if (heal && !isReconciledArtifactName(heal)) {
+          setSelected(heal)
+          selectedRef.current = heal
+        }
       }
     } catch { /* ignore */ }
   }, [setMqttReplayActive])
@@ -329,23 +363,28 @@ export default function ReplayPanel({ onClose }: ReplayPanelProps) {
   }, [refreshFiles, refreshStatus, refreshRecordStatus, refreshReconcilePresets])
 
   useEffect(() => {
-    if (selected) void refreshReconcileJobs(selected)
+    if (selected && !isReconciledArtifactName(selected)) {
+      sourceCaptureRef.current = selected
+    }
+    const source = resolveSourceCapture()
+    if (source) void refreshReconcileJobs(source)
   }, [selected, refreshReconcileJobs])
 
   useEffect(() => {
     const runningJob = reconcileJobs.find(j => j.status === 'running' || j.status === 'pending')
     if (!runningJob) return
-    const iv = window.setInterval(() => { void refreshReconcileJobs(selected) }, 1000)
+    const iv = window.setInterval(() => { void refreshReconcileJobs(resolveSourceCapture()) }, 1000)
     return () => window.clearInterval(iv)
   }, [reconcileJobs, selected, refreshReconcileJobs])
 
   useEffect(() => {
-    if (!selected) {
+    const metaFile = resolveSourceCapture()
+    if (!metaFile) {
       setFileMeta(null)
       return
     }
     let cancelled = false
-    fetch(`${API_BASE}/api/replay/meta?file=${encodeURIComponent(selected)}`)
+    fetch(`${API_BASE}/api/replay/meta?file=${encodeURIComponent(metaFile)}`)
       .then(r => r.ok ? r.json() : null)
       .then(data => { if (!cancelled && data) setFileMeta(data) })
       .catch(() => { if (!cancelled) setFileMeta(null) })
@@ -458,7 +497,7 @@ export default function ReplayPanel({ onClose }: ReplayPanelProps) {
       })
       const data = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`)
-      await refreshReconcileJobs(selectedRef.current)
+      await refreshReconcileJobs(resolveSourceCapture())
     } catch (err: unknown) {
       setReconcileError(friendlyReconcileError(err instanceof Error ? err.message : String(err)))
     } finally {
@@ -476,7 +515,7 @@ export default function ReplayPanel({ onClose }: ReplayPanelProps) {
       const data = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`)
       if (selectedReconcileJobId === jobId) setSelectedReconcileJobId('')
-      await refreshReconcileJobs(selectedRef.current)
+      await refreshReconcileJobs(resolveSourceCapture())
     } catch (err: unknown) {
       setReconcileError(friendlyReconcileError(err instanceof Error ? err.message : String(err)))
     } finally {
@@ -842,6 +881,7 @@ export default function ReplayPanel({ onClose }: ReplayPanelProps) {
               onChange={e => {
                 const v = e.target.value
                 selectedRef.current = v
+                sourceCaptureRef.current = v
                 setSelected(v)
               }}
               disabled={running}
