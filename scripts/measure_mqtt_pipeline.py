@@ -94,34 +94,75 @@ def summarize_gaps(gaps: list[float]) -> dict:
 def run_mqtt_tap(broker: str, topic: str, seconds: int, stats: MqttTapStats):
     try:
         import paho.mqtt.client as mqtt
+        use_paho = True
     except ImportError:
-        print("Install paho-mqtt: pip install paho-mqtt", file=sys.stderr)
-        sys.exit(1)
+        use_paho = False
 
+    if use_paho:
+        host_port = broker.replace("mqtt://", "").replace("mqtts://", "")
+        if ":" in host_port:
+            host, port_s = host_port.rsplit(":", 1)
+            port = int(port_s)
+        else:
+            host, port = host_port, 1883
+
+        def on_message(_c, _u, msg):
+            try:
+                payload = json.loads(msg.payload.decode())
+            except Exception:
+                return
+            stats.on_message(payload, time.time() * 1000)
+
+        client = mqtt.Client()
+        client.on_message = on_message
+        client.connect(host, port, keepalive=30)
+        client.subscribe(topic)
+        client.loop_start()
+        try:
+            time.sleep(seconds)
+        finally:
+            client.loop_stop()
+            client.disconnect()
+        return
+
+    # Fallback: mosquitto_sub (no extra pip install on DO)
+    import subprocess
     host_port = broker.replace("mqtt://", "").replace("mqtts://", "")
     if ":" in host_port:
         host, port_s = host_port.rsplit(":", 1)
-        port = int(port_s)
+        port = port_s
     else:
-        host, port = host_port, 1883
-
-    def on_message(_c, _u, msg):
-        try:
-            payload = json.loads(msg.payload.decode())
-        except Exception:
-            return
-        stats.on_message(payload, time.time() * 1000)
-
-    client = mqtt.Client()
-    client.on_message = on_message
-    client.connect(host, port, keepalive=30)
-    client.subscribe(topic)
-    client.loop_start()
+        host, port = host_port, "1883"
+    print(f"  (paho-mqtt missing — using mosquitto_sub on {host}:{port})", flush=True)
+    proc = subprocess.Popen(
+        ["mosquitto_sub", "-h", host, "-p", str(port), "-t", topic],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+    )
+    end = time.time() + seconds
     try:
-        time.sleep(seconds)
+        assert proc.stdout is not None
+        while time.time() < end:
+            line = proc.stdout.readline()
+            if not line:
+                time.sleep(0.01)
+                continue
+            # mosquitto_sub -v format: "topic {json}"
+            parts = line.strip().split(" ", 1)
+            if len(parts) < 2:
+                continue
+            try:
+                payload = json.loads(parts[1])
+            except Exception:
+                continue
+            stats.on_message(payload, time.time() * 1000)
     finally:
-        client.loop_stop()
-        client.disconnect()
+        proc.terminate()
+        try:
+            proc.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            proc.kill()
 
 
 def classify(edge_rate: float | None, mqtt_rate: float, backend: dict | None, tap: MqttTapStats) -> list[str]:
@@ -193,7 +234,8 @@ def main():
     if args.edge:
         print(f"\n[1/4] Edge probe ({args.probe_ms}ms) via {args.edge} ...")
         edge_probe = fetch_json(
-            f"{args.edge.rstrip('/')}/api/edge/mqtt/record/probe?durationMs={args.probe_ms}&detailed=1"
+            f"{args.edge.rstrip('/')}/api/edge/mqtt/record/probe?durationMs={args.probe_ms}&detailed=1",
+            timeout=max(30.0, args.probe_ms / 1000 + 15),
         )
         if edge_probe and edge_probe.get("ok"):
             p = edge_probe.get("probe") or {}

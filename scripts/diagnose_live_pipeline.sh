@@ -91,8 +91,15 @@ fi
 if [[ -n "$EDGE_IP" ]]; then
   section "Edge probe (via Tailscale :8080)"
   EDGE_URL="http://${EDGE_IP}:8080"
-  curl -sf "${EDGE_URL}/api/edge/mqtt/record/probe?durationMs=8000&detailed=1" | python3 -m json.tool 2>/dev/null || \
-    echo "⚠ edge probe failed at $EDGE_URL"
+  # Probe blocks for durationMs — allow extra time over Tailscale DERP (~160ms RTT).
+  if curl -sf --max-time 25 "${EDGE_URL}/api/edge/mqtt/record/probe?durationMs=8000&detailed=1" | python3 -m json.tool 2>/dev/null; then
+    true
+  elif curl -sf --max-time 25 "${EDGE_URL}/api/edge/mqtt/record/probe?durationMs=5000" | python3 -m json.tool 2>/dev/null; then
+    echo "(detailed probe unavailable — edge may need git pull + restart)"
+  else
+    echo "⚠ edge probe failed at $EDGE_URL (deploy latest edge-server or check :8080)"
+    curl -sS --max-time 5 -o /dev/null -w "  HTTP status: %{http_code}\n" "${EDGE_URL}/api/status" 2>/dev/null || true
+  fi
   echo ""
   curl -sf "${EDGE_URL}/api/mqtt-bridge" | python3 -m json.tool 2>/dev/null || true
 fi

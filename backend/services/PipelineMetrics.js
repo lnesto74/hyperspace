@@ -157,8 +157,25 @@ export class PipelineMetrics {
       hints.push('MQTT arriving but socket batches <5/s — check TrackAggregator / event loop load.');
     }
 
+    const ingestP50 = snapshot.mqtt.ingestLatencyMs.p50;
+    if (ingestP50 != null && Math.abs(ingestP50) > 5000) {
+      issues.push('clock_skew');
+      hints.push(
+        `Payload timestamp vs DO clock offset ~${Math.round(Math.abs(ingestP50) / 1000)}s — fix NTP on edge `
+        + '(chrony/systemd-timesyncd). This is NOT network latency; ignore ingestLatencyMs until clocks sync.',
+      );
+    }
+
+    const mqttGapP50 = snapshot.mqtt.interArrivalMs.p50;
+    if (mqttGapP50 === 0 && snapshot.mqtt.msgPerSec > 100) {
+      hints.push(
+        `MQTT arrives in micro-bursts (${Math.round(snapshot.mqtt.msgPerSec)} msg/s, p50 gap 0ms) — `
+        + 'normal for per-track messages; socket emit is smoothed to ~10 batches/s.',
+      );
+    }
+
     if (issues.length === 0 && snapshot.mqtt.messages > 0) {
-      hints.push('DO backend path looks healthy in this window. If UI still stutters, measure browser socket gaps (localStorage hyperspace-diag=1). Replay smooth ⇒ frontend render is unlikely the bottleneck.');
+      hints.push('DO backend path looks healthy in this window. If UI still stutters, measure browser socket gaps (localStorage hyperspace-diag=1).');
     }
 
     return { issues, hints, replayControlNote: 'Raw JSONL replay bypasses Tailscale/MQTT bridge — if replay is smooth but live is not, suspect edge bridge or live MQTT delivery, not Chrome rendering.' };
