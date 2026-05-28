@@ -1,5 +1,10 @@
 export type TimelineGrain = 'hour' | 'day' | 'week';
 
+export interface TimelineCategoryLeader {
+  category: string;
+  visits: number;
+}
+
 export interface TimelinePoint {
   label: string;
   bucketStartTs: number;
@@ -7,6 +12,7 @@ export interface TimelinePoint {
   isOpen: boolean;
   peak?: number;
   avgVal?: number;
+  topCategories?: TimelineCategoryLeader[];
 }
 
 export interface OperationsTimeline {

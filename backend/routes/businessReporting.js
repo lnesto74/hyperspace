@@ -766,6 +766,99 @@ function fetchStoreActivityByHour(db, venueId, startTs, endTs, openingHour, clos
   return result;
 }
 
+function toLocalDateKey(ms) {
+  const d = new Date(ms);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+const SHELF_ROI_SQL = `
+  r.name NOT LIKE '%Queue%'
+  AND r.name NOT LIKE '%Service%'
+  AND r.name NOT LIKE '%Checkout%'
+  AND (r.name LIKE '%Engagement%' OR r.name LIKE '%Shelf%' OR r.name LIKE '%Category%')
+`;
+
+function fetchTimelineCategoryLeadersByBucket(db, venueId, startTs, endTs, grain) {
+  const shelfRois = safeQueryAll(db, `
+    SELECT r.id, r.metadata_json
+    FROM regions_of_interest r
+    WHERE r.venue_id = ? AND ${SHELF_ROI_SQL}
+  `, [venueId]);
+
+  const roiCategory = new Map();
+  for (const r of shelfRois) {
+    roiCategory.set(r.id, resolveRoiCategoryForReporting(db, r.metadata_json) || 'Uncategorized');
+  }
+  const roiIds = [...roiCategory.keys()];
+  if (!roiIds.length) return new Map();
+
+  const placeholders = roiIds.map(() => '?').join(',');
+  let rows;
+
+  if (grain === 'hour') {
+    rows = safeQueryAll(db, `
+      SELECT (zv.start_time / 3600000) * 3600000 as bucketKey,
+        zv.roi_id as roiId,
+        COUNT(*) as visits
+      FROM zone_visits zv
+      WHERE zv.venue_id = ? AND zv.roi_id IN (${placeholders})
+        AND zv.start_time >= ? AND zv.start_time < ?
+      GROUP BY bucketKey, zv.roi_id
+    `, [venueId, ...roiIds, startTs, endTs]);
+  } else if (grain === 'day') {
+    rows = safeQueryAll(db, `
+      SELECT date(zv.start_time / 1000, 'unixepoch', 'localtime') as bucketKey,
+        zv.roi_id as roiId,
+        COUNT(*) as visits
+      FROM zone_visits zv
+      WHERE zv.venue_id = ? AND zv.roi_id IN (${placeholders})
+        AND zv.start_time >= ? AND zv.start_time < ?
+      GROUP BY bucketKey, zv.roi_id
+    `, [venueId, ...roiIds, startTs, endTs]);
+  } else {
+    rows = safeQueryAll(db, `
+      SELECT MIN(date(zv.start_time / 1000, 'unixepoch', 'localtime')) as bucketKey,
+        zv.roi_id as roiId,
+        COUNT(*) as visits
+      FROM zone_visits zv
+      WHERE zv.venue_id = ? AND zv.roi_id IN (${placeholders})
+        AND zv.start_time >= ? AND zv.start_time < ?
+      GROUP BY strftime('%Y-W%W', datetime(zv.start_time/1000, 'unixepoch', 'localtime')), zv.roi_id
+    `, [venueId, ...roiIds, startTs, endTs]);
+  }
+
+  const bucketMap = new Map();
+  for (const row of rows) {
+    const category = roiCategory.get(row.roiId) || 'Uncategorized';
+    const key = grain === 'hour' ? Math.round(Number(row.bucketKey)) : row.bucketKey;
+    if (!bucketMap.has(key)) bucketMap.set(key, new Map());
+    const catMap = bucketMap.get(key);
+    catMap.set(category, (catMap.get(category) || 0) + (row.visits || 0));
+  }
+
+  const result = new Map();
+  for (const [bucketKey, catMap] of bucketMap) {
+    let leaders = [...catMap.entries()]
+      .map(([category, visits]) => ({ category, visits }))
+      .sort((a, b) => b.visits - a.visits);
+    const named = leaders.filter(c => c.category !== 'Uncategorized');
+    if (named.length > 0) leaders = named;
+    result.set(bucketKey, leaders.slice(0, 3));
+  }
+  return result;
+}
+
+function attachCategoryLeadersToPoints(points, grain, leadersByBucket) {
+  if (!leadersByBucket?.size) return points;
+  return points.map(p => {
+    const key = grain === 'hour' ? Math.round(p.bucketStartTs) : toLocalDateKey(p.bucketStartTs);
+    return { ...p, topCategories: leadersByBucket.get(key) || [] };
+  });
+}
+
 function parseSqlDateMs(dateStr) {
   if (!dateStr || typeof dateStr !== 'string') return NaN;
   const [y, m, d] = dateStr.split('-').map(Number);
@@ -987,20 +1080,25 @@ function fetchOperationsTimeline(db, venueId, startTs, endTs, grain, storeHours,
 
   const visitorRows = fetchVisitorRows();
   const occRows = fetchOccRows();
+  const categoryLeaders = fetchTimelineCategoryLeadersByBucket(db, venueId, startTs, endTs, grain);
 
-  const toPoints = (rows, isOcc) => rowsToTimelinePoints(
-    rows.map(r => ({
-      ...r,
-      bucketStartTs: Math.round(Number(r.bucketStartTs)),
-      value: isOcc
-        ? Math.round((r.peak ?? r.value ?? 0) * 10) / 10
-        : (r.value || 0),
-      peak: Math.round((r.peak ?? r.value ?? 0) * 10) / 10,
-      avgVal: r.avgVal != null ? Math.round(r.avgVal * 10) / 10 : undefined,
-    })),
+  const toPoints = (rows, isOcc) => attachCategoryLeadersToPoints(
+    rowsToTimelinePoints(
+      rows.map(r => ({
+        ...r,
+        bucketStartTs: Math.round(Number(r.bucketStartTs)),
+        value: isOcc
+          ? Math.round((r.peak ?? r.value ?? 0) * 10) / 10
+          : (r.value || 0),
+        peak: Math.round((r.peak ?? r.value ?? 0) * 10) / 10,
+        avgVal: r.avgVal != null ? Math.round(r.avgVal * 10) / 10 : undefined,
+      })),
+      grain,
+      openingHour,
+      closingHour,
+    ),
     grain,
-    openingHour,
-    closingHour,
+    categoryLeaders,
   );
 
   return {

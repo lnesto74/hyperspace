@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import TimelineRangeBrush from './TimelineRangeBrush';
+import BarCategoryBadges from './BarCategoryBadges';
+import { CATEGORY_BADGE_MAX_BARS } from './categoryVisuals';
 import type { OperationsTimeline } from './types';
 
 type SeriesMode = 'occupancy' | 'footfall';
@@ -65,6 +67,7 @@ export default function OperationsTimelineChart({
 
   const grainLabel = timeline.grain === 'hour' ? 'Hourly' : timeline.grain === 'day' ? 'Daily' : 'Weekly';
   const valueLabel = activeMode === 'footfall' ? 'Visits' : 'Peak shoppers';
+  const showCategoryBadges = activeMode === 'occupancy' && visiblePoints.length <= CATEGORY_BADGE_MAX_BARS;
 
   if (!points.length || !points.some(p => p.value > 0)) {
     const altHasData = altPoints.some(p => p.value > 0);
@@ -91,6 +94,7 @@ export default function OperationsTimelineChart({
           <h3 className="text-xs font-semibold text-white">Store Activity</h3>
           <p className="text-[10px] text-gray-500">
             {grainLabel} · {activeMode === 'occupancy' ? 'peak IDs per frame (same as MQTT live)' : 'ingress visits'}
+            {showCategoryBadges && ' · top categories on bars when zoomed in'}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -126,7 +130,7 @@ export default function OperationsTimelineChart({
         >
           <div
             className="flex items-end justify-center gap-1 w-full"
-            style={{ height: CHART_H }}
+            style={{ height: CHART_H + (showCategoryBadges ? 20 : 0) }}
           >
             {visiblePoints.map((p, i) => {
               const barH = Math.max(Math.round((p.value / maxVal) * CHART_H), p.value > 0 ? 4 : 0);
@@ -149,8 +153,18 @@ export default function OperationsTimelineChart({
                       {activeMode === 'occupancy' && p.avgVal != null && p.avgVal !== p.value && (
                         <div className="text-gray-400">Typical: {p.avgVal}</div>
                       )}
+                      {p.topCategories && p.topCategories.length > 0 && (
+                        <div className="text-gray-400 mt-0.5 border-t border-gray-700/60 pt-0.5">
+                          {p.topCategories.map(c => (
+                            <div key={c.category}>{c.category}: {c.visits.toLocaleString()}</div>
+                          ))}
+                        </div>
+                      )}
                       {closed && <div className="text-gray-400">Closed hour</div>}
                     </div>
+                  )}
+                  {showCategoryBadges && (p.topCategories?.length ?? 0) > 0 && (
+                    <BarCategoryBadges categories={p.topCategories!} />
                   )}
                   <div
                     className={`w-full rounded-t transition-colors ${
