@@ -115,7 +115,7 @@ export function HeatmapProvider({ children }: { children: ReactNode }) {
       setHeatmapData(data)
     } catch (err) {
       console.error('Failed to load heatmap:', err)
-      setHeatmapData(null)
+      // Keep previous tiles visible on transient failures
     } finally {
       setIsLoading(false)
     }

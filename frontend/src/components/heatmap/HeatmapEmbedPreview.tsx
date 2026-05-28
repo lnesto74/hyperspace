@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Expand, Loader2 } from 'lucide-react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
@@ -9,6 +9,7 @@ import { getHeatColor, hexToThreeColor, isPointInPolygon } from './heatmapUtils'
 import { buildDwgWireframeGroup, disposeObject3D } from '../../utils/dwgWireframe3d';
 import { getCategoryVisual } from '../../features/businessReporting/operationsConsole/categoryVisuals';
 import type { CategoryRankingRow } from '../../features/businessReporting/components/CategoryRankingPanel';
+import type { HeatmapTile } from '../../context/HeatmapContext';
 
 type MetricMode = 'visits' | 'dwell';
 
@@ -21,7 +22,40 @@ interface HeatmapEmbedPreviewProps {
   onExpand?: () => void;
 }
 
+interface TileEntry {
+  mesh: THREE.Mesh;
+  tile: HeatmapTile;
+}
+
 const ELEVATION = 0.45;
+const MAX_EMBED_PIXEL_RATIO = 1.25;
+
+function disposeGroup(group: THREE.Group | null) {
+  if (!group) return;
+  while (group.children.length > 0) {
+    const child = group.children[0];
+    if (child instanceof THREE.Mesh || child instanceof THREE.Line) {
+      child.geometry.dispose();
+      const mat = child.material;
+      if (Array.isArray(mat)) mat.forEach(m => m.dispose());
+      else mat.dispose();
+    } else {
+      disposeObject3D(child);
+    }
+    group.remove(child);
+  }
+}
+
+function disposeScene(scene: THREE.Scene) {
+  scene.traverse(obj => {
+    if (obj instanceof THREE.Mesh || obj instanceof THREE.Line) {
+      obj.geometry.dispose();
+      const mat = obj.material;
+      if (Array.isArray(mat)) mat.forEach(m => m.dispose());
+      else mat.dispose();
+    }
+  });
+}
 
 export default function HeatmapEmbedPreview({
   venueId,
@@ -44,10 +78,13 @@ export default function HeatmapEmbedPreview({
   const zoneGroupRef = useRef<THREE.Group | null>(null);
   const dwgGroupRef = useRef<THREE.Group | null>(null);
   const pulseLinesRef = useRef<THREE.Line[]>([]);
+  const tileEntriesRef = useRef<TileEntry[]>([]);
   const animRef = useRef<number | null>(null);
-  const highlightRef = useRef<string | null>(null);
+  const visibleRef = useRef(true);
+  const loadGenRef = useRef(0);
 
-  highlightRef.current = highlightCategory;
+  const [sceneReady, setSceneReady] = useState(false);
+  const [tileVersion, setTileVersion] = useState(0);
 
   const categoryByRoiId = useMemo(() => {
     const map = new Map<string, string>();
@@ -70,38 +107,72 @@ export default function HeatmapEmbedPreview({
     [regions, categoryByRoiId],
   );
 
-  const tileInCategory = useCallback((tile: { x: number; z: number }, roiIds: Set<string>) => {
+  const tileInCategory = useCallback((tile: HeatmapTile, roiIds: Set<string>) => {
     if (!roiIds.size) return true;
     return shelfRegions.some(
       zone => roiIds.has(zone.id) && isPointInPolygon({ x: tile.x, z: tile.z }, zone.vertices),
     );
   }, [shelfRegions]);
 
+  const heightKpi = metric === 'visits' ? 'visits' : 'dwellSec';
+  const colorKpi = metric === 'visits' ? 'visits' : 'dwellSec';
+
+  // Load venue/regions once — avoid reloading global venue context on every hover
   useEffect(() => {
-    if (venueId) {
+    if (!venueId) return;
+    loadRegions(venueId);
+    if (venue?.id !== venueId) {
       loadVenue(venueId);
-      loadRegions(venueId);
     }
-  }, [venueId, loadVenue, loadRegions]);
+  }, [venueId, venue?.id, loadVenue, loadRegions]);
 
   useEffect(() => {
     setTimeframe(timeframe);
   }, [timeframe, setTimeframe]);
 
   useEffect(() => {
-    if (venueId) loadHeatmap(venueId);
+    if (!venueId) return;
+    const gen = ++loadGenRef.current;
+    loadHeatmap(venueId).then(() => {
+      if (gen !== loadGenRef.current) return;
+    });
+    return () => {
+      loadGenRef.current += 1;
+    };
   }, [venueId, timeframe, loadHeatmap]);
 
-  const heightKpi = metric === 'visits' ? 'visits' : 'dwellSec';
-  const colorKpi = metric === 'visits' ? 'visits' : 'dwellSec';
-
-  // Three.js scene lifecycle
+  // Pause GPU work when scrolled off-screen or tab hidden
   useEffect(() => {
-    if (!canvasRef.current || !venue?.id || venue.id !== venueId) return;
+    const el = canvasRef.current;
+    if (!el) return;
+
+    const io = new IntersectionObserver(
+      entries => { visibleRef.current = entries[0]?.isIntersecting ?? true; },
+      { threshold: 0.05 },
+    );
+    io.observe(el);
+
+    const onVis = () => {
+      if (document.hidden) visibleRef.current = false;
+    };
+    document.addEventListener('visibilitychange', onVis);
+
+    return () => {
+      io.disconnect();
+      document.removeEventListener('visibilitychange', onVis);
+    };
+  }, [sceneReady]);
+
+  // Three.js scene — init once per venue footprint, not on every context update
+  useEffect(() => {
+    if (!canvasRef.current || !venue?.id || venue.id !== venueId) {
+      setSceneReady(false);
+      return;
+    }
 
     const container = canvasRef.current;
-    const width = container.clientWidth;
-    const height = container.clientHeight;
+    const width = Math.max(container.clientWidth, 1);
+    const height = Math.max(container.clientHeight, 1);
 
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0x0a0a0f);
@@ -115,9 +186,13 @@ export default function HeatmapEmbedPreview({
     );
     cameraRef.current = camera;
 
-    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
+    const renderer = new THREE.WebGLRenderer({
+      antialias: true,
+      alpha: false,
+      powerPreference: 'low-power',
+    });
     renderer.setSize(width, height);
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, MAX_EMBED_PIXEL_RATIO));
     container.appendChild(renderer.domElement);
     rendererRef.current = renderer;
 
@@ -156,48 +231,67 @@ export default function HeatmapEmbedPreview({
     scene.add(dwgGroup);
     dwgGroupRef.current = dwgGroup;
 
-    const animate = () => {
+    tileEntriesRef.current = [];
+    pulseLinesRef.current = [];
+    setTileVersion(0);
+    setSceneReady(true);
+
+    let lastFrame = 0;
+    const animate = (now: number) => {
       animRef.current = requestAnimationFrame(animate);
+      if (!visibleRef.current) return;
+      // Cap ~30fps for embed preview — enough for orbit + pulse, half the GPU cost
+      if (now - lastFrame < 33) return;
+      lastFrame = now;
+
       controls.update();
 
-      const pulse = 0.45 + 0.55 * (0.5 + 0.5 * Math.sin(Date.now() * 0.004));
+      const pulse = 0.45 + 0.55 * (0.5 + 0.5 * Math.sin(now * 0.004));
       for (const line of pulseLinesRef.current) {
-        const mat = line.material as THREE.LineBasicMaterial;
-        mat.opacity = pulse;
+        (line.material as THREE.LineBasicMaterial).opacity = pulse;
       }
 
       renderer.render(scene, camera);
     };
-    animate();
+    animRef.current = requestAnimationFrame(animate);
 
-    const onResize = () => {
+    const ro = new ResizeObserver(() => {
       if (!container || !renderer || !camera) return;
-      const w = container.clientWidth;
-      const h = container.clientHeight;
+      const w = Math.max(container.clientWidth, 1);
+      const h = Math.max(container.clientHeight, 1);
       camera.aspect = w / h;
       camera.updateProjectionMatrix();
       renderer.setSize(w, h);
-    };
-    const ro = new ResizeObserver(onResize);
+    });
     ro.observe(container);
 
     return () => {
       ro.disconnect();
       if (animRef.current) cancelAnimationFrame(animRef.current);
+      animRef.current = null;
       controls.dispose();
+      disposeScene(scene);
       renderer.dispose();
       if (container.contains(renderer.domElement)) {
         container.removeChild(renderer.domElement);
       }
+      tileEntriesRef.current = [];
       pulseLinesRef.current = [];
+      heatmapGroupRef.current = null;
+      zoneGroupRef.current = null;
+      dwgGroupRef.current = null;
       sceneRef.current = null;
+      cameraRef.current = null;
+      controlsRef.current = null;
+      rendererRef.current = null;
+      setSceneReady(false);
     };
   }, [venue?.id, venueId, venue?.width, venue?.depth, venue?.height]);
 
   // DWG wireframe
   useEffect(() => {
     const host = dwgGroupRef.current;
-    if (!host) return;
+    if (!host || !sceneReady) return;
     while (host.children.length > 0) {
       disposeObject3D(host.children[0]);
       host.remove(host.children[0]);
@@ -205,21 +299,14 @@ export default function HeatmapEmbedPreview({
     if (objects.length > 0) {
       host.add(buildDwgWireframeGroup(objects, { plane: 'pedestal', highContrast: true, showFill: true }));
     }
-  }, [objects]);
+  }, [objects, sceneReady]);
 
-  // Zone outlines — colored by category, pulse when highlighted
+  // Zone outlines
   useEffect(() => {
     const group = zoneGroupRef.current;
-    if (!group) return;
+    if (!group || !sceneReady) return;
 
-    while (group.children.length > 0) {
-      const child = group.children[0];
-      if (child instanceof THREE.Line) {
-        child.geometry.dispose();
-        (child.material as THREE.Material).dispose();
-      }
-      group.remove(child);
-    }
+    disposeGroup(group);
     pulseLinesRef.current = [];
 
     shelfRegions.forEach(zone => {
@@ -243,19 +330,15 @@ export default function HeatmapEmbedPreview({
         pulseLinesRef.current.push(line);
       }
     });
-  }, [shelfRegions, categoryByRoiId, highlightCategory, highlightRoiIds]);
+  }, [shelfRegions, categoryByRoiId, highlightCategory, highlightRoiIds, sceneReady]);
 
-  // Heat tiles
+  // Build heat tiles once — NOT on every hover (was melting laptops)
   useEffect(() => {
     const group = heatmapGroupRef.current;
-    if (!group || !heatmapData?.tiles?.length) return;
+    if (!group || !sceneReady || !heatmapData?.tiles?.length || !shelfRegions.length) return;
 
-    while (group.children.length > 0) {
-      const child = group.children[0] as THREE.Mesh;
-      child.geometry.dispose();
-      (child.material as THREE.Material).dispose();
-      group.remove(child);
-    }
+    disposeGroup(group);
+    tileEntriesRef.current = [];
 
     const { tileSize, tiles } = heatmapData;
     const values = tiles.map(t => t[colorKpi]).filter(v => v > 0);
@@ -266,11 +349,10 @@ export default function HeatmapEmbedPreview({
       p95 * 2,
     ) || 1;
 
-    tiles.forEach(tile => {
+    for (const tile of tiles) {
       const inShelf = shelfRegions.some(z => isPointInPolygon({ x: tile.x, z: tile.z }, z.vertices));
-      if (!inShelf) return;
+      if (!inShelf) continue;
 
-      const inHighlight = !highlightCategory || tileInCategory(tile, highlightRoiIds);
       const heightValue = tile[heightKpi];
       const colorValue = tile[colorKpi];
       const normH = maxNorm > 0 ? Math.min(heightValue / maxNorm, 1.4) : 0;
@@ -280,9 +362,9 @@ export default function HeatmapEmbedPreview({
       const mat = new THREE.MeshStandardMaterial({
         color,
         transparent: true,
-        opacity: inHighlight ? 0.82 : 0.1,
+        opacity: 0.82,
         emissive: color,
-        emissiveIntensity: inHighlight ? 0.22 : 0.05,
+        emissiveIntensity: 0.22,
       });
       const mesh = new THREE.Mesh(
         new THREE.BoxGeometry(tileSize * 0.82, barH, tileSize * 0.82),
@@ -290,8 +372,24 @@ export default function HeatmapEmbedPreview({
       );
       mesh.position.set(tile.x, ELEVATION + barH / 2, tile.z);
       group.add(mesh);
-    });
-  }, [heatmapData, shelfRegions, heightKpi, colorKpi, highlightCategory, highlightRoiIds, tileInCategory]);
+      tileEntriesRef.current.push({ mesh, tile });
+    }
+    setTileVersion(v => v + 1);
+  }, [heatmapData, shelfRegions, heightKpi, colorKpi, sceneReady]);
+
+  // Highlight: update material opacity only — cheap
+  useEffect(() => {
+    if (!tileVersion) return;
+    for (const { mesh, tile } of tileEntriesRef.current) {
+      const inHighlight = !highlightCategory || tileInCategory(tile, highlightRoiIds);
+      const mat = mesh.material as THREE.MeshStandardMaterial;
+      mat.opacity = inHighlight ? 0.82 : 0.1;
+      mat.emissiveIntensity = inHighlight ? 0.22 : 0.05;
+      mat.needsUpdate = true;
+    }
+  }, [highlightCategory, highlightRoiIds, tileInCategory, tileVersion]);
+
+  const showEmpty = sceneReady && !isLoading && (!heatmapData?.tiles?.length || !shelfRegions.length);
 
   return (
     <div className="flex flex-col h-full min-h-[240px]">
@@ -310,14 +408,14 @@ export default function HeatmapEmbedPreview({
         )}
       </div>
       <div className="relative flex-1 rounded-lg border border-gray-700/60 bg-gray-950 overflow-hidden min-h-[220px]">
-        {isLoading && (
+        {isLoading && !heatmapData?.tiles?.length && (
           <div className="absolute inset-0 z-10 flex items-center justify-center bg-gray-950/80">
             <Loader2 className="w-5 h-5 text-gray-400 animate-spin" />
           </div>
         )}
-        {!isLoading && !heatmapData?.tiles?.length && (
-          <div className="absolute inset-0 flex items-center justify-center text-[10px] text-gray-500">
-            No heatmap data for this period
+        {showEmpty && (
+          <div className="absolute inset-0 flex items-center justify-center text-[10px] text-gray-500 z-10 pointer-events-none">
+            {!shelfRegions.length ? 'Loading shelf zones…' : 'No heatmap data for this period'}
           </div>
         )}
         <div ref={canvasRef} className="absolute inset-0" />
