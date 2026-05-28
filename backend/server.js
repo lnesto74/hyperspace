@@ -20,6 +20,7 @@ import { KPICalculator } from './services/KPICalculator.js';
 
 import discoveryRoutes from './routes/discovery.js';
 import replayRoutes from './routes/replay.js';
+import ReplayService from './services/ReplayService.js';
 import { OfflineReconcileService } from './services/OfflineReconcileService.js';
 import StoryReplayService from './services/StoryReplayService.js';
 import MqttRecordService from './services/MqttRecordService.js';
