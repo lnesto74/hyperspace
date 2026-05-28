@@ -38,6 +38,13 @@ export default function CategoryVisitsPanel({
   const maxVisits = Math.max(...sorted.map(c => c.totalVisits), 1)
   const maxDwell = Math.max(...sorted.map(c => c.totalDwellMin ?? 0), 1)
 
+  const totalVisitsAll = sorted.reduce((s, c) => s + c.totalVisits, 0)
+  const uncategorized = sorted.find(c => c.category === 'Uncategorized')
+  const uncategorizedPct = totalVisitsAll > 0 && uncategorized
+    ? Math.round((uncategorized.totalVisits / totalVisitsAll) * 100)
+    : 0
+  const showUncategorizedWarning = uncategorizedPct >= 40
+
   if (!sorted.length) {
     return (
       <div className="text-sm text-gray-500 py-4">
@@ -50,6 +57,12 @@ export default function CategoryVisitsPanel({
 
   return (
     <div className="space-y-3">
+      {showUncategorizedWarning && (
+        <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-2.5 py-2 text-[10px] text-amber-200/90 leading-relaxed">
+          <b>{uncategorizedPct}%</b> of shelf visits are Uncategorized ({uncategorized?.zoneCount ?? 0} zones lack
+          category mapping). Map shelves in DWG import or Smart KPI to split traffic by Latticini, Frutta, Surgelati, etc.
+        </div>
+      )}
       <div className="flex items-center justify-between gap-2">
         <p className="text-[10px] text-gray-500">
           Visits and dwell by product category · click a row to open zone heatmap

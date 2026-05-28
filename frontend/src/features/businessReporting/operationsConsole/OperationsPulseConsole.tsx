@@ -10,6 +10,8 @@ import OperationsCheckoutCollapsible from './OperationsCheckoutCollapsible';
 import OperationsAlertsPanel from './OperationsAlertsPanel';
 import OperationsFootfallPanel from './OperationsFootfallPanel';
 import OperationsDrillDown from './OperationsDrillDown';
+import CategoryVisitsPanel from '../components/CategoryVisitsPanel';
+import type { CategoryRankingRow } from '../components/CategoryRankingPanel';
 import type { DrillDownView, OperationsConsoleData, PeriodDeltas, TimelineGrain } from './types';
 
 interface OperationsPulseConsoleProps {
@@ -18,6 +20,8 @@ interface OperationsPulseConsoleProps {
   periodDeltas?: PeriodDeltas;
   grain: TimelineGrain;
   onGrainChange: (grain: TimelineGrain) => void;
+  topCategories?: CategoryRankingRow[];
+  onOpenCategoryHeatmap?: (row: CategoryRankingRow) => void;
 }
 
 const GRAINS: { id: TimelineGrain; label: string }[] = [
@@ -32,6 +36,8 @@ export default function OperationsPulseConsole({
   periodDeltas,
   grain,
   onGrainChange,
+  topCategories = [],
+  onOpenCategoryHeatmap,
 }: OperationsPulseConsoleProps) {
   const [drillDown, setDrillDown] = useState<DrillDownView>(null);
   const [selectedLaneId, setSelectedLaneId] = useState<string | null>(null);
@@ -109,6 +115,25 @@ export default function OperationsPulseConsole({
           <OperationsAlertsPanel alerts={consoleData.alerts} />
         </div>
       </div>
+
+      {topCategories.length > 0 && (
+        <div className="rounded-lg border border-gray-700/80 bg-gray-800/40 overflow-hidden">
+          <div className="px-3 py-2 border-b border-gray-700/60 flex items-center justify-between gap-2">
+            <div>
+              <span className="text-xs font-medium text-white">Category Traffic</span>
+              <span className="text-[10px] text-gray-500 ml-2">Surgelati · Frutta · Verdura · …</span>
+            </div>
+            <span className="text-[10px] text-gray-500 shrink-0">click row → heatmap</span>
+          </div>
+          <div className="p-3">
+            <CategoryVisitsPanel
+              categories={topCategories}
+              onOpenHeatmap={onOpenCategoryHeatmap}
+              compact
+            />
+          </div>
+        </div>
+      )}
 
       <OperationsCheckoutCollapsible
         lanes={consoleData.queueLanes}

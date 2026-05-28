@@ -270,7 +270,7 @@ export default function BusinessReportingPage({ onClose }: BusinessReportingPage
   };
 
   const showCategoryVisits = Array.isArray(topCategories) && topCategories.length > 0
-    && (selectedPersonaId === 'executive' || selectedPersonaId === 'store-manager' || selectedPersonaId === 'merchandising');
+    && selectedPersonaId === 'merchandising';
 
   return (
     <div className="fixed inset-0 z-50 bg-gray-900 flex flex-col overflow-hidden">
@@ -375,6 +375,8 @@ export default function BusinessReportingPage({ onClose }: BusinessReportingPage
                   periodDeltas={periodDeltas}
                   grain={opsGrain}
                   onGrainChange={setOpsGrain}
+                  topCategories={topCategories}
+                  onOpenCategoryHeatmap={handleCategoryHeatmap}
                 />
               ) : (
                 <ReportingKpiStrip

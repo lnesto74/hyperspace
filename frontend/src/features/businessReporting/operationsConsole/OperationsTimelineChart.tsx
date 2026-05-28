@@ -45,6 +45,7 @@ export default function OperationsTimelineChart({
 
   const grainLabel = timeline.grain === 'hour' ? 'Hourly' : timeline.grain === 'day' ? 'Daily' : 'Weekly';
   const valueLabel = activeMode === 'footfall' ? 'Visits' : 'Peak shoppers';
+  const hoveredPoint = hoveredIdx != null ? points[hoveredIdx] : null;
 
   if (!points.length || !points.some(p => p.value > 0)) {
     const altHasData = altPoints.some(p => p.value > 0);
@@ -110,41 +111,55 @@ export default function OperationsTimelineChart({
 
       <div className="flex flex-col">
         <div
-          className="relative flex items-end justify-center gap-1 w-full"
-          style={{ height: CHART_H }}
+          className="relative w-full"
           onMouseLeave={() => setHoveredIdx(null)}
         >
-          {points.map((p, i) => {
-            const barH = Math.max(Math.round((p.value / maxVal) * CHART_H), p.value > 0 ? 4 : 0);
-            const closed = timeline.grain === 'hour' && !p.isOpen;
-            const barWidth = points.length === 1 ? 80 : Math.max(8, Math.min(48, Math.floor(600 / points.length)));
-            const isHovered = hoveredIdx === i;
-            return (
-              <div
-                key={`${p.bucketStartTs}-${i}`}
-                className="flex flex-col justify-end items-center relative h-full"
-                style={{ width: barWidth, minWidth: 6, flex: points.length > 12 ? 1 : undefined }}
-                onMouseEnter={() => setHoveredIdx(i)}
-              >
-                {isHovered && (
-                  <div className="absolute bottom-full mb-1 z-20 bg-gray-900 border border-gray-600 rounded px-2 py-1 text-[10px] text-white whitespace-nowrap pointer-events-none">
-                    <div className="font-medium">{p.label}</div>
-                    <div>{valueLabel}: <b>{p.value}</b></div>
-                    {activeMode === 'occupancy' && p.avgVal != null && p.avgVal !== p.value && (
-                      <div className="text-gray-400">Typical: {p.avgVal}</div>
-                    )}
-                    {closed && <div className="text-gray-400">Closed hour</div>}
-                  </div>
-                )}
+          {hoveredPoint && hoveredIdx != null && (
+            <div
+              className="absolute z-30 pointer-events-none bg-gray-900 border border-gray-600 rounded px-2 py-1 text-[10px] text-white whitespace-nowrap shadow-lg"
+              style={{
+                left: `${((hoveredIdx + 0.5) / points.length) * 100}%`,
+                transform: 'translateX(-50%)',
+                bottom: CHART_H + 6,
+              }}
+            >
+              <div className="font-medium">{hoveredPoint.label}</div>
+              <div>{valueLabel}: <b>{hoveredPoint.value}</b></div>
+              {activeMode === 'occupancy' && hoveredPoint.avgVal != null && hoveredPoint.avgVal !== hoveredPoint.value && (
+                <div className="text-gray-400">Typical: {hoveredPoint.avgVal}</div>
+              )}
+              {timeline.grain === 'hour' && !hoveredPoint.isOpen && (
+                <div className="text-gray-400">Closed hour</div>
+              )}
+            </div>
+          )}
+
+          <div
+            className="flex items-end justify-center gap-1 w-full"
+            style={{ height: CHART_H }}
+          >
+            {points.map((p, i) => {
+              const barH = Math.max(Math.round((p.value / maxVal) * CHART_H), p.value > 0 ? 4 : 0);
+              const closed = timeline.grain === 'hour' && !p.isOpen;
+              const barWidth = points.length === 1 ? 80 : Math.max(8, Math.min(48, Math.floor(600 / points.length)));
+              const isHovered = hoveredIdx === i;
+              return (
                 <div
-                  className={`w-full rounded-t transition-colors ${
-                    closed ? 'bg-white/15' : isHovered ? 'bg-white/80' : 'bg-white/55'
-                  }`}
-                  style={{ height: barH }}
-                />
-              </div>
-            );
-          })}
+                  key={`${p.bucketStartTs}-${i}`}
+                  className="flex flex-col justify-end items-center h-full"
+                  style={{ width: barWidth, minWidth: 6, flex: points.length > 12 ? 1 : undefined }}
+                  onMouseEnter={() => setHoveredIdx(i)}
+                >
+                  <div
+                    className={`w-full rounded-t transition-colors ${
+                      closed ? 'bg-white/15' : isHovered ? 'bg-white/80' : 'bg-white/55'
+                    }`}
+                    style={{ height: barH }}
+                  />
+                </div>
+              );
+            })}
+          </div>
         </div>
         <div className="flex justify-between text-[9px] text-gray-500 mt-2 pt-1 border-t border-gray-700/40">
           <span className="truncate max-w-[30%]">{points[0]?.label}</span>
