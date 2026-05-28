@@ -16,6 +16,10 @@ function getTimelineCacheKey(venueId, startTime, endTime, interval, roiId) {
 }
 
 import { resolveKpiContext, demoCacheSuffix } from '../utils/demoKpiContext.js';
+import {
+  computeStoreFootfallFromHourly,
+  isTrafficZoneName,
+} from '../lib/storeHours.js';
 
 export default function createKpiRoutes(db, kpiCalculator, trajectoryStorage, demoSessionService = null) {
   // Initialize shelf KPI enricher
@@ -164,6 +168,33 @@ export default function createKpiRoutes(db, kpiCalculator, trajectoryStorage, de
       }
 
       const kpis = ctx.kpiCalculator.getZoneKPIs(roiId, start, end);
+
+      const roiRow = db.prepare(`
+        SELECT r.id, r.name, r.venue_id, v.opening_hour, v.closing_hour, v.footfall_roi_id
+        FROM regions_of_interest r
+        JOIN venues v ON v.id = r.venue_id
+        WHERE r.id = ?
+      `).get(roiId);
+
+      if (roiRow) {
+        const openingHour = roiRow.opening_hour ?? 8;
+        const closingHour = roiRow.closing_hour ?? 20;
+        const isFootfallZone = roiRow.footfall_roi_id === roiId
+          || (!roiRow.footfall_roi_id && isTrafficZoneName(roiRow.name));
+
+        if (isFootfallZone) {
+          kpis.storeFootfall = computeStoreFootfallFromHourly(
+            kpis.visitsByHour,
+            openingHour,
+            closingHour,
+          );
+          kpis.storeHours = {
+            openingHour,
+            closingHour,
+            footfallRoiId: roiRow.footfall_roi_id || roiId,
+          };
+        }
+      }
       
       // Store in cache
       kpiCache.set(kpiCacheKey, { data: kpis, cachedAt: Date.now() });

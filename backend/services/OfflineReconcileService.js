@@ -406,10 +406,15 @@ export class OfflineReconcileService {
       );
     } catch (err) {
       const msg = String(err.message || err);
+      // Failed writes (e.g. ENOSPC at ~98%) leave a huge partial artifact — remove it.
+      this._removeArtifactIfIncomplete({ artifactPath: ctx.artifactPath, status: 'failed' });
       if (msg !== 'cancelled') {
+        const hint = /ENOSPC|no space left/i.test(msg)
+          ? `${msg} — freed partial artifact; check df -h on replay volume (/opt/hyperspace/replay). Reconcile a trimmed capture if the raw file is multi-GB.`
+          : msg;
         this.db.prepare(`
           UPDATE offline_reconcile_jobs SET status = 'failed', error = ?, finished_at = ? WHERE id = ?
-        `).run(msg, new Date().toISOString(), id);
+        `).run(hint, new Date().toISOString(), id);
       }
       throw err;
     } finally {

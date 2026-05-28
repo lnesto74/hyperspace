@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import fs from 'fs';
 import path from 'path';
 import { venueQueries } from '../database/schema.js';
 
@@ -68,12 +69,14 @@ export default function replayRoutes({ replayService, mqttRecordService, mqttSer
           resolvedArtifact = verified;
         }
         await replayService.stop();
+        const batchHint = job.meta?.batchCount ?? job.meta?.metrics?.batch_count ?? null;
         const playPromise = replayService.startReconciledArtifact({
           file: resolvedArtifact || playFile,
           speed,
           startProgress,
           rewriteTimestamps,
           venueId: playbackVenueId || replayService.trackAggregator?.venueId || null,
+          totalBatchesHint: batchHint,
         });
         playPromise.catch((err) => { console.error('[Replay] reconciled playback failed:', err.message); });
 
@@ -140,7 +143,7 @@ export default function replayRoutes({ replayService, mqttRecordService, mqttSer
   });
 
   router.post('/seek', async (req, res) => {
-    const { file, progress, speed } = req.body || {};
+    const { file, progress, speed, reconciled, jobId } = req.body || {};
     try {
       const p = Number(progress);
       if (!Number.isFinite(p)) return res.status(400).json({ error: 'progress (0-1) is required' });
@@ -149,12 +152,50 @@ export default function replayRoutes({ replayService, mqttRecordService, mqttSer
       if (!requested) return res.status(400).json({ error: 'file is required' });
 
       await replayService.stop();
-      replayService.start({
-        file: requested,
-        speed: speed ?? current.speed ?? 1,
-        startProgress: p,
-        rewriteTimestamps: true,
-      }).catch((err) => { console.error('[Replay] seek failed:', err.message); });
+
+      const wantReconciled = !!reconciled || !!jobId || current.reconciled
+        || requested.endsWith('.reconciled.jsonl')
+        || String(current.file || '').endsWith('.reconciled.jsonl');
+
+      if (wantReconciled) {
+        let resolvedArtifact = null;
+        let batchHint = current.totalBatches ?? null;
+        let playbackVenueId = null;
+
+        if (jobId && offlineReconcileService) {
+          const job = offlineReconcileService.getJob(String(jobId));
+          if (!job || job.status !== 'complete') {
+            return res.status(400).json({ error: 'Reconciliation job not complete' });
+          }
+          resolvedArtifact = offlineReconcileService.resolveArtifactPath(job);
+          batchHint = job.meta?.batchCount ?? job.meta?.metrics?.batch_count ?? batchHint;
+          playbackVenueId = job.venueId || null;
+        } else if (requested.endsWith('.reconciled.jsonl')) {
+          resolvedArtifact = path.join(replayService.replayDir, 'reconciled', requested);
+        } else if (String(current.file || '').endsWith('.reconciled.jsonl')) {
+          resolvedArtifact = path.join(replayService.replayDir, 'reconciled', current.file);
+        }
+
+        if (!resolvedArtifact || !fs.existsSync(resolvedArtifact)) {
+          return res.status(400).json({ error: 'Reconciled artifact not found for seek' });
+        }
+
+        replayService.startReconciledArtifact({
+          file: resolvedArtifact,
+          speed: speed ?? current.speed ?? 1,
+          startProgress: p,
+          rewriteTimestamps: true,
+          venueId: playbackVenueId || replayService.trackAggregator?.venueId || null,
+          totalBatchesHint: batchHint,
+        }).catch((err) => { console.error('[Replay] reconciled seek failed:', err.message); });
+      } else {
+        replayService.start({
+          file: requested,
+          speed: speed ?? current.speed ?? 1,
+          startProgress: p,
+          rewriteTimestamps: true,
+        }).catch((err) => { console.error('[Replay] seek failed:', err.message); });
+      }
 
       let status = replayService.status();
       for (let i = 0; i < 30 && !status.running; i++) {

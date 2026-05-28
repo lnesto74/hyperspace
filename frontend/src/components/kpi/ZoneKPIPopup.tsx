@@ -46,8 +46,24 @@ interface KPIData {
   inMotionTotalTime: number
   percentAtRest: number
   percentInMotion: number
-  visitsByHour: { hour: string; visits: number }[]
+  visitsByHour: { hour: string; visits: number; isOpen?: boolean }[]
   occupancyOverTime: { timestamp: number; avgOccupancy: number; maxOccupancy: number }[]
+  storeFootfall?: {
+    openingHour: number
+    closingHour: number
+    hoursLabel: string
+    openHoursPerDay: number
+    totalVisitsOpenHours: number
+    avgVisitsPerOpenHour: number
+    peakOpenHour: string | null
+    peakOpenHourVisits: number
+    visitsByHour: { hour: string; visits: number; isOpen: boolean }[]
+  }
+  storeHours?: {
+    openingHour: number
+    closingHour: number
+    footfallRoiId: string
+  }
   dwellDistribution: { bucket: string; count: number }[]
 }
 
@@ -157,12 +173,14 @@ function MetricCard({
   )
 }
 
-function SimpleBarChart({ data, dataKey, labelKey, color = '#3b82f6', height = 120 }: {
+function SimpleBarChart({ data, dataKey, labelKey, color = '#3b82f6', height = 120, dimKey }: {
   data: any[]
   dataKey: string
   labelKey: string
   color?: string
   height?: number
+  /** When set, rows where dimKey is false use a muted bar color (closed hours). */
+  dimKey?: string
 }) {
   if (!data || data.length === 0) return <div className="text-gray-500 text-xs text-center py-4">No data</div>
   
@@ -172,16 +190,19 @@ function SimpleBarChart({ data, dataKey, labelKey, color = '#3b82f6', height = 1
     <div className="flex items-end gap-1" style={{ height }}>
       {data.map((item, idx) => {
         const barHeight = (item[dataKey] / maxValue) * (height - 20)
+        const isDimmed = dimKey && item[dimKey] === false
+        const barColor = isDimmed ? '#374151' : color
         return (
           <div key={idx} className="flex-1 flex flex-col items-center">
             <div 
               className="w-full rounded-t transition-all hover:opacity-80"
               style={{ 
                 height: Math.max(barHeight, 2), 
-                backgroundColor: color,
+                backgroundColor: barColor,
                 minWidth: 4,
+                opacity: isDimmed ? 0.45 : 1,
               }}
-              title={`${item[labelKey]}: ${item[dataKey]}`}
+              title={`${item[labelKey]}: ${item[dataKey]}${isDimmed ? ' (closed)' : ''}`}
             />
             <div className="text-[8px] text-gray-500 mt-1 truncate w-full text-center">
               {item[labelKey]}
@@ -575,17 +596,49 @@ export default function ZoneKPIPopup({ roiId, roiName, roiColor, onClose, shelfI
                     />
                   </div>
 
+                  {kpis.storeFootfall && (
+                    <div className="bg-gradient-to-r from-blue-900/40 to-indigo-900/30 border border-blue-600/40 rounded-lg p-4 space-y-3">
+                      <div className="flex items-center justify-between gap-2">
+                        <h3 className="text-sm font-medium text-blue-200">Store footfall (open hours)</h3>
+                        <span className="text-[10px] text-blue-300/80 font-mono">{kpis.storeFootfall.hoursLabel}</span>
+                      </div>
+                      <div className="grid grid-cols-3 gap-3">
+                        <div className="bg-black/20 rounded-lg p-3">
+                          <div className="text-[10px] text-gray-400 uppercase tracking-wide">Visits (open hrs)</div>
+                          <div className="text-xl font-semibold text-white">{kpis.storeFootfall.totalVisitsOpenHours}</div>
+                        </div>
+                        <div className="bg-black/20 rounded-lg p-3">
+                          <div className="text-[10px] text-gray-400 uppercase tracking-wide">Avg / open hour</div>
+                          <div className="text-xl font-semibold text-white">{kpis.storeFootfall.avgVisitsPerOpenHour}</div>
+                        </div>
+                        <div className="bg-black/20 rounded-lg p-3">
+                          <div className="text-[10px] text-gray-400 uppercase tracking-wide">Peak hour</div>
+                          <div className="text-xl font-semibold text-white">
+                            {kpis.storeFootfall.peakOpenHour ? `${kpis.storeFootfall.peakOpenHour}:00` : '—'}
+                          </div>
+                          <div className="text-[10px] text-gray-500">{kpis.storeFootfall.peakOpenHourVisits} visits</div>
+                        </div>
+                      </div>
+                      <p className="text-[10px] text-gray-500">
+                        Gray bars = outside store hours ({kpis.storeFootfall.openHoursPerDay}h trading window). Edit hours in Venue Settings.
+                      </p>
+                    </div>
+                  )}
+
                   {/* Charts Row */}
                   <div className="grid grid-cols-2 gap-4">
                     {/* Visits by Hour */}
                     <div className="bg-gray-800/50 border border-gray-700 rounded-lg p-4">
-                      <h3 className="text-sm font-medium text-gray-300 mb-3">Visits by Hour</h3>
+                      <h3 className="text-sm font-medium text-gray-300 mb-3">
+                        {kpis.storeFootfall ? 'Visits by Hour (store hours highlighted)' : 'Visits by Hour'}
+                      </h3>
                       <SimpleBarChart 
-                        data={kpis.visitsByHour} 
+                        data={kpis.storeFootfall?.visitsByHour ?? kpis.visitsByHour} 
                         dataKey="visits" 
                         labelKey="hour"
                         color="#3b82f6"
                         height={100}
+                        dimKey={kpis.storeFootfall ? 'isOpen' : undefined}
                       />
                     </div>
 

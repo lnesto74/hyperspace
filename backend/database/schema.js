@@ -967,6 +967,18 @@ export function initDatabase() {
       db.exec("ALTER TABLE venues ADD COLUMN default_engagement_threshold_sec INTEGER DEFAULT 120");
       console.log('📦 Migration: Added default_engagement_threshold_sec column to venues');
     }
+    if (!columnNames.includes('opening_hour')) {
+      db.exec("ALTER TABLE venues ADD COLUMN opening_hour INTEGER DEFAULT 8");
+      console.log('📦 Migration: Added opening_hour column to venues');
+    }
+    if (!columnNames.includes('closing_hour')) {
+      db.exec("ALTER TABLE venues ADD COLUMN closing_hour INTEGER DEFAULT 20");
+      console.log('📦 Migration: Added closing_hour column to venues');
+    }
+    if (!columnNames.includes('footfall_roi_id')) {
+      db.exec("ALTER TABLE venues ADD COLUMN footfall_roi_id TEXT DEFAULT NULL");
+      console.log('📦 Migration: Added footfall_roi_id column to venues');
+    }
   } catch (migrationErr) {
     console.log('📦 Migration check completed (columns may already exist)');
   }

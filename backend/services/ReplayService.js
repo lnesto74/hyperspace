@@ -21,6 +21,10 @@ import path from 'path';
 import mqtt from 'mqtt';
 import sharp from 'sharp';
 import { perceptionToFloor, applyTransformToPoint, normalizePerceptionTransform } from './PerceptionTransform.js';
+import {
+  readReconciledMeta,
+  resolveReconciledBatchCount,
+} from './offline/reconciledArtifactIndex.js';
 
 export default class ReplayService {
   constructor({ replayDir, mqttBrokerUrl, mqttService, trackAggregator } = {}) {
@@ -481,7 +485,14 @@ export default class ReplayService {
    * Replay a post-processed reconciled artifact (.reconciled.jsonl).
    * Batches are injected directly — no live reconciler, same client path as raw replay.
    */
-  async startReconciledArtifact({ file, speed = 1, startProgress = 0, rewriteTimestamps = true, venueId: venueIdHint = null } = {}) {
+  async startReconciledArtifact({
+    file,
+    speed = 1,
+    startProgress = 0,
+    rewriteTimestamps = true,
+    venueId: venueIdHint = null,
+    totalBatchesHint = null,
+  } = {}) {
     await this.stop();
 
     const fullPath = path.isAbsolute(file) ? file : path.join(this.replayDir, 'reconciled', path.basename(String(file)));
@@ -535,35 +546,22 @@ export default class ReplayService {
     const YIELD_EVERY = 40;
 
     try {
-      // Pass 1: read meta (+ optional footer batch count) without holding batches in memory.
-      let meta = null;
-      let totalBatches = 0;
-      let footerBatchCount = null;
-      const rlCount = readline.createInterface({
-        input: fs.createReadStream(fullPath),
-        crlfDelay: Infinity,
+      const indexT0 = Date.now();
+      const meta = readReconciledMeta(fullPath);
+      const { totalBatches, source } = await resolveReconciledBatchCount(fullPath, {
+        hint: totalBatchesHint,
       });
-      for await (const line of rlCount) {
-        if (abort.aborted || token !== this._playbackToken) break;
-        const raw = line.trim();
-        if (!raw) continue;
-        let row;
-        try { row = JSON.parse(raw); } catch { continue; }
-        if (row._type === 'meta') { meta = row; continue; }
-        if (row._type === 'meta_footer' && row.batchCount != null) {
-          footerBatchCount = Number(row.batchCount);
-          continue;
-        }
-        if (row._type === 'batch' && row.tracks?.length) totalBatches++;
-      }
-
-      if (footerBatchCount != null && footerBatchCount > 0) {
-        totalBatches = footerBatchCount;
-      }
 
       if (abort.aborted || token !== this._playbackToken) return;
 
-      if (!totalBatches) throw new Error('Reconciled artifact has no playback batches — re-run post-process job');
+      if (!totalBatches) {
+        throw new Error('Reconciled artifact has no playback batches — re-run post-process job');
+      }
+
+      console.log(
+        `[Replay] Indexed ${path.basename(fullPath)} — ${totalBatches.toLocaleString()} batches`
+        + ` (${source}, ${Date.now() - indexT0}ms, no full-file scan)`,
+      );
 
       const startIdx = Math.floor(progress * totalBatches);
       const playbackCount = Math.max(0, totalBatches - startIdx);
@@ -572,6 +570,7 @@ export default class ReplayService {
       this.state.lastRecordedTs = meta?.lastTs ?? null;
       this.state.presetId = meta?.presetId || null;
       this.state.sourceFile = meta?.sourceFile || null;
+      this.state.totalBatches = totalBatches;
 
       const playbackVenueId = this._resolvePlaybackVenueId(
         venueIdHint,

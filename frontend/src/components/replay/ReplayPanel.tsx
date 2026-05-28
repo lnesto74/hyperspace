@@ -664,10 +664,20 @@ export default function ReplayPanel({ onClose, launch }: ReplayPanelProps) {
     startingReplayRef.current = true
     setError(null)
     try {
+      const useReconciled = playbackSource === 'reconciled' && selectedReconcileJobId
+      const body: Record<string, unknown> = {
+        file: useReconciled ? (status?.file || fileToPlay) : fileToPlay,
+        progress: pct / 100,
+        speed,
+      }
+      if (useReconciled) {
+        body.reconciled = true
+        body.jobId = selectedReconcileJobId
+      }
       const res = await fetch(`${API_BASE}/api/replay/seek`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ file: fileToPlay, progress: pct / 100, speed }),
+        body: JSON.stringify(body),
       })
       const data = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`)
@@ -678,7 +688,7 @@ export default function ReplayPanel({ onClose, launch }: ReplayPanelProps) {
       setSeeking(false)
       startingReplayRef.current = false
     }
-  }, [speed, refreshStatus, status?.file])
+  }, [speed, refreshStatus, status?.file, playbackSource, selectedReconcileJobId])
 
   const stop = useCallback(async () => {
     try {

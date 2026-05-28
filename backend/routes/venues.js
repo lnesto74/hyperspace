@@ -175,6 +175,9 @@ export default function venuesRoutes(db, { mqttService, io, visualTrackService }
           maxCapacity: venue.max_capacity || 300,
           defaultDwellThresholdSec: venue.default_dwell_threshold_sec || 60,
           defaultEngagementThresholdSec: venue.default_engagement_threshold_sec || 120,
+          openingHour: venue.opening_hour ?? 8,
+          closingHour: venue.closing_hour ?? 20,
+          footfallRoiId: venue.footfall_roi_id || null,
           company_id: venue.company_id || null,
           createdAt: venue.created_at,
           updatedAt: venue.updated_at,
@@ -717,7 +720,7 @@ export default function venuesRoutes(db, { mqttService, io, visualTrackService }
   router.patch('/:venueId/settings', (req, res) => {
     try {
       const { venueId } = req.params;
-      const { maxCapacity, defaultDwellThresholdSec, defaultEngagementThresholdSec } = req.body;
+      const { maxCapacity, defaultDwellThresholdSec, defaultEngagementThresholdSec, openingHour, closingHour, footfallRoiId } = req.body;
 
       const updates = [];
       const params = [];
@@ -733,6 +736,36 @@ export default function venuesRoutes(db, { mqttService, io, visualTrackService }
       if (defaultEngagementThresholdSec !== undefined) {
         updates.push('default_engagement_threshold_sec = ?');
         params.push(defaultEngagementThresholdSec);
+      }
+      if (openingHour !== undefined) {
+        const h = Number(openingHour);
+        if (!Number.isInteger(h) || h < 0 || h > 23) {
+          return res.status(400).json({ error: 'openingHour must be 0–23' });
+        }
+        updates.push('opening_hour = ?');
+        params.push(h);
+      }
+      if (closingHour !== undefined) {
+        const h = Number(closingHour);
+        if (!Number.isInteger(h) || h < 0 || h > 23) {
+          return res.status(400).json({ error: 'closingHour must be 0–23' });
+        }
+        updates.push('closing_hour = ?');
+        params.push(h);
+      }
+      if (footfallRoiId !== undefined) {
+        if (footfallRoiId === null || footfallRoiId === '') {
+          updates.push('footfall_roi_id = NULL');
+        } else {
+          const roi = db.prepare(
+            'SELECT id FROM regions_of_interest WHERE id = ? AND venue_id = ?',
+          ).get(String(footfallRoiId), venueId);
+          if (!roi) {
+            return res.status(400).json({ error: 'footfallRoiId not found for this venue' });
+          }
+          updates.push('footfall_roi_id = ?');
+          params.push(String(footfallRoiId));
+        }
       }
 
       if (updates.length === 0) {
