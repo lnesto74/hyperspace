@@ -5,7 +5,7 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { useHeatmap } from '../../context/HeatmapContext'
 import { useRoi } from '../../context/RoiContext'
 import { useVenue } from '../../context/VenueContext'
-import { Vector2 } from '../../types'
+import { getHeatColor, getZoneBounds, isPointInPolygon } from './heatmapUtils'
 import {
   buildDwgWireframeGroup,
   disposeObject3D,
@@ -35,72 +35,6 @@ interface TileTooltip {
   dwellSec: number
   tileX: number
   tileZ: number
-}
-
-function isPointInPolygon(point: { x: number; z: number }, vertices: Vector2[]): boolean {
-  let inside = false
-  for (let i = 0, j = vertices.length - 1; i < vertices.length; j = i++) {
-    const xi = vertices[i].x, zi = vertices[i].z
-    const xj = vertices[j].x, zj = vertices[j].z
-    if (((zi > point.z) !== (zj > point.z)) &&
-        (point.x < (xj - xi) * (point.z - zi) / (zj - zi) + xi)) {
-      inside = !inside
-    }
-  }
-  return inside
-}
-
-function getZoneBounds(vertices: Vector2[]): { minX: number; maxX: number; minZ: number; maxZ: number } {
-  const xs = vertices.map(v => v.x)
-  const zs = vertices.map(v => v.z)
-  return {
-    minX: Math.min(...xs),
-    maxX: Math.max(...xs),
-    minZ: Math.min(...zs),
-    maxZ: Math.max(...zs),
-  }
-}
-
-// Vibrant heatmap colors using HSL interpolation for better contrast
-// Cool (blue/purple) -> Warm (yellow/orange) -> Hot (red/magenta)
-function getHeatColor(value: number, max: number): THREE.Color {
-  if (max === 0) return new THREE.Color(0x1e3a5f) // dark blue for zero
-  
-  // Apply power curve to spread out low values (makes differences more visible)
-  const linearT = Math.min(value / max, 1)
-  const t = Math.pow(linearT, 0.6) // gamma correction - spreads values, emphasizes differences
-  
-  // HSL-based gradient: Blue (240°) -> Cyan (180°) -> Green (120°) -> Yellow (60°) -> Orange (30°) -> Red (0°)
-  // This creates a classic "thermal" heatmap look
-  let h: number, s: number, l: number
-  
-  if (t < 0.25) {
-    // Blue to Cyan (cool zone)
-    const ratio = t / 0.25
-    h = 240 - ratio * 60 // 240 -> 180
-    s = 0.7 + ratio * 0.2 // 70% -> 90%
-    l = 0.35 + ratio * 0.15 // 35% -> 50%
-  } else if (t < 0.5) {
-    // Cyan to Green
-    const ratio = (t - 0.25) / 0.25
-    h = 180 - ratio * 60 // 180 -> 120
-    s = 0.9
-    l = 0.5 + ratio * 0.05 // 50% -> 55%
-  } else if (t < 0.75) {
-    // Green to Yellow/Orange (warm zone)
-    const ratio = (t - 0.5) / 0.25
-    h = 120 - ratio * 80 // 120 -> 40
-    s = 0.9 + ratio * 0.1 // 90% -> 100%
-    l = 0.55 - ratio * 0.05 // 55% -> 50%
-  } else {
-    // Yellow/Orange to Red/Magenta (hot zone)
-    const ratio = (t - 0.75) / 0.25
-    h = 40 - ratio * 40 // 40 -> 0
-    s = 1.0
-    l = 0.5 + ratio * 0.1 // 50% -> 60% (brighter for hotspots)
-  }
-  
-  return new THREE.Color().setHSL(h / 360, s, l)
 }
 
 export default function HeatmapViewerModal({ isOpen, onClose }: HeatmapViewerModalProps) {

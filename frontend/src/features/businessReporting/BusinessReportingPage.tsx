@@ -377,6 +377,8 @@ export default function BusinessReportingPage({ onClose }: BusinessReportingPage
                   onGrainChange={setOpsGrain}
                   topCategories={topCategories}
                   onOpenCategoryHeatmap={handleCategoryHeatmap}
+                  venueId={selectedVenueId!}
+                  heatmapTimeframe={heatmapTimeframe}
                 />
               ) : (
                 <ReportingKpiStrip

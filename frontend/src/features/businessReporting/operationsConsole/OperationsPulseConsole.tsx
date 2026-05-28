@@ -9,7 +9,7 @@ import OperationsTimelineChart from './OperationsTimelineChart';
 import OperationsCheckoutCollapsible from './OperationsCheckoutCollapsible';
 import OperationsAlertsPanel from './OperationsAlertsPanel';
 import OperationsFootfallPanel from './OperationsFootfallPanel';
-import CategoryVisitsPanel from '../components/CategoryVisitsPanel';
+import CategoryTrafficSection from '../components/CategoryTrafficSection';
 import type { CategoryRankingRow } from '../components/CategoryRankingPanel';
 import type { OperationsConsoleData, PeriodDeltas, TimelineGrain } from './types';
 
@@ -21,6 +21,8 @@ interface OperationsPulseConsoleProps {
   onGrainChange: (grain: TimelineGrain) => void;
   topCategories?: CategoryRankingRow[];
   onOpenCategoryHeatmap?: (row: CategoryRankingRow) => void;
+  venueId?: string;
+  heatmapTimeframe?: 'day' | 'week' | 'month';
 }
 
 const GRAINS: { id: TimelineGrain; label: string }[] = [
@@ -37,6 +39,8 @@ export default function OperationsPulseConsole({
   onGrainChange,
   topCategories = [],
   onOpenCategoryHeatmap,
+  venueId,
+  heatmapTimeframe = 'day',
 }: OperationsPulseConsoleProps) {
   const allKpiDefs = useMemo(
     () => [...OPERATIONS_HERO_KPIS, ...OPERATIONS_SECONDARY_KPIS],
@@ -93,23 +97,14 @@ export default function OperationsPulseConsole({
         </div>
       </div>
 
-      {topCategories.length > 0 && (
-        <div className="rounded-lg border border-gray-700/80 bg-gray-800/40 overflow-hidden">
-          <div className="px-3 py-2 border-b border-gray-700/60 flex items-center justify-between gap-2">
-            <div>
-              <span className="text-xs font-medium text-white">Category Traffic</span>
-              <span className="text-[10px] text-gray-500 ml-2">Surgelati · Frutta · Verdura · …</span>
-            </div>
-            <span className="text-[10px] text-gray-500 shrink-0">click row → heatmap</span>
-          </div>
-          <div className="p-3">
-            <CategoryVisitsPanel
-              categories={topCategories}
-              onOpenHeatmap={onOpenCategoryHeatmap}
-              compact
-            />
-          </div>
-        </div>
+      {topCategories.length > 0 && venueId && (
+        <CategoryTrafficSection
+          categories={topCategories}
+          venueId={venueId}
+          heatmapTimeframe={heatmapTimeframe}
+          onOpenCategoryHeatmap={onOpenCategoryHeatmap}
+          compact
+        />
       )}
 
       <OperationsCheckoutCollapsible
