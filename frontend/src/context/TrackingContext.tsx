@@ -18,6 +18,20 @@ const MAX_CLIENT_TRACKS = 220 // Emergency cap only — reconciler keeps count l
 const EMERGENCY_CAP_THRESHOLD = 200 // Only sticky-cap above this
 const INTERP_MISSING_GRACE_MS = 600 // Drop ghost targets faster when ID churns
 
+function isStoryTrackKey(key: string) {
+  return key.startsWith('story-')
+}
+
+function isReplayTrackKey(key: string) {
+  return key.startsWith('replay-')
+}
+
+function acceptTrackKey(key: string, storyActive: boolean, mqttReplay: boolean) {
+  if (storyActive) return isStoryTrackKey(key)
+  if (mqttReplay) return isReplayTrackKey(key)
+  return !isReplayTrackKey(key) && !isStoryTrackKey(key)
+}
+
 function capTrackMap<T extends { timestamp?: number }>(source: Map<string, T>): Map<string, T> {
   if (source.size <= MAX_CLIENT_TRACKS) return source
   const entries = [...source.entries()].sort((a, b) => {
@@ -103,6 +117,7 @@ interface TrackingContextType {
   isConnected: boolean
   isReplayMode: boolean
   mqttReplayActive: boolean
+  storyReplayActive: boolean
   useHistoricalTracks: boolean
   demoSessionId: string | null
   liveTrackDelivery: LiveTrackDelivery
@@ -114,7 +129,9 @@ interface TrackingContextType {
   setInterpolation: (enabled: boolean) => void
   setVisualizationMode: (mode: 'vtl' | 'raw', opts?: { forceClear?: boolean }) => void
   setMqttReplayActive: (active: boolean) => void
+  setStoryReplayActive: (active: boolean) => void
   clearReplayTracks: () => void
+  clearStoryTracks: () => void
 }
 
 const TrackingContext = createContext<TrackingContextType | null>(null)
@@ -134,7 +151,9 @@ interface TrackingActionsType {
   setInterpolation: (enabled: boolean) => void
   setVisualizationMode: (mode: 'vtl' | 'raw', opts?: { forceClear?: boolean }) => void
   setMqttReplayActive: (active: boolean) => void
+  setStoryReplayActive: (active: boolean) => void
   clearReplayTracks: () => void
+  clearStoryTracks: () => void
   setLiveTrackDelivery: (mode: LiveTrackDelivery) => void
   applyLiveTrackDelivery: () => void
   startDemoSession: (venueId: string) => Promise<string | null>
@@ -176,12 +195,15 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
   const [isConnected, setIsConnected] = useState(false)
   const [isReplayMode, setIsReplayMode] = useState(false)
   const [mqttReplayActive, setMqttReplayActiveState] = useState(false)
+  const [storyReplayActive, setStoryReplayActiveState] = useState(false)
   const [demoSessionId, setDemoSessionId] = useState<string | null>(null)
   const [liveTrackDelivery, setLiveTrackDeliveryState] = useState<LiveTrackDelivery>(readLiveTrackDelivery)
   const demoSessionIdRef = useRef<string | null>(null)
   demoSessionIdRef.current = demoSessionId
   const mqttReplayActiveRef = useRef(false)
   mqttReplayActiveRef.current = mqttReplayActive
+  const storyReplayActiveRef = useRef(false)
+  storyReplayActiveRef.current = storyReplayActive
   const socketRef = useRef<Socket | null>(null)
   const subscribedVenueRef = useRef<string | null>(null)
   const venueIdRef = useRef<string | null>(null)
@@ -337,11 +359,7 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
       const lastBatch = pendingBatches[pendingBatches.length - 1]
       const latestByKey = new Map<string, Track>()
       for (const track of lastBatch) {
-        if (mqttReplayActiveRef.current) {
-          if (!track.trackKey.startsWith('replay-')) continue
-        } else if (track.trackKey.startsWith('replay-')) {
-          continue
-        }
+        if (!acceptTrackKey(track.trackKey, storyReplayActiveRef.current, mqttReplayActiveRef.current)) continue
         latestByKey.set(track.trackKey, track)
       }
       pendingBatches = []
@@ -367,8 +385,7 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
         // Brief grace: reconciler re-ID can drop a track from one snapshot then restore it
         for (const [key, track] of prev) {
           if (next.has(key)) continue
-          if (mqttReplayActiveRef.current && !key.startsWith('replay-')) continue
-          if (key.startsWith('replay-') && !mqttReplayActiveRef.current) continue
+          if (!acceptTrackKey(key, storyReplayActiveRef.current, mqttReplayActiveRef.current)) continue
           const lastSeen = trackLastSeenRef.current.get(key) ?? 0
           if (now - lastSeen < snapshotGraceMs()) {
             next.set(key, track)
@@ -416,7 +433,7 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
         if (isTrackingDiag()) console.warn(`[DIAG] tracks IGNORED  eventVenue=${data.venueId}  subscribed=${subscribedVenueRef.current}  n=${data.tracks.length}  t=${Date.now()}`)
         return
       }
-      if (isReplayModeRef.current && !mqttReplayActiveRef.current && replayTracksRef.current.size > 0) return
+      if (isReplayModeRef.current && !mqttReplayActiveRef.current && !storyReplayActiveRef.current && replayTracksRef.current.size > 0) return
 
       const now = Date.now()
 
@@ -433,11 +450,10 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
         }
       }
       
-      if (interpEnabledRef.current && !mqttReplayActiveRef.current) {
-        // Build a Set of trackKeys in this snapshot to prune stale targets
+      if (interpEnabledRef.current && !mqttReplayActiveRef.current && !storyReplayActiveRef.current) {
         const incomingKeys = new Set<string>()
         for (const track of data.tracks) {
-          if (!mqttReplayActiveRef.current && track.trackKey.startsWith('replay-')) continue
+          if (!acceptTrackKey(track.trackKey, storyReplayActiveRef.current, mqttReplayActiveRef.current)) continue
           targetTracksRef.current.set(track.trackKey, track)
           interpTsRef.current.set(track.trackKey, now)
           trackLastSeenRef.current.set(track.trackKey, now)
@@ -457,9 +473,9 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
           }
         }
       } else {
-        const batch = mqttReplayActiveRef.current
-          ? data.tracks.filter(t => t.trackKey.startsWith('replay-'))
-          : data.tracks.filter(t => !t.trackKey.startsWith('replay-'))
+        const batch = data.tracks.filter(t =>
+          acceptTrackKey(t.trackKey, storyReplayActiveRef.current, mqttReplayActiveRef.current),
+        )
         pendingBatches.push(batch)
         requestAnimationFrame(flushTrackUpdates)
       }
@@ -510,8 +526,8 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
       })
     }
 
-    socket.on('track_removed', (data: { trackKey: string; replay?: boolean; liveSuppressed?: boolean }) => {
-      if (data.replay || data.trackKey?.startsWith('replay-')) {
+    socket.on('track_removed', (data: { trackKey: string; replay?: boolean; liveSuppressed?: boolean; story?: boolean }) => {
+      if (data.replay || data.story || data.trackKey?.startsWith('replay-') || data.trackKey?.startsWith('story-')) {
         removeTrackKeyImmediately(data.trackKey)
         return
       }
@@ -803,12 +819,13 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
 
   const setInterpolation = useCallback((enabled: boolean) => {
     smoothMotionRequestedRef.current = enabled
-    const historicalReplay = isReplayModeRef.current && !mqttReplayActiveRef.current
+    const historicalReplay = isReplayModeRef.current && !mqttReplayActiveRef.current && !storyReplayActiveRef.current
     const trackCount = liveTracksRef.current.size
     const shouldInterp =
       enabled &&
       !historicalReplay &&
-      !mqttReplayActiveRef.current
+      !mqttReplayActiveRef.current &&
+      !storyReplayActiveRef.current
     if (isTrackingDiag()) {
       console.log(
         `[DIAG] setInterpolation  enabled=${enabled}  active=${shouldInterp}  historicalReplay=${historicalReplay}  mqttReplay=${mqttReplayActiveRef.current}  tracks=${trackCount}  t=${Date.now()}`
@@ -852,18 +869,18 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
 
   const purgeLiveEdgeTracks = useCallback(() => {
     for (const key of [...trackLastSeenRef.current.keys()]) {
-      if (!key.startsWith('replay-')) trackLastSeenRef.current.delete(key)
+      if (!isReplayTrackKey(key) && !isStoryTrackKey(key)) trackLastSeenRef.current.delete(key)
     }
     for (const key of [...targetTracksRef.current.keys()]) {
-      if (!key.startsWith('replay-')) targetTracksRef.current.delete(key)
+      if (!isReplayTrackKey(key) && !isStoryTrackKey(key)) targetTracksRef.current.delete(key)
     }
     for (const key of [...interpTsRef.current.keys()]) {
-      if (!key.startsWith('replay-')) interpTsRef.current.delete(key)
+      if (!isReplayTrackKey(key) && !isStoryTrackKey(key)) interpTsRef.current.delete(key)
     }
     setLiveTracks(prev => {
       let hasLive = false
       for (const key of prev.keys()) {
-        if (!key.startsWith('replay-')) {
+        if (!isReplayTrackKey(key) && !isStoryTrackKey(key)) {
           hasLive = true
           break
         }
@@ -871,14 +888,60 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
       if (!hasLive) return prev
       const next = new Map<string, TrackWithTrail>()
       for (const [key, track] of prev) {
-        if (key.startsWith('replay-')) next.set(key, track)
+        if (isReplayTrackKey(key) || isStoryTrackKey(key)) next.set(key, track)
       }
       return next
     })
     window.dispatchEvent(new CustomEvent('hyperspace:live-tracks-hidden'))
   }, [])
 
+  const clearStoryTracks = useCallback(() => {
+    const purge = (keys: Iterable<string>) => {
+      for (const key of keys) {
+        if (isStoryTrackKey(key)) {
+          trackLastSeenRef.current.delete(key)
+          targetTracksRef.current.delete(key)
+          interpTsRef.current.delete(key)
+        }
+      }
+    }
+    purge(trackLastSeenRef.current.keys())
+    purge(targetTracksRef.current.keys())
+    setLiveTracks(prev => {
+      let changed = false
+      const next = new Map<string, TrackWithTrail>()
+      for (const [key, track] of prev) {
+        if (isStoryTrackKey(key)) {
+          changed = true
+        } else {
+          next.set(key, track)
+        }
+      }
+      return changed ? next : prev
+    })
+    window.dispatchEvent(new CustomEvent('hyperspace:story-tracks-cleared'))
+  }, [])
+
+  const setStoryReplayActive = useCallback((active: boolean) => {
+    storyReplayActiveRef.current = active
+    setStoryReplayActiveState(active)
+    if (active) {
+      mqttReplayActiveRef.current = false
+      setMqttReplayActiveState(false)
+      setReplayTracksState(new Map())
+      purgeLiveEdgeTracks()
+    } else {
+      clearStoryTracks()
+    }
+    setInterpolationRef.current(smoothMotionRequestedRef.current)
+  }, [purgeLiveEdgeTracks, clearStoryTracks])
+
   const setMqttReplayActive = useCallback((active: boolean) => {
+    if (active) {
+      storyReplayActiveRef.current = false
+      setStoryReplayActiveState(false)
+      clearStoryTracks()
+    }
     mqttReplayActiveRef.current = active
     setMqttReplayActiveState(active)
     if (active) {
@@ -891,7 +954,7 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
       setReplayTracksState(new Map())
     }
     setInterpolationRef.current(smoothMotionRequestedRef.current)
-  }, [purgeLiveEdgeTracks])
+  }, [purgeLiveEdgeTracks, clearStoryTracks])
 
   // Keep mqttReplayActive in sync when replay runs server-side (ReplayPanel may be closed).
   useEffect(() => {
@@ -899,6 +962,7 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
     let cancelled = false
     const poll = async () => {
       try {
+        if (storyReplayActiveRef.current) return
         const res = await fetch(`${API_BASE}/api/replay/status`)
         if (!res.ok || cancelled) return
         const status = await res.json()
@@ -916,6 +980,25 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
     const iv = window.setInterval(poll, 3000)
     return () => { cancelled = true; window.clearInterval(iv) }
   }, [venue?.id, setMqttReplayActive])
+
+  useEffect(() => {
+    if (!venue?.id) return
+    let cancelled = false
+    const poll = async () => {
+      try {
+        const res = await fetch(`${API_BASE}/api/replay/stories/status`)
+        if (!res.ok || cancelled) return
+        const data = await res.json()
+        const running = !!data.status?.running
+        if (running !== storyReplayActiveRef.current) {
+          setStoryReplayActive(running)
+        }
+      } catch { /* ignore */ }
+    }
+    poll()
+    const iv = window.setInterval(poll, storyReplayActive ? 500 : 3000)
+    return () => { cancelled = true; window.clearInterval(iv) }
+  }, [venue?.id, storyReplayActive, setStoryReplayActive])
 
   const startDemoSession = useCallback(async (venueId: string) => {
     try {
@@ -998,12 +1081,15 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
     setInterpolation,
     setVisualizationMode,
     setMqttReplayActive,
+    setStoryReplayActive,
     clearReplayTracks,
+    clearStoryTracks,
     mqttReplayActive,
+    storyReplayActive,
     useHistoricalTracks,
     demoSessionId,
     liveTrackDelivery,
-  }), [tracks, isConnected, isReplayMode, mqttReplayActive, useHistoricalTracks, demoSessionId, liveTrackDelivery, subscribe, unsubscribe, setReplayMode, setReplayTracks, setTrackVisibility, setInterpolation, setVisualizationMode, setMqttReplayActive, clearReplayTracks])
+  }), [tracks, isConnected, isReplayMode, mqttReplayActive, storyReplayActive, useHistoricalTracks, demoSessionId, liveTrackDelivery, subscribe, unsubscribe, setReplayMode, setReplayTracks, setTrackVisibility, setInterpolation, setVisualizationMode, setMqttReplayActive, setStoryReplayActive, clearReplayTracks, clearStoryTracks])
 
   const actionsValue = useMemo(() => ({
     subscribe,
@@ -1014,12 +1100,14 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
     setInterpolation,
     setVisualizationMode,
     setMqttReplayActive,
+    setStoryReplayActive,
     clearReplayTracks,
+    clearStoryTracks,
     setLiveTrackDelivery,
     applyLiveTrackDelivery,
     startDemoSession,
     stopDemoSession,
-  }), [subscribe, unsubscribe, setReplayMode, setReplayTracks, setTrackVisibility, setInterpolation, setVisualizationMode, setMqttReplayActive, clearReplayTracks, setLiveTrackDelivery, applyLiveTrackDelivery, startDemoSession, stopDemoSession])
+  }), [subscribe, unsubscribe, setReplayMode, setReplayTracks, setTrackVisibility, setInterpolation, setVisualizationMode, setMqttReplayActive, setStoryReplayActive, clearReplayTracks, clearStoryTracks, setLiveTrackDelivery, applyLiveTrackDelivery, startDemoSession, stopDemoSession])
 
   return (
     <TracksRefContext.Provider value={stableTracksRef}>

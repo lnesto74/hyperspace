@@ -8,7 +8,7 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import { Hand, Move3D, RotateCcw, Save, Download, Layers, Eye, EyeOff, Move, RotateCw } from 'lucide-react'
 import { useVenue } from '../../context/VenueContext'
 import { useLidar } from '../../context/LidarContext'
-import { useTrackingActions, useTracksRef, useVtlModeRef } from '../../context/TrackingContext'
+import { useTrackingActions, useTracking, useTracksRef, useVtlModeRef } from '../../context/TrackingContext'
 import { sanitizeTrailPoints } from '../../lib/trackTrail'
 import { useRoi } from '../../context/RoiContext'
 import { useReplayInsight } from '../../context/ReplayInsightContext'
@@ -774,6 +774,11 @@ export default function MainViewport({
   const { venue, objects, selectedObjectId, selectedObjectIds, hoveredObjectId, selectObject, selectObjects, hoverObject, updateObject, removeObject, removeObjects, snapToGrid, copySelectedObjects, pasteObjects } = useVenue()
   const { placements, selectedPlacementId, selectPlacement, updatePlacement, removePlacement, getDeviceById } = useLidar()
   const tracksRef = useTracksRef()
+  const { storyReplayActive } = useTracking()
+  const storyReplayActiveRef = useRef(storyReplayActive)
+  storyReplayActiveRef.current = storyReplayActive
+  const storyPickModeRef = useRef(false)
+  const [storyPickMode, setStoryPickMode] = useState(false)
   const vtlModeRef = useVtlModeRef()
   const forcePurgeMeshesRef = useRef(false)
 
@@ -781,6 +786,16 @@ export default function MainViewport({
     const handler = () => { forcePurgeMeshesRef.current = true }
     window.addEventListener('hyperspace:visualization-mode', handler)
     return () => window.removeEventListener('hyperspace:visualization-mode', handler)
+  }, [])
+
+  useEffect(() => {
+    const onPickMode = (e: Event) => {
+      const active = !!(e as CustomEvent<{ active?: boolean }>).detail?.active
+      storyPickModeRef.current = active
+      setStoryPickMode(active)
+    }
+    window.addEventListener('hyperspace:story-pick-mode', onPickMode)
+    return () => window.removeEventListener('hyperspace:story-pick-mode', onPickMode)
   }, [])
 
   const disposeTrackMesh = useCallback((scene: THREE.Scene, key: string) => {
@@ -825,18 +840,28 @@ export default function MainViewport({
         disposeTrackMesh(scene, key)
       }
     }
+    const purgeStoryMeshes = () => {
+      const scene = sceneRef.current
+      if (!scene) return
+      const storyKeys = [...trackMeshesRef.current.keys()].filter(k => k.startsWith('story-'))
+      for (const key of storyKeys) {
+        disposeTrackMesh(scene, key)
+      }
+    }
     const purgeLiveMeshes = () => {
       const scene = sceneRef.current
       if (!scene) return
-      const liveKeys = [...trackMeshesRef.current.keys()].filter(k => !k.startsWith('replay-'))
+      const liveKeys = [...trackMeshesRef.current.keys()].filter(k => !k.startsWith('replay-') && !k.startsWith('story-'))
       for (const key of liveKeys) {
         disposeTrackMesh(scene, key)
       }
     }
     window.addEventListener('hyperspace:replay-tracks-cleared', purgeReplayMeshes)
+    window.addEventListener('hyperspace:story-tracks-cleared', purgeStoryMeshes)
     window.addEventListener('hyperspace:live-tracks-hidden', purgeLiveMeshes)
     return () => {
       window.removeEventListener('hyperspace:replay-tracks-cleared', purgeReplayMeshes)
+      window.removeEventListener('hyperspace:story-tracks-cleared', purgeStoryMeshes)
       window.removeEventListener('hyperspace:live-tracks-hidden', purgeLiveMeshes)
     }
   }, [disposeTrackMesh])
@@ -2181,10 +2206,20 @@ export default function MainViewport({
             selectPlacementRef.current(null)
           }
         } else if (!pendingDragRef.current && !isDraggingRef.current && mouseDownPosRef.current) {
-          // Clicked on empty space - deselect all
-          selectObjectRef.current(null)
-          selectPlacementRef.current(null)
-          selectRegionRef.current(null)
+          if (storyPickModeRef.current) {
+            const mouse = getMouseNDC(event)
+            const floorPoint = getFloorIntersection(mouse)
+            if (floorPoint) {
+              window.dispatchEvent(new CustomEvent('hyperspace:story-floor-pick', {
+                detail: { x: floorPoint.x, z: floorPoint.z },
+              }))
+            }
+          } else {
+            // Clicked on empty space - deselect all
+            selectObjectRef.current(null)
+            selectPlacementRef.current(null)
+            selectRegionRef.current(null)
+          }
         }
       }
       
@@ -4118,7 +4153,7 @@ export default function MainViewport({
       // Phase 1: hide only when track is truly gone from server snapshot (not just render-capped)
       trackMeshesRef.current.forEach((group, key) => {
         if (!allTrackKeys.has(key)) {
-          if (key.startsWith('replay-')) {
+          if (key.startsWith('replay-') || key.startsWith('story-')) {
             disposeTrackMesh(scene, key)
             return
           }
@@ -4226,6 +4261,11 @@ export default function MainViewport({
             : COLORS.trackUnknown
           )
         )
+
+        const isStoryRaw = key.startsWith('story-raw-')
+        const isStoryRecon = key.startsWith('story-recon-')
+        if (isStoryRaw) color = 0x60a5fa
+        else if (isStoryRecon) color = 0x34d399
 
         // Fixed dimensions for all person cylinders — ignore perception bounding box
         // so every track looks identical regardless of LiDAR detection size.
@@ -4417,9 +4457,16 @@ export default function MainViewport({
             geom.setAttribute('position', new THREE.BufferAttribute(posArray, 3))
             geom.setDrawRange(0, 0)
 
-            const mat = new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.8 })
+            const mat = isStoryRaw
+              ? new THREE.LineDashedMaterial({ color: 0x60a5fa, transparent: true, opacity: 0.7, dashSize: 0.35, gapSize: 0.22 })
+              : new THREE.LineBasicMaterial({
+                color: isStoryRecon ? 0x34d399 : color,
+                transparent: true,
+                opacity: isStoryRecon ? 0.95 : 0.8,
+              })
 
             trailLine = new THREE.Line(geom, mat)
+            if (isStoryRaw) trailLine.computeLineDistances()
             trailLine.frustumCulled = false
             trailLine.userData.isTrail = true
             trailLine.userData.trackKey = key
@@ -4441,7 +4488,17 @@ export default function MainViewport({
 
           posAttr.needsUpdate = true
           trailLine.geometry.setDrawRange(0, count)
-          ;(trailLine.material as THREE.LineBasicMaterial).color.set(color as any)
+          const trailMat = trailLine.material as THREE.LineBasicMaterial | THREE.LineDashedMaterial
+          if (isStoryRaw) {
+            trailMat.color.setHex(0x60a5fa)
+            trailMat.opacity = 0.7
+            trailLine.computeLineDistances()
+          } else if (isStoryRecon) {
+            trailMat.color.setHex(0x34d399)
+            trailMat.opacity = 0.95
+          } else {
+            ;(trailMat as THREE.LineBasicMaterial).color.set(color as any)
+          }
           trailLine.visible = showTracksRef.current
           }
         } else {
@@ -4467,7 +4524,13 @@ export default function MainViewport({
         const topCapMat = topCap.material as THREE.MeshStandardMaterial
         const bottomCapMat = bottomCap.material as THREE.MeshStandardMaterial
 
-        const effectiveOpacity = isInSez ? Math.min(currentTracking.cylinderOpacity, 0.4) : currentTracking.cylinderOpacity
+        const effectiveOpacity = isStoryRaw
+          ? Math.min(currentTracking.cylinderOpacity, 0.45)
+          : isStoryRecon
+            ? Math.min(1, currentTracking.cylinderOpacity + 0.15)
+            : isInSez
+              ? Math.min(currentTracking.cylinderOpacity, 0.4)
+              : currentTracking.cylinderOpacity
         cylinderMat.opacity = effectiveOpacity
         topCapMat.opacity = effectiveOpacity
         bottomCapMat.opacity = effectiveOpacity
@@ -5997,6 +6060,14 @@ export default function MainViewport({
       
       {/* 3D Canvas */}
       <div ref={containerRef} className="flex-1 relative">
+        {storyReplayActive && (
+          <div className="absolute inset-0 pointer-events-none z-[4] bg-black/40" aria-hidden />
+        )}
+        {storyPickMode && (
+          <div className="absolute top-3 left-1/2 -translate-x-1/2 z-[6] px-3 py-1 rounded-full bg-amber-950/90 border border-amber-600/50 text-[10px] text-amber-200 pointer-events-none">
+            Click the floor near a trail to pick a story
+          </div>
+        )}
         <div
           ref={axisContainerRef}
           className="hidden"

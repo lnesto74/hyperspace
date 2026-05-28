@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { History, Play, Square, X, ChevronDown, ChevronUp, RefreshCw, Loader2, Circle, GripVertical, Sparkles, Wand2, AlertTriangle, Trash2 } from 'lucide-react'
+import { History, Play, Square, X, ChevronDown, ChevronUp, RefreshCw, Loader2, Circle, GripVertical, Sparkles, Wand2, AlertTriangle, Trash2, Film } from 'lucide-react'
 import { API_BASE } from '../../config/api'
 import { useTrackingActions, useTracking } from '../../context/TrackingContext'
 import { useVenue } from '../../context/VenueContext'
 import { useDraggablePanel } from '../../hooks/useDraggablePanel'
+import TrackStoriesPanel from './TrackStoriesPanel'
+import type { TrackStoriesLaunch } from '../../types/trackStories'
 
 interface ReplayFile {
   name: string
@@ -121,6 +123,7 @@ const friendlyReconcileError = (msg: string) => {
 
 interface ReplayPanelProps {
   onClose: () => void
+  launch?: TrackStoriesLaunch | null
 }
 
 const formatBytes = (n: number) => {
@@ -171,10 +174,10 @@ const readStoredDuration = () => {
   }
 }
 
-export default function ReplayPanel({ onClose }: ReplayPanelProps) {
+export default function ReplayPanel({ onClose, launch }: ReplayPanelProps) {
   const { venue } = useVenue()
-  const { demoSessionId, liveTrackDelivery } = useTracking()
-  const { clearReplayTracks, setMqttReplayActive, setReplayMode, startDemoSession, stopDemoSession, setLiveTrackDelivery } = useTrackingActions()
+  const { demoSessionId, liveTrackDelivery, storyReplayActive } = useTracking()
+  const { clearReplayTracks, setMqttReplayActive, setStoryReplayActive, setReplayMode, startDemoSession, stopDemoSession, setLiveTrackDelivery } = useTrackingActions()
   const [files, setFiles] = useState<ReplayFile[]>([])
   const [selected, setSelected] = useState<string>('')
   const [speed, setSpeed] = useState<number>(4)
@@ -202,6 +205,8 @@ export default function ReplayPanel({ onClose }: ReplayPanelProps) {
   const [reconcileError, setReconcileError] = useState<string | null>(null)
   const [reconcileCancelBusy, setReconcileCancelBusy] = useState(false)
   const [reconcileDeleteBusy, setReconcileDeleteBusy] = useState<string | null>(null)
+  const [showTrackStories, setShowTrackStories] = useState(false)
+  const [storyLaunchId, setStoryLaunchId] = useState<string | undefined>()
 
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const recordPollRef = useRef<ReturnType<typeof setInterval> | null>(null)
@@ -298,8 +303,20 @@ export default function ReplayPanel({ onClose }: ReplayPanelProps) {
     }
   }, [])
 
+  useEffect(() => {
+    if (!launch) return
+    if (launch.sourceFile) {
+      sourceCaptureRef.current = launch.sourceFile
+      setSelected(launch.sourceFile)
+      selectedRef.current = launch.sourceFile
+    }
+    if (launch.jobId) setSelectedReconcileJobId(launch.jobId)
+    if (launch.storyId) setStoryLaunchId(launch.storyId)
+    if (launch.openStoriesMode) setShowTrackStories(true)
+  }, [launch])
+
   const refreshStatus = useCallback(async () => {
-    if (startingReplayRef.current) return
+    if (startingReplayRef.current || storyReplayActive) return
     try {
       const res = await fetch(`${API_BASE}/api/replay/status`)
       if (!res.ok) return
@@ -326,7 +343,7 @@ export default function ReplayPanel({ onClose }: ReplayPanelProps) {
         }
       }
     } catch { /* ignore */ }
-  }, [setMqttReplayActive])
+  }, [setMqttReplayActive, storyReplayActive])
 
   const refreshRecordStatus = useCallback(async () => {
     try {
@@ -552,9 +569,11 @@ export default function ReplayPanel({ onClose }: ReplayPanelProps) {
     const progress = startProgress ?? scrubPct / 100
     startingReplayRef.current = true
     setReplayMode(false)
+    setStoryReplayActive(false)
     setMqttReplayActive(true)
     setError(null)
     try {
+      await fetch(`${API_BASE}/api/replay/stories/stop`, { method: 'POST' })
       await fetch(`${API_BASE}/api/replay/stop`, { method: 'POST' })
       await waitForReplayStopped()
 
@@ -606,7 +625,7 @@ export default function ReplayPanel({ onClose }: ReplayPanelProps) {
     } finally {
       startingReplayRef.current = false
     }
-  }, [speed, refreshStatus, waitForReplayStopped, scrubPct, setMqttReplayActive, setReplayMode, venue?.id, startDemoSession, playbackSource, selectedReconcileJobId])
+  }, [speed, refreshStatus, waitForReplayStopped, scrubPct, setMqttReplayActive, setStoryReplayActive, setReplayMode, venue?.id, startDemoSession, playbackSource, selectedReconcileJobId])
 
   const seekTo = useCallback(async (pct: number) => {
     const fileToPlay = readSelectedFile() || status?.file
@@ -633,17 +652,20 @@ export default function ReplayPanel({ onClose }: ReplayPanelProps) {
 
   const stop = useCallback(async () => {
     try {
+      await fetch(`${API_BASE}/api/replay/stories/stop`, { method: 'POST' })
       await fetch(`${API_BASE}/api/replay/stop`, { method: 'POST' })
       clearReplayTracks()
       await stopDemoSession()
+      setStoryReplayActive(false)
       setMqttReplayActive(false)
       await refreshStatus()
     } catch (err) {
       console.error(err)
       clearReplayTracks()
+      setStoryReplayActive(false)
       setMqttReplayActive(false)
     }
-  }, [refreshStatus, clearReplayTracks, setMqttReplayActive, stopDemoSession])
+  }, [refreshStatus, clearReplayTracks, setMqttReplayActive, setStoryReplayActive, stopDemoSession])
 
   const running = !!status?.running
   const playingFile = status?.file || null
@@ -660,6 +682,7 @@ export default function ReplayPanel({ onClose }: ReplayPanelProps) {
   const failedReconcileJobs = reconcileJobs.filter(j => j.status === 'failed')
   const latestFailedReconcileJob = failedReconcileJobs[0] ?? null
   const latestCompleteReconcileJob = reconcileJobs.find(j => j.status === 'complete') ?? null
+  const storiesJobId = selectedReconcileJobId || latestCompleteReconcileJob?.id || ''
   const reconcileProgressPct = Math.min(100, Math.max(0, (activeReconcileJob?.progress ?? 0) * 100))
   const showFailedBanner = !activeReconcileJob && (reconcileError || latestFailedReconcileJob?.error)
 
@@ -692,6 +715,9 @@ export default function ReplayPanel({ onClose }: ReplayPanelProps) {
         <GripVertical className="w-3.5 h-3.5 text-gray-500 shrink-0" />
         <History className="w-4 h-4 text-amber-400" />
         <span className="font-semibold text-white">MQTT Replay</span>
+        {storyReplayActive && (
+          <span className="ml-1 text-[10px] uppercase tracking-wider text-violet-400 animate-pulse">story</span>
+        )}
         {running && <span className="ml-2 text-[10px] uppercase tracking-wider text-amber-400 animate-pulse">replaying</span>}
         {demoSessionId && (
           <span className="ml-1 text-[10px] uppercase tracking-wider text-emerald-400" title="KPIs recorded to isolated demo DB">
@@ -1156,6 +1182,40 @@ export default function ReplayPanel({ onClose }: ReplayPanelProps) {
                     </option>
                   ))}
                 </select>
+              </div>
+            )}
+          </div>
+
+          <div className="space-y-2 pb-3 border-b border-gray-800">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <Film className="w-3.5 h-3.5 text-violet-400" />
+                <span className="font-medium text-white">Compare sample tracks</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowTrackStories(v => !v)}
+                className={`px-2 py-0.5 rounded text-[10px] border ${
+                  showTrackStories ? 'border-violet-500 text-violet-200 bg-violet-950/40' : 'border-gray-700 text-gray-400'
+                }`}
+              >
+                {showTrackStories ? 'On' : 'Off'}
+              </button>
+            </div>
+            <p className="text-[10px] text-gray-500">
+              Curated before/after trajectories from post-process — dashed blue raw fragments vs solid green reconciled path.
+            </p>
+            {showTrackStories && storiesJobId && (
+              <TrackStoriesPanel
+                jobId={storiesJobId}
+                speed={speed}
+                disabled={running || recording}
+                initialStoryId={storyLaunchId}
+              />
+            )}
+            {showTrackStories && !storiesJobId && (
+              <div className="text-[10px] text-amber-300/90 rounded border border-amber-900/40 bg-amber-950/20 px-2 py-1.5">
+                Run post-process on this capture first, then pick a completed job above.
               </div>
             )}
           </div>

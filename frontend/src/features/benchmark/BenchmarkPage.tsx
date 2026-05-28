@@ -313,6 +313,7 @@ export default function BenchmarkPage({ onClose }: BenchmarkPageProps) {
                     setCoverageTrackView(trackView)
                     setTab('coverage')
                   }}
+                  onOpenTrackStories={onClose}
                 />
               )}
 

@@ -9,6 +9,7 @@ import { getOfflinePreset, listOfflinePresets } from '../config/offlineReconcile
 import { runBatchReconciliationToFile } from './offline/BatchTrajectoryReconciler.js';
 import { normalizePerceptionTransform, IDENTITY_TRANSFORM } from './PerceptionTransform.js';
 import { venueQueries } from '../database/schema.js';
+import { readStoriesFile, storiesPathForArtifact } from './offline/storyBuilder.js';
 
 function parseDwgTransform(json) {
   if (!json) return {};
@@ -373,6 +374,17 @@ export class OfflineReconcileService {
       artifactPath: job.artifactPath,
       artifactName: job.artifactName,
     });
+  }
+
+  getStoriesForJob(jobId) {
+    const job = this.getJob(jobId);
+    if (!job || job.status !== 'complete') return null;
+    const artifact = this.resolveArtifactPath(job);
+    if (!artifact) return null;
+    const storiesPath = storiesPathForArtifact(artifact);
+    const doc = readStoriesFile(storiesPath);
+    if (!doc) return null;
+    return { ...doc, jobId: job.id, storiesPath };
   }
 
   listArtifactsForSource(sourceFile) {

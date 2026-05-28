@@ -18,6 +18,11 @@ import {
   IDENTITY_TRANSFORM,
 } from '../PerceptionTransform.js';
 import { GROCERY_MOTION } from '../../config/offlineReconcilePresets.js';
+import {
+  buildStoriesDocument,
+  storiesPathForArtifact,
+  writeStoriesFile,
+} from './storyBuilder.js';
 
 const BATCH_MS = 100;
 /** Offline artifacts use coarser buckets — fewer batches, same replay semantics. */
@@ -101,10 +106,12 @@ function mergeFragments(fragments, cfg, motion = GROCERY_MOTION) {
   const ids = [...fragments.keys()];
   if (ids.length <= 1) {
     const merged = new Map();
+    const groups = new Map();
     for (const [id, frag] of fragments) {
       merged.set(id, { stableId: id, samples: frag.samples });
+      groups.set(id, [id]);
     }
-    return merged;
+    return { merged, groups, mergeEvents: [] };
   }
 
   const parent = new Map(ids.map(id => [id, id]));
@@ -159,8 +166,18 @@ function mergeFragments(fragments, cfg, motion = GROCERY_MOTION) {
   }
 
   merges.sort((a, b) => a.cost - b.cost);
+  const mergeEvents = [];
   for (const m of merges) {
     if (find(m.idA) === find(m.idB)) continue;
+    const fragB = fragments.get(m.idB);
+    mergeEvents.push({
+      fromFragmentId: m.idB,
+      toFragmentId: m.idA,
+      t: fragB?.firstTs ?? null,
+      x: fragB?.start?.x ?? null,
+      z: fragB?.start?.z ?? null,
+      gapMs: fragB ? fragB.firstTs - (fragments.get(m.idA)?.lastTs ?? 0) : null,
+    });
     union(m.idA, m.idB);
   }
 
@@ -186,7 +203,7 @@ function mergeFragments(fragments, cfg, motion = GROCERY_MOTION) {
     }
     merged.set(root, { stableId: root, samples });
   }
-  return merged;
+  return { merged, groups, mergeEvents };
 }
 
 function smoothSamples(samples, alpha) {
@@ -356,7 +373,8 @@ export async function runBatchReconciliationToFile({
 
   if (onProgress) onProgress({ phase: 'merge', fragments: forwardFragmentCount });
 
-  const mergedRaw = mergeFragments(fragments, cfg);
+  const forwardFragmentsCopy = new Map(fragments);
+  const { merged: mergedRaw, groups: mergeGroups, mergeEvents } = mergeFragments(fragments, cfg);
   fragments.clear();
 
   if (onProgress) onProgress({ phase: 'smooth', merged: mergedRaw.size });
@@ -369,6 +387,29 @@ export async function runBatchReconciliationToFile({
     });
   }
   const mergedTrackCount = mergedTracks.size;
+
+  const storiesPath = storiesPathForArtifact(artifactPath);
+  if (storiesPath) {
+    const storiesDoc = buildStoriesDocument({
+      forwardFragments: forwardFragmentsCopy,
+      mergedTracks,
+      mergeGroups,
+      mergeEvents,
+      meta: {
+        jobId: meta.jobId || null,
+        sourceFile: meta.sourceFile || null,
+        presetId: meta.presetId || null,
+        presetLabel: meta.presetLabel || null,
+        venueId: venueId || meta.venueId || null,
+        firstTs,
+        lastTs,
+      },
+      maxStories: 5,
+    });
+    await writeStoriesFile(storiesPath, storiesDoc);
+    console.log(`[OfflineReconcile] Wrote ${storiesDoc.story_count} track stories → ${storiesPath}`);
+  }
+  forwardFragmentsCopy.clear();
   mergedRaw.clear();
 
   const ws = fs.createWriteStream(artifactPath, { flags: 'w' });

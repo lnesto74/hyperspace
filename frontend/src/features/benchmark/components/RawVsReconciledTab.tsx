@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { ArrowRight, MapPin, Sparkles, TrendingDown, TrendingUp } from 'lucide-react'
+import { ArrowRight, Film, MapPin, Sparkles, TrendingDown, TrendingUp } from 'lucide-react'
 import { API_BASE } from '../../../config/api'
 import type { BenchmarkRunDetail, ReconciledSpatial, TrackViewMode } from '../types'
 import {
@@ -11,10 +11,12 @@ import {
   type ReconcilerConfigId,
 } from '../rawVsReconciledUtils'
 import { computeDataConfidenceScore } from '../benchmarkMapUtils'
+import { TRACK_STORIES_LAUNCH_KEY } from '../../../types/trackStories'
 
 interface Props {
   detail: BenchmarkRunDetail
   onOpenCoverage?: (trackView: TrackViewMode) => void
+  onOpenTrackStories?: () => void
 }
 
 function overlayForConfig(config: ReconcilerConfigId): TrackViewMode {
@@ -66,7 +68,7 @@ function HeroStat({
   )
 }
 
-export default function RawVsReconciledTab({ detail, onOpenCoverage }: Props) {
+export default function RawVsReconciledTab({ detail, onOpenCoverage, onOpenTrackStories }: Props) {
   const perception = detail.scorecard?.layers?.perception
   const reconcilerLayer = detail.scorecard?.layers?.reconciler
   const structural = detail.scorecard?.layers?.structural
@@ -79,6 +81,8 @@ export default function RawVsReconciledTab({ detail, onOpenCoverage }: Props) {
   const [config, setConfig] = useState<ReconcilerConfigId>('GROCERY_BALANCED')
   const [spatialRaw, setSpatialRaw] = useState<{ births: number; deaths: number; ghosts: number } | null>(null)
   const [spatialRecon, setSpatialRecon] = useState<ReconciledSpatial | null>(null)
+  const [floorLinkBusy, setFloorLinkBusy] = useState(false)
+  const [floorLinkError, setFloorLinkError] = useState<string | null>(null)
 
   useEffect(() => {
     if (availableConfigs.length && !reconcilerLayer?.[config]) {
@@ -141,6 +145,38 @@ export default function RawVsReconciledTab({ detail, onOpenCoverage }: Props) {
   }
 
   const overlayMode = overlayForConfig(config)
+  const sourceFile = detail.scorecard?.source_file
+
+  const openTrackStoriesOnFloor = async () => {
+    if (!sourceFile) {
+      setFloorLinkError('No source capture file on this benchmark run')
+      return
+    }
+    setFloorLinkBusy(true)
+    setFloorLinkError(null)
+    try {
+      const res = await fetch(`${API_BASE}/api/replay/reconcile/jobs?sourceFile=${encodeURIComponent(sourceFile)}`)
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`)
+      const jobs: { id: string; status: string; presetId?: string }[] = data.jobs || []
+      const job = jobs.find(j => j.status === 'complete' && j.presetId === config)
+        || jobs.find(j => j.status === 'complete')
+      if (!job) {
+        throw new Error('No completed post-process job for this capture — run post-process in MQTT Replay first')
+      }
+      sessionStorage.setItem(TRACK_STORIES_LAUNCH_KEY, JSON.stringify({
+        sourceFile,
+        jobId: job.id,
+        openStoriesMode: true,
+      }))
+      window.dispatchEvent(new CustomEvent('hyperspace:open-track-stories'))
+      onOpenTrackStories?.()
+    } catch (err: unknown) {
+      setFloorLinkError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setFloorLinkBusy(false)
+    }
+  }
 
   return (
     <div className="space-y-5">
@@ -186,7 +222,19 @@ export default function RawVsReconciledTab({ detail, onOpenCoverage }: Props) {
             Open before/after map
           </button>
         )}
+        <button
+          type="button"
+          disabled={floorLinkBusy || !sourceFile}
+          onClick={() => void openTrackStoriesOnFloor()}
+          className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm border border-violet-700/60 text-violet-200 hover:text-white hover:border-violet-500 disabled:opacity-50"
+        >
+          <Film className="w-4 h-4" />
+          {floorLinkBusy ? 'Loading…' : 'See on floor'}
+        </button>
       </div>
+      {floorLinkError && (
+        <p className="text-xs text-amber-300/90">{floorLinkError}</p>
+      )}
 
       {/* Hero KPIs */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">

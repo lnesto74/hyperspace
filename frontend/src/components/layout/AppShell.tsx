@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { Eye, Grid3X3, Box, ArrowUp, Sun, X, Radio, History, Crosshair, LayoutGrid, ChevronLeft, ChevronRight, Compass, Sparkles, FileVideo } from 'lucide-react'
 import Sidebar from './Sidebar'
 import RightPanel from './RightPanel'
@@ -11,6 +11,7 @@ import { NeuralDashboard } from '../neuralDashboard'
 import MatchingTunerPanel from '../matching/MatchingTunerPanel'
 import TrajectoryQualityPanel from '../matching/TrajectoryQualityPanel'
 import ReplayPanel from '../replay/ReplayPanel'
+import { TRACK_STORIES_LAUNCH_KEY, type TrackStoriesLaunch } from '../../types/trackStories'
 import { useVenue } from '../../context/VenueContext'
 import { useLidar } from '../../context/LidarContext'
 import { useDwg } from '../../context/DwgContext'
@@ -73,6 +74,7 @@ export default function AppShell({ onOpenDwgImporter, onOpenEdgeCommissioning, s
   const [showMatchingTuner, setShowMatchingTuner] = useState(false)
   const [showTrajectoryQuality, setShowTrajectoryQuality] = useState(false)
   const [showReplayPanel, setShowReplayPanel] = useState(false)
+  const [trackStoriesLaunch, setTrackStoriesLaunch] = useState<TrackStoriesLaunch | null>(null)
   const [lighting, setLighting] = useState<LightingSettings>(defaultLighting)
   const [tracking, setTracking] = useState<TrackingSettings>(defaultTracking)
   const { venue, selectedObjectId, objects } = useVenue()
@@ -90,6 +92,23 @@ export default function AppShell({ onOpenDwgImporter, onOpenEdgeCommissioning, s
   
   // Auto-save venue, objects, and placements after changes
   useAutoSave()
+
+  useEffect(() => {
+    const openFromStorage = () => {
+      try {
+        const raw = sessionStorage.getItem(TRACK_STORIES_LAUNCH_KEY)
+        if (!raw) return
+        sessionStorage.removeItem(TRACK_STORIES_LAUNCH_KEY)
+        const payload = JSON.parse(raw) as TrackStoriesLaunch
+        setTrackStoriesLaunch(payload)
+        setShowReplayPanel(true)
+      } catch { /* ignore */ }
+    }
+    openFromStorage()
+    const onOpen = () => openFromStorage()
+    window.addEventListener('hyperspace:open-track-stories', onOpen)
+    return () => window.removeEventListener('hyperspace:open-track-stories', onOpen)
+  }, [])
   
   // Screenshot capture function from MainViewport
   const [captureScreenshot, setCaptureScreenshot] = useState<CaptureScreenshotFn | null>(null)
@@ -177,7 +196,13 @@ export default function AppShell({ onOpenDwgImporter, onOpenEdgeCommissioning, s
 
         {/* MQTT capture replay panel */}
         {showReplayPanel && (
-          <ReplayPanel onClose={() => setShowReplayPanel(false)} />
+          <ReplayPanel
+            onClose={() => {
+              setShowReplayPanel(false)
+              setTrackStoriesLaunch(null)
+            }}
+            launch={trackStoriesLaunch}
+          />
         )}
 
 

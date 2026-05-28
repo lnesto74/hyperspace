@@ -2,7 +2,7 @@ import { Router } from 'express';
 import path from 'path';
 import { venueQueries } from '../database/schema.js';
 
-export default function replayRoutes({ replayService, mqttRecordService, mqttService, db, offlineReconcileService }) {
+export default function replayRoutes({ replayService, mqttRecordService, mqttService, db, offlineReconcileService, storyReplayService }) {
   const router = Router();
 
   router.get('/files', (_req, res) => {
@@ -285,6 +285,105 @@ export default function replayRoutes({ replayService, mqttRecordService, mqttSer
       if (!offlineReconcileService) return res.status(503).json({ error: 'Offline reconciliation not available' });
       const result = offlineReconcileService.deleteJob(req.params.id);
       res.json({ success: true, ...result });
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  router.get('/reconcile/jobs/:id/stories', (req, res) => {
+    try {
+      if (!offlineReconcileService) return res.status(503).json({ error: 'Offline reconciliation not available' });
+      const doc = offlineReconcileService.getStoriesForJob(String(req.params.id));
+      if (!doc) {
+        return res.status(404).json({
+          error: 'Track stories not found — re-run post-process on this capture to generate stories.json',
+        });
+      }
+      res.json({ success: true, stories: doc });
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  router.get('/stories/status', (_req, res) => {
+    try {
+      if (!storyReplayService) return res.status(503).json({ error: 'Story replay not available' });
+      res.json({ success: true, status: storyReplayService.status() });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  router.post('/stories/start', async (req, res) => {
+    const { jobId, storyId, venueId, speed, startProgress } = req.body || {};
+    try {
+      if (!storyReplayService || !offlineReconcileService) {
+        return res.status(503).json({ error: 'Story replay not available' });
+      }
+      if (!jobId || !storyId) return res.status(400).json({ error: 'jobId and storyId are required' });
+
+      const doc = offlineReconcileService.getStoriesForJob(String(jobId));
+      if (!doc?.stories?.length) {
+        return res.status(404).json({ error: 'Track stories not found for this job' });
+      }
+      const story = doc.stories.find(s => s.id === storyId || s.stableId === storyId);
+      if (!story) return res.status(404).json({ error: `Story not found: ${storyId}` });
+
+      await replayService.stop();
+      await storyReplayService.stop();
+
+      const playVenue = venueId || doc.venueId || replayService.trackAggregator?.venueId || 'default';
+      storyReplayService.start({
+        story: { ...story, jobId: doc.jobId },
+        venueId: playVenue,
+        speed,
+        startProgress,
+      }).catch(err => console.error('[StoryReplay] failed:', err.message));
+
+      let status = storyReplayService.status();
+      for (let i = 0; i < 20 && !status.running; i++) {
+        await new Promise(r => setTimeout(r, 50));
+        status = storyReplayService.status();
+      }
+      res.json({ success: true, status, story: { id: story.id, label: story.label } });
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  router.post('/stories/stop', async (_req, res) => {
+    try {
+      if (!storyReplayService) return res.status(503).json({ error: 'Story replay not available' });
+      await storyReplayService.stop();
+      replayService.trackAggregator?.emitTracks?.();
+      res.json({ success: true, status: storyReplayService.status() });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  router.post('/stories/seek', async (req, res) => {
+    const { jobId, storyId, progress, speed, venueId } = req.body || {};
+    try {
+      if (!storyReplayService || !offlineReconcileService) {
+        return res.status(503).json({ error: 'Story replay not available' });
+      }
+      const p = Number(progress);
+      if (!Number.isFinite(p)) return res.status(400).json({ error: 'progress (0-1) required' });
+      const doc = offlineReconcileService.getStoriesForJob(String(jobId));
+      const story = doc?.stories?.find(s => s.id === storyId || s.stableId === storyId);
+      if (!story) return res.status(404).json({ error: 'Story not found' });
+
+      await storyReplayService.stop();
+      const playVenue = venueId || doc.venueId || 'default';
+      storyReplayService.start({
+        story: { ...story, jobId: doc.jobId },
+        venueId: playVenue,
+        speed: speed ?? storyReplayService.status().speed ?? 1,
+        startProgress: p,
+      }).catch(err => console.error('[StoryReplay] seek failed:', err.message));
+
+      res.json({ success: true, status: storyReplayService.status() });
     } catch (err) {
       res.status(400).json({ error: err.message });
     }

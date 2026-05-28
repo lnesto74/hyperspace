@@ -21,7 +21,7 @@ import { KPICalculator } from './services/KPICalculator.js';
 import discoveryRoutes from './routes/discovery.js';
 import replayRoutes from './routes/replay.js';
 import { OfflineReconcileService } from './services/OfflineReconcileService.js';
-import ReplayService from './services/ReplayService.js';
+import StoryReplayService from './services/StoryReplayService.js';
 import MqttRecordService from './services/MqttRecordService.js';
 import BenchmarkRunService from './services/BenchmarkRunService.js';
 import BenchmarkCoverageService from './services/BenchmarkCoverageService.js';
@@ -468,10 +468,11 @@ app.use('/api/discovery', discoveryRoutes(tailscaleService, mockGenerator));
 app.use('/api/venues', venuesRoutes(db, { mqttService, io, visualTrackService }));
 const replayDir = process.env.REPLAY_DIR || '/data/replay';
 const replayService = new ReplayService({ mqttService, replayDir, trackAggregator });
+const storyReplayService = new StoryReplayService({ io });
 const mqttRecordService = new MqttRecordService({ replayDir });
 const offlineReconcileService = new OfflineReconcileService({ db, replayDir });
 if (mqttService) mqttService.setMqttRecorder(mqttRecordService);
-app.use('/api/replay', replayRoutes({ replayService, mqttRecordService, mqttService, db, offlineReconcileService }));
+app.use('/api/replay', replayRoutes({ replayService, mqttRecordService, mqttService, db, offlineReconcileService, storyReplayService }));
 const benchmarkRunService = new BenchmarkRunService();
 const benchmarkCoverageService = new BenchmarkCoverageService({
   benchmarkRunService,
