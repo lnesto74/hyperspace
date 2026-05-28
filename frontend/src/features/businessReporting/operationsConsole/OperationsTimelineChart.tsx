@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import TimelineRangeBrush from './TimelineRangeBrush';
 import type { OperationsTimeline } from './types';
 
 type SeriesMode = 'occupancy' | 'footfall';
@@ -12,6 +13,7 @@ interface OperationsTimelineChartProps {
 
 const CHART_H = 140;
 const MIN_WINDOW = 4;
+const DEFAULT_WINDOW = 24;
 
 export default function OperationsTimelineChart({
   timeline,
@@ -21,8 +23,8 @@ export default function OperationsTimelineChart({
 }: OperationsTimelineChartProps) {
   const [mode, setMode] = useState<SeriesMode>(forcedMode || 'occupancy');
   const [hoveredIdx, setHoveredIdx] = useState<number | null>(null);
-  const [windowSize, setWindowSize] = useState(MIN_WINDOW);
-  const [windowStart, setWindowStart] = useState(0);
+  const [rangeStart, setRangeStart] = useState(0);
+  const [rangeEnd, setRangeEnd] = useState(DEFAULT_WINDOW);
   const activeMode = forcedMode || mode;
 
   const footfallPoints = timeline.visitors;
@@ -40,19 +42,20 @@ export default function OperationsTimelineChart({
   const altPoints = activeMode === 'occupancy' ? footfallPoints : occupancyPoints;
 
   useEffect(() => {
-    const initialSize = Math.min(24, Math.max(MIN_WINDOW, points.length));
-    setWindowSize(initialSize);
-    setWindowStart(Math.max(0, points.length - initialSize));
+    const window = Math.min(DEFAULT_WINDOW, Math.max(MIN_WINDOW, points.length));
+    setRangeStart(Math.max(0, points.length - window));
+    setRangeEnd(points.length);
     setHoveredIdx(null);
   }, [points.length, activeMode, timeline.grain]);
 
-  useEffect(() => {
-    setWindowStart(prev => Math.min(prev, Math.max(0, points.length - windowSize)));
-  }, [windowSize, points.length]);
+  const handleRangeChange = (start: number, end: number) => {
+    setRangeStart(start);
+    setRangeEnd(end);
+  };
 
   const visiblePoints = useMemo(
-    () => points.slice(windowStart, windowStart + windowSize),
-    [points, windowStart, windowSize],
+    () => points.slice(rangeStart, rangeEnd),
+    [points, rangeStart, rangeEnd],
   );
 
   const maxVal = useMemo(
@@ -62,8 +65,6 @@ export default function OperationsTimelineChart({
 
   const grainLabel = timeline.grain === 'hour' ? 'Hourly' : timeline.grain === 'day' ? 'Daily' : 'Weekly';
   const valueLabel = activeMode === 'footfall' ? 'Visits' : 'Peak shoppers';
-  const showNavigator = points.length > MIN_WINDOW;
-  const maxPan = Math.max(0, points.length - windowSize);
 
   if (!points.length || !points.some(p => p.value > 0)) {
     const altHasData = altPoints.some(p => p.value > 0);
@@ -118,38 +119,6 @@ export default function OperationsTimelineChart({
         </div>
       </div>
 
-      {showNavigator && (
-        <div className="flex flex-col gap-1.5 mb-2">
-          <div className="flex items-center gap-2">
-            <span className="text-[9px] text-gray-500 w-10 shrink-0">Zoom</span>
-            <input
-              type="range"
-              min={MIN_WINDOW}
-              max={points.length}
-              value={windowSize}
-              onChange={(e) => setWindowSize(Number(e.target.value))}
-              className="flex-1 h-1 accent-white/70"
-            />
-            <span className="text-[9px] text-gray-400 tabular-nums shrink-0 w-16 text-right">{windowSize} pts</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <span className="text-[9px] text-gray-500 w-10 shrink-0">Shift</span>
-            <input
-              type="range"
-              min={0}
-              max={maxPan}
-              value={windowStart}
-              onChange={(e) => setWindowStart(Number(e.target.value))}
-              className="flex-1 h-1 accent-white/70"
-              disabled={maxPan === 0}
-            />
-            <span className="text-[9px] text-gray-400 truncate shrink-0 max-w-[40%] text-right">
-              {visiblePoints[0]?.label} – {visiblePoints[visiblePoints.length - 1]?.label}
-            </span>
-          </div>
-        </div>
-      )}
-
       <div className="flex flex-col overflow-visible">
         <div
           className="relative w-full overflow-visible pt-7"
@@ -168,7 +137,7 @@ export default function OperationsTimelineChart({
               const isHovered = hoveredIdx === i;
               return (
                 <div
-                  key={`${p.bucketStartTs}-${windowStart + i}`}
+                  key={`${p.bucketStartTs}-${rangeStart + i}`}
                   className="relative flex flex-col justify-end items-center h-full"
                   style={{ width: barWidth, minWidth: 6, flex: visiblePoints.length > 12 ? 1 : undefined }}
                   onMouseEnter={() => setHoveredIdx(i)}
@@ -194,7 +163,8 @@ export default function OperationsTimelineChart({
             })}
           </div>
         </div>
-        <div className="flex justify-between text-[9px] text-gray-500 mt-2 pt-1 border-t border-gray-700/40">
+
+        <div className="flex justify-between text-[9px] text-gray-500 mt-2 px-0.5">
           <span className="truncate max-w-[30%]">{visiblePoints[0]?.label}</span>
           {visiblePoints.length > 2 && (
             <span className="truncate max-w-[30%] text-center">
@@ -203,6 +173,14 @@ export default function OperationsTimelineChart({
           )}
           <span className="truncate max-w-[30%] text-right">{visiblePoints[visiblePoints.length - 1]?.label}</span>
         </div>
+
+        <TimelineRangeBrush
+          points={points}
+          rangeStart={rangeStart}
+          rangeEnd={rangeEnd}
+          onRangeChange={handleRangeChange}
+          minWindow={MIN_WINDOW}
+        />
       </div>
     </div>
   );
