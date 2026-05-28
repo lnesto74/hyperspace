@@ -19,16 +19,11 @@
     }
     .toolbar {
       width: min(1400px, 100%);
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 12px;
       margin-bottom: 12px;
       font-size: 12px;
       color: #6b7280;
-      flex-wrap: wrap;
     }
-    .toolbar code { color: #9ca3af; font-size: 11px; }
+    .toolbar code { color: #9ca3af; }
     .canvas {
       width: min(1400px, 100%);
       aspect-ratio: 16 / 9;
@@ -40,20 +35,20 @@
       flex-direction: column;
       box-shadow: 0 24px 80px rgba(0, 0, 0, 0.45);
     }
-    .header { margin-bottom: 18px; }
+    .header { margin-bottom: 16px; }
     .header h1 {
-      font-size: clamp(22px, 2.4vw, 30px);
+      font-size: 28px;
       font-weight: 700;
       letter-spacing: -0.02em;
       color: #f9fafb;
-      margin-bottom: 6px;
+      margin-bottom: 4px;
     }
-    .header p { font-size: clamp(12px, 1.1vw, 14px); color: #9ca3af; }
+    .header p { font-size: 13px; color: #9ca3af; }
     .strip {
       flex: 1;
       display: grid;
       grid-template-columns: repeat(3, 1fr);
-      gap: 16px;
+      gap: 14px;
       min-height: 0;
     }
     .panel {
@@ -69,11 +64,12 @@
       display: flex;
       align-items: center;
       gap: 8px;
-      padding: 10px 12px;
+      padding: 8px 12px;
       border-bottom: 1px solid #1f2937;
+      flex-shrink: 0;
     }
     .badge {
-      font-size: 10px;
+      font-size: 9px;
       font-weight: 700;
       letter-spacing: 0.06em;
       padding: 3px 7px;
@@ -85,58 +81,149 @@
     .l3 .badge { background: #064e3b; color: #6ee7b7; }
     .panel-title { font-size: 12px; font-weight: 600; color: #f3f4f6; }
     .panel-sub { font-size: 10px; color: #6b7280; margin-left: auto; }
-    .panel-body { flex: 1; min-height: 0; position: relative; background: #0a0e13; }
-    .panel-body img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .panel-body {
+      flex: 1;
+      min-height: 0;
+      position: relative;
+      background: #0a0e13;
+      overflow: hidden;
+    }
     .panel-caption {
-      padding: 8px 12px;
-      font-size: 11px;
+      padding: 7px 12px;
+      font-size: 10px;
       color: #9ca3af;
       border-top: 1px solid #1f2937;
       line-height: 1.35;
+      flex-shrink: 0;
     }
-    .split { display: grid; grid-template-columns: 1fr 1fr; height: 100%; }
-    .split-half {
+
+    /* Crop one quadrant from 2×2 artifact grid */
+    .crop {
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
       position: relative;
-      border-right: 1px solid #1f2937;
-      display: flex;
-      flex-direction: column;
-      min-height: 0;
+      background: #fff;
     }
-    .split-half:last-child { border-right: none; }
-    .split-label {
+    .crop img {
+      position: absolute;
+      width: 200%;
+      height: 200%;
+      object-fit: fill;
+    }
+    .crop-tl img { left: 0; top: 0; }
+    .crop-tr img { left: -100%; top: 0; }
+    .crop-bl img { left: 0; top: -100%; }
+    .crop-br img { left: -100%; top: -100%; }
+
+    .overlay-label {
       position: absolute;
       top: 8px;
       left: 8px;
       z-index: 2;
       font-size: 9px;
       font-weight: 700;
-      letter-spacing: 0.05em;
+      letter-spacing: 0.04em;
       text-transform: uppercase;
       padding: 4px 8px;
       border-radius: 4px;
-      backdrop-filter: blur(4px);
+      background: rgba(0, 0, 0, 0.72);
+      color: #e5e7eb;
     }
-    .split-label.before { background: rgba(127, 29, 29, 0.85); color: #fecaca; }
-    .split-label.after { background: rgba(6, 78, 59, 0.85); color: #a7f3d0; }
-    .split-half img, .split-half svg { flex: 1; width: 100%; height: 100%; object-fit: cover; }
-    .dual { display: grid; grid-template-columns: 1fr 1fr; height: 100%; }
-    .dual-half { position: relative; border-right: 1px solid #1f2937; min-height: 0; }
+
+    /* Layer 2 — metrics compare */
+    .metrics {
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      padding: 12px;
+      gap: 10px;
+      justify-content: center;
+    }
+    .metric-row {
+      display: grid;
+      grid-template-columns: 1fr auto auto;
+      gap: 8px;
+      align-items: baseline;
+      padding: 8px 10px;
+      border-radius: 8px;
+      background: rgba(17, 24, 39, 0.9);
+      border: 1px solid #1f2937;
+    }
+    .metric-row .name {
+      font-size: 10px;
+      color: #9ca3af;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .metric-row .raw { font-size: 14px; font-weight: 600; color: #f87171; text-align: right; }
+    .metric-row .rec {
+      font-size: 14px;
+      font-weight: 700;
+      color: #34d399;
+      text-align: right;
+      min-width: 72px;
+    }
+    .metrics-head {
+      display: grid;
+      grid-template-columns: 1fr auto auto;
+      gap: 8px;
+      padding: 0 10px 4px;
+      font-size: 9px;
+      color: #6b7280;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+    .metrics-head span:nth-child(2),
+    .metrics-head span:nth-child(3) { text-align: right; }
+    .preset-pill {
+      align-self: center;
+      font-size: 10px;
+      color: #c4b5fd;
+      background: rgba(88, 28, 135, 0.35);
+      border: 1px solid rgba(167, 139, 250, 0.35);
+      padding: 4px 10px;
+      border-radius: 999px;
+      margin-bottom: 4px;
+    }
+
+    /* Layer 3 — contain both maps */
+    .dual {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      height: 100%;
+    }
+    .dual-half {
+      position: relative;
+      border-right: 1px solid #1f2937;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 6px;
+      background: #0a0e13;
+    }
     .dual-half:last-child { border-right: none; }
+    .dual-half img {
+      max-width: 100%;
+      max-height: 100%;
+      object-fit: contain;
+    }
     .dual-tag {
       position: absolute;
-      bottom: 8px;
-      left: 8px;
+      bottom: 6px;
+      left: 6px;
       z-index: 2;
-      font-size: 9px;
+      font-size: 8px;
       font-weight: 600;
       padding: 3px 7px;
       border-radius: 4px;
-      background: rgba(0, 0, 0, 0.65);
+      background: rgba(0, 0, 0, 0.75);
       color: #d1d5db;
     }
+
     .footer {
-      margin-top: 14px;
-      padding-top: 12px;
+      margin-top: 12px;
+      padding-top: 10px;
       border-top: 1px solid #1f2937;
       display: flex;
       align-items: center;
@@ -144,18 +231,17 @@
       gap: 12px;
       flex-wrap: wrap;
     }
-    .dataset { font-size: 11px; color: #6b7280; }
+    .dataset { font-size: 10px; color: #6b7280; }
     .dataset strong { color: #d1d5db; font-weight: 600; }
     .flow {
       display: flex;
       align-items: center;
       gap: 6px;
-      font-size: 10px;
-      color: #4b5563;
+      font-size: 9px;
+      color: #6b7280;
       text-transform: uppercase;
       letter-spacing: 0.08em;
     }
-    .flow span { color: #6b7280; }
     .arrow { color: #374151; }
     .err {
       display: none;
@@ -182,15 +268,14 @@
 </head>
 <body>
   <div class="toolbar">
-    <span>Use <code>/api/benchmark/story-strip</code> on production (not the SPA root path)</span>
-    <span><code>?run=CAPTURE_ID</code> · <code>?clean=1</code> for screenshot</span>
+    <code>/api/benchmark/story-strip?clean=1</code>
   </div>
   <div class="err" id="err"></div>
 
-  <div class="canvas" id="canvas">
+  <div class="canvas">
     <div class="header">
       <h1>How we benchmark — three layers, one dataset</h1>
-      <p>Detect → stitch → explain gaps · same 3 h capture, reconciler OFF at record time</p>
+      <p>Detect → stitch → explain gaps · same 3 h capture · reconciler OFF at record</p>
     </div>
 
     <div class="strip">
@@ -201,51 +286,49 @@
           <span class="panel-sub">Raw · reconciler OFF</span>
         </div>
         <div class="panel-body">
-          <img id="img-l1" alt="Detection heatmap and ID birth/death map" />
+          <div class="crop crop-tr">
+            <span class="overlay-label">ID birth (green) · death (red)</span>
+            <img id="img-l1" alt="Birth and death map" />
+          </div>
         </div>
-        <p class="panel-caption">People detected — IDs fragment at shelf shadows (green = birth, red = death)</p>
+        <p class="panel-caption">People detected — IDs fragment where green and red stack in aisles</p>
       </article>
 
       <article class="panel l2">
         <div class="panel-head">
           <span class="badge">Layer 2</span>
           <span class="panel-title">Reconciler</span>
-          <span class="panel-sub">RAJ_v1_CONSERVATIVE</span>
+          <span class="panel-sub">Same file replayed</span>
         </div>
         <div class="panel-body">
-          <div class="split">
-            <div class="split-half">
-              <span class="split-label before">Before · raw replay</span>
-              <img id="l2-before" alt="Raw replay" hidden />
-              <svg id="l2-before-fallback" viewBox="0 0 200 160" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMid slice">
-                <rect width="200" height="160" fill="#0c1018"/>
-                <rect x="20" y="30" width="160" height="100" rx="4" fill="#151b28" stroke="#334155"/>
-                <g stroke-width="1.2" fill="none" opacity="0.9">
-                  <path d="M40 80 L55 75 L48 90" stroke="#ef4444"/>
-                  <path d="M52 88 L60 95 L58 110" stroke="#22c55e"/>
-                  <path d="M70 70 L85 72 L78 85" stroke="#ef4444"/>
-                  <path d="M100 65 L115 68 L108 82" stroke="#ef4444"/>
-                  <path d="M130 90 L145 88 L138 105" stroke="#ef4444"/>
-                </g>
-                <text x="100" y="148" text-anchor="middle" fill="#64748b" font-size="8">Many short IDs · same aisle</text>
-              </svg>
+          <div class="metrics" id="metrics-panel">
+            <div class="preset-pill">RAJ_v1_CONSERVATIVE · RECOMMENDED</div>
+            <div class="metrics-head">
+              <span>Metric</span><span>Raw</span><span>Reconciled</span>
             </div>
-            <div class="split-half">
-              <span class="split-label after">After · reconciled</span>
-              <img id="l2-after" alt="Reconciled replay" hidden />
-              <svg id="l2-after-fallback" viewBox="0 0 200 160" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMid slice">
-                <rect width="200" height="160" fill="#0c1018"/>
-                <rect x="20" y="30" width="160" height="100" rx="4" fill="#151b28" stroke="#334155"/>
-                <g stroke-width="2" fill="none" opacity="0.95">
-                  <path d="M35 85 Q55 70 75 88 T115 82 T155 95" stroke="#a78bfa"/>
-                  <path d="M45 55 Q70 48 95 58 T140 52" stroke="#38bdf8"/>
-                </g>
-                <text x="100" y="148" text-anchor="middle" fill="#64748b" font-size="8">Stitched paths · same file replayed</text>
-              </svg>
+            <div class="metric-row">
+              <span class="name">Fragmentation</span>
+              <span class="raw" id="m-frag-raw">—</span>
+              <span class="rec" id="m-frag-rec">—</span>
+            </div>
+            <div class="metric-row">
+              <span class="name">Mean lifetime</span>
+              <span class="raw" id="m-lt-raw">—</span>
+              <span class="rec" id="m-lt-rec">—</span>
+            </div>
+            <div class="metric-row">
+              <span class="name">Journeys ≥30 m</span>
+              <span class="raw" id="m-j-raw">—</span>
+              <span class="rec" id="m-j-rec">—</span>
+            </div>
+            <div class="metric-row">
+              <span class="name">Teleports / 1k</span>
+              <span class="raw" id="m-tp-raw">—</span>
+              <span class="rec" id="m-tp-rec">—</span>
             </div>
           </div>
         </div>
-        <p class="panel-caption">Same capture replayed — continuity recovered without re-recording</p>
+        <p class="panel-caption">Software uplift on today’s install — no new LiDAR required</p>
       </article>
 
       <article class="panel l3">
@@ -261,8 +344,8 @@
               <span class="dual-tag" id="tag-blind">Blindspot map</span>
             </div>
             <div class="dual-half">
-              <img id="img-l3-pc" alt="Point cloud shadows" />
-              <span class="dual-tag">Point cloud · black = no line of sight</span>
+              <img id="img-l3-pc" alt="Point cloud" />
+              <span class="dual-tag">Point cloud · black = no sight</span>
             </div>
           </div>
         </div>
@@ -271,9 +354,7 @@
     </div>
 
     <div class="footer">
-      <p class="dataset" id="dataset-footer">
-        <strong id="dataset-file">Loading benchmark run…</strong>
-      </p>
+      <p class="dataset" id="dataset-footer"><strong id="dataset-file">Loading…</strong></p>
       <div class="flow">
         <span>Detect</span><span class="arrow">→</span>
         <span>Stitch</span><span class="arrow">→</span>
@@ -287,10 +368,16 @@
     if (params.has('clean')) document.body.classList.add('clean');
 
     const DEFAULT_RUN = 'grocery_capture_2705_1714_Raj_103_2026-05-27T15-14-57';
+    const PRESET = 'RAJ_v1_CONSERVATIVE';
     const runId = params.get('run') || DEFAULT_RUN;
 
     function artifact(name) {
       return `/api/benchmark/runs/${encodeURIComponent(runId)}/artifacts/${name}`;
+    }
+
+    function fmt(n, d = 1) {
+      if (n == null || Number.isNaN(n)) return '—';
+      return Number(n).toFixed(d);
     }
 
     function showErr(msg) {
@@ -299,39 +386,10 @@
       el.style.display = 'block';
     }
 
-    function tryOptionalImage(imgId, fallbackId, src) {
-      const img = document.getElementById(imgId);
-      const fallback = document.getElementById(fallbackId);
-      if (!img) return;
-      img.onload = () => {
-        img.hidden = false;
-        if (fallback) fallback.hidden = true;
-      };
-      img.onerror = () => {
-        img.hidden = true;
-        if (fallback) fallback.hidden = false;
-      };
-      img.src = src;
-    }
-
     async function init() {
       document.getElementById('img-l1').src = artifact('02_spatial_motion.png');
       document.getElementById('img-l3-blind').src = artifact('05_blindspots.png');
-
-      const pcPaths = [
-        '/api/benchmark/presentation/treviglio_pointcloud_2026-05-27.png',
-        '/presentation/treviglio_pointcloud_2026-05-27.png',
-        '/docs-assets/treviglio_pointcloud_2026-05-27.png',
-      ];
-      const pcImg = document.getElementById('img-l3-pc');
-      pcImg.onerror = () => {
-        const idx = pcPaths.indexOf(pcImg.src.replace(location.origin, '')) + 1;
-        if (idx < pcPaths.length) pcImg.src = pcPaths[idx];
-      };
-      pcImg.src = pcPaths[0];
-
-      tryOptionalImage('l2-before', 'l2-before-fallback', '/api/benchmark/presentation/l2-raw-replay.png');
-      tryOptionalImage('l2-after', 'l2-after-fallback', '/api/benchmark/presentation/l2-reconciled-replay.png');
+      document.getElementById('img-l3-pc').src = '/api/benchmark/presentation/treviglio_pointcloud_2026-05-27.png';
 
       try {
         const res = await fetch(`/api/benchmark/runs/${encodeURIComponent(runId)}`);
@@ -339,23 +397,33 @@
         const data = await res.json();
         const sc = data.scorecard || {};
         const p = sc.layers?.perception || {};
+        const r = sc.layers?.reconciler || {};
+        const raw = r.BYPASS_RAW || {};
+        const rec = r[PRESET] || {};
         const s = sc.layers?.structural || {};
+
+        document.getElementById('m-frag-raw').textContent = `${fmt(p.fragmentation_factor || raw.fragmentation_x, 1)}×`;
+        document.getElementById('m-frag-rec').textContent = `${fmt(rec.fragmentation_x, 2)}×`;
+        document.getElementById('m-lt-raw').textContent = `${fmt(raw.mean_lifetime_s ?? p.mean_lifetime_s, 1)} s`;
+        document.getElementById('m-lt-rec').textContent = `${fmt(rec.mean_lifetime_s, 1)} s`;
+        document.getElementById('m-j-raw').textContent = (raw.shopper_grade_ge_30m ?? p.shopper_grade_ge_30m ?? '—').toLocaleString();
+        document.getElementById('m-j-rec').textContent = (rec.shopper_grade_ge_30m ?? '—').toLocaleString();
+        document.getElementById('m-tp-raw').textContent = fmt(raw.teleports_per_1k ?? p.teleports_per_1k, 2);
+        document.getElementById('m-tp-rec').textContent = fmt(rec.teleports_per_1k, 2);
+
         const src = sc.source_file || data.meta?.source_file || runId;
         const msgs = p.messages != null ? p.messages.toLocaleString() : '—';
         const ids = p.unique_perception_ids != null ? p.unique_perception_ids.toLocaleString() : '—';
         const hours = p.time_span_h != null ? `${p.time_span_h.toFixed(2)} h` : '3.00 h';
-        const ver = sc.perception_version || data.meta?.perception_version || 'Raj 1.0.1';
-
-        document.getElementById('dataset-file').textContent = src;
         document.getElementById('dataset-footer').innerHTML =
-          `<strong>${src}</strong> · ${hours} · ${msgs} msgs · ${ids} IDs · ${ver}`;
+          `<strong>${src}</strong> · ${hours} · ${msgs} msgs · ${ids} IDs · Raj 1.0.1`;
 
         if (s.significant_blindspot_m2 != null) {
           document.getElementById('tag-blind').textContent =
-            `Blindspot map · ${Math.round(s.significant_blindspot_m2).toLocaleString()} m²`;
+            `Blindspots · ${Math.round(s.significant_blindspot_m2).toLocaleString()} m²`;
         }
       } catch (e) {
-        showErr(`${e.message} — try ?run=YOUR_CAPTURE_FOLDER under /data/benchmark/runs`);
+        showErr(`${e.message}`);
         document.getElementById('dataset-file').textContent = runId;
       }
     }
