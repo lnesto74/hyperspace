@@ -418,8 +418,6 @@ export default function HeatmapViewerModal({ isOpen, onClose }: HeatmapViewerMod
       })
       const mesh = new THREE.Mesh(geo, mat)
       mesh.position.set(tile.x, ELEVATION + height / 2, tile.z)
-      const mesh = new THREE.Mesh(geo, mat)
-      mesh.position.set(tile.x, ELEVATION + height / 2, tile.z)
       mesh.userData = {
         visits: tile.visits,
         dwellSec: tile.dwellSec,
