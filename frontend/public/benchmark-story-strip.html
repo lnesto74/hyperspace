@@ -182,7 +182,7 @@
 </head>
 <body>
   <div class="toolbar">
-    <span>Backend server · artifacts loaded from <code>/api/benchmark/runs/…</code></span>
+    <span>Use <code>/api/benchmark/story-strip</code> on production (not the SPA root path)</span>
     <span><code>?run=CAPTURE_ID</code> · <code>?clean=1</code> for screenshot</span>
   </div>
   <div class="err" id="err"></div>
@@ -319,6 +319,7 @@
       document.getElementById('img-l3-blind').src = artifact('05_blindspots.png');
 
       const pcPaths = [
+        '/api/benchmark/presentation/treviglio_pointcloud_2026-05-27.png',
         '/presentation/treviglio_pointcloud_2026-05-27.png',
         '/docs-assets/treviglio_pointcloud_2026-05-27.png',
       ];
@@ -329,8 +330,8 @@
       };
       pcImg.src = pcPaths[0];
 
-      tryOptionalImage('l2-before', 'l2-before-fallback', '/presentation/l2-raw-replay.png');
-      tryOptionalImage('l2-after', 'l2-after-fallback', '/presentation/l2-reconciled-replay.png');
+      tryOptionalImage('l2-before', 'l2-before-fallback', '/api/benchmark/presentation/l2-raw-replay.png');
+      tryOptionalImage('l2-after', 'l2-after-fallback', '/api/benchmark/presentation/l2-reconciled-replay.png');
 
       try {
         const res = await fetch(`/api/benchmark/runs/${encodeURIComponent(runId)}`);

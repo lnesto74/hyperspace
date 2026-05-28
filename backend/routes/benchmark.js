@@ -1,5 +1,11 @@
 import { Router } from 'express';
+import fs from 'fs';
 import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const STORY_STRIP_HTML = path.join(__dirname, '../public/benchmark-story-strip.html');
+const PRESENTATION_DIR = path.join(__dirname, '../public/presentation');
 
 export default function benchmarkRoutes({
   benchmarkRunService,
@@ -8,6 +14,32 @@ export default function benchmarkRoutes({
   replayService,
 }) {
   const router = Router();
+
+  // Canva screenshot page — under /api/* so Caddy already proxies to backend (no Caddyfile change needed)
+  router.get('/story-strip', (_req, res) => {
+    if (!fs.existsSync(STORY_STRIP_HTML)) {
+      return res.status(404).type('text/plain').send('Story strip page not deployed (missing backend/public/benchmark-story-strip.html)');
+    }
+    res.type('html');
+    return res.sendFile(STORY_STRIP_HTML);
+  });
+
+  router.get('/presentation/:filename', (req, res) => {
+    try {
+      const base = path.basename(String(req.params.filename));
+      if (!base || base.includes('..')) throw new Error('Invalid filename');
+      const filePath = path.join(PRESENTATION_DIR, base);
+      if (!fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {
+        return res.status(404).json({ error: `Not found: ${base}` });
+      }
+      const ext = path.extname(filePath).toLowerCase();
+      if (ext === '.png') res.type('image/png');
+      else if (ext === '.jpg' || ext === '.jpeg') res.type('image/jpeg');
+      return res.sendFile(filePath);
+    } catch (err) {
+      return res.status(400).json({ error: err.message });
+    }
+  });
 
   router.get('/capture-files', (_req, res) => {
     try {

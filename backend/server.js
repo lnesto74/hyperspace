@@ -115,6 +115,10 @@ if (fs.existsSync(DOCS_ASSETS_DIR)) {
 if (fs.existsSync(PUBLIC_DIR)) {
   app.use(express.static(PUBLIC_DIR));
 }
+app.get('/benchmark-story-strip.html', (req, res) => {
+  const q = req.url.includes('?') ? req.url.slice(req.url.indexOf('?')) : '';
+  res.redirect(302, `/api/benchmark/story-strip${q}`);
+});
 
 // Initialize HTTP server and Socket.IO
 const httpServer = createServer(app);
