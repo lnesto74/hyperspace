@@ -107,5 +107,3 @@ export interface OperationsConsoleData {
   dataWindowStartTs: number;
   dataWindowEndTs: number;
 }
-
-export type DrillDownView = 'traffic' | 'checkout' | 'occupancy' | 'lane' | null;

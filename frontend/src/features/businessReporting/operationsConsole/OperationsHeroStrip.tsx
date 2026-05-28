@@ -8,7 +8,6 @@ interface OperationsHeroStripProps {
   kpiDefinitions: KpiTileDefinition[];
   kpiValues: Record<string, number | null | undefined>;
   periodDeltas?: PeriodDeltas;
-  onSelect?: (kpiId: string) => void;
 }
 
 const DELTA_FOR_KPI: Record<string, keyof PeriodDeltas> = {
@@ -21,7 +20,6 @@ export default function OperationsHeroStrip({
   kpiDefinitions,
   kpiValues,
   periodDeltas,
-  onSelect,
 }: OperationsHeroStripProps) {
   const defs = heroIds
     .map(id => kpiDefinitions.find(d => d.id === id))
@@ -47,11 +45,9 @@ export default function OperationsHeroStrip({
             : false;
 
         return (
-          <button
+          <div
             key={def.id}
-            type="button"
-            onClick={() => onSelect?.(def.id)}
-            className={`rounded-lg border p-3 text-left transition-colors hover:border-gray-500/60 ${STATE_BG[state]}`}
+            className={`rounded-lg border p-3 ${STATE_BG[state]}`}
           >
             <div className="text-[10px] text-gray-500 uppercase tracking-wide">{def.title}</div>
             <div className="flex items-baseline gap-2 mt-1">
@@ -70,7 +66,7 @@ export default function OperationsHeroStrip({
               )}
             </div>
             <p className="text-[10px] text-gray-500 mt-1 line-clamp-2">{def.meaning}</p>
-          </button>
+          </div>
         );
       })}
     </div>

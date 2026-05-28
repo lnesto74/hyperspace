@@ -1,15 +1,11 @@
-import { ChevronRight, Clock } from 'lucide-react';
+import { Clock } from 'lucide-react';
 import type { QueueLaneRow } from './types';
-
-const PREVIEW_LANES = 3;
 
 interface OperationsCheckoutPanelProps {
   lanes: QueueLaneRow[];
   totalQueueLength: number;
   avgWaitMin: number;
   abandonRate: number;
-  onSelectLane?: (laneId: string) => void;
-  onViewAll?: () => void;
 }
 
 export default function OperationsCheckoutPanel({
@@ -17,20 +13,15 @@ export default function OperationsCheckoutPanel({
   totalQueueLength,
   avgWaitMin,
   abandonRate,
-  onSelectLane,
-  onViewAll,
 }: OperationsCheckoutPanelProps) {
-  const preview = lanes.slice(0, PREVIEW_LANES);
   const busiest = [...lanes].sort((a, b) => b.currentQueue - a.currentQueue || b.sessions - a.sessions)[0];
 
   return (
     <div className="rounded-lg border border-gray-700/80 bg-gray-800/40 p-3">
       <div className="flex items-center justify-between mb-2">
         <h3 className="text-xs font-semibold text-white">Checkout</h3>
-        {lanes.length > PREVIEW_LANES && (
-          <button type="button" onClick={onViewAll} className="text-[10px] text-gray-400 hover:text-white flex items-center gap-0.5">
-            All {lanes.length} lanes <ChevronRight className="w-3 h-3" />
-          </button>
+        {lanes.length > 0 && (
+          <span className="text-[10px] text-gray-500">{lanes.length} lanes</span>
         )}
       </div>
 
@@ -58,23 +49,37 @@ export default function OperationsCheckoutPanel({
         </div>
       )}
 
-      {preview.length > 0 ? (
-        <div className="flex gap-1.5">
-          {preview.map(lane => (
-            <button
+      {lanes.length > 0 ? (
+        <div className="space-y-1.5 max-h-64 overflow-y-auto">
+          {lanes.map(lane => (
+            <div
               key={lane.id}
-              type="button"
-              onClick={() => onSelectLane?.(lane.id)}
-              className="flex-1 min-w-0 rounded-md border border-gray-700/60 bg-gray-900/40 px-2 py-1.5 hover:border-gray-500/60 text-left"
+              className="rounded-md border border-gray-700/60 bg-gray-900/40 px-2.5 py-2"
             >
-              <div className="text-[10px] text-white truncate">{lane.name.replace(' - Queue', '')}</div>
-              <div className="text-[9px] text-gray-500">{lane.sessions} sess · {lane.currentQueue} now</div>
-            </button>
+              <div className="text-[10px] text-white truncate mb-1.5">{lane.name.replace(' - Queue', '')}</div>
+              <div className="grid grid-cols-3 sm:grid-cols-6 gap-1.5 text-center">
+                <LaneStat label="Sessions" value={String(lane.sessions)} />
+                <LaneStat label="Completed" value={String(lane.completed)} />
+                <LaneStat label="Avg wait" value={`${lane.avgWaitMin.toFixed(1)}m`} />
+                <LaneStat label="Abandon" value={`${lane.abandonPct}%`} />
+                <LaneStat label="Left queue" value={String(lane.abandoned)} />
+                <LaneStat label="Queue now" value={String(lane.currentQueue)} />
+              </div>
+            </div>
           ))}
         </div>
       ) : (
         <p className="text-[10px] text-gray-500 text-center py-2">No queue sessions in this period</p>
       )}
+    </div>
+  );
+}
+
+function LaneStat({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <div className="text-[8px] text-gray-500">{label}</div>
+      <div className="text-[10px] text-white tabular-nums">{value}</div>
     </div>
   );
 }

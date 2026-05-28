@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo } from 'react';
 import {
   OPERATIONS_HERO_KPIS,
   OPERATIONS_SECONDARY_KPIS,
@@ -9,10 +9,9 @@ import OperationsTimelineChart from './OperationsTimelineChart';
 import OperationsCheckoutCollapsible from './OperationsCheckoutCollapsible';
 import OperationsAlertsPanel from './OperationsAlertsPanel';
 import OperationsFootfallPanel from './OperationsFootfallPanel';
-import OperationsDrillDown from './OperationsDrillDown';
 import CategoryVisitsPanel from '../components/CategoryVisitsPanel';
 import type { CategoryRankingRow } from '../components/CategoryRankingPanel';
-import type { DrillDownView, OperationsConsoleData, PeriodDeltas, TimelineGrain } from './types';
+import type { OperationsConsoleData, PeriodDeltas, TimelineGrain } from './types';
 
 interface OperationsPulseConsoleProps {
   consoleData: OperationsConsoleData;
@@ -39,32 +38,12 @@ export default function OperationsPulseConsole({
   topCategories = [],
   onOpenCategoryHeatmap,
 }: OperationsPulseConsoleProps) {
-  const [drillDown, setDrillDown] = useState<DrillDownView>(null);
-  const [selectedLaneId, setSelectedLaneId] = useState<string | null>(null);
-
   const allKpiDefs = useMemo(
     () => [...OPERATIONS_HERO_KPIS, ...OPERATIONS_SECONDARY_KPIS],
     [],
   );
 
   const showFootfallSeries = consoleData.timeline.visitorSource === 'ingress';
-
-  const handleHeroSelect = (kpiId: string) => {
-    if (kpiId === 'totalInStore' || kpiId === 'peakOccupancy' || kpiId === 'avgOccupancy') {
-      setDrillDown('occupancy');
-    } else if (kpiId === 'avgWaitingTimeMin') {
-      setDrillDown('checkout');
-    }
-  };
-
-  const handleTimelineDrill = (mode: 'occupancy' | 'traffic') => {
-    setDrillDown(mode);
-  };
-
-  const handleLaneSelect = (laneId: string) => {
-    setSelectedLaneId(laneId);
-    setDrillDown('lane');
-  };
 
   return (
     <div className="space-y-3">
@@ -73,7 +52,6 @@ export default function OperationsPulseConsole({
         kpiDefinitions={allKpiDefs}
         kpiValues={kpiValues}
         periodDeltas={periodDeltas}
-        onSelect={handleHeroSelect}
       />
 
       {consoleData.dataHealth && (
@@ -100,7 +78,6 @@ export default function OperationsPulseConsole({
 
       <OperationsTimelineChart
         timeline={consoleData.timeline}
-        onOpenDetail={handleTimelineDrill}
         showFootfallSeries={showFootfallSeries}
       />
 
@@ -140,18 +117,6 @@ export default function OperationsPulseConsole({
         totalQueueLength={kpiValues.currentQueueLength as number || 0}
         avgWaitMin={kpiValues.avgWaitingTimeMin as number || 0}
         abandonRate={kpiValues.abandonRate as number || 0}
-        onSelectLane={handleLaneSelect}
-        onViewAll={() => setDrillDown('checkout')}
-      />
-
-      <OperationsDrillDown
-        view={drillDown}
-        consoleData={consoleData}
-        selectedLaneId={selectedLaneId}
-        onClose={() => {
-          setDrillDown(null);
-          setSelectedLaneId(null);
-        }}
       />
     </div>
   );

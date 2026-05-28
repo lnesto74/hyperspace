@@ -5,7 +5,6 @@ type SeriesMode = 'occupancy' | 'footfall';
 
 interface OperationsTimelineChartProps {
   timeline: OperationsTimeline;
-  onOpenDetail?: (mode: 'occupancy' | 'traffic') => void;
   forcedMode?: SeriesMode;
   hideToggle?: boolean;
   showFootfallSeries?: boolean;
@@ -15,7 +14,6 @@ const CHART_H = 140;
 
 export default function OperationsTimelineChart({
   timeline,
-  onOpenDetail,
   forcedMode,
   hideToggle,
   showFootfallSeries = false,
@@ -75,15 +73,6 @@ export default function OperationsTimelineChart({
           </p>
         </div>
         <div className="flex items-center gap-2">
-          {onOpenDetail && (
-            <button
-              type="button"
-              onClick={() => onOpenDetail(activeMode === 'occupancy' ? 'occupancy' : 'traffic')}
-              className="text-[10px] text-gray-500 hover:text-white"
-            >
-              Table →
-            </button>
-          )}
           {footfallHasData && !hideToggle && !forcedMode && (
             <div className="flex bg-gray-900/80 rounded-md p-0.5 border border-gray-700/60">
               <button

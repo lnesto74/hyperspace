@@ -8,8 +8,6 @@ interface OperationsCheckoutCollapsibleProps {
   totalQueueLength: number;
   avgWaitMin: number;
   abandonRate: number;
-  onSelectLane?: (laneId: string) => void;
-  onViewAll?: () => void;
 }
 
 export default function OperationsCheckoutCollapsible(props: OperationsCheckoutCollapsibleProps) {
