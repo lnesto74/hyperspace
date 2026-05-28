@@ -18,6 +18,17 @@
         reverse_proxy backend:3001
     }
 
+    # Benchmark story strip
+    handle /benchmark-story-strip.html {
+        reverse_proxy backend:3001
+    }
+    handle /presentation/* {
+        reverse_proxy backend:3001
+    }
+    handle /docs-assets/* {
+        reverse_proxy backend:3001
+    }
+
     # Fallback
     handle {
         respond "Use app.hyspace.app for frontend" 200
@@ -42,6 +53,17 @@ app.hyspace.app {
 
     # Uploaded files (logos, DOOH videos, floor plans)
     handle /uploads/* {
+        reverse_proxy backend:3001
+    }
+
+    # Benchmark story strip (Canva screenshot page — served by backend)
+    handle /benchmark-story-strip.html {
+        reverse_proxy backend:3001
+    }
+    handle /presentation/* {
+        reverse_proxy backend:3001
+    }
+    handle /docs-assets/* {
         reverse_proxy backend:3001
     }
 

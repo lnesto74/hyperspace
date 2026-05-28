@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Hyperspace — Three-layer benchmark story strip</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #0b0f14;
+      color: #e5e7eb;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+    }
+    .toolbar {
+      width: min(1400px, 100%);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 12px;
+      font-size: 12px;
+      color: #6b7280;
+      flex-wrap: wrap;
+    }
+    .toolbar code { color: #9ca3af; font-size: 11px; }
+    .canvas {
+      width: min(1400px, 100%);
+      aspect-ratio: 16 / 9;
+      background: linear-gradient(165deg, #111827 0%, #0f172a 45%, #0b0f14 100%);
+      border: 1px solid #1f2937;
+      border-radius: 16px;
+      padding: 28px 32px 22px;
+      display: flex;
+      flex-direction: column;
+      box-shadow: 0 24px 80px rgba(0, 0, 0, 0.45);
+    }
+    .header { margin-bottom: 18px; }
+    .header h1 {
+      font-size: clamp(22px, 2.4vw, 30px);
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      color: #f9fafb;
+      margin-bottom: 6px;
+    }
+    .header p { font-size: clamp(12px, 1.1vw, 14px); color: #9ca3af; }
+    .strip {
+      flex: 1;
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 16px;
+      min-height: 0;
+    }
+    .panel {
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+      border-radius: 12px;
+      overflow: hidden;
+      border: 1px solid #374151;
+      background: #111827;
+    }
+    .panel-head {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 12px;
+      border-bottom: 1px solid #1f2937;
+    }
+    .badge {
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      padding: 3px 7px;
+      border-radius: 4px;
+      text-transform: uppercase;
+    }
+    .l1 .badge { background: #1e3a8a; color: #93c5fd; }
+    .l2 .badge { background: #581c87; color: #d8b4fe; }
+    .l3 .badge { background: #064e3b; color: #6ee7b7; }
+    .panel-title { font-size: 12px; font-weight: 600; color: #f3f4f6; }
+    .panel-sub { font-size: 10px; color: #6b7280; margin-left: auto; }
+    .panel-body { flex: 1; min-height: 0; position: relative; background: #0a0e13; }
+    .panel-body img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .panel-caption {
+      padding: 8px 12px;
+      font-size: 11px;
+      color: #9ca3af;
+      border-top: 1px solid #1f2937;
+      line-height: 1.35;
+    }
+    .split { display: grid; grid-template-columns: 1fr 1fr; height: 100%; }
+    .split-half {
+      position: relative;
+      border-right: 1px solid #1f2937;
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+    }
+    .split-half:last-child { border-right: none; }
+    .split-label {
+      position: absolute;
+      top: 8px;
+      left: 8px;
+      z-index: 2;
+      font-size: 9px;
+      font-weight: 700;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      padding: 4px 8px;
+      border-radius: 4px;
+      backdrop-filter: blur(4px);
+    }
+    .split-label.before { background: rgba(127, 29, 29, 0.85); color: #fecaca; }
+    .split-label.after { background: rgba(6, 78, 59, 0.85); color: #a7f3d0; }
+    .split-half img, .split-half svg { flex: 1; width: 100%; height: 100%; object-fit: cover; }
+    .dual { display: grid; grid-template-columns: 1fr 1fr; height: 100%; }
+    .dual-half { position: relative; border-right: 1px solid #1f2937; min-height: 0; }
+    .dual-half:last-child { border-right: none; }
+    .dual-tag {
+      position: absolute;
+      bottom: 8px;
+      left: 8px;
+      z-index: 2;
+      font-size: 9px;
+      font-weight: 600;
+      padding: 3px 7px;
+      border-radius: 4px;
+      background: rgba(0, 0, 0, 0.65);
+      color: #d1d5db;
+    }
+    .footer {
+      margin-top: 14px;
+      padding-top: 12px;
+      border-top: 1px solid #1f2937;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+    .dataset { font-size: 11px; color: #6b7280; }
+    .dataset strong { color: #d1d5db; font-weight: 600; }
+    .flow {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 10px;
+      color: #4b5563;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+    .flow span { color: #6b7280; }
+    .arrow { color: #374151; }
+    .err {
+      display: none;
+      width: min(1400px, 100%);
+      margin-bottom: 10px;
+      padding: 10px 14px;
+      border-radius: 8px;
+      background: #451a1a;
+      border: 1px solid #7f1d1d;
+      color: #fecaca;
+      font-size: 12px;
+    }
+    body.clean .toolbar, body.clean .err { display: none; }
+    body.clean { padding: 0; }
+    body.clean .canvas {
+      width: 100vw;
+      height: 100vh;
+      max-width: none;
+      aspect-ratio: auto;
+      border-radius: 0;
+      border: none;
+    }
+  </style>
+</head>
+<body>
+  <div class="toolbar">
+    <span>Backend server · artifacts loaded from <code>/api/benchmark/runs/…</code></span>
+    <span><code>?run=CAPTURE_ID</code> · <code>?clean=1</code> for screenshot</span>
+  </div>
+  <div class="err" id="err"></div>
+
+  <div class="canvas" id="canvas">
+    <div class="header">
+      <h1>How we benchmark — three layers, one dataset</h1>
+      <p>Detect → stitch → explain gaps · same 3 h capture, reconciler OFF at record time</p>
+    </div>
+
+    <div class="strip">
+      <article class="panel l1">
+        <div class="panel-head">
+          <span class="badge">Layer 1</span>
+          <span class="panel-title">Perception</span>
+          <span class="panel-sub">Raw · reconciler OFF</span>
+        </div>
+        <div class="panel-body">
+          <img id="img-l1" alt="Detection heatmap and ID birth/death map" />
+        </div>
+        <p class="panel-caption">People detected — IDs fragment at shelf shadows (green = birth, red = death)</p>
+      </article>
+
+      <article class="panel l2">
+        <div class="panel-head">
+          <span class="badge">Layer 2</span>
+          <span class="panel-title">Reconciler</span>
+          <span class="panel-sub">RAJ_v1_CONSERVATIVE</span>
+        </div>
+        <div class="panel-body">
+          <div class="split">
+            <div class="split-half">
+              <span class="split-label before">Before · raw replay</span>
+              <img id="l2-before" alt="Raw replay" hidden />
+              <svg id="l2-before-fallback" viewBox="0 0 200 160" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMid slice">
+                <rect width="200" height="160" fill="#0c1018"/>
+                <rect x="20" y="30" width="160" height="100" rx="4" fill="#151b28" stroke="#334155"/>
+                <g stroke-width="1.2" fill="none" opacity="0.9">
+                  <path d="M40 80 L55 75 L48 90" stroke="#ef4444"/>
+                  <path d="M52 88 L60 95 L58 110" stroke="#22c55e"/>
+                  <path d="M70 70 L85 72 L78 85" stroke="#ef4444"/>
+                  <path d="M100 65 L115 68 L108 82" stroke="#ef4444"/>
+                  <path d="M130 90 L145 88 L138 105" stroke="#ef4444"/>
+                </g>
+                <text x="100" y="148" text-anchor="middle" fill="#64748b" font-size="8">Many short IDs · same aisle</text>
+              </svg>
+            </div>
+            <div class="split-half">
+              <span class="split-label after">After · reconciled</span>
+              <img id="l2-after" alt="Reconciled replay" hidden />
+              <svg id="l2-after-fallback" viewBox="0 0 200 160" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMid slice">
+                <rect width="200" height="160" fill="#0c1018"/>
+                <rect x="20" y="30" width="160" height="100" rx="4" fill="#151b28" stroke="#334155"/>
+                <g stroke-width="2" fill="none" opacity="0.95">
+                  <path d="M35 85 Q55 70 75 88 T115 82 T155 95" stroke="#a78bfa"/>
+                  <path d="M45 55 Q70 48 95 58 T140 52" stroke="#38bdf8"/>
+                </g>
+                <text x="100" y="148" text-anchor="middle" fill="#64748b" font-size="8">Stitched paths · same file replayed</text>
+              </svg>
+            </div>
+          </div>
+        </div>
+        <p class="panel-caption">Same capture replayed — continuity recovered without re-recording</p>
+      </article>
+
+      <article class="panel l3">
+        <div class="panel-head">
+          <span class="badge">Layer 3</span>
+          <span class="panel-title">Structural</span>
+          <span class="panel-sub">Site · LiDAR placement</span>
+        </div>
+        <div class="panel-body">
+          <div class="dual">
+            <div class="dual-half">
+              <img id="img-l3-blind" alt="Blindspot map" />
+              <span class="dual-tag" id="tag-blind">Blindspot map</span>
+            </div>
+            <div class="dual-half">
+              <img id="img-l3-pc" alt="Point cloud shadows" />
+              <span class="dual-tag">Point cloud · black = no line of sight</span>
+            </div>
+          </div>
+        </div>
+        <p class="panel-caption">Breaks cluster where sensors cannot see — Phase 2 closes the voids</p>
+      </article>
+    </div>
+
+    <div class="footer">
+      <p class="dataset" id="dataset-footer">
+        <strong id="dataset-file">Loading benchmark run…</strong>
+      </p>
+      <div class="flow">
+        <span>Detect</span><span class="arrow">→</span>
+        <span>Stitch</span><span class="arrow">→</span>
+        <span>Explain gaps</span>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const params = new URLSearchParams(location.search);
+    if (params.has('clean')) document.body.classList.add('clean');
+
+    const DEFAULT_RUN = 'grocery_capture_2705_1714_Raj_103_2026-05-27T15-14-57';
+    const runId = params.get('run') || DEFAULT_RUN;
+
+    function artifact(name) {
+      return `/api/benchmark/runs/${encodeURIComponent(runId)}/artifacts/${name}`;
+    }
+
+    function showErr(msg) {
+      const el = document.getElementById('err');
+      el.textContent = msg;
+      el.style.display = 'block';
+    }
+
+    function tryOptionalImage(imgId, fallbackId, src) {
+      const img = document.getElementById(imgId);
+      const fallback = document.getElementById(fallbackId);
+      if (!img) return;
+      img.onload = () => {
+        img.hidden = false;
+        if (fallback) fallback.hidden = true;
+      };
+      img.onerror = () => {
+        img.hidden = true;
+        if (fallback) fallback.hidden = false;
+      };
+      img.src = src;
+    }
+
+    async function init() {
+      document.getElementById('img-l1').src = artifact('02_spatial_motion.png');
+      document.getElementById('img-l3-blind').src = artifact('05_blindspots.png');
+
+      const pcPaths = [
+        '/presentation/treviglio_pointcloud_2026-05-27.png',
+        '/docs-assets/treviglio_pointcloud_2026-05-27.png',
+      ];
+      const pcImg = document.getElementById('img-l3-pc');
+      pcImg.onerror = () => {
+        const idx = pcPaths.indexOf(pcImg.src.replace(location.origin, '')) + 1;
+        if (idx < pcPaths.length) pcImg.src = pcPaths[idx];
+      };
+      pcImg.src = pcPaths[0];
+
+      tryOptionalImage('l2-before', 'l2-before-fallback', '/presentation/l2-raw-replay.png');
+      tryOptionalImage('l2-after', 'l2-after-fallback', '/presentation/l2-reconciled-replay.png');
+
+      try {
+        const res = await fetch(`/api/benchmark/runs/${encodeURIComponent(runId)}`);
+        if (!res.ok) throw new Error(`Run not found: ${runId}`);
+        const data = await res.json();
+        const sc = data.scorecard || {};
+        const p = sc.layers?.perception || {};
+        const s = sc.layers?.structural || {};
+        const src = sc.source_file || data.meta?.source_file || runId;
+        const msgs = p.messages != null ? p.messages.toLocaleString() : '—';
+        const ids = p.unique_perception_ids != null ? p.unique_perception_ids.toLocaleString() : '—';
+        const hours = p.time_span_h != null ? `${p.time_span_h.toFixed(2)} h` : '3.00 h';
+        const ver = sc.perception_version || data.meta?.perception_version || 'Raj 1.0.1';
+
+        document.getElementById('dataset-file').textContent = src;
+        document.getElementById('dataset-footer').innerHTML =
+          `<strong>${src}</strong> · ${hours} · ${msgs} msgs · ${ids} IDs · ${ver}`;
+
+        if (s.significant_blindspot_m2 != null) {
+          document.getElementById('tag-blind').textContent =
+            `Blindspot map · ${Math.round(s.significant_blindspot_m2).toLocaleString()} m²`;
+        }
+      } catch (e) {
+        showErr(`${e.message} — try ?run=YOUR_CAPTURE_FOLDER under /data/benchmark/runs`);
+        document.getElementById('dataset-file').textContent = runId;
+      }
+    }
+
+    init();
+  </script>
+</body>
+</html>

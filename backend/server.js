@@ -102,6 +102,20 @@ const UPLOADS_DIR = process.env.UPLOADS_DIR || path.join(__dirname, '../uploads'
 const MODELS_DIR = process.env.MODELS_DIR || path.join(__dirname, 'models');
 app.use('/uploads', express.static(UPLOADS_DIR));
 
+// Presentation / benchmark story strip (screenshot page for Canva slides)
+const HYPERSPACE_ROOT = process.env.HYPERSPACE_ROOT || path.join(__dirname, '..');
+const PUBLIC_DIR = path.join(__dirname, 'public');
+const DOCS_ASSETS_DIR = path.join(HYPERSPACE_ROOT, 'docs/assets');
+if (fs.existsSync(path.join(PUBLIC_DIR, 'presentation'))) {
+  app.use('/presentation', express.static(path.join(PUBLIC_DIR, 'presentation')));
+}
+if (fs.existsSync(DOCS_ASSETS_DIR)) {
+  app.use('/docs-assets', express.static(DOCS_ASSETS_DIR));
+}
+if (fs.existsSync(PUBLIC_DIR)) {
+  app.use(express.static(PUBLIC_DIR));
+}
+
 // Initialize HTTP server and Socket.IO
 const httpServer = createServer(app);
 const io = new Server(httpServer, {
