@@ -12,8 +12,16 @@
 import { Router } from 'express';
 import { KPICalculator } from '../services/KPICalculator.js';
 import { ShelfKPIEnricher } from '../services/ShelfKPIEnricher.js';
-import { getReportingSummary as getNarrator2Kpis } from '../services/narrator2/KpiSourceAdapter.js';
+import {
+  getReportingSummary as getNarrator2Kpis,
+  getQueueLaneKpis,
+} from '../services/narrator2/KpiSourceAdapter.js';
 import { resolveShelfCategories } from '../services/ShelfCategoryResolver.js';
+import {
+  computeStoreFootfallFromHourly,
+  isHourWithinStoreHours,
+  isTrafficZoneName,
+} from '../lib/storeHours.js';
 
 export default function createBusinessReportingRoutes(db, trajectoryStorage, trackAggregator) {
 const router = Router();
@@ -24,8 +32,8 @@ const shelfKPIEnricher = new ShelfKPIEnricher(db);
 const cache = new Map();
 const CACHE_TTL_MS = 30000; // 30 seconds
 
-function getCacheKey(personaId, venueId, startTs, endTs) {
-  return `${personaId}:${venueId}:${startTs}:${endTs}`;
+function getCacheKey(personaId, venueId, startTs, endTs, grain) {
+  return `${personaId}:${venueId}:${startTs}:${endTs}:${grain || 'default'}`;
 }
 
 function getCached(key) {
@@ -162,7 +170,7 @@ router.get('/categories', async (req, res) => {
  */
 router.get('/summary', async (req, res) => {
   try {
-    const { personaId, venueId, startTs, endTs, categoryId, shelfId, campaignId } = req.query;
+    const { personaId, venueId, startTs, endTs, categoryId, shelfId, campaignId, grain } = req.query;
     
     // Debug logging
     console.log(`[BusinessReporting] Request: persona=${personaId}, venue=${venueId}, startTs=${startTs}, endTs=${endTs}`);
@@ -187,8 +195,11 @@ router.get('/summary', async (req, res) => {
       return res.status(400).json({ error: 'Time range exceeds maximum of 30 days' });
     }
 
+    const validGrains = ['hour', 'day', 'week'];
+    const resolvedGrain = validGrains.includes(grain) ? grain : 'hour';
+
     // Check cache
-    const cacheKey = getCacheKey(personaId, venueId, start, end);
+    const cacheKey = getCacheKey(personaId, venueId, start, end, personaId === 'store-manager' ? resolvedGrain : null);
     const cached = getCached(cacheKey);
     if (cached) {
       return res.json(cached);
@@ -200,7 +211,9 @@ router.get('/summary', async (req, res) => {
     // Compute KPIs based on persona
     switch (personaId) {
       case 'store-manager':
-        ({ kpis, supporting } = await computeStoreManagerKpis(db, kpiCalculator, trajectoryStorage, trackAggregator, venueId, start, end));
+        ({ kpis, supporting } = await computeStoreManagerKpis(
+          db, kpiCalculator, trajectoryStorage, trackAggregator, venueId, start, end, resolvedGrain,
+        ));
         break;
       case 'merchandising':
         ({ kpis, supporting } = await computeMerchandisingKpis(db, kpiCalculator, shelfKPIEnricher, venueId, start, end, categoryId, shelfId));
@@ -269,14 +282,13 @@ function resolveRoiCategoryForReporting(db, metadataJson) {
 /**
  * Store Manager KPIs: Operations Pulse
  * Uses KpiSourceAdapter (AI Narrator 2) as single source of truth for queue KPIs.
- * Adds store-manager specific metrics on top.
+ * Adds operations console payload for the redesigned dashboard.
  */
-async function computeStoreManagerKpis(db, kpiCalculator, trajectoryStorage, trackAggregator, venueId, startTs, endTs) {
-  // Get all KPIs from AI Narrator 2 (single source of truth)
+async function computeStoreManagerKpis(db, kpiCalculator, trajectoryStorage, trackAggregator, venueId, startTs, endTs, grain = 'hour') {
   const narrator2Data = await getNarrator2Kpis(venueId, 'store-manager', startTs, endTs);
-  
-  // Start with Narrator2 KPIs as base
-  const kpis = narrator2Data?.kpis ? { ...narrator2Data.kpis } : {};
+  const queueKpis = await getQueueLaneKpis(venueId, startTs, endTs);
+
+  const kpis = narrator2Data?.kpis ? { ...narrator2Data.kpis, ...queueKpis } : { ...queueKpis };
   const supporting = {
     deadZones: narrator2Data?.supporting?.deadZones || [],
     topZones: narrator2Data?.supporting?.topZones || [],
@@ -284,11 +296,9 @@ async function computeStoreManagerKpis(db, kpiCalculator, trajectoryStorage, tra
     zoneUtilThresholdPct: narrator2Data?.supporting?.zoneUtilThresholdPct ?? 5,
   };
 
-  // Map Narrator2 KPI names to Business Reporting expected names
   kpis.avgWaitingTimeMin = kpis.avgQueueWaitTime || 0;
   kpis.abandonRate = kpis.queueAbandonmentRate || 0;
 
-  // Get CURRENT queue length from zone_occupancy (latest snapshot for Queue zones)
   const currentQueueStats = safeQuery(db, `
     SELECT SUM(zo.occupancy_count) as total_queue
     FROM zone_occupancy zo
@@ -298,7 +308,364 @@ async function computeStoreManagerKpis(db, kpiCalculator, trajectoryStorage, tra
   `, [venueId, venueId]);
   kpis.currentQueueLength = currentQueueStats?.total_queue || 0;
 
+  const storeHours = resolveVenueStoreHours(db, venueId);
+  const periodDeltas = fetchPeriodDeltas(db, venueId, startTs, endTs);
+  const queueLanes = fetchQueueLanesBreakdown(db, venueId, startTs, endTs);
+  const timeline = fetchOperationsTimeline(db, kpiCalculator, venueId, startTs, endTs, grain, storeHours);
+  const footfall = buildFootfallSummary(db, kpiCalculator, venueId, startTs, endTs, storeHours);
+  const alerts = buildOperationsAlerts(kpis, periodDeltas, queueLanes);
+
+  supporting.periodDeltas = periodDeltas;
+  supporting.operationsConsole = {
+    grain,
+    storeHours,
+    timeline,
+    footfall,
+    queueLanes,
+    alerts,
+    secondaryKpiIds: [
+      'currentQueueLength',
+      'peakOccupancy',
+      'avgOccupancy',
+      'utilizationRate',
+      'p95QueueWaitTime',
+      'queueThroughput',
+      'deadZonesCount',
+      'avgStoreVisit',
+    ],
+    heroKpiIds: ['uniqueVisitors', 'avgWaitingTimeMin', 'totalInStore', 'abandonRate'],
+    dataWindowStartTs: startTs,
+    dataWindowEndTs: endTs,
+  };
+
   return { kpis, supporting };
+}
+
+function resolveVenueStoreHours(db, venueId) {
+  const venue = safeQuery(db, `
+    SELECT opening_hour, closing_hour, footfall_roi_id
+    FROM venues WHERE id = ?
+  `, [venueId]) || {};
+
+  let footfallRoiId = venue.footfall_roi_id || null;
+  let footfallZoneName = null;
+
+  if (footfallRoiId) {
+    const roi = safeQuery(db, 'SELECT name FROM regions_of_interest WHERE id = ?', [footfallRoiId]);
+    footfallZoneName = roi?.name || null;
+  } else {
+    const rois = safeQueryAll(db, 'SELECT id, name FROM regions_of_interest WHERE venue_id = ?', [venueId]);
+    const traffic = rois.find(r => isTrafficZoneName(r.name));
+    if (traffic) {
+      footfallRoiId = traffic.id;
+      footfallZoneName = traffic.name;
+    }
+  }
+
+  return {
+    openingHour: venue.opening_hour ?? 8,
+    closingHour: venue.closing_hour ?? 20,
+    footfallRoiId,
+    footfallZoneName,
+  };
+}
+
+function fetchQueueLanesBreakdown(db, venueId, startTs, endTs) {
+  const lanes = safeQueryAll(db, `
+    SELECT
+      r.id,
+      r.name,
+      COUNT(*) as sessions,
+      ROUND(AVG(CASE WHEN qs.is_abandoned = 0 THEN qs.waiting_time_ms END) / 60000.0, 2) as avgWaitMin,
+      ROUND(SUM(CASE WHEN qs.is_abandoned = 1 THEN 1.0 ELSE 0 END) * 100.0 / COUNT(*), 1) as abandonPct,
+      SUM(CASE WHEN qs.is_abandoned = 0 THEN 1 ELSE 0 END) as completed,
+      SUM(CASE WHEN qs.is_abandoned = 1 THEN 1 ELSE 0 END) as abandoned
+    FROM queue_sessions qs
+    JOIN regions_of_interest r ON r.id = qs.queue_zone_id
+    WHERE qs.venue_id = ?
+      AND qs.queue_entry_time >= ?
+      AND qs.queue_entry_time <= ?
+      AND qs.waiting_time_ms >= 5000
+    GROUP BY r.id, r.name
+    ORDER BY sessions DESC
+  `, [venueId, startTs, endTs]);
+
+  const latestTs = safeQuery(db, `
+    SELECT MAX(timestamp) as ts FROM zone_occupancy WHERE venue_id = ?
+  `, [venueId])?.ts;
+
+  return lanes.map(lane => {
+    let currentQueue = 0;
+    if (latestTs) {
+      const occ = safeQuery(db, `
+        SELECT occupancy_count FROM zone_occupancy
+        WHERE roi_id = ? AND timestamp = ?
+      `, [lane.id, latestTs]);
+      currentQueue = occ?.occupancy_count || 0;
+    }
+    return {
+      id: lane.id,
+      name: lane.name,
+      sessions: lane.sessions || 0,
+      avgWaitMin: lane.avgWaitMin || 0,
+      abandonPct: lane.abandonPct || 0,
+      completed: lane.completed || 0,
+      abandoned: lane.abandoned || 0,
+      currentQueue,
+    };
+  });
+}
+
+function fetchOperationsTimeline(db, kpiCalculator, venueId, startTs, endTs, grain, storeHours) {
+  const { openingHour, closingHour, footfallRoiId } = storeHours;
+
+  if (grain === 'day') {
+    const visitorSql = footfallRoiId
+      ? `SELECT date, SUM(visits) as value FROM zone_kpi_daily
+         WHERE venue_id = ? AND roi_id = ?
+           AND date >= date(? / 1000, 'unixepoch', 'localtime')
+           AND date <= date(? / 1000, 'unixepoch', 'localtime')
+         GROUP BY date ORDER BY date`
+      : `SELECT date(start_time / 1000, 'unixepoch', 'localtime') as date,
+            COUNT(DISTINCT track_key) as value
+         FROM zone_visits
+         WHERE venue_id = ? AND start_time >= ? AND start_time < ?
+           AND track_key NOT LIKE '%cashier%'
+         GROUP BY date ORDER BY date`;
+
+    const visitorParams = footfallRoiId
+      ? [venueId, footfallRoiId, startTs, endTs]
+      : [venueId, startTs, endTs];
+
+    const visitorRows = safeQueryAll(db, visitorSql, visitorParams);
+    const occRows = safeQueryAll(db, `
+      SELECT date(timestamp / 1000, 'unixepoch', 'localtime') as date,
+        AVG(occupancy_count) as value,
+        MAX(occupancy_count) as peak
+      FROM zone_occupancy
+      WHERE venue_id = ? AND timestamp >= ? AND timestamp < ?
+      GROUP BY date ORDER BY date
+    `, [venueId, startTs, endTs]);
+
+    return {
+      grain,
+      visitors: visitorRows.map(r => ({
+        label: r.date,
+        bucketStartTs: Date.parse(`${r.date}T12:00:00`),
+        value: r.value || 0,
+        isOpen: true,
+      })),
+      occupancy: occRows.map(r => ({
+        label: r.date,
+        bucketStartTs: Date.parse(`${r.date}T12:00:00`),
+        value: Math.round((r.value || 0) * 10) / 10,
+        peak: r.peak || 0,
+        isOpen: true,
+      })),
+    };
+  }
+
+  if (grain === 'week') {
+    const visitorSql = footfallRoiId
+      ? `SELECT strftime('%Y-W%W', date) as weekKey,
+            MIN(date) as weekStart,
+            SUM(visits) as value
+         FROM zone_kpi_daily
+         WHERE venue_id = ? AND roi_id = ?
+           AND date >= date(? / 1000, 'unixepoch', 'localtime')
+           AND date <= date(? / 1000, 'unixepoch', 'localtime')
+         GROUP BY weekKey ORDER BY weekStart`
+      : `SELECT strftime('%Y-W%W', datetime(start_time/1000, 'unixepoch', 'localtime')) as weekKey,
+            MIN(date(start_time/1000, 'unixepoch', 'localtime')) as weekStart,
+            COUNT(DISTINCT track_key) as value
+         FROM zone_visits
+         WHERE venue_id = ? AND start_time >= ? AND start_time < ?
+           AND track_key NOT LIKE '%cashier%'
+         GROUP BY weekKey ORDER BY weekStart`;
+
+    const visitorParams = footfallRoiId
+      ? [venueId, footfallRoiId, startTs, endTs]
+      : [venueId, startTs, endTs];
+
+    const visitorRows = safeQueryAll(db, visitorSql, visitorParams);
+    const occRows = safeQueryAll(db, `
+      SELECT strftime('%Y-W%W', datetime(timestamp/1000, 'unixepoch', 'localtime')) as weekKey,
+        MIN(date(timestamp/1000, 'unixepoch', 'localtime')) as weekStart,
+        AVG(occupancy_count) as value,
+        MAX(occupancy_count) as peak
+      FROM zone_occupancy
+      WHERE venue_id = ? AND timestamp >= ? AND timestamp < ?
+      GROUP BY weekKey ORDER BY weekStart
+    `, [venueId, startTs, endTs]);
+
+    return {
+      grain,
+      visitors: visitorRows.map(r => ({
+        label: r.weekKey,
+        bucketStartTs: Date.parse(`${r.weekStart}T12:00:00`),
+        value: r.value || 0,
+        isOpen: true,
+      })),
+      occupancy: occRows.map(r => ({
+        label: r.weekKey,
+        bucketStartTs: Date.parse(`${r.weekStart}T12:00:00`),
+        value: Math.round((r.value || 0) * 10) / 10,
+        peak: r.peak || 0,
+        isOpen: true,
+      })),
+    };
+  }
+
+  // hour grain — time buckets within selected range
+  const visitorFilter = footfallRoiId
+    ? 'AND roi_id = ?'
+    : "AND track_key NOT LIKE '%cashier%'";
+  const visitorParams = footfallRoiId
+    ? [venueId, startTs, endTs, footfallRoiId]
+    : [venueId, startTs, endTs];
+
+  const visitorRows = safeQueryAll(db, `
+    SELECT
+      (start_time / 3600000) * 3600000 as bucketStartTs,
+      COUNT(DISTINCT track_key) as value
+    FROM zone_visits
+    WHERE venue_id = ? AND start_time >= ? AND start_time < ?
+      ${visitorFilter}
+    GROUP BY bucketStartTs
+    ORDER BY bucketStartTs
+  `, visitorParams);
+
+  const occRows = safeQueryAll(db, `
+    SELECT
+      (timestamp / 3600000) * 3600000 as bucketStartTs,
+      AVG(occupancy_count) as value,
+      MAX(occupancy_count) as peak
+    FROM zone_occupancy
+    WHERE venue_id = ? AND timestamp >= ? AND timestamp < ?
+    GROUP BY bucketStartTs
+    ORDER BY bucketStartTs
+  `, [venueId, startTs, endTs]);
+
+  const labelForTs = (ts) => new Date(ts).toLocaleString([], {
+    month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
+  });
+
+  return {
+    grain,
+    visitors: visitorRows.map(r => {
+      const hour = new Date(r.bucketStartTs).getHours();
+      return {
+        label: labelForTs(r.bucketStartTs),
+        bucketStartTs: r.bucketStartTs,
+        value: r.value || 0,
+        isOpen: isHourWithinStoreHours(hour, openingHour, closingHour),
+      };
+    }),
+    occupancy: occRows.map(r => {
+      const hour = new Date(r.bucketStartTs).getHours();
+      return {
+        label: labelForTs(r.bucketStartTs),
+        bucketStartTs: r.bucketStartTs,
+        value: Math.round((r.value || 0) * 10) / 10,
+        peak: r.peak || 0,
+        isOpen: isHourWithinStoreHours(hour, openingHour, closingHour),
+      };
+    }),
+  };
+}
+
+function buildFootfallSummary(db, kpiCalculator, venueId, startTs, endTs, storeHours) {
+  const { openingHour, closingHour, footfallRoiId, footfallZoneName } = storeHours;
+  if (!footfallRoiId) {
+    return {
+      configured: false,
+      footfallZoneName: null,
+      ...computeStoreFootfallFromHourly([], openingHour, closingHour),
+    };
+  }
+
+  const visitsByHour = kpiCalculator.getVisitsByHour(footfallRoiId, startTs, endTs);
+  const footfall = computeStoreFootfallFromHourly(visitsByHour, openingHour, closingHour);
+  return {
+    configured: true,
+    footfallRoiId,
+    footfallZoneName,
+    ...footfall,
+  };
+}
+
+function buildOperationsAlerts(kpis, periodDeltas, queueLanes) {
+  const alerts = [];
+
+  if ((kpis.avgWaitingTimeMin || 0) > 5) {
+    alerts.push({
+      id: 'high-wait',
+      severity: 'warn',
+      title: 'Elevated wait time',
+      message: `Average checkout wait is ${(kpis.avgWaitingTimeMin || 0).toFixed(1)} min — consider opening another lane.`,
+      metric: 'avgWaitingTimeMin',
+      value: kpis.avgWaitingTimeMin,
+    });
+  }
+
+  if ((kpis.abandonRate || 0) > 15) {
+    alerts.push({
+      id: 'high-abandon',
+      severity: 'bad',
+      title: 'High abandon rate',
+      message: `${(kpis.abandonRate || 0).toFixed(1)}% of queue sessions ended without checkout.`,
+      metric: 'abandonRate',
+      value: kpis.abandonRate,
+    });
+  }
+
+  if ((kpis.currentQueueLength || 0) > 8) {
+    alerts.push({
+      id: 'long-queue',
+      severity: 'warn',
+      title: 'Queue building',
+      message: `${kpis.currentQueueLength} shoppers waiting right now.`,
+      metric: 'currentQueueLength',
+      value: kpis.currentQueueLength,
+    });
+  }
+
+  if (periodDeltas.visitorsDeltaPct != null && periodDeltas.visitorsDeltaPct <= -20) {
+    alerts.push({
+      id: 'traffic-drop',
+      severity: 'warn',
+      title: 'Traffic down vs prior period',
+      message: `Visitors ${periodDeltas.visitorsDeltaPct}% vs previous period.`,
+      metric: 'visitorsDeltaPct',
+      value: periodDeltas.visitorsDeltaPct,
+    });
+  }
+
+  const worstLane = [...queueLanes].sort((a, b) => (b.abandonPct || 0) - (a.abandonPct || 0))[0];
+  if (worstLane && worstLane.abandonPct > 20 && worstLane.sessions >= 5) {
+    alerts.push({
+      id: 'lane-abandon',
+      severity: 'warn',
+      title: `${worstLane.name} under pressure`,
+      message: `${worstLane.abandonPct}% abandon rate on this lane (${worstLane.sessions} sessions).`,
+      metric: 'laneAbandonPct',
+      value: worstLane.abandonPct,
+      laneId: worstLane.id,
+    });
+  }
+
+  if ((kpis.deadZonesCount || 0) >= 3) {
+    alerts.push({
+      id: 'dead-zones',
+      severity: 'info',
+      title: 'Dead zones detected',
+      message: `${kpis.deadZonesCount} areas below utilization threshold — review layout.`,
+      metric: 'deadZonesCount',
+      value: kpis.deadZonesCount,
+    });
+  }
+
+  return alerts.slice(0, 6);
 }
 
 /**

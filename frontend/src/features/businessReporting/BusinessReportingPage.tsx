@@ -12,6 +12,8 @@ import {
 import { useVenue } from '../../context/VenueContext';
 import { PERSONAS, getPersonaById, enforceKpiCap } from './personas';
 import ReportingKpiStrip from './components/ReportingKpiStrip';
+import OperationsPulseConsole from './operationsConsole/OperationsPulseConsole';
+import type { OperationsConsoleData, TimelineGrain } from './operationsConsole/types';
 import ReportingInsightsPanel from './components/ReportingInsightsPanel';
 import ZonePerformanceViewport, { type ZonePerformanceItem } from './components/ZonePerformanceViewport';
 import PebleEffectivenessViewport, { type CampaignPerformanceItem } from './components/PebleEffectivenessViewport';
@@ -60,7 +62,7 @@ const TIME_RANGES: TimeRangeOption[] = [
   },
 ];
 
-const ZONE_MAP_PERSONAS = new Set(['store-manager', 'merchandising']);
+const ZONE_MAP_PERSONAS = new Set(['merchandising']);
 const PEBLE_MAP_PERSONAS = new Set(['retail-media']);
 const EXECUTIVE_PERSONAS = new Set(['executive']);
 
@@ -73,6 +75,7 @@ export default function BusinessReportingPage({ onClose }: BusinessReportingPage
   const [selectedVenueId, setSelectedVenueId] = useState<string | null>(venue?.id || null);
   const [selectedPersonaId, setSelectedPersonaId] = useState<string>(PERSONAS[0].id);
   const [selectedTimeRange, setSelectedTimeRange] = useState<TimeRange>('24h');
+  const [opsGrain, setOpsGrain] = useState<TimelineGrain>('hour');
   const [kpiValues, setKpiValues] = useState<Record<string, number | null>>({});
   const [supporting, setSupporting] = useState<Record<string, unknown>>({});
   const [loading, setLoading] = useState(false);
@@ -102,6 +105,13 @@ export default function BusinessReportingPage({ onClose }: BusinessReportingPage
     () => (supporting.topZones as ZonePerformanceItem[]) || [],
     [supporting.topZones],
   );
+
+  const operationsConsole = useMemo(
+    () => supporting.operationsConsole as OperationsConsoleData | undefined,
+    [supporting.operationsConsole],
+  );
+
+  const showOperationsConsole = selectedPersonaId === 'store-manager' && !!operationsConsole;
 
   const showZoneMap = ZONE_MAP_PERSONAS.has(selectedPersonaId)
     && selectedVenueId
@@ -168,6 +178,10 @@ export default function BusinessReportingPage({ onClose }: BusinessReportingPage
         params.set('categoryId', selectedCategoryId);
       }
 
+      if (selectedPersonaId === 'store-manager') {
+        params.set('grain', opsGrain);
+      }
+
       const response = await fetch(`${API_BASE}/api/reporting/summary?${params}`);
 
       if (!response.ok) {
@@ -192,7 +206,7 @@ export default function BusinessReportingPage({ onClose }: BusinessReportingPage
 
   useEffect(() => {
     fetchData();
-  }, [selectedVenueId, selectedPersonaId, selectedTimeRange, selectedCategoryId]);
+  }, [selectedVenueId, selectedPersonaId, selectedTimeRange, selectedCategoryId, opsGrain]);
 
   useEffect(() => {
     if (venue?.id && !selectedVenueId) {
@@ -314,10 +328,20 @@ export default function BusinessReportingPage({ onClose }: BusinessReportingPage
 
           {!loading && !error && (
             <>
-              <ReportingKpiStrip
-                kpiDefinitions={kpiDefinitions}
-                kpiValues={kpiValues}
-              />
+              {showOperationsConsole && operationsConsole ? (
+                <OperationsPulseConsole
+                  consoleData={operationsConsole}
+                  kpiValues={kpiValues}
+                  periodDeltas={periodDeltas}
+                  grain={opsGrain}
+                  onGrainChange={setOpsGrain}
+                />
+              ) : (
+                <ReportingKpiStrip
+                  kpiDefinitions={kpiDefinitions}
+                  kpiValues={kpiValues}
+                />
+              )}
 
               {showExecutiveSummary && (
                 <ExecutiveSummaryViewport
@@ -337,11 +361,6 @@ export default function BusinessReportingPage({ onClose }: BusinessReportingPage
                   deadZones={deadZones}
                   topZones={topZones}
                   zoneUtilThresholdPct={zoneUtilThresholdPct}
-                  kpiNote={
-                    selectedPersonaId === 'store-manager'
-                      ? 'Dead Zones KPI counts all store ROIs below 1% util'
-                      : undefined
-                  }
                 />
               )}
 
@@ -356,12 +375,14 @@ export default function BusinessReportingPage({ onClose }: BusinessReportingPage
                 />
               )}
 
-              <ReportingInsightsPanel
-                kpiDefinitions={kpiDefinitions}
-                kpiValues={kpiValues}
-                personaName={selectedPersona.name}
-                compact
-              />
+              {!showOperationsConsole && (
+                <ReportingInsightsPanel
+                  kpiDefinitions={kpiDefinitions}
+                  kpiValues={kpiValues}
+                  personaName={selectedPersona.name}
+                  compact
+                />
+              )}
 
               {Array.isArray(campaignRanking) && campaignRanking.length > 0
                 && (selectedPersonaId === 'retail-media' || selectedPersonaId === 'executive') && (
@@ -389,7 +410,8 @@ export default function BusinessReportingPage({ onClose }: BusinessReportingPage
               )}
 
               {Array.isArray(topCategories) && topCategories.length > 0
-                && selectedPersonaId !== 'retail-media' && (
+                && selectedPersonaId !== 'retail-media'
+                && selectedPersonaId !== 'store-manager' && (
                 <div className="rounded-lg border border-gray-700/80 bg-gray-800/40 overflow-hidden">
                   <button
                     type="button"

@@ -113,6 +113,68 @@ const storeManagerKpis: KpiTileDefinition[] = [
   },
 ];
 
+/** Hero KPIs for Operations Pulse console (separate from 7-tile cap) */
+export const OPERATIONS_HERO_KPIS: KpiTileDefinition[] = [
+  {
+    id: 'uniqueVisitors',
+    title: 'Visitors',
+    format: 'int',
+    meaning: 'Unique shoppers in the selected period.',
+    action: 'Compare to prior period to spot traffic trends.',
+    tooltip: 'Distinct track_keys with store activity in range.',
+    thresholds: { good: 500, warn: 200, bad: 50, direction: 'higher' },
+  },
+  storeManagerKpis[0], // avgWaitingTimeMin
+  {
+    id: 'totalInStore',
+    title: 'In Store Now',
+    format: 'int',
+    meaning: 'Shoppers currently active in the store.',
+    action: 'Watch during peak hours for capacity planning.',
+    tooltip: 'Unique tracks with activity in the last 5 minutes.',
+    thresholds: { good: 40, warn: 80, bad: 120, direction: 'lower' },
+  },
+  storeManagerKpis[1], // abandonRate
+];
+
+/** Secondary KPIs shown below the console chart */
+export const OPERATIONS_SECONDARY_KPIS: KpiTileDefinition[] = [
+  storeManagerKpis[2], // currentQueueLength
+  storeManagerKpis[3], // peakOccupancy
+  storeManagerKpis[4], // avgOccupancy
+  storeManagerKpis[5], // utilizationRate
+  {
+    id: 'p95QueueWaitTime',
+    title: 'P95 Wait',
+    unit: 'min',
+    format: 'minutes',
+    meaning: '95th percentile checkout wait — worst-case experience.',
+    action: 'Spikes here mean some shoppers wait far too long.',
+    tooltip: '95th percentile of completed queue sessions (≥5s dwell).',
+    thresholds: { good: 3, warn: 8, bad: 15, direction: 'lower' },
+  },
+  {
+    id: 'queueThroughput',
+    title: 'Throughput',
+    unit: '/hr',
+    format: 'float',
+    meaning: 'Completed checkout sessions per hour.',
+    action: 'Drop during rush hour signals understaffing.',
+    tooltip: 'Completed queue sessions divided by active period hours.',
+    thresholds: { good: 30, warn: 15, bad: 5, direction: 'higher' },
+  },
+  storeManagerKpis[6], // deadZonesCount
+  {
+    id: 'avgStoreVisit',
+    title: 'Avg Visit',
+    unit: 'min',
+    format: 'minutes',
+    meaning: 'Average time each shopper spends in store.',
+    action: 'Longer visits may indicate browsing or congestion.',
+    tooltip: 'Total dwell across zones divided by unique visitors.',
+  },
+];
+
 // ============================================
 // PERSONA B: Merchandising - Shelf & Category
 // ============================================
