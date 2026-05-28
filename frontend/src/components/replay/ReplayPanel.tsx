@@ -154,6 +154,15 @@ const tsAtProgress = (meta: FileMeta | null, progress: number) => {
 
 const RECORD_SOFT_CAP_BYTES = 500 * 1024 * 1024
 const RECORD_DURATION_STORAGE_KEY = 'hyperspace.replay.recordDurationMinutes'
+const REPLAY_CAPTURE_STORAGE_KEY = 'hyperspace.replay.lastCapture'
+
+const readStoredCapture = () => {
+  try {
+    return localStorage.getItem(REPLAY_CAPTURE_STORAGE_KEY) || ''
+  } catch {
+    return ''
+  }
+}
 
 const formatCountdown = (ms: number) => {
   const totalSec = Math.max(0, Math.ceil(ms / 1000))
@@ -267,14 +276,21 @@ export default function ReplayPanel({ onClose, launch }: ReplayPanelProps) {
       const jobs: ReconcileJob[] = data.jobs || []
       setReconcileJobs(jobs)
       const active = jobs.find(j => j.status === 'running' || j.status === 'pending')
-      const complete = jobs.find(j => j.status === 'complete')
-      if (active) setSelectedReconcileJobId(active.id)
-      else if (complete && !selectedReconcileJobId) setSelectedReconcileJobId(complete.id)
-      if (!active && complete) setReconcileError(null)
+      const completeJobs = jobs.filter(j => j.status === 'complete')
+      if (active) {
+        setSelectedReconcileJobId(active.id)
+      } else if (completeJobs.length) {
+        setSelectedReconcileJobId(prev =>
+          completeJobs.some(j => j.id === prev) ? prev : completeJobs[0].id,
+        )
+      } else {
+        setSelectedReconcileJobId('')
+      }
+      if (!active && completeJobs.length) setReconcileError(null)
     } catch (err: unknown) {
       setReconcileError(friendlyReconcileError(err instanceof Error ? err.message : String(err)))
     }
-  }, [selectedReconcileJobId])
+  }, [])
 
   const refreshFiles = useCallback(async (preferNewest = false) => {
     setLoading(true)
@@ -288,10 +304,13 @@ export default function ReplayPanel({ onClose, launch }: ReplayPanelProps) {
       setReplayDir(data.replayDir || '')
       setSelected(prev => {
         let next = prev
+        const stored = readStoredCapture()
         if (preferNewest && list[0]?.name) next = list[0].name
         else if (prev && list.some(f => f.name === prev) && !isReconciledArtifactName(prev)) next = prev
         else if (sourceCaptureRef.current && list.some(f => f.name === sourceCaptureRef.current)) {
           next = sourceCaptureRef.current
+        } else if (stored && list.some(f => f.name === stored) && !isReconciledArtifactName(stored)) {
+          next = stored
         } else next = list[0]?.name || ''
         if (next && !isReconciledArtifactName(next)) sourceCaptureRef.current = next
         return next
@@ -382,10 +401,21 @@ export default function ReplayPanel({ onClose, launch }: ReplayPanelProps) {
   useEffect(() => {
     if (selected && !isReconciledArtifactName(selected)) {
       sourceCaptureRef.current = selected
+      try {
+        localStorage.setItem(REPLAY_CAPTURE_STORAGE_KEY, selected)
+      } catch { /* ignore */ }
     }
     const source = resolveSourceCapture()
     if (source) void refreshReconcileJobs(source)
   }, [selected, refreshReconcileJobs])
+
+  useEffect(() => {
+    if (playbackSource !== 'reconciled') return
+    const iv = window.setInterval(() => {
+      void refreshReconcileJobs(resolveSourceCapture())
+    }, 5000)
+    return () => window.clearInterval(iv)
+  }, [playbackSource, selected, refreshReconcileJobs])
 
   useEffect(() => {
     const runningJob = reconcileJobs.find(j => j.status === 'running' || j.status === 'pending')
@@ -1182,6 +1212,11 @@ export default function ReplayPanel({ onClose, launch }: ReplayPanelProps) {
                     </option>
                   ))}
                 </select>
+                {reconcileJobs.filter(j => j.status === 'complete').length === 0 && (
+                  <p className="mt-1 text-[10px] text-amber-300/90">
+                    No completed jobs for this capture — run post-process, or pick the correct capture above.
+                  </p>
+                )}
               </div>
             )}
           </div>

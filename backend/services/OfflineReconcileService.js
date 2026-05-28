@@ -38,7 +38,65 @@ export class OfflineReconcileService {
     fs.mkdirSync(this.artifactDir, { recursive: true });
     this._recoverInterruptedJobs();
     this._recoverTimedOutJobs();
+    this._rehealJobsFromDiskArtifacts();
     this._recoverOrphanedCompleteJobs();
+  }
+
+  /**
+   * Artifacts on disk are the source of truth — re-link DB after deploy/restart
+   * so completed post-process jobs stay in the Replay panel dropdown.
+   */
+  _rehealJobsFromDiskArtifacts() {
+    let names = [];
+    try {
+      names = fs.readdirSync(this.artifactDir)
+        .filter(f => f.endsWith('.reconciled.jsonl'));
+    } catch {
+      return;
+    }
+
+    for (const name of names) {
+      const m = name.match(/^(.+)__(.+)\.reconciled\.jsonl$/);
+      if (!m) continue;
+      const sourceFile = `${m[1]}.jsonl`;
+      const presetId = m[2];
+      const artifactPath = path.join(this.artifactDir, name);
+      try {
+        if (!fs.existsSync(artifactPath) || fs.statSync(artifactPath).size === 0) continue;
+      } catch {
+        continue;
+      }
+
+      const preset = getOfflinePreset(presetId);
+      const presetLabel = preset?.label || presetId;
+
+      const existing = this.db.prepare(`
+        SELECT id, status FROM offline_reconcile_jobs
+        WHERE source_file = ? AND preset_id = ?
+        ORDER BY created_at DESC LIMIT 1
+      `).get(sourceFile, presetId);
+
+      if (existing?.status === 'complete') continue;
+
+      const finished = new Date().toISOString();
+      if (existing) {
+        this.db.prepare(`
+          UPDATE offline_reconcile_jobs
+          SET status = 'complete', progress = 1, error = NULL,
+              artifact_path = ?, finished_at = COALESCE(finished_at, ?)
+          WHERE id = ?
+        `).run(artifactPath, finished, existing.id);
+        console.log(`[OfflineReconcile] Re-healed job ${existing.id} from disk artifact ${name}`);
+      } else {
+        const id = randomUUID();
+        this.db.prepare(`
+          INSERT INTO offline_reconcile_jobs
+            (id, venue_id, source_file, preset_id, preset_label, status, artifact_path, progress, created_at, finished_at)
+          VALUES (?, NULL, ?, ?, ?, 'complete', ?, 1, ?, ?)
+        `).run(id, sourceFile, presetId, presetLabel, artifactPath, finished, finished);
+        console.log(`[OfflineReconcile] Registered disk artifact ${name} as job ${id}`);
+      }
+    }
   }
 
   /** Jobs left running/pending in DB have no in-process worker after restart. */
