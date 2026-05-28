@@ -62,6 +62,7 @@ export interface HeatmapFocusRequest {
   zoneIds: string[]
   categoryLabel?: string
   timeframe?: 'day' | 'week' | 'month'
+  venueId?: string
 }
 
 interface HeatmapContextType {
@@ -78,7 +79,7 @@ interface HeatmapContextType {
   toggleHeatmap: () => void
   openHeatmapModal: (focus?: HeatmapFocusRequest) => void
   closeHeatmapModal: () => void
-  openHeatmapForCategory: (zoneIds: string[], categoryLabel: string, timeframe?: 'day' | 'week' | 'month') => void
+  openHeatmapForCategory: (zoneIds: string[], categoryLabel: string, timeframe?: 'day' | 'week' | 'month', venueId?: string) => void
   setTimeframe: (tf: 'day' | 'week' | 'month') => void
   setHeightKpi: (kpi: 'visits' | 'dwellSec') => void
   setColorKpi: (kpi: 'visits' | 'dwellSec') => void
@@ -147,8 +148,9 @@ export function HeatmapProvider({ children }: { children: ReactNode }) {
     zoneIds: string[],
     categoryLabel: string,
     tf?: 'day' | 'week' | 'month',
+    venueId?: string,
   ) => {
-    openHeatmapModal({ zoneIds, categoryLabel, timeframe: tf })
+    openHeatmapModal({ zoneIds, categoryLabel, timeframe: tf, venueId })
   }, [openHeatmapModal])
 
   const setTimeframe = useCallback((tf: 'day' | 'week' | 'month') => {

@@ -154,10 +154,11 @@ export default function HeatmapViewerModal({ isOpen, onClose }: HeatmapViewerMod
 
   // Load heatmap when modal opens
   useEffect(() => {
-    if (isOpen && venue?.id) {
-      loadHeatmap(venue.id)
+    const venueId = focusRequest?.venueId || venue?.id
+    if (isOpen && venueId) {
+      loadHeatmap(venueId)
     }
-  }, [isOpen, venue?.id, timeframe, loadHeatmap])
+  }, [isOpen, venue?.id, focusRequest?.venueId, timeframe, loadHeatmap])
 
   // Initialize Three.js scene
   useEffect(() => {
@@ -529,7 +530,7 @@ export default function HeatmapViewerModal({ isOpen, onClose }: HeatmapViewerMod
   if (!isOpen) return null
 
   return (
-    <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50" onClick={onClose}>
+    <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-[70]" onClick={onClose}>
       <div 
         className="bg-gray-900 border border-gray-700 rounded-xl shadow-2xl w-[1000px] h-[700px] max-w-[95vw] max-h-[90vh] overflow-hidden flex flex-col"
         onClick={e => e.stopPropagation()}

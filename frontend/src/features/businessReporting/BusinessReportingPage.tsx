@@ -265,8 +265,8 @@ export default function BusinessReportingPage({ onClose }: BusinessReportingPage
   const heatmapTimeframe = selectedTimeRange === '7d' ? 'week' as const : 'day' as const;
 
   const handleCategoryHeatmap = (row: CategoryRankingRow) => {
-    if (!row.roiIds?.length) return;
-    openHeatmapForCategory(row.roiIds, row.category, heatmapTimeframe);
+    if (!row.roiIds?.length || !selectedVenueId) return;
+    openHeatmapForCategory(row.roiIds, row.category, heatmapTimeframe, selectedVenueId);
   };
 
   const showCategoryVisits = Array.isArray(topCategories) && topCategories.length > 0

@@ -20,10 +20,9 @@ export default function OperationsFootfallPanel({
 
   const maxVal = Math.max(...rows.map(r => r.value), 0.1);
   const peakRow = rows.reduce((best, r) => (r.value > (best?.value || 0) ? r : best), rows[0]);
-  const hoveredRow = hoveredHour != null ? rows.find(r => r.hour === hoveredHour) : null;
 
   return (
-    <div className="rounded-lg border border-gray-700/80 bg-gray-800/40 p-3">
+    <div className="rounded-lg border border-gray-700/80 bg-gray-800/40 p-3 overflow-visible">
       <div className="flex items-start justify-between gap-2 mb-2">
         <div>
           <h3 className="text-xs font-semibold text-white">
@@ -52,23 +51,9 @@ export default function OperationsFootfallPanel({
       </div>
 
       <div
-        className="relative"
+        className="relative overflow-visible pt-6"
         onMouseLeave={() => setHoveredHour(null)}
       >
-        {hoveredRow && hoveredHour != null && (
-          <div
-            className="absolute z-20 pointer-events-none bg-gray-900 border border-gray-600 rounded px-1.5 py-0.5 text-[9px] text-white whitespace-nowrap shadow-lg"
-            style={{
-              left: `${((hoveredHour + 0.5) / 24) * 100}%`,
-              transform: 'translateX(-50%)',
-              bottom: CHART_H + 4,
-            }}
-          >
-            {hoveredRow.hour}:00 · {useFootfall ? `${hoveredRow.value} visits` : `${hoveredRow.value} peak`}
-            {!hoveredRow.isOpen && ' (closed)'}
-          </div>
-        )}
-
         <div className="flex items-end gap-0.5" style={{ height: CHART_H }}>
           {rows.map(row => {
             const barH = Math.max(Math.round((row.value / maxVal) * (CHART_H - 8)), row.value > 0 ? 3 : 0);
@@ -76,9 +61,15 @@ export default function OperationsFootfallPanel({
             return (
               <div
                 key={row.hour}
-                className="flex-1 flex flex-col items-center justify-end h-full"
+                className="relative flex-1 flex flex-col items-center justify-end h-full"
                 onMouseEnter={() => setHoveredHour(row.hour)}
               >
+                {isHovered && (
+                  <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1 z-50 bg-gray-900 border border-gray-600 rounded px-1.5 py-0.5 text-[9px] text-white whitespace-nowrap pointer-events-none shadow-lg">
+                    {row.hour}:00 · {useFootfall ? `${row.value} visits` : `${row.value} peak`}
+                    {!row.isOpen && ' (closed)'}
+                  </div>
+                )}
                 <div
                   className={`w-full rounded-t transition-colors ${
                     row.isOpen

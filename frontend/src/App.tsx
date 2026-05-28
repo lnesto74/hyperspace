@@ -91,6 +91,16 @@ function KPIPopupWrapper() {
   )
 }
 
+function GlobalHeatmapModal() {
+  const { heatmapModalOpen, closeHeatmapModal } = useHeatmap()
+  return (
+    <HeatmapViewerModal
+      isOpen={heatmapModalOpen}
+      onClose={closeHeatmapModal}
+    />
+  )
+}
+
 function KPIOverlayToggle() {
   const { showKPIOverlays, toggleKPIOverlays, startDrawing: startRoiDrawing } = useRoi()
   const { venue } = useVenue()
@@ -98,7 +108,7 @@ function KPIOverlayToggle() {
   const { dwgLayoutId } = useDwg()
   const { openStoryGrid, explainKpi, selectEpisode, selectedEpisode } = useReplayInsight()
   const { openNarrator, askQuestion } = useNarrator2()
-  const { heatmapModalOpen, openHeatmapModal, closeHeatmapModal } = useHeatmap()
+  const { heatmapModalOpen, openHeatmapModal } = useHeatmap()
   const [showLedger, setShowLedger] = useState(false)
   const [showSmartKpiModal, setShowSmartKpiModal] = useState(false)
   const [showCheckoutManager, setShowCheckoutManager] = useState(false)
@@ -213,12 +223,6 @@ function KPIOverlayToggle() {
   
   return (
     <>
-      {/* Heatmap Viewer Modal */}
-      <HeatmapViewerModal 
-        isOpen={heatmapModalOpen} 
-        onClose={closeHeatmapModal} 
-      />
-      
       {/* Checkout Manager Modal */}
       <CheckoutManagerModal
         isOpen={showCheckoutManager}
@@ -558,6 +562,7 @@ function MainApp() {
   
   return (
     <ViewModeContext.Provider value={{ mode: viewMode, setMode: setViewMode, launchPadOpen, setLaunchPadOpen, neuralDashboardEnabled, setNeuralDashboardEnabled }}>
+      <GlobalHeatmapModal />
       <PlanogramProvider>
         {/* DWG Importer View */}
         {viewMode === 'dwgImporter' && (
