@@ -94,7 +94,7 @@ export default function OperationsPulseConsole({
 
       <OperationsTimelineChart
         timeline={consoleData.timeline}
-        onDrillDown={handleTimelineDrill}
+        onOpenDetail={handleTimelineDrill}
         showFootfallSeries={showFootfallSeries}
       />
 

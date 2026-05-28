@@ -10,6 +10,7 @@ import {
   MonitorPlay,
 } from 'lucide-react';
 import { useVenue } from '../../context/VenueContext';
+import { useHeatmap } from '../../context/HeatmapContext';
 import { PERSONAS, getPersonaById, enforceKpiCap } from './personas';
 import ReportingKpiStrip from './components/ReportingKpiStrip';
 import OperationsPulseConsole from './operationsConsole/OperationsPulseConsole';
@@ -19,6 +20,7 @@ import ZonePerformanceViewport, { type ZonePerformanceItem } from './components/
 import PebleEffectivenessViewport, { type CampaignPerformanceItem } from './components/PebleEffectivenessViewport';
 import PersonaIconRail from './components/PersonaIconRail';
 import CategoryRankingPanel, { CategoryRankingRow } from './components/CategoryRankingPanel';
+import CategoryVisitsPanel from './components/CategoryVisitsPanel';
 import CampaignRankingPanel, { CampaignRankingRow } from './components/CampaignRankingPanel';
 import ExecutiveSummaryViewport, {
   type ExecutivePillar,
@@ -72,6 +74,7 @@ interface BusinessReportingPageProps {
 
 export default function BusinessReportingPage({ onClose }: BusinessReportingPageProps) {
   const { venue, venues } = useVenue();
+  const { openHeatmapForCategory } = useHeatmap();
   const [selectedVenueId, setSelectedVenueId] = useState<string | null>(venue?.id || null);
   const [selectedPersonaId, setSelectedPersonaId] = useState<string>(PERSONAS[0].id);
   const [selectedTimeRange, setSelectedTimeRange] = useState<TimeRange>('24h');
@@ -259,6 +262,16 @@ export default function BusinessReportingPage({ onClose }: BusinessReportingPage
 
   const topCategories = supporting.topCategories as CategoryRankingRow[] | undefined;
 
+  const heatmapTimeframe = selectedTimeRange === '7d' ? 'week' as const : 'day' as const;
+
+  const handleCategoryHeatmap = (row: CategoryRankingRow) => {
+    if (!row.roiIds?.length) return;
+    openHeatmapForCategory(row.roiIds, row.category, heatmapTimeframe);
+  };
+
+  const showCategoryVisits = Array.isArray(topCategories) && topCategories.length > 0
+    && (selectedPersonaId === 'executive' || selectedPersonaId === 'store-manager' || selectedPersonaId === 'merchandising');
+
   return (
     <div className="fixed inset-0 z-50 bg-gray-900 flex flex-col overflow-hidden">
       {/* Command strip header */}
@@ -379,7 +392,25 @@ export default function BusinessReportingPage({ onClose }: BusinessReportingPage
                   deadZones={deadZones}
                   topZones={topZones}
                   zoneUtilThresholdPct={zoneUtilThresholdPct}
+                  topCategories={topCategories}
+                  onOpenCategoryHeatmap={handleCategoryHeatmap}
                 />
+              )}
+
+              {showCategoryVisits && selectedPersonaId !== 'executive' && (
+                <div className="rounded-lg border border-gray-700/80 bg-gray-800/40 overflow-hidden">
+                  <div className="px-3 py-2 border-b border-gray-700/60">
+                    <span className="text-xs font-medium text-white">Category Traffic</span>
+                    <span className="text-[10px] text-gray-500 ml-2">Latticini · Frutta · Surgelati · …</span>
+                  </div>
+                  <div className="p-3">
+                    <CategoryVisitsPanel
+                      categories={topCategories!}
+                      onOpenHeatmap={handleCategoryHeatmap}
+                      compact={selectedPersonaId === 'store-manager'}
+                    />
+                  </div>
+                </div>
               )}
 
               {showZoneMap && (
@@ -438,7 +469,9 @@ export default function BusinessReportingPage({ onClose }: BusinessReportingPage
 
               {Array.isArray(topCategories) && topCategories.length > 0
                 && selectedPersonaId !== 'retail-media'
-                && selectedPersonaId !== 'store-manager' && (
+                && selectedPersonaId !== 'store-manager'
+                && selectedPersonaId !== 'executive'
+                && selectedPersonaId !== 'merchandising' && (
                 <div className="rounded-lg border border-gray-700/80 bg-gray-800/40 overflow-hidden">
                   <button
                     type="button"

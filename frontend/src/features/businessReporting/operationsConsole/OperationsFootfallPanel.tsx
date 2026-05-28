@@ -27,7 +27,7 @@ export default function OperationsFootfallPanel({
           <p className="text-[10px] text-gray-500">
             {useFootfall
               ? `${footfall.footfallZoneName || 'Ingress'} · ${footfall.hoursLabel}`
-              : 'Avg shoppers in store per hour (until ingress zone records visits)'}
+              : 'Peak concurrent shoppers by hour (until ingress zone records visits)'}
           </p>
           {!useFootfall && footfall.warning && (
             <p className="text-[10px] text-gray-400 mt-1 line-clamp-2">{footfall.warning}</p>
@@ -41,7 +41,7 @@ export default function OperationsFootfallPanel({
         ) : peakRow && peakRow.value > 0 ? (
           <div className="text-right">
             <div className="text-lg font-bold text-white tabular-nums">{Math.round(peakRow.value * 10) / 10}</div>
-            <div className="text-[9px] text-gray-500">peak avg at {peakRow.hour}:00</div>
+            <div className="text-[9px] text-gray-500">peak at {peakRow.hour}:00</div>
           </div>
         ) : null}
       </div>
@@ -56,7 +56,7 @@ export default function OperationsFootfallPanel({
                 style={{ height: barH }}
               />
               <div className="absolute bottom-full mb-1 hidden group-hover:block z-10 bg-gray-900 border border-gray-600 rounded px-1.5 py-0.5 text-[9px] text-white whitespace-nowrap">
-                {row.hour}:00 · {useFootfall ? `${row.value} visits` : `${row.value} avg`}
+                {row.hour}:00 · {useFootfall ? `${row.value} visits` : `${row.value} peak`}
                 {!row.isOpen && ' (closed)'}
               </div>
             </div>

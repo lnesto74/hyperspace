@@ -23,7 +23,7 @@ import {
   isTrafficZoneName,
 } from '../lib/storeHours.js';
 
-export default function createBusinessReportingRoutes(db, trajectoryStorage, trackAggregator) {
+export default function createBusinessReportingRoutes(db, trajectoryStorage, trackAggregator, mqttService) {
 const router = Router();
 const kpiCalculator = new KPICalculator(db);
 const shelfKPIEnricher = new ShelfKPIEnricher(db);
@@ -316,14 +316,24 @@ async function computeStoreManagerKpis(db, kpiCalculator, trajectoryStorage, tra
   } else {
     kpis.uniqueVisitors = null;
   }
-  kpis.totalInStore = fetchLiveStoreOccupancy(db, venueId);
+  kpis.totalInStore = fetchLiveShoppersInStore(
+    db, venueId, mqttService?.getFrameOccupancy?.(venueId),
+  );
+
+  const storeOccKpis = fetchStoreShopperKpis(
+    db, venueId, startTs, endTs, storeHours.openingHour, storeHours.closingHour,
+  );
+  kpis.peakOccupancy = storeOccKpis.peakOccupancy;
+  kpis.avgOccupancy = storeOccKpis.avgOccupancy;
 
   const periodDeltas = fetchPeriodDeltasForFootfall(db, venueId, startTs, endTs, storeHours, dataHealth);
   const queueLanes = fetchQueueLanesBreakdown(db, venueId, startTs, endTs);
-  const timeline = fetchOperationsTimeline(db, venueId, startTs, endTs, grain, storeHours, dataHealth);
+  const timeline = fetchOperationsTimeline(
+    db, venueId, startTs, endTs, grain, storeHours, dataHealth, storeOccKpis.source,
+  );
   const footfall = buildFootfallSummary(db, venueId, startTs, endTs, storeHours, dataHealth);
   const storeActivityByHour = fetchStoreActivityByHour(
-    db, venueId, startTs, endTs, storeHours.openingHour, storeHours.closingHour,
+    db, venueId, startTs, endTs, storeHours.openingHour, storeHours.closingHour, storeOccKpis.source,
   );
   const alerts = buildOperationsAlerts(kpis, periodDeltas, queueLanes, dataHealth);
 
@@ -335,6 +345,7 @@ async function computeStoreManagerKpis(db, kpiCalculator, trajectoryStorage, tra
       savedFootfallRoiId: dataHealth.savedFootfallRoiId,
     },
     dataHealth,
+    shopperMetricSource: storeOccKpis.source,
     timeline,
     footfall,
     storeActivityByHour,
@@ -441,6 +452,104 @@ function resolveTrafficRoiIds(db, venueId, footfallRoiId) {
     if (isTrafficZoneName(r.name) && !ids.includes(r.id)) ids.push(r.id);
   }
   return ids;
+}
+
+function fetchLiveShoppersInStore(db, venueId, liveFrameOccupancy) {
+  if (liveFrameOccupancy != null && liveFrameOccupancy > 0) {
+    return liveFrameOccupancy;
+  }
+
+  const latest = safeQuery(db, `
+    SELECT timestamp as ts FROM track_positions
+    WHERE venue_id = ? ORDER BY timestamp DESC LIMIT 1
+  `, [venueId]);
+  if (latest?.ts) {
+    const frame = safeQuery(db, `
+      SELECT COUNT(DISTINCT track_key) as c
+      FROM track_positions
+      WHERE venue_id = ? AND timestamp = ? AND track_key NOT LIKE '%cashier%'
+    `, [venueId, latest.ts]);
+    if ((frame?.c || 0) > 0) return frame.c;
+  }
+
+  const row = safeQuery(db, `
+    SELECT COUNT(DISTINCT track_key) as c
+    FROM zone_visits
+    WHERE venue_id = ?
+      AND start_time >= ?
+      AND track_key NOT LIKE '%cashier%'
+  `, [venueId, Date.now() - 300000]);
+  return row?.c || 0;
+}
+
+/** Ignore sparse/stale frames (single-ID heartbeats) when averaging. */
+const MIN_ACTIVE_FRAME_COUNT = 15;
+
+function storePerceptionFramesSql() {
+  return `
+    SELECT timestamp as ts, COUNT(DISTINCT track_key) as frame_count
+    FROM track_positions
+    WHERE venue_id = ? AND timestamp >= ? AND timestamp < ?
+      AND track_key NOT LIKE '%cashier%'
+    GROUP BY timestamp
+  `;
+}
+
+function perceptionFramesAvailable(db, venueId, startTs, endTs) {
+  const row = safeQuery(db, `
+    SELECT MAX(frame_count) as peak FROM (${storePerceptionFramesSql()})
+  `, [venueId, startTs, endTs]);
+  return (row?.peak || 0) >= MIN_ACTIVE_FRAME_COUNT;
+}
+
+function storeOccupancySnapshotsSql() {
+  return `
+    SELECT zo.timestamp as ts, SUM(zo.occupancy_count) as store_total
+    FROM zone_occupancy zo
+    JOIN regions_of_interest r ON r.id = zo.roi_id
+    WHERE zo.venue_id = ? AND zo.timestamp >= ? AND zo.timestamp < ?
+      AND r.name NOT LIKE '%Queue%'
+      AND r.name NOT LIKE '%Checkout%'
+    GROUP BY zo.timestamp
+  `;
+}
+
+function fetchStoreShopperKpis(db, venueId, startTs, endTs, openingHour, closingHour) {
+  if (perceptionFramesAvailable(db, venueId, startTs, endTs)) {
+    const row = safeQuery(db, `
+      SELECT
+        MAX(frame_count) as peakOccupancy,
+        AVG(CASE WHEN open_hr AND frame_count >= ? THEN frame_count END) as avgOccupancy
+      FROM (
+        SELECT frame_count,
+          CAST(strftime('%H', datetime(ts/1000,'unixepoch','localtime')) AS INT) >= ?
+          AND CAST(strftime('%H', datetime(ts/1000,'unixepoch','localtime')) AS INT) < ? as open_hr
+        FROM (${storePerceptionFramesSql()})
+      )
+    `, [MIN_ACTIVE_FRAME_COUNT, openingHour, closingHour, venueId, startTs, endTs]);
+    return {
+      source: 'perception_frames',
+      peakOccupancy: Math.round(row?.peakOccupancy || 0),
+      avgOccupancy: Math.round((row?.avgOccupancy || 0) * 10) / 10,
+    };
+  }
+
+  const row = safeQuery(db, `
+    SELECT
+      MAX(store_total) as peakOccupancy,
+      AVG(CASE WHEN open_hr AND store_total > 0 THEN store_total END) as avgOccupancy
+    FROM (
+      SELECT store_total,
+        CAST(strftime('%H', datetime(ts/1000,'unixepoch','localtime')) AS INT) >= ?
+        AND CAST(strftime('%H', datetime(ts/1000,'unixepoch','localtime')) AS INT) < ? as open_hr
+      FROM (${storeOccupancySnapshotsSql()})
+    )
+  `, [openingHour, closingHour, venueId, startTs, endTs]);
+  return {
+    source: 'zone_snapshots',
+    peakOccupancy: Math.round(row?.peakOccupancy || 0),
+    avgOccupancy: Math.round((row?.avgOccupancy || 0) * 10) / 10,
+  };
 }
 
 function fetchLiveStoreOccupancy(db, venueId) {
@@ -632,23 +741,19 @@ function fetchQueueVisitorTimeline(db, venueId, startTs, endTs, grain) {
   }));
 }
 
-function fetchStoreActivityByHour(db, venueId, startTs, endTs, openingHour, closingHour) {
+function fetchStoreActivityByHour(db, venueId, startTs, endTs, openingHour, closingHour, metricSource) {
+  const useFrames = metricSource === 'perception_frames';
+  const snapshotSql = useFrames ? storePerceptionFramesSql() : storeOccupancySnapshotsSql();
+  const valueCol = useFrames ? 'frame_count' : 'store_total';
+
   const rows = safeQueryAll(db, `
     SELECT printf('%02d', CAST(strftime('%H', datetime(ts/1000,'unixepoch','localtime')) AS INTEGER)) as hour,
-      AVG(store_total) as avgOcc
-    FROM (
-      SELECT timestamp as ts, SUM(zo.occupancy_count) as store_total
-      FROM zone_occupancy zo
-      JOIN regions_of_interest r ON r.id = zo.roi_id
-      WHERE zo.venue_id = ? AND zo.timestamp >= ? AND zo.timestamp < ?
-        AND r.name NOT LIKE '%Queue%'
-        AND r.name NOT LIKE '%Checkout%'
-      GROUP BY ts
-    )
+      MAX(${valueCol}) as peakOcc
+    FROM (${snapshotSql})
     GROUP BY hour ORDER BY hour
   `, [venueId, startTs, endTs]);
 
-  const byHour = new Map(rows.map(r => [r.hour, Math.round((r.avgOcc || 0) * 10) / 10]));
+  const byHour = new Map(rows.map(r => [r.hour, Math.round(r.peakOcc || 0)]));
   const result = [];
   for (let h = 0; h < 24; h++) {
     const hour = String(h).padStart(2, '0');
@@ -703,6 +808,7 @@ function rowsToTimelinePoints(rows, grain, openingHour, closingHour) {
         bucketStartTs,
         value: Number(r.value) || 0,
         peak: Number(r.peak) || 0,
+        avgVal: r.avgVal != null ? Number(r.avgVal) : undefined,
         isOpen: grain !== 'hour' || isHourWithinStoreHours(hour, openingHour, closingHour),
       };
     })
@@ -755,9 +861,15 @@ function fetchQueueLanesBreakdown(db, venueId, startTs, endTs) {
   });
 }
 
-function fetchOperationsTimeline(db, venueId, startTs, endTs, grain, storeHours, dataHealth) {
+function fetchOperationsTimeline(db, venueId, startTs, endTs, grain, storeHours, dataHealth, metricSource) {
   const { openingHour, closingHour, trafficRoiIds } = storeHours;
   const roiPlaceholders = (trafficRoiIds || []).map(() => '?').join(',');
+  const useFrames = metricSource === 'perception_frames';
+  const snapshotSql = useFrames ? storePerceptionFramesSql() : storeOccupancySnapshotsSql();
+  const valueCol = useFrames ? 'frame_count' : 'store_total';
+  const activeFrameFilter = useFrames
+    ? `${valueCol} >= ${MIN_ACTIVE_FRAME_COUNT}`
+    : `${valueCol} > 0`;
 
   const fetchVisitorRows = () => {
     if (!dataHealth?.ingressRecording) {
@@ -835,53 +947,40 @@ function fetchOperationsTimeline(db, venueId, startTs, endTs, grain, storeHours,
     if (grain === 'hour') {
       return safeQueryAll(db, `
         SELECT (ts / 3600000) * 3600000 as bucketStartTs,
-          AVG(store_total) as value,
-          MAX(store_total) as peak
-        FROM (
-          SELECT timestamp as ts, SUM(occupancy_count) as store_total
-          FROM zone_occupancy zo
-          JOIN regions_of_interest r ON r.id = zo.roi_id
-          WHERE zo.venue_id = ? AND zo.timestamp >= ? AND zo.timestamp < ?
-            AND r.name NOT LIKE '%Queue%'
-          GROUP BY timestamp
-        )
+          AVG(CASE WHEN ${activeFrameFilter} THEN ${valueCol} END) as avgVal,
+          MAX(${valueCol}) as peak
+        FROM (${snapshotSql})
         GROUP BY bucketStartTs ORDER BY bucketStartTs
       `, [venueId, startTs, endTs]);
     }
     if (grain === 'day') {
       return safeQueryAll(db, `
         SELECT date(ts / 1000, 'unixepoch', 'localtime') as date,
-          AVG(store_total) as value, MAX(store_total) as peak
-        FROM (
-          SELECT timestamp as ts, SUM(occupancy_count) as store_total
-          FROM zone_occupancy
-          WHERE venue_id = ? AND timestamp >= ? AND timestamp < ?
-          GROUP BY timestamp
-        )
+          AVG(CASE WHEN ${activeFrameFilter} THEN ${valueCol} END) as avgVal,
+          MAX(${valueCol}) as peak
+        FROM (${snapshotSql})
         GROUP BY date ORDER BY date
       `, [venueId, startTs, endTs]).map(r => ({
         label: r.date,
         bucketStartTs: parseSqlDateMs(r.date),
-        value: r.value || 0,
+        value: r.peak || 0,
+        avgVal: r.avgVal || 0,
         peak: r.peak || 0,
       }));
     }
     return safeQueryAll(db, `
       SELECT strftime('%Y-W%W', datetime(ts/1000, 'unixepoch', 'localtime')) as weekKey,
         MIN(date(ts/1000, 'unixepoch', 'localtime')) as weekStart,
-        AVG(store_total) as value, MAX(store_total) as peak
-      FROM (
-        SELECT timestamp as ts, SUM(occupancy_count) as store_total
-        FROM zone_occupancy
-        WHERE venue_id = ? AND timestamp >= ? AND timestamp < ?
-        GROUP BY timestamp
-      )
+        AVG(CASE WHEN ${activeFrameFilter} THEN ${valueCol} END) as avgVal,
+        MAX(${valueCol}) as peak
+      FROM (${snapshotSql})
       GROUP BY weekKey ORDER BY weekStart
     `, [venueId, startTs, endTs]).map(r => ({
       label: formatWeekRangeLabel(r.weekStart),
       weekStart: r.weekStart,
       bucketStartTs: parseSqlDateMs(r.weekStart),
-      value: r.value || 0,
+      value: r.peak || 0,
+      avgVal: r.avgVal || 0,
       peak: r.peak || 0,
     }));
   };
@@ -893,8 +992,11 @@ function fetchOperationsTimeline(db, venueId, startTs, endTs, grain, storeHours,
     rows.map(r => ({
       ...r,
       bucketStartTs: Math.round(Number(r.bucketStartTs)),
-      value: isOcc ? Math.round((r.value || 0) * 10) / 10 : (r.value || 0),
-      peak: r.peak || 0,
+      value: isOcc
+        ? Math.round((r.peak ?? r.value ?? 0) * 10) / 10
+        : (r.value || 0),
+      peak: Math.round((r.peak ?? r.value ?? 0) * 10) / 10,
+      avgVal: r.avgVal != null ? Math.round(r.avgVal * 10) / 10 : undefined,
     })),
     grain,
     openingHour,

@@ -2,6 +2,7 @@ import { TrendingUp, TrendingDown, Minus, Store, ShoppingBag, MonitorPlay, Users
 import type { ZonePerformanceItem } from './ZonePerformanceViewport'
 import type { CampaignPerformanceItem } from './PebleEffectivenessViewport'
 import type { CategoryRankingRow } from './CategoryRankingPanel'
+import CategoryVisitsPanel from './CategoryVisitsPanel'
 import ZonePerformanceViewport from './ZonePerformanceViewport'
 
 export interface ExecutivePillar {
@@ -36,6 +37,8 @@ interface ExecutiveSummaryViewportProps {
   deadZones: ZonePerformanceItem[]
   topZones: ZonePerformanceItem[]
   zoneUtilThresholdPct?: number
+  topCategories?: CategoryRankingRow[]
+  onOpenCategoryHeatmap?: (row: CategoryRankingRow) => void
 }
 
 const PILLAR_ICON: Record<string, typeof Users> = {
@@ -96,6 +99,8 @@ export default function ExecutiveSummaryViewport({
   deadZones,
   topZones,
   zoneUtilThresholdPct = 5,
+  topCategories = [],
+  onOpenCategoryHeatmap,
 }: ExecutiveSummaryViewportProps) {
   const issueCount = deadZones.length
 
@@ -175,6 +180,21 @@ export default function ExecutiveSummaryViewport({
           </div>
         )}
       </div>
+
+      {topCategories.length > 0 && (
+        <div className="rounded-lg border border-gray-700/80 bg-gray-800/40 overflow-hidden">
+          <div className="px-3 py-2 border-b border-gray-700/60 flex items-center justify-between">
+            <span className="text-xs font-medium text-white">Category Traffic</span>
+            <span className="text-[10px] text-gray-500">click row → zone heatmap</span>
+          </div>
+          <div className="p-3">
+            <CategoryVisitsPanel
+              categories={topCategories}
+              onOpenHeatmap={onOpenCategoryHeatmap}
+            />
+          </div>
+        </div>
+      )}
 
       {(deadZones.length > 0 || topZones.length > 0) && (
         <ZonePerformanceViewport

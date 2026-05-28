@@ -6,6 +6,7 @@ export interface TimelinePoint {
   value: number;
   isOpen: boolean;
   peak?: number;
+  avgVal?: number;
 }
 
 export interface OperationsTimeline {
@@ -100,6 +101,7 @@ export interface OperationsConsoleData {
   queueLanes: QueueLaneRow[];
   alerts: OpsAlert[];
   dataHealth: OpsDataHealth;
+  shopperMetricSource?: 'perception_frames' | 'zone_snapshots';
   secondaryKpiIds: string[];
   heroKpiIds: string[];
   dataWindowStartTs: number;

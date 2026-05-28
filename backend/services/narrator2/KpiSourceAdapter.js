@@ -1239,6 +1239,7 @@ function getCategoryPerformanceRanking(venueId, startTs, endTs) {
       totalDurationMs: 0,
       uniqueVisitors: 0,
       zoneCount: 0,
+      roiIds: [],
     };
     bucket.totalVisits += row.total_visits || 0;
     bucket.dwellCount += row.dwell_count || 0;
@@ -1246,6 +1247,7 @@ function getCategoryPerformanceRanking(venueId, startTs, endTs) {
     bucket.totalDurationMs += row.total_duration_ms || 0;
     bucket.uniqueVisitors += row.unique_visitors || 0;
     bucket.zoneCount += 1;
+    if (row.id && !bucket.roiIds.includes(row.id)) bucket.roiIds.push(row.id);
     byCategory.set(category, bucket);
   }
 
@@ -1253,7 +1255,9 @@ function getCategoryPerformanceRanking(venueId, startTs, endTs) {
     .map((c) => ({
       category: c.category,
       zoneCount: c.zoneCount,
+      roiIds: c.roiIds || [],
       totalVisits: c.totalVisits,
+      totalDwellMin: Math.round((c.totalDurationMs || 0) / 60000),
       browsingRate: c.totalVisits > 0
         ? Math.round((c.dwellCount / c.totalVisits) * 1000) / 10
         : 0,
@@ -1267,7 +1271,7 @@ function getCategoryPerformanceRanking(venueId, startTs, endTs) {
         ? Math.round((c.totalDurationMs / c.uniqueVisitors) / 60000 * 10) / 10
         : 0,
     }))
-    .sort((a, b) => b.engagementRate - a.engagementRate || b.totalVisits - a.totalVisits);
+    .sort((a, b) => b.totalVisits - a.totalVisits || b.engagementRate - a.engagementRate);
 }
 
 /**

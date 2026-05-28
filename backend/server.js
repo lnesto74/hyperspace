@@ -530,7 +530,7 @@ app.use('/api/dooh', doohRoutes);
 app.use('/api/dooh-attribution', doohAttributionRoutes);
 
 // Business Reporting routes (feature-flagged: FEATURE_BUSINESS_REPORTING=true)
-app.use('/api/reporting', createBusinessReportingRoutes(db, trajectoryStorage, trackAggregator));
+app.use('/api/reporting', createBusinessReportingRoutes(db, trajectoryStorage, trackAggregator, mqttService));
 
 // AI Narrator routes (additive layer - does not modify existing functionality)
 app.use('/api/narrator', narratorRoutes);

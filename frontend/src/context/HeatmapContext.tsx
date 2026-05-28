@@ -58,6 +58,12 @@ export interface HeatmapData {
   venueDepth: number
 }
 
+export interface HeatmapFocusRequest {
+  zoneIds: string[]
+  categoryLabel?: string
+  timeframe?: 'day' | 'week' | 'month'
+}
+
 interface HeatmapContextType {
   isEnabled: boolean
   isLoading: boolean
@@ -66,8 +72,13 @@ interface HeatmapContextType {
   heightKpi: 'visits' | 'dwellSec'
   colorKpi: 'visits' | 'dwellSec'
   opacity: number
-  
+  heatmapModalOpen: boolean
+  focusRequest: HeatmapFocusRequest | null
+
   toggleHeatmap: () => void
+  openHeatmapModal: (focus?: HeatmapFocusRequest) => void
+  closeHeatmapModal: () => void
+  openHeatmapForCategory: (zoneIds: string[], categoryLabel: string, timeframe?: 'day' | 'week' | 'month') => void
   setTimeframe: (tf: 'day' | 'week' | 'month') => void
   setHeightKpi: (kpi: 'visits' | 'dwellSec') => void
   setColorKpi: (kpi: 'visits' | 'dwellSec') => void
@@ -84,10 +95,11 @@ export function HeatmapProvider({ children }: { children: ReactNode }) {
   const [heatmapData, setHeatmapData] = useState<HeatmapData | null>(null)
   const [settings, setSettings] = useState<HeatmapSettings>(loadSettings)
   const [currentVenueId, setCurrentVenueId] = useState<string | null>(null)
+  const [heatmapModalOpen, setHeatmapModalOpen] = useState(false)
+  const [focusRequest, setFocusRequest] = useState<HeatmapFocusRequest | null>(null)
 
   const { timeframe, heightKpi, colorKpi, opacity } = settings
 
-  // Save settings whenever they change
   useEffect(() => {
     saveSettings(settings)
   }, [settings])
@@ -118,6 +130,27 @@ export function HeatmapProvider({ children }: { children: ReactNode }) {
     setIsEnabled(prev => !prev)
   }, [])
 
+  const openHeatmapModal = useCallback((focus?: HeatmapFocusRequest) => {
+    if (focus?.timeframe) {
+      setSettings(prev => ({ ...prev, timeframe: focus.timeframe! }))
+    }
+    setFocusRequest(focus || null)
+    setHeatmapModalOpen(true)
+  }, [])
+
+  const closeHeatmapModal = useCallback(() => {
+    setHeatmapModalOpen(false)
+    setFocusRequest(null)
+  }, [])
+
+  const openHeatmapForCategory = useCallback((
+    zoneIds: string[],
+    categoryLabel: string,
+    tf?: 'day' | 'week' | 'month',
+  ) => {
+    openHeatmapModal({ zoneIds, categoryLabel, timeframe: tf })
+  }, [openHeatmapModal])
+
   const setTimeframe = useCallback((tf: 'day' | 'week' | 'month') => {
     setSettings(prev => ({ ...prev, timeframe: tf }))
   }, [])
@@ -143,7 +176,12 @@ export function HeatmapProvider({ children }: { children: ReactNode }) {
       heightKpi,
       colorKpi,
       opacity,
+      heatmapModalOpen,
+      focusRequest,
       toggleHeatmap,
+      openHeatmapModal,
+      closeHeatmapModal,
+      openHeatmapForCategory,
       setTimeframe,
       setHeightKpi,
       setColorKpi,

@@ -1,6 +1,5 @@
 import { X } from 'lucide-react';
-import type { DrillDownView, OperationsConsoleData, QueueLaneRow } from './types';
-import OperationsTimelineChart from './OperationsTimelineChart';
+import type { DrillDownView, OperationsConsoleData, QueueLaneRow, TimelinePoint } from './types';
 
 interface OperationsDrillDownProps {
   view: DrillDownView;
@@ -33,10 +32,66 @@ function Stat({ label, value }: { label: string; value: string }) {
   );
 }
 
+function BucketTable({
+  title,
+  note,
+  points,
+  valueHeader,
+  showTypical,
+}: {
+  title: string;
+  note: string;
+  points: TimelinePoint[];
+  valueHeader: string;
+  showTypical?: boolean;
+}) {
+  const sorted = [...points].filter(p => p.value > 0).sort((a, b) => b.value - a.value);
+  const peak = sorted[0]?.value ?? 0;
+  const typical = sorted.length
+    ? Math.round(sorted.reduce((s, p) => s + p.value, 0) / sorted.length * 10) / 10
+    : 0;
+
+  return (
+    <div className="space-y-3">
+      <p className="text-xs text-gray-400 leading-relaxed">{note}</p>
+      <div className="grid grid-cols-2 gap-2">
+        <Stat label="Peak" value={String(peak)} />
+        <Stat label={`Avg ${valueHeader.toLowerCase()}`} value={String(typical)} />
+        <Stat label="Buckets with data" value={String(sorted.length)} />
+        <Stat label="Grain" value={title} />
+      </div>
+      <div className="rounded-lg border border-gray-700/60 overflow-hidden">
+        <table className="w-full text-[11px]">
+          <thead>
+            <tr className="bg-gray-900/80 text-gray-500 text-left">
+              <th className="px-3 py-2 font-medium">Period</th>
+              <th className="px-3 py-2 font-medium text-right">{valueHeader}</th>
+              {showTypical && <th className="px-3 py-2 font-medium text-right">Typical</th>}
+            </tr>
+          </thead>
+          <tbody>
+            {sorted.map(p => (
+              <tr key={p.bucketStartTs} className="border-t border-gray-800/80">
+                <td className="px-3 py-1.5 text-gray-300">{p.label}</td>
+                <td className="px-3 py-1.5 text-right text-white font-medium tabular-nums">{p.value}</td>
+                {showTypical && (
+                  <td className="px-3 py-1.5 text-right text-gray-400 tabular-nums">
+                    {p.avgVal != null ? p.avgVal : '—'}
+                  </td>
+                )}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 const TITLES: Record<NonNullable<DrillDownView>, string> = {
-  traffic: 'Traffic Detail',
+  traffic: 'Footfall Breakdown',
   checkout: 'Checkout Detail',
-  occupancy: 'Occupancy Detail',
+  occupancy: 'Shopper Activity Breakdown',
   lane: 'Lane Detail',
 };
 
@@ -51,6 +106,8 @@ export default function OperationsDrillDown({
   const lane = selectedLaneId
     ? consoleData.queueLanes.find(l => l.id === selectedLaneId)
     : null;
+
+  const grainLabel = consoleData.timeline.grain === 'hour' ? 'hourly' : consoleData.timeline.grain;
 
   return (
     <>
@@ -68,20 +125,23 @@ export default function OperationsDrillDown({
         <div className="flex-1 overflow-y-auto p-4 space-y-4">
           {view === 'lane' && lane && <LaneDetail lane={lane} />}
 
-          {(view === 'traffic' || view === 'occupancy') && (
-            <>
-              <p className="text-xs text-gray-400">
-                {view === 'traffic'
-                  ? 'Visitor counts over the selected period. Closed hours appear muted on hourly view.'
-                  : 'Average in-store occupancy by time bucket.'}
-              </p>
-              <OperationsTimelineChart
-                timeline={consoleData.timeline}
-                forcedMode={view === 'traffic' ? 'footfall' : 'occupancy'}
-                showFootfallSeries={consoleData.timeline.visitorSource === 'ingress'}
-                hideToggle
-              />
-            </>
+          {view === 'occupancy' && (
+            <BucketTable
+              title={grainLabel}
+              note="Peak and typical shopper counts per period — distinct perception IDs per LiDAR frame (same metric as MQTT live), open hours only."
+              points={consoleData.timeline.occupancy}
+              valueHeader="Peak shoppers"
+              showTypical
+            />
+          )}
+
+          {view === 'traffic' && (
+            <BucketTable
+              title={grainLabel}
+              note="Ingress zone visits per period from configured footfall ROI."
+              points={consoleData.timeline.visitors}
+              valueHeader="Visits"
+            />
           )}
 
           {view === 'checkout' && (

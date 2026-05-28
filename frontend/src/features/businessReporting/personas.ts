@@ -119,13 +119,18 @@ export const OPERATIONS_HERO_KPIS: KpiTileDefinition[] = [
     id: 'totalInStore',
     title: 'In Store Now',
     format: 'int',
-    meaning: 'Shoppers currently in the store (excludes checkout queues).',
+    meaning: 'Distinct perception IDs in the current LiDAR frame (same as MQTT live count).',
     action: 'Watch during peak hours for capacity planning.',
-    tooltip: 'Live sum of zone occupancy snapshots, excluding queue lanes.',
+    tooltip: 'Live frameOccupancy from MQTT, or latest track_positions frame count.',
     thresholds: { good: 40, warn: 80, bad: 120, direction: 'lower' },
   },
   storeManagerKpis[3], // peakOccupancy
-  storeManagerKpis[4], // avgOccupancy
+  {
+    ...storeManagerKpis[4],
+    title: 'Typical Shoppers',
+    meaning: 'Average IDs per LiDAR frame during open hours (matches MQTT live range).',
+    tooltip: 'AVG distinct perception IDs per frame from track_positions, open hours, frames with 15+ IDs.',
+  },
   storeManagerKpis[0], // avgWaitingTimeMin — only checkout metric in hero row
 ];
 

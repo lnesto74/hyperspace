@@ -3,7 +3,7 @@ import { LidarProvider } from './context/LidarContext'
 import { TrackingProvider, useTracking, useTrackingActions } from './context/TrackingContext'
 import { ToastProvider } from './context/ToastContext'
 import { RoiProvider, useRoi } from './context/RoiContext'
-import { HeatmapProvider } from './context/HeatmapContext'
+import { HeatmapProvider, useHeatmap } from './context/HeatmapContext'
 import { PlanogramProvider, usePlanogram } from './context/PlanogramContext'
 import { DwgProvider, useDwg } from './context/DwgContext'
 // Legacy Narrator v1 disabled - using Narrator2 (Copilot) only
@@ -98,8 +98,8 @@ function KPIOverlayToggle() {
   const { dwgLayoutId } = useDwg()
   const { openStoryGrid, explainKpi, selectEpisode, selectedEpisode } = useReplayInsight()
   const { openNarrator, askQuestion } = useNarrator2()
+  const { heatmapModalOpen, openHeatmapModal, closeHeatmapModal } = useHeatmap()
   const [showLedger, setShowLedger] = useState(false)
-  const [showHeatmapModal, setShowHeatmapModal] = useState(false)
   const [showSmartKpiModal, setShowSmartKpiModal] = useState(false)
   const [showCheckoutManager, setShowCheckoutManager] = useState(false)
   const [unreadCount, setUnreadCount] = useState(0)
@@ -146,7 +146,7 @@ function KPIOverlayToggle() {
       
       switch (intent) {
         case 'open_heatmap':
-          setShowHeatmapModal(true)
+          openHeatmapModal()
           break
         case 'open_zone_analytics':
         case 'open_analytics':
@@ -215,8 +215,8 @@ function KPIOverlayToggle() {
     <>
       {/* Heatmap Viewer Modal */}
       <HeatmapViewerModal 
-        isOpen={showHeatmapModal} 
-        onClose={() => setShowHeatmapModal(false)} 
+        isOpen={heatmapModalOpen} 
+        onClose={closeHeatmapModal} 
       />
       
       {/* Checkout Manager Modal */}
@@ -291,7 +291,7 @@ function KPIOverlayToggle() {
           icon={PieChart}
           title="Business Reporting — executive dashboards"
           accent="blue"
-          active={mode === 'businessReporting' || mode === 'profitRadar' || showHeatmapModal}
+          active={mode === 'businessReporting' || mode === 'profitRadar' || heatmapModalOpen}
           onPrimaryClick={() => setMode('businessReporting')}
           items={[
             {
@@ -306,9 +306,9 @@ function KPIOverlayToggle() {
               id: 'heatmap',
               icon: Thermometer,
               title: 'Heatmap Viewer',
-              active: showHeatmapModal,
+              active: heatmapModalOpen,
               accent: 'orange',
-              onClick: () => setShowHeatmapModal(true),
+              onClick: () => openHeatmapModal(),
             },
           ]}
         />

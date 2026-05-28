@@ -28,6 +28,15 @@ interface HeatmapViewerModalProps {
   onClose: () => void
 }
 
+interface TileTooltip {
+  x: number
+  y: number
+  visits: number
+  dwellSec: number
+  tileX: number
+  tileZ: number
+}
+
 function isPointInPolygon(point: { x: number; z: number }, vertices: Vector2[]): boolean {
   let inside = false
   for (let i = 0, j = vertices.length - 1; i < vertices.length; j = i++) {
@@ -104,6 +113,7 @@ export default function HeatmapViewerModal({ isOpen, onClose }: HeatmapViewerMod
     heightKpi,
     colorKpi,
     opacity,
+    focusRequest,
     setTimeframe,
     setHeightKpi,
     setColorKpi,
@@ -115,8 +125,12 @@ export default function HeatmapViewerModal({ isOpen, onClose }: HeatmapViewerMod
   const [showZoneDropdown, setShowZoneDropdown] = useState(false)
   const [showDwgWireframe, setShowDwgWireframe] = useState(true)
   const [dwgWireframePlane, setDwgWireframePlane] = useState<DwgWireframePlane>('pedestal')
+  const [tileTooltip, setTileTooltip] = useState<TileTooltip | null>(null)
   
   const canvasRef = useRef<HTMLDivElement>(null)
+  const tileMeshesRef = useRef<THREE.Mesh[]>([])
+  const raycasterRef = useRef(new THREE.Raycaster())
+  const mouseRef = useRef(new THREE.Vector2())
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null)
   const sceneRef = useRef<THREE.Scene | null>(null)
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null)
@@ -127,6 +141,16 @@ export default function HeatmapViewerModal({ isOpen, onClose }: HeatmapViewerMod
   const floorRef = useRef<THREE.Mesh | null>(null)
   const gridHelperRef = useRef<THREE.GridHelper | null>(null)
   const animationFrameRef = useRef<number | null>(null)
+
+  // Apply focus from Business Reporting category click
+  useEffect(() => {
+    if (!isOpen) return
+    if (focusRequest?.zoneIds?.length) {
+      setSelectedZoneIds(new Set(focusRequest.zoneIds))
+    } else {
+      setSelectedZoneIds(new Set())
+    }
+  }, [isOpen, focusRequest])
 
   // Load heatmap when modal opens
   useEffect(() => {
@@ -352,6 +376,7 @@ export default function HeatmapViewerModal({ isOpen, onClose }: HeatmapViewerMod
 
     if (filteredTiles.length === 0) return
 
+    tileMeshesRef.current = []
     const { tileSize } = heatmapData
     const ELEVATION = 0.5 // Elevated plane for heatmap
 
@@ -393,9 +418,59 @@ export default function HeatmapViewerModal({ isOpen, onClose }: HeatmapViewerMod
       })
       const mesh = new THREE.Mesh(geo, mat)
       mesh.position.set(tile.x, ELEVATION + height / 2, tile.z)
+      const mesh = new THREE.Mesh(geo, mat)
+      mesh.position.set(tile.x, ELEVATION + height / 2, tile.z)
+      mesh.userData = {
+        visits: tile.visits,
+        dwellSec: tile.dwellSec,
+        tileX: tile.tileX,
+        tileZ: tile.tileZ,
+      }
+      tileMeshesRef.current.push(mesh)
       group.add(mesh)
     })
   }, [filteredTiles, heatmapData, heightKpi, colorKpi, opacity])
+
+  // Tile hover tooltip via raycasting
+  useEffect(() => {
+    if (!isOpen) return
+    const container = canvasRef.current
+    const camera = cameraRef.current
+    if (!container || !camera) return
+
+    const onMove = (event: MouseEvent) => {
+      if (!tileMeshesRef.current.length) {
+        setTileTooltip(null)
+        return
+      }
+      const rect = container.getBoundingClientRect()
+      mouseRef.current.x = ((event.clientX - rect.left) / rect.width) * 2 - 1
+      mouseRef.current.y = -((event.clientY - rect.top) / rect.height) * 2 + 1
+      raycasterRef.current.setFromCamera(mouseRef.current, camera)
+      const hits = raycasterRef.current.intersectObjects(tileMeshesRef.current, false)
+      if (hits.length > 0) {
+        const data = hits[0].object.userData as { visits: number; dwellSec: number; tileX: number; tileZ: number }
+        setTileTooltip({
+          x: event.clientX - rect.left,
+          y: event.clientY - rect.top,
+          visits: data.visits,
+          dwellSec: data.dwellSec,
+          tileX: data.tileX,
+          tileZ: data.tileZ,
+        })
+      } else {
+        setTileTooltip(null)
+      }
+    }
+
+    const onLeave = () => setTileTooltip(null)
+    container.addEventListener('mousemove', onMove)
+    container.addEventListener('mouseleave', onLeave)
+    return () => {
+      container.removeEventListener('mousemove', onMove)
+      container.removeEventListener('mouseleave', onLeave)
+    }
+  }, [isOpen, filteredTiles.length])
 
   // Auto-focus camera on selected zones
   const focusOnSelectedZones = useCallback(() => {
@@ -466,8 +541,14 @@ export default function HeatmapViewerModal({ isOpen, onClose }: HeatmapViewerMod
           <div className="flex items-center gap-3">
             <Thermometer className="w-5 h-5 text-orange-400" />
             <div>
-              <h2 className="text-lg font-semibold text-white">Heatmap Viewer</h2>
-              <p className="text-xs text-gray-400">Focused zone analysis • Elevated visualization</p>
+              <h2 className="text-lg font-semibold text-white">
+                {focusRequest?.categoryLabel ? `${focusRequest.categoryLabel} Heatmap` : 'Heatmap Viewer'}
+              </h2>
+              <p className="text-xs text-gray-400">
+                {focusRequest?.categoryLabel
+                  ? 'Category zones · hover tiles for visits & dwell'
+                  : 'Focused zone analysis · hover tiles for detail'}
+              </p>
             </div>
           </div>
 
@@ -558,6 +639,17 @@ export default function HeatmapViewerModal({ isOpen, onClose }: HeatmapViewerMod
         {/* 3D Canvas */}
         <div className="flex-1 relative">
           <div ref={canvasRef} className="w-full h-full" />
+
+          {tileTooltip && (
+            <div
+              className="absolute z-20 pointer-events-none bg-gray-950/95 border border-gray-600 rounded px-2.5 py-1.5 text-[10px] text-white shadow-lg"
+              style={{ left: tileTooltip.x + 12, top: tileTooltip.y - 8 }}
+            >
+              <div className="text-gray-400 mb-0.5">Tile {tileTooltip.tileX}, {tileTooltip.tileZ}</div>
+              <div><span className="text-gray-500">Visits</span> <b>{tileTooltip.visits}</b></div>
+              <div><span className="text-gray-500">Dwell</span> <b>{Math.round(tileTooltip.dwellSec / 60)}m {tileTooltip.dwellSec % 60}s</b></div>
+            </div>
+          )}
           
           {isLoading && (
             <div className="absolute inset-0 flex items-center justify-center bg-black/50">

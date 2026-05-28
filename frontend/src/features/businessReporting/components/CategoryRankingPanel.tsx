@@ -3,7 +3,9 @@ import { TrendingUp, TrendingDown, Minus } from 'lucide-react'
 export interface CategoryRankingRow {
   category: string
   zoneCount: number
+  roiIds?: string[]
   totalVisits: number
+  totalDwellMin?: number
   browsingRate: number
   engagementRate: number
   conversionRate: number
