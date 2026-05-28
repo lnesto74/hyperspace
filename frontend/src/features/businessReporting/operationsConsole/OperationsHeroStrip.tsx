@@ -1,6 +1,6 @@
 import { TrendingDown, TrendingUp } from 'lucide-react';
 import { KpiTileDefinition } from '../personas';
-import { formatKpiValue, getThresholdState, STATE_BG, STATE_TEXT } from './kpiFormat';
+import { formatKpiValue, getThresholdState, STATE_BG } from './kpiFormat';
 import type { PeriodDeltas } from './types';
 
 interface OperationsHeroStripProps {
@@ -8,12 +8,11 @@ interface OperationsHeroStripProps {
   kpiDefinitions: KpiTileDefinition[];
   kpiValues: Record<string, number | null | undefined>;
   periodDeltas?: PeriodDeltas;
-  visitorSource?: 'ingress' | 'queue_proxy' | 'none';
   onSelect?: (kpiId: string) => void;
 }
 
 const DELTA_FOR_KPI: Record<string, keyof PeriodDeltas> = {
-  uniqueVisitors: 'visitorsDeltaPct',
+  avgOccupancy: 'engagementDeltaPct',
   avgWaitingTimeMin: 'visitsDeltaPct',
 };
 
@@ -22,7 +21,6 @@ export default function OperationsHeroStrip({
   kpiDefinitions,
   kpiValues,
   periodDeltas,
-  visitorSource,
   onSelect,
 }: OperationsHeroStripProps) {
   const defs = heroIds
@@ -37,9 +35,14 @@ export default function OperationsHeroStrip({
         const deltaKey = DELTA_FOR_KPI[def.id];
         const delta = deltaKey && periodDeltas ? periodDeltas[deltaKey] : null;
         const deltaUp = delta != null && delta > 0;
-        const deltaBad = def.id === 'uniqueVisitors'
+        const deltaBad = def.id === 'avgWaitingTimeMin'
+          ? delta != null && delta > 0
+          : def.id === 'avgOccupancy' || def.id === 'peakOccupancy'
+            ? delta != null && delta < 0
+            : false;
+        const deltaGood = def.id === 'avgWaitingTimeMin'
           ? delta != null && delta < 0
-          : def.id === 'abandonRate' || def.id === 'avgWaitingTimeMin'
+          : def.id === 'avgOccupancy' || def.id === 'peakOccupancy'
             ? delta != null && delta > 0
             : false;
 
@@ -50,27 +53,23 @@ export default function OperationsHeroStrip({
             onClick={() => onSelect?.(def.id)}
             className={`rounded-lg border p-3 text-left transition-colors hover:border-gray-500/60 ${STATE_BG[state]}`}
           >
-            <div className="text-[10px] text-gray-500 uppercase tracking-wide">
-              {def.id === 'uniqueVisitors' && visitorSource === 'queue_proxy' ? 'Queue shoppers' : def.title}
-            </div>
+            <div className="text-[10px] text-gray-500 uppercase tracking-wide">{def.title}</div>
             <div className="flex items-baseline gap-2 mt-1">
-              <span className={`text-2xl font-bold tabular-nums ${STATE_TEXT[state]}`}>
+              <span className={`text-2xl font-bold tabular-nums ${
+                state === 'bad' ? 'text-red-400' : state === 'good' ? 'text-green-400' : 'text-white'
+              }`}>
                 {formatKpiValue(value, def.format)}
               </span>
               {delta != null && (
-                <span className={`flex items-center text-[10px] ${deltaBad ? 'text-red-400' : deltaUp ? 'text-green-400' : 'text-gray-500'}`}>
+                <span className={`flex items-center text-[10px] ${
+                  deltaBad ? 'text-red-400' : deltaGood ? 'text-green-400' : 'text-gray-500'
+                }`}>
                   {deltaUp ? <TrendingUp className="w-3 h-3 mr-0.5" /> : <TrendingDown className="w-3 h-3 mr-0.5" />}
                   {Math.abs(delta).toFixed(1)}%
                 </span>
               )}
             </div>
-          <p className="text-[10px] text-gray-500 mt-1 line-clamp-2">
-            {def.id === 'uniqueVisitors' && visitorSource === 'queue_proxy'
-              ? 'Distinct shoppers who entered a checkout queue (ingress zone not recording yet).'
-              : def.id === 'totalInStore'
-                ? 'Live store occupancy from zone snapshots (excludes checkout queues).'
-                : def.meaning}
-          </p>
+            <p className="text-[10px] text-gray-500 mt-1 line-clamp-2">{def.meaning}</p>
           </button>
         );
       })}

@@ -313,10 +313,8 @@ async function computeStoreManagerKpis(db, kpiCalculator, trajectoryStorage, tra
 
   if (dataHealth.visitorSource === 'ingress') {
     kpis.uniqueVisitors = dataHealth.ingressVisitCount;
-  } else if (dataHealth.visitorSource === 'queue_proxy') {
-    kpis.uniqueVisitors = dataHealth.queueVisitorCount;
   } else {
-    kpis.uniqueVisitors = 0;
+    kpis.uniqueVisitors = null;
   }
   kpis.totalInStore = fetchLiveStoreOccupancy(db, venueId);
 
@@ -324,6 +322,9 @@ async function computeStoreManagerKpis(db, kpiCalculator, trajectoryStorage, tra
   const queueLanes = fetchQueueLanesBreakdown(db, venueId, startTs, endTs);
   const timeline = fetchOperationsTimeline(db, venueId, startTs, endTs, grain, storeHours, dataHealth);
   const footfall = buildFootfallSummary(db, venueId, startTs, endTs, storeHours, dataHealth);
+  const storeActivityByHour = fetchStoreActivityByHour(
+    db, venueId, startTs, endTs, storeHours.openingHour, storeHours.closingHour,
+  );
   const alerts = buildOperationsAlerts(kpis, periodDeltas, queueLanes, dataHealth);
 
   supporting.periodDeltas = periodDeltas;
@@ -336,15 +337,17 @@ async function computeStoreManagerKpis(db, kpiCalculator, trajectoryStorage, tra
     dataHealth,
     timeline,
     footfall,
+    storeActivityByHour,
     queueLanes,
     alerts,
     secondaryKpiIds: [
+      'uniqueVisitors',
+      'utilizationRate',
       'currentQueueLength',
+      'abandonRate',
       'queueThroughput',
-      'lanesUsedCoverage',
-      'avgConcurrentOpenLanes',
     ],
-    heroKpiIds: ['uniqueVisitors', 'avgWaitingTimeMin', 'totalInStore', 'abandonRate'],
+    heroKpiIds: ['totalInStore', 'peakOccupancy', 'avgOccupancy', 'avgWaitingTimeMin'],
     dataWindowStartTs: startTs,
     dataWindowEndTs: endTs,
   };
@@ -622,17 +625,57 @@ function fetchQueueVisitorTimeline(db, venueId, startTs, endTs, grain) {
       AND waiting_time_ms >= 5000
     GROUP BY weekKey ORDER BY weekStart
   `, [venueId, startTs, endTs]).map(r => ({
-    label: r.weekKey,
+    label: formatWeekRangeLabel(r.weekStart),
+    weekStart: r.weekStart,
     bucketStartTs: parseSqlDateMs(r.weekStart),
     value: r.value || 0,
   }));
+}
+
+function fetchStoreActivityByHour(db, venueId, startTs, endTs, openingHour, closingHour) {
+  const rows = safeQueryAll(db, `
+    SELECT printf('%02d', CAST(strftime('%H', datetime(ts/1000,'unixepoch','localtime')) AS INTEGER)) as hour,
+      AVG(store_total) as avgOcc
+    FROM (
+      SELECT timestamp as ts, SUM(zo.occupancy_count) as store_total
+      FROM zone_occupancy zo
+      JOIN regions_of_interest r ON r.id = zo.roi_id
+      WHERE zo.venue_id = ? AND zo.timestamp >= ? AND zo.timestamp < ?
+        AND r.name NOT LIKE '%Queue%'
+        AND r.name NOT LIKE '%Checkout%'
+      GROUP BY ts
+    )
+    GROUP BY hour ORDER BY hour
+  `, [venueId, startTs, endTs]);
+
+  const byHour = new Map(rows.map(r => [r.hour, Math.round((r.avgOcc || 0) * 10) / 10]));
+  const result = [];
+  for (let h = 0; h < 24; h++) {
+    const hour = String(h).padStart(2, '0');
+    result.push({
+      hour,
+      avgOccupancy: byHour.get(hour) || 0,
+      isOpen: isHourWithinStoreHours(h, openingHour, closingHour),
+    });
+  }
+  return result;
 }
 
 function parseSqlDateMs(dateStr) {
   if (!dateStr || typeof dateStr !== 'string') return NaN;
   const [y, m, d] = dateStr.split('-').map(Number);
   if (!y || !m || !d) return NaN;
-  return Date.UTC(y, m - 1, d, 12, 0, 0);
+  return new Date(y, m - 1, d, 12, 0, 0).getTime();
+}
+
+function formatWeekRangeLabel(weekStartStr) {
+  const ms = parseSqlDateMs(weekStartStr);
+  if (!Number.isFinite(ms)) return weekStartStr || '';
+  const start = new Date(ms);
+  const end = new Date(ms);
+  end.setDate(end.getDate() + 6);
+  const opts = { month: 'short', day: 'numeric' };
+  return `${start.toLocaleDateString([], opts)} – ${end.toLocaleDateString([], opts)}`;
 }
 
 function rowsToTimelinePoints(rows, grain, openingHour, closingHour) {
@@ -642,7 +685,9 @@ function rowsToTimelinePoints(rows, grain, openingHour, closingHour) {
       if (!Number.isFinite(bucketStartTs)) return null;
       const hour = new Date(bucketStartTs).getHours();
       let label = r.label || r.date || r.weekKey || '';
-      if (!label) {
+      if (grain === 'week') {
+        label = formatWeekRangeLabel(r.weekStart || r.date || label);
+      } else if (!label || label.includes('-W')) {
         if (grain === 'hour') {
           label = new Date(bucketStartTs).toLocaleString([], {
             month: 'short', day: 'numeric', hour: '2-digit',
@@ -716,7 +761,7 @@ function fetchOperationsTimeline(db, venueId, startTs, endTs, grain, storeHours,
 
   const fetchVisitorRows = () => {
     if (!dataHealth?.ingressRecording) {
-      return fetchQueueVisitorTimeline(db, venueId, startTs, endTs, grain);
+      return [];
     }
 
     if (grain === 'hour') {
@@ -779,7 +824,8 @@ function fetchOperationsTimeline(db, venueId, startTs, endTs, grain, storeHours,
       `, [venueId, ...trafficRoiIds, startTs, endTs]);
     }
     return rows.map(r => ({
-      label: r.weekKey,
+      label: formatWeekRangeLabel(r.weekStart),
+      weekStart: r.weekStart,
       bucketStartTs: parseSqlDateMs(r.weekStart),
       value: r.value || 0,
     }));
@@ -832,7 +878,8 @@ function fetchOperationsTimeline(db, venueId, startTs, endTs, grain, storeHours,
       )
       GROUP BY weekKey ORDER BY weekStart
     `, [venueId, startTs, endTs]).map(r => ({
-      label: r.weekKey,
+      label: formatWeekRangeLabel(r.weekStart),
+      weekStart: r.weekStart,
       bucketStartTs: parseSqlDateMs(r.weekStart),
       value: r.value || 0,
       peak: r.peak || 0,
@@ -858,7 +905,7 @@ function fetchOperationsTimeline(db, venueId, startTs, endTs, grain, storeHours,
     grain,
     visitors: toPoints(visitorRows, false),
     occupancy: toPoints(occRows, true),
-    visitorSource: dataHealth?.ingressRecording ? 'ingress' : 'queue_proxy',
+    visitorSource: dataHealth?.ingressRecording ? 'ingress' : 'none',
   };
 }
 
@@ -898,9 +945,9 @@ function buildOperationsAlerts(kpis, periodDeltas, queueLanes, dataHealth) {
   if (dataHealth && !dataHealth.ingressRecording) {
     alerts.push({
       id: 'ingress-not-recording',
-      severity: 'bad',
-      title: 'Ingress zone not counting',
-      message: dataHealth.message || 'Footfall ROI recorded 0 visits — reposition zone or save footfall in Venue Settings.',
+      severity: 'info',
+      title: 'Footfall zone pending',
+      message: dataHealth.message || 'Ingress zone recorded 0 visits — verify polygon placement when store is open.',
       metric: 'ingressVisitCount',
       value: 0,
     });

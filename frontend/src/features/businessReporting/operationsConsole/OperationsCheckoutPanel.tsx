@@ -28,7 +28,7 @@ export default function OperationsCheckoutPanel({
       <div className="flex items-center justify-between mb-2">
         <h3 className="text-xs font-semibold text-white">Checkout</h3>
         {lanes.length > PREVIEW_LANES && (
-          <button type="button" onClick={onViewAll} className="text-[10px] text-blue-400 hover:text-blue-300 flex items-center gap-0.5">
+          <button type="button" onClick={onViewAll} className="text-[10px] text-gray-400 hover:text-white flex items-center gap-0.5">
             All {lanes.length} lanes <ChevronRight className="w-3 h-3" />
           </button>
         )}
@@ -41,7 +41,7 @@ export default function OperationsCheckoutPanel({
         </div>
         <div className="rounded-md bg-gray-900/60 px-2 py-1.5 border border-gray-700/50">
           <div className="text-[9px] text-gray-500 flex items-center gap-0.5"><Clock className="w-2.5 h-2.5" /> Avg wait</div>
-          <div className="text-lg font-bold text-amber-400 tabular-nums">{avgWaitMin.toFixed(1)}m</div>
+          <div className={`text-lg font-bold tabular-nums ${avgWaitMin > 5 ? 'text-red-400' : 'text-white'}`}>{avgWaitMin.toFixed(1)}m</div>
         </div>
         <div className="rounded-md bg-gray-900/60 px-2 py-1.5 border border-gray-700/50">
           <div className="text-[9px] text-gray-500">Abandon</div>

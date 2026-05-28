@@ -113,28 +113,20 @@ const storeManagerKpis: KpiTileDefinition[] = [
   },
 ];
 
-/** Hero KPIs for Operations Pulse console (separate from 7-tile cap) */
+/** Hero KPIs for Operations Pulse console — store director view */
 export const OPERATIONS_HERO_KPIS: KpiTileDefinition[] = [
-  {
-    id: 'uniqueVisitors',
-    title: 'Visitors',
-    format: 'int',
-    meaning: 'Unique shoppers in the selected period.',
-    action: 'Compare to prior period to spot traffic trends.',
-    tooltip: 'Distinct track_keys with store activity in range.',
-    thresholds: { good: 500, warn: 200, bad: 50, direction: 'higher' },
-  },
-  storeManagerKpis[0], // avgWaitingTimeMin
   {
     id: 'totalInStore',
     title: 'In Store Now',
     format: 'int',
-    meaning: 'Shoppers currently active in the store.',
+    meaning: 'Shoppers currently in the store (excludes checkout queues).',
     action: 'Watch during peak hours for capacity planning.',
-    tooltip: 'Unique tracks with activity in the last 5 minutes.',
+    tooltip: 'Live sum of zone occupancy snapshots, excluding queue lanes.',
     thresholds: { good: 40, warn: 80, bad: 120, direction: 'lower' },
   },
-  storeManagerKpis[1], // abandonRate
+  storeManagerKpis[3], // peakOccupancy
+  storeManagerKpis[4], // avgOccupancy
+  storeManagerKpis[0], // avgWaitingTimeMin — only checkout metric in hero row
 ];
 
 /** Secondary KPIs shown below the console chart */

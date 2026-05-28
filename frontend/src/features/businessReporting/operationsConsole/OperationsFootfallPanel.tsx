@@ -1,60 +1,63 @@
-import type { FootfallSummary } from './types';
+import type { FootfallSummary, StoreActivityHourRow } from './types';
 
 interface OperationsFootfallPanelProps {
   footfall: FootfallSummary;
+  storeActivityByHour?: StoreActivityHourRow[];
 }
 
-export default function OperationsFootfallPanel({ footfall }: OperationsFootfallPanelProps) {
-  const maxVisits = Math.max(...footfall.visitsByHour.map(h => h.visits), 1);
+export default function OperationsFootfallPanel({
+  footfall,
+  storeActivityByHour = [],
+}: OperationsFootfallPanelProps) {
+  const useFootfall = footfall.ingressRecording && footfall.visitsByHour.some(h => h.visits > 0);
+  const rows = useFootfall
+    ? footfall.visitsByHour.map(h => ({ hour: h.hour, value: h.visits, isOpen: h.isOpen }))
+    : storeActivityByHour.map(h => ({ hour: h.hour, value: h.avgOccupancy, isOpen: h.isOpen }));
+
+  const maxVal = Math.max(...rows.map(r => r.value), 0.1);
+  const peakRow = rows.reduce((best, r) => (r.value > (best?.value || 0) ? r : best), rows[0]);
 
   return (
     <div className="rounded-lg border border-gray-700/80 bg-gray-800/40 p-3">
       <div className="flex items-start justify-between gap-2 mb-2">
         <div>
-          <h3 className="text-xs font-semibold text-white">Footfall by Open Hour</h3>
+          <h3 className="text-xs font-semibold text-white">
+            {useFootfall ? 'Footfall by Open Hour' : 'Store Activity by Hour'}
+          </h3>
           <p className="text-[10px] text-gray-500">
-            {footfall.configured
-              ? `${footfall.footfallZoneName || 'Ingress zone'} · ${footfall.hoursLabel}`
-              : 'Configure footfall ROI in Venue Settings'}
-            {footfall.warning && !footfall.ingressRecording && (
-              <span className="block text-amber-400/90 mt-1">{footfall.warning}</span>
-            )}
+            {useFootfall
+              ? `${footfall.footfallZoneName || 'Ingress'} · ${footfall.hoursLabel}`
+              : 'Avg shoppers in store per hour (until ingress zone records visits)'}
           </p>
+          {!useFootfall && footfall.warning && (
+            <p className="text-[10px] text-gray-400 mt-1 line-clamp-2">{footfall.warning}</p>
+          )}
         </div>
-        <div className="text-right">
-          <div className="text-lg font-bold text-emerald-400 tabular-nums">{footfall.totalVisitsOpenHours}</div>
-          <div className="text-[9px] text-gray-500">open-hour visits</div>
-        </div>
-      </div>
-
-      <div className="grid grid-cols-3 gap-2 mb-2 text-center">
-        <div className="rounded bg-gray-900/50 py-1">
-          <div className="text-[9px] text-gray-500">Avg / open hr</div>
-          <div className="text-sm font-semibold text-white">{footfall.avgVisitsPerOpenHour}</div>
-        </div>
-        <div className="rounded bg-gray-900/50 py-1">
-          <div className="text-[9px] text-gray-500">Peak hour</div>
-          <div className="text-sm font-semibold text-white">
-            {footfall.peakOpenHour ? `${footfall.peakOpenHour}:00` : '—'}
+        {useFootfall ? (
+          <div className="text-right">
+            <div className="text-lg font-bold text-white tabular-nums">{footfall.totalVisitsOpenHours}</div>
+            <div className="text-[9px] text-gray-500">open-hour visits</div>
           </div>
-        </div>
-        <div className="rounded bg-gray-900/50 py-1">
-          <div className="text-[9px] text-gray-500">Peak visits</div>
-          <div className="text-sm font-semibold text-white">{footfall.peakOpenHourVisits || '—'}</div>
-        </div>
+        ) : peakRow && peakRow.value > 0 ? (
+          <div className="text-right">
+            <div className="text-lg font-bold text-white tabular-nums">{Math.round(peakRow.value * 10) / 10}</div>
+            <div className="text-[9px] text-gray-500">peak avg at {peakRow.hour}:00</div>
+          </div>
+        ) : null}
       </div>
 
-      <div className="flex items-end gap-0.5 h-16">
-        {footfall.visitsByHour.map(row => {
-          const h = Math.max((row.visits / maxVisits) * 100, row.visits > 0 ? 6 : 0);
+      <div className="flex items-end gap-0.5 h-20">
+        {rows.map(row => {
+          const barH = Math.max(Math.round((row.value / maxVal) * 72), row.value > 0 ? 3 : 0);
           return (
             <div key={row.hour} className="flex-1 flex flex-col items-center justify-end group relative">
               <div
-                className={`w-full rounded-t ${row.isOpen ? 'bg-emerald-500/70' : 'bg-gray-600/30'}`}
-                style={{ height: `${h}%` }}
+                className={`w-full rounded-t ${row.isOpen ? 'bg-white/55 group-hover:bg-white/70' : 'bg-white/12'}`}
+                style={{ height: barH }}
               />
               <div className="absolute bottom-full mb-1 hidden group-hover:block z-10 bg-gray-900 border border-gray-600 rounded px-1.5 py-0.5 text-[9px] text-white whitespace-nowrap">
-                {row.hour}:00 · {row.visits}{!row.isOpen && ' (closed)'}
+                {row.hour}:00 · {useFootfall ? `${row.value} visits` : `${row.value} avg`}
+                {!row.isOpen && ' (closed)'}
               </div>
             </div>
           );

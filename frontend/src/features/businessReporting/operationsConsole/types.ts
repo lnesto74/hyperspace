@@ -12,7 +12,7 @@ export interface OperationsTimeline {
   grain: TimelineGrain;
   visitors: TimelinePoint[];
   occupancy: TimelinePoint[];
-  visitorSource?: 'ingress' | 'queue_proxy';
+  visitorSource?: 'ingress' | 'queue_proxy' | 'none';
 }
 
 export interface StoreHoursInfo {
@@ -85,11 +85,18 @@ export interface PeriodDeltas {
   previousPeriodEndTs: number;
 }
 
+export interface StoreActivityHourRow {
+  hour: string;
+  avgOccupancy: number;
+  isOpen: boolean;
+}
+
 export interface OperationsConsoleData {
   grain: TimelineGrain;
   storeHours: StoreHoursInfo;
   timeline: OperationsTimeline;
   footfall: FootfallSummary;
+  storeActivityByHour?: StoreActivityHourRow[];
   queueLanes: QueueLaneRow[];
   alerts: OpsAlert[];
   dataHealth: OpsDataHealth;

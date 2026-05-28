@@ -6,7 +6,7 @@ import {
 import OperationsDataHealthBanner from './OperationsDataHealthBanner';
 import OperationsHeroStrip from './OperationsHeroStrip';
 import OperationsTimelineChart from './OperationsTimelineChart';
-import OperationsCheckoutPanel from './OperationsCheckoutPanel';
+import OperationsCheckoutCollapsible from './OperationsCheckoutCollapsible';
 import OperationsAlertsPanel from './OperationsAlertsPanel';
 import OperationsFootfallPanel from './OperationsFootfallPanel';
 import OperationsDrillDown from './OperationsDrillDown';
@@ -41,14 +41,18 @@ export default function OperationsPulseConsole({
     [],
   );
 
+  const showFootfallSeries = consoleData.timeline.visitorSource === 'ingress';
+
   const handleHeroSelect = (kpiId: string) => {
-    if (kpiId === 'uniqueVisitors') setDrillDown('traffic');
-    else if (kpiId === 'avgWaitingTimeMin' || kpiId === 'abandonRate') setDrillDown('checkout');
-    else if (kpiId === 'totalInStore') setDrillDown('occupancy');
+    if (kpiId === 'totalInStore' || kpiId === 'peakOccupancy' || kpiId === 'avgOccupancy') {
+      setDrillDown('occupancy');
+    } else if (kpiId === 'avgWaitingTimeMin') {
+      setDrillDown('checkout');
+    }
   };
 
-  const handleTimelineDrill = (mode: 'visitors' | 'occupancy') => {
-    setDrillDown(mode === 'visitors' ? 'traffic' : 'occupancy');
+  const handleTimelineDrill = (mode: 'occupancy' | 'traffic') => {
+    setDrillDown(mode);
   };
 
   const handleLaneSelect = (laneId: string) => {
@@ -58,21 +62,20 @@ export default function OperationsPulseConsole({
 
   return (
     <div className="space-y-3">
-      {consoleData.dataHealth && (
-        <OperationsDataHealthBanner health={consoleData.dataHealth} />
-      )}
-
       <OperationsHeroStrip
         heroIds={consoleData.heroKpiIds}
         kpiDefinitions={allKpiDefs}
         kpiValues={kpiValues}
         periodDeltas={periodDeltas}
-        visitorSource={consoleData.dataHealth?.visitorSource}
         onSelect={handleHeroSelect}
       />
 
+      {consoleData.dataHealth && (
+        <OperationsDataHealthBanner health={consoleData.dataHealth} />
+      )}
+
       <div className="flex items-center justify-between gap-2">
-        <span className="text-[10px] text-gray-500 uppercase tracking-wide">Timeline grain</span>
+        <span className="text-[10px] text-gray-500 uppercase tracking-wide">Activity grain</span>
         <div className="flex bg-gray-800 rounded-md p-0.5 border border-gray-700/60">
           {GRAINS.map(g => (
             <button
@@ -80,7 +83,7 @@ export default function OperationsPulseConsole({
               type="button"
               onClick={() => onGrainChange(g.id)}
               className={`px-2.5 py-0.5 text-[10px] rounded transition-colors ${
-                grain === g.id ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-white'
+                grain === g.id ? 'bg-white/10 text-white' : 'text-gray-500 hover:text-gray-300'
               }`}
             >
               {g.label}
@@ -89,27 +92,32 @@ export default function OperationsPulseConsole({
         </div>
       </div>
 
+      <OperationsTimelineChart
+        timeline={consoleData.timeline}
+        onDrillDown={handleTimelineDrill}
+        showFootfallSeries={showFootfallSeries}
+      />
+
       <div className="grid grid-cols-1 xl:grid-cols-12 gap-3">
         <div className="xl:col-span-8">
-          <OperationsTimelineChart
-            timeline={consoleData.timeline}
-            onDrillDown={handleTimelineDrill}
+          <OperationsFootfallPanel
+            footfall={consoleData.footfall}
+            storeActivityByHour={consoleData.storeActivityByHour}
           />
         </div>
-        <div className="xl:col-span-4 flex flex-col gap-3">
-          <OperationsCheckoutPanel
-            lanes={consoleData.queueLanes}
-            totalQueueLength={kpiValues.currentQueueLength as number || 0}
-            avgWaitMin={kpiValues.avgWaitingTimeMin as number || 0}
-            abandonRate={kpiValues.abandonRate as number || 0}
-            onSelectLane={handleLaneSelect}
-            onViewAll={() => setDrillDown('checkout')}
-          />
+        <div className="xl:col-span-4">
           <OperationsAlertsPanel alerts={consoleData.alerts} />
         </div>
       </div>
 
-      <OperationsFootfallPanel footfall={consoleData.footfall} />
+      <OperationsCheckoutCollapsible
+        lanes={consoleData.queueLanes}
+        totalQueueLength={kpiValues.currentQueueLength as number || 0}
+        avgWaitMin={kpiValues.avgWaitingTimeMin as number || 0}
+        abandonRate={kpiValues.abandonRate as number || 0}
+        onSelectLane={handleLaneSelect}
+        onViewAll={() => setDrillDown('checkout')}
+      />
 
       <OperationsDrillDown
         view={drillDown}

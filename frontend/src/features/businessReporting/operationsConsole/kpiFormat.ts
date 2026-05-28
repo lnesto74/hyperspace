@@ -32,14 +32,14 @@ export function getThresholdState(
 
 export const STATE_TEXT: Record<string, string> = {
   good: 'text-green-400',
-  warn: 'text-amber-400',
+  warn: 'text-white',
   bad: 'text-red-400',
   neutral: 'text-white',
 };
 
 export const STATE_BG: Record<string, string> = {
-  good: 'border-green-500/30 bg-green-500/5',
-  warn: 'border-amber-500/30 bg-amber-500/5',
-  bad: 'border-red-500/30 bg-red-500/5',
+  good: 'border-green-500/20 bg-green-500/5',
+  warn: 'border-gray-700/80 bg-gray-800/60',
+  bad: 'border-red-500/20 bg-red-500/5',
   neutral: 'border-gray-700/80 bg-gray-800/60',
 };

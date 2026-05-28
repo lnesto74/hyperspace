@@ -77,7 +77,8 @@ export default function OperationsDrillDown({
               </p>
               <OperationsTimelineChart
                 timeline={consoleData.timeline}
-                forcedMode={view === 'traffic' ? 'visitors' : 'occupancy'}
+                forcedMode={view === 'traffic' ? 'footfall' : 'occupancy'}
+                showFootfallSeries={consoleData.timeline.visitorSource === 'ingress'}
                 hideToggle
               />
             </>
