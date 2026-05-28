@@ -209,6 +209,12 @@ export default function BusinessReportingPage({ onClose }: BusinessReportingPage
   }, [selectedVenueId, selectedPersonaId, selectedTimeRange, selectedCategoryId, opsGrain]);
 
   useEffect(() => {
+    if (selectedPersonaId !== 'store-manager') return;
+    if (selectedTimeRange === '7d' && opsGrain === 'hour') setOpsGrain('day');
+    else if ((selectedTimeRange === '1h' || selectedTimeRange === '24h') && opsGrain === 'week') setOpsGrain('hour');
+  }, [selectedTimeRange, selectedPersonaId]);
+
+  useEffect(() => {
     if (venue?.id && !selectedVenueId) {
       setSelectedVenueId(venue.id);
     }

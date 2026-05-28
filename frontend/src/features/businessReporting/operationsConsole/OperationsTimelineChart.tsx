@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { OperationsTimeline } from './types';
 
 type SeriesMode = 'visitors' | 'occupancy';
@@ -19,6 +19,15 @@ export default function OperationsTimelineChart({
   const [mode, setMode] = useState<SeriesMode>(forcedMode || 'visitors');
   const activeMode = forcedMode || mode;
 
+  const visitorsHasData = timeline.visitors.some(p => p.value > 0);
+  const occupancyHasData = timeline.occupancy.some(p => p.value > 0);
+
+  useEffect(() => {
+    if (forcedMode) return;
+    if (!visitorsHasData && occupancyHasData) setMode('occupancy');
+    else if (visitorsHasData && !occupancyHasData) setMode('visitors');
+  }, [visitorsHasData, occupancyHasData, forcedMode]);
+
   const points = activeMode === 'visitors' ? timeline.visitors : timeline.occupancy;
   const maxVal = useMemo(
     () => Math.max(...points.map(p => p.value), 1),
@@ -27,20 +36,26 @@ export default function OperationsTimelineChart({
 
   const grainLabel = timeline.grain === 'hour' ? 'Hourly' : timeline.grain === 'day' ? 'Daily' : 'Weekly';
 
-  if (!points.length) {
+  if (!points.length || !points.some(p => p.value > 0)) {
     return (
       <div className="rounded-lg border border-gray-700/80 bg-gray-800/40 p-4 h-[220px] flex items-center justify-center">
-        <span className="text-xs text-gray-500">No timeline data for this range</span>
+        <span className="text-xs text-gray-500">No chart data for this range</span>
       </div>
     );
   }
+
+  const visitorLabel = timeline.visitorSource === 'queue_proxy' ? 'Queue shoppers' : 'Visitors';
 
   return (
     <div className="rounded-lg border border-gray-700/80 bg-gray-800/40 p-3 flex flex-col h-full min-h-[220px]">
       <div className="flex items-center justify-between mb-2 gap-2">
         <div>
           <h3 className="text-xs font-semibold text-white">Store Timeline</h3>
-          <p className="text-[10px] text-gray-500">{grainLabel} · closed hours muted</p>
+          <p className="text-[10px] text-gray-500">
+            {grainLabel}
+            {timeline.visitorSource === 'queue_proxy' && activeMode === 'visitors' ? ' · queue proxy' : ''}
+            {timeline.grain === 'hour' ? ' · closed hours muted' : ''}
+          </p>
         </div>
         {!hideToggle && !forcedMode && (
         <div className="flex bg-gray-900/80 rounded-md p-0.5 border border-gray-700/60">
@@ -49,7 +64,7 @@ export default function OperationsTimelineChart({
             onClick={() => setMode('visitors')}
             className={`px-2 py-0.5 text-[10px] rounded ${activeMode === 'visitors' ? 'bg-blue-600 text-white' : 'text-gray-400'}`}
           >
-            Visitors
+            {visitorLabel}
           </button>
           <button
             type="button"

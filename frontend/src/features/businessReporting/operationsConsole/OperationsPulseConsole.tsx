@@ -3,12 +3,12 @@ import {
   OPERATIONS_HERO_KPIS,
   OPERATIONS_SECONDARY_KPIS,
 } from '../personas';
+import OperationsDataHealthBanner from './OperationsDataHealthBanner';
 import OperationsHeroStrip from './OperationsHeroStrip';
 import OperationsTimelineChart from './OperationsTimelineChart';
 import OperationsCheckoutPanel from './OperationsCheckoutPanel';
 import OperationsAlertsPanel from './OperationsAlertsPanel';
 import OperationsFootfallPanel from './OperationsFootfallPanel';
-import OperationsSecondaryStrip from './OperationsSecondaryStrip';
 import OperationsDrillDown from './OperationsDrillDown';
 import type { DrillDownView, OperationsConsoleData, PeriodDeltas, TimelineGrain } from './types';
 
@@ -58,11 +58,16 @@ export default function OperationsPulseConsole({
 
   return (
     <div className="space-y-3">
+      {consoleData.dataHealth && (
+        <OperationsDataHealthBanner health={consoleData.dataHealth} />
+      )}
+
       <OperationsHeroStrip
         heroIds={consoleData.heroKpiIds}
         kpiDefinitions={allKpiDefs}
         kpiValues={kpiValues}
         periodDeltas={periodDeltas}
+        visitorSource={consoleData.dataHealth?.visitorSource}
         onSelect={handleHeroSelect}
       />
 
@@ -84,32 +89,27 @@ export default function OperationsPulseConsole({
         </div>
       </div>
 
-      <div className="grid grid-cols-1 xl:grid-cols-12 gap-3 min-h-[240px]">
-        <div className="xl:col-span-7">
+      <div className="grid grid-cols-1 xl:grid-cols-12 gap-3">
+        <div className="xl:col-span-8">
           <OperationsTimelineChart
             timeline={consoleData.timeline}
             onDrillDown={handleTimelineDrill}
           />
         </div>
-        <div className="xl:col-span-5 grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-1 gap-3">
+        <div className="xl:col-span-4 flex flex-col gap-3">
           <OperationsCheckoutPanel
             lanes={consoleData.queueLanes}
             totalQueueLength={kpiValues.currentQueueLength as number || 0}
             avgWaitMin={kpiValues.avgWaitingTimeMin as number || 0}
             abandonRate={kpiValues.abandonRate as number || 0}
             onSelectLane={handleLaneSelect}
+            onViewAll={() => setDrillDown('checkout')}
           />
           <OperationsAlertsPanel alerts={consoleData.alerts} />
         </div>
       </div>
 
       <OperationsFootfallPanel footfall={consoleData.footfall} />
-
-      <OperationsSecondaryStrip
-        kpiIds={consoleData.secondaryKpiIds}
-        kpiDefinitions={allKpiDefs}
-        kpiValues={kpiValues}
-      />
 
       <OperationsDrillDown
         view={drillDown}

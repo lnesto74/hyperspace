@@ -8,6 +8,7 @@ interface OperationsHeroStripProps {
   kpiDefinitions: KpiTileDefinition[];
   kpiValues: Record<string, number | null | undefined>;
   periodDeltas?: PeriodDeltas;
+  visitorSource?: 'ingress' | 'queue_proxy' | 'none';
   onSelect?: (kpiId: string) => void;
 }
 
@@ -21,6 +22,7 @@ export default function OperationsHeroStrip({
   kpiDefinitions,
   kpiValues,
   periodDeltas,
+  visitorSource,
   onSelect,
 }: OperationsHeroStripProps) {
   const defs = heroIds
@@ -48,7 +50,9 @@ export default function OperationsHeroStrip({
             onClick={() => onSelect?.(def.id)}
             className={`rounded-lg border p-3 text-left transition-colors hover:border-gray-500/60 ${STATE_BG[state]}`}
           >
-            <div className="text-[10px] text-gray-500 uppercase tracking-wide">{def.title}</div>
+            <div className="text-[10px] text-gray-500 uppercase tracking-wide">
+              {def.id === 'uniqueVisitors' && visitorSource === 'queue_proxy' ? 'Queue shoppers' : def.title}
+            </div>
             <div className="flex items-baseline gap-2 mt-1">
               <span className={`text-2xl font-bold tabular-nums ${STATE_TEXT[state]}`}>
                 {formatKpiValue(value, def.format)}
@@ -60,7 +64,13 @@ export default function OperationsHeroStrip({
                 </span>
               )}
             </div>
-            <p className="text-[10px] text-gray-500 mt-1 line-clamp-2">{def.meaning}</p>
+          <p className="text-[10px] text-gray-500 mt-1 line-clamp-2">
+            {def.id === 'uniqueVisitors' && visitorSource === 'queue_proxy'
+              ? 'Distinct shoppers who entered a checkout queue (ingress zone not recording yet).'
+              : def.id === 'totalInStore'
+                ? 'Live store occupancy from zone snapshots (excludes checkout queues).'
+                : def.meaning}
+          </p>
           </button>
         );
       })}

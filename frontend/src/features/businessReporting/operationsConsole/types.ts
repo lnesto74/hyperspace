@@ -12,6 +12,7 @@ export interface OperationsTimeline {
   grain: TimelineGrain;
   visitors: TimelinePoint[];
   occupancy: TimelinePoint[];
+  visitorSource?: 'ingress' | 'queue_proxy';
 }
 
 export interface StoreHoursInfo {
@@ -19,6 +20,16 @@ export interface StoreHoursInfo {
   closingHour: number;
   footfallRoiId: string | null;
   footfallZoneName: string | null;
+  savedFootfallRoiId?: string | null;
+}
+
+export interface OpsDataHealth {
+  dbWritable: true;
+  ingressRecording: boolean;
+  ingressVisitCount: number;
+  visitorSource: 'ingress' | 'queue_proxy' | 'none';
+  savedFootfallRoiId: string | null;
+  message?: string;
 }
 
 export interface FootfallHourRow {
@@ -31,6 +42,9 @@ export interface FootfallSummary {
   configured: boolean;
   footfallRoiId?: string;
   footfallZoneName?: string | null;
+  dataSource?: string;
+  ingressRecording?: boolean;
+  warning?: string | null;
   openingHour: number;
   closingHour: number;
   hoursLabel: string;
@@ -78,6 +92,7 @@ export interface OperationsConsoleData {
   footfall: FootfallSummary;
   queueLanes: QueueLaneRow[];
   alerts: OpsAlert[];
+  dataHealth: OpsDataHealth;
   secondaryKpiIds: string[];
   heroKpiIds: string[];
   dataWindowStartTs: number;

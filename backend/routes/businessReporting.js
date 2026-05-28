@@ -309,29 +309,40 @@ async function computeStoreManagerKpis(db, kpiCalculator, trajectoryStorage, tra
   kpis.currentQueueLength = currentQueueStats?.total_queue || 0;
 
   const storeHours = resolveVenueStoreHours(db, venueId);
-  const periodDeltas = fetchPeriodDeltas(db, venueId, startTs, endTs);
+  const dataHealth = assessIngressHealth(db, venueId, startTs, endTs, storeHours);
+
+  if (dataHealth.visitorSource === 'ingress') {
+    kpis.uniqueVisitors = dataHealth.ingressVisitCount;
+  } else if (dataHealth.visitorSource === 'queue_proxy') {
+    kpis.uniqueVisitors = dataHealth.queueVisitorCount;
+  } else {
+    kpis.uniqueVisitors = 0;
+  }
+  kpis.totalInStore = fetchLiveStoreOccupancy(db, venueId);
+
+  const periodDeltas = fetchPeriodDeltasForFootfall(db, venueId, startTs, endTs, storeHours, dataHealth);
   const queueLanes = fetchQueueLanesBreakdown(db, venueId, startTs, endTs);
-  const timeline = fetchOperationsTimeline(db, kpiCalculator, venueId, startTs, endTs, grain, storeHours);
-  const footfall = buildFootfallSummary(db, kpiCalculator, venueId, startTs, endTs, storeHours);
-  const alerts = buildOperationsAlerts(kpis, periodDeltas, queueLanes);
+  const timeline = fetchOperationsTimeline(db, venueId, startTs, endTs, grain, storeHours, dataHealth);
+  const footfall = buildFootfallSummary(db, venueId, startTs, endTs, storeHours, dataHealth);
+  const alerts = buildOperationsAlerts(kpis, periodDeltas, queueLanes, dataHealth);
 
   supporting.periodDeltas = periodDeltas;
   supporting.operationsConsole = {
     grain,
-    storeHours,
+    storeHours: {
+      ...storeHours,
+      savedFootfallRoiId: dataHealth.savedFootfallRoiId,
+    },
+    dataHealth,
     timeline,
     footfall,
     queueLanes,
     alerts,
     secondaryKpiIds: [
       'currentQueueLength',
-      'peakOccupancy',
-      'avgOccupancy',
-      'utilizationRate',
-      'p95QueueWaitTime',
       'queueThroughput',
-      'deadZonesCount',
-      'avgStoreVisit',
+      'lanesUsedCoverage',
+      'avgConcurrentOpenLanes',
     ],
     heroKpiIds: ['uniqueVisitors', 'avgWaitingTimeMin', 'totalInStore', 'abandonRate'],
     dataWindowStartTs: startTs,
@@ -367,7 +378,282 @@ function resolveVenueStoreHours(db, venueId) {
     closingHour: venue.closing_hour ?? 20,
     footfallRoiId,
     footfallZoneName,
+    savedFootfallRoiId: venue.footfall_roi_id || null,
+    trafficRoiIds: resolveTrafficRoiIds(db, venueId, footfallRoiId),
   };
+}
+
+function assessIngressHealth(db, venueId, startTs, endTs, storeHours) {
+  const roiIds = storeHours.trafficRoiIds || [];
+  let ingressVisitCount = 0;
+
+  if (roiIds.length) {
+    const placeholders = roiIds.map(() => '?').join(',');
+    const row = safeQuery(db, `
+      SELECT COUNT(DISTINCT track_key) as c
+      FROM zone_visits
+      WHERE venue_id = ? AND roi_id IN (${placeholders})
+        AND start_time >= ? AND start_time < ?
+        AND track_key NOT LIKE '%cashier%'
+    `, [venueId, ...roiIds, startTs, endTs]);
+    ingressVisitCount = row?.c || 0;
+  }
+
+  const queueRow = safeQuery(db, `
+    SELECT COUNT(DISTINCT track_key) as c
+    FROM queue_sessions
+    WHERE venue_id = ? AND queue_entry_time >= ? AND queue_entry_time < ?
+      AND waiting_time_ms >= 5000
+  `, [venueId, startTs, endTs]);
+
+  const ingressRecording = ingressVisitCount > 0;
+  let visitorSource = 'none';
+  if (ingressRecording) visitorSource = 'ingress';
+  else if ((queueRow?.c || 0) > 0) visitorSource = 'queue_proxy';
+
+  let message = null;
+  if (!ingressRecording) {
+    const zoneLabel = storeHours.footfallZoneName || 'ingress zone';
+    message = storeHours.savedFootfallRoiId
+      ? `${zoneLabel} is configured but recorded 0 visits in this period — check zone placement on the floorplan.`
+      : `${zoneLabel} is not saved as footfall ROI in Venue Settings, and recorded 0 visits — save footfall zone and verify tracks cross it.`;
+  }
+
+  return {
+    dbWritable: true,
+    ingressRecording,
+    ingressVisitCount,
+    queueVisitorCount: queueRow?.c || 0,
+    visitorSource,
+    savedFootfallRoiId: storeHours.savedFootfallRoiId,
+    message,
+  };
+}
+
+function resolveTrafficRoiIds(db, venueId, footfallRoiId) {
+  const ids = [];
+  if (footfallRoiId) ids.push(footfallRoiId);
+  const rois = safeQueryAll(db, 'SELECT id, name FROM regions_of_interest WHERE venue_id = ?', [venueId]);
+  for (const r of rois) {
+    if (isTrafficZoneName(r.name) && !ids.includes(r.id)) ids.push(r.id);
+  }
+  return ids;
+}
+
+function fetchLiveStoreOccupancy(db, venueId) {
+  const latestTs = safeQuery(db, `
+    SELECT MAX(timestamp) as ts FROM zone_occupancy WHERE venue_id = ?
+  `, [venueId])?.ts;
+  if (!latestTs) return 0;
+
+  const row = safeQuery(db, `
+    SELECT SUM(zo.occupancy_count) as total
+    FROM zone_occupancy zo
+    JOIN regions_of_interest r ON r.id = zo.roi_id
+    WHERE zo.venue_id = ? AND zo.timestamp = ?
+      AND r.name NOT LIKE '%Queue%'
+      AND r.name NOT LIKE '%Checkout%'
+  `, [venueId, latestTs]);
+  return row?.total || 0;
+}
+
+function fetchFootfallVisitorCount(db, venueId, startTs, endTs, storeHours) {
+  const roiIds = storeHours.trafficRoiIds || [];
+  if (!roiIds.length) return null;
+
+  const placeholders = roiIds.map(() => '?').join(',');
+  const fromVisits = safeQuery(db, `
+    SELECT COUNT(DISTINCT track_key) as c
+    FROM zone_visits
+    WHERE venue_id = ? AND roi_id IN (${placeholders})
+      AND start_time >= ? AND start_time < ?
+      AND track_key NOT LIKE '%cashier%'
+  `, [venueId, ...roiIds, startTs, endTs]);
+  if (fromVisits?.c > 0) return fromVisits.c;
+
+  const fromHourly = safeQuery(db, `
+    SELECT SUM(visits) as c
+    FROM zone_kpi_hourly
+    WHERE venue_id = ? AND roi_id IN (${placeholders})
+      AND ((date || ' ' || printf('%02d', hour)) >= strftime('%Y-%m-%d %H', ?, 'unixepoch', 'localtime'))
+      AND ((date || ' ' || printf('%02d', hour)) <= strftime('%Y-%m-%d %H', ?, 'unixepoch', 'localtime'))
+  `, [venueId, ...roiIds, Math.floor(startTs / 1000), Math.floor(endTs / 1000)]);
+  if (fromHourly?.c > 0) return fromHourly.c;
+
+  const fromDaily = safeQuery(db, `
+    SELECT SUM(visits) as c
+    FROM zone_kpi_daily
+    WHERE venue_id = ? AND roi_id IN (${placeholders})
+      AND date >= date(? / 1000, 'unixepoch', 'localtime')
+      AND date <= date(? / 1000, 'unixepoch', 'localtime')
+  `, [venueId, ...roiIds, startTs, endTs]);
+  return fromDaily?.c || 0;
+}
+
+function fetchFootfallVisitsByHour(db, roiIds, startTs, endTs) {
+  if (!roiIds?.length) return Array.from({ length: 24 }, (_, i) => ({ hour: String(i).padStart(2, '0'), visits: 0 }));
+
+  const placeholders = roiIds.map(() => '?').join(',');
+  const fromVisits = safeQueryAll(db, `
+    SELECT
+      strftime('%H', datetime(start_time/1000, 'unixepoch', 'localtime')) as hour,
+      COUNT(DISTINCT track_key) as visits
+    FROM zone_visits
+    WHERE roi_id IN (${placeholders})
+      AND start_time >= ? AND start_time < ?
+      AND track_key NOT LIKE '%cashier%'
+    GROUP BY hour
+    ORDER BY hour
+  `, [...roiIds, startTs, endTs]);
+
+  if (fromVisits.length > 0) {
+    const hourlyData = Array.from({ length: 24 }, (_, i) => ({
+      hour: i.toString().padStart(2, '0'),
+      visits: 0,
+    }));
+    for (const row of fromVisits) {
+      const idx = parseInt(row.hour, 10);
+      if (idx >= 0 && idx < 24) hourlyData[idx].visits = row.visits;
+    }
+    return hourlyData;
+  }
+
+  const fromKpiHourly = safeQueryAll(db, `
+    SELECT printf('%02d', hour) as hour, SUM(visits) as visits
+    FROM zone_kpi_hourly
+    WHERE roi_id IN (${placeholders})
+      AND ((date || ' ' || printf('%02d', hour)) >= strftime('%Y-%m-%d %H', ?, 'unixepoch', 'localtime'))
+      AND ((date || ' ' || printf('%02d', hour)) <= strftime('%Y-%m-%d %H', ?, 'unixepoch', 'localtime'))
+    GROUP BY hour
+    ORDER BY hour
+  `, [...roiIds, Math.floor(startTs / 1000), Math.floor(endTs / 1000)]);
+
+  const hourlyData = Array.from({ length: 24 }, (_, i) => ({
+    hour: i.toString().padStart(2, '0'),
+    visits: 0,
+  }));
+  for (const row of fromKpiHourly) {
+    const idx = parseInt(row.hour, 10);
+    if (idx >= 0 && idx < 24) hourlyData[idx].visits = row.visits;
+  }
+  return hourlyData;
+}
+
+function fetchPeriodDeltasForFootfall(db, venueId, startTs, endTs, storeHours, dataHealth) {
+  const duration = endTs - startTs;
+  const prevStart = startTs - duration;
+  const prevEnd = startTs;
+  const pctDelta = (curr, prev) => (prev > 0 ? Math.round(((curr - prev) / prev) * 1000) / 10 : null);
+
+  if (dataHealth?.ingressRecording && storeHours.trafficRoiIds?.length) {
+    const placeholders = storeHours.trafficRoiIds.map(() => '?').join(',');
+    const countVisitors = (start, end) => {
+      const r = safeQuery(db, `
+        SELECT COUNT(DISTINCT track_key) as visitors
+        FROM zone_visits
+        WHERE venue_id = ? AND roi_id IN (${placeholders})
+          AND start_time >= ? AND start_time < ?
+          AND track_key NOT LIKE '%cashier%'
+      `, [venueId, ...storeHours.trafficRoiIds, start, end]);
+      return r?.visitors || 0;
+    };
+    const current = countVisitors(startTs, endTs);
+    const previous = countVisitors(prevStart, prevEnd);
+    return {
+      visitorsDeltaPct: pctDelta(current, previous),
+      visitsDeltaPct: pctDelta(current, previous),
+      engagementDeltaPct: null,
+      previousPeriodStartTs: prevStart,
+      previousPeriodEndTs: prevEnd,
+    };
+  }
+
+  const countQueue = (start, end) => {
+    const r = safeQuery(db, `
+      SELECT COUNT(DISTINCT track_key) as visitors
+      FROM queue_sessions
+      WHERE venue_id = ? AND queue_entry_time >= ? AND queue_entry_time < ?
+        AND waiting_time_ms >= 5000
+    `, [venueId, start, end]);
+    return r?.visitors || 0;
+  };
+  const current = countQueue(startTs, endTs);
+  const previous = countQueue(prevStart, prevEnd);
+  return {
+    visitorsDeltaPct: pctDelta(current, previous),
+    visitsDeltaPct: pctDelta(current, previous),
+    engagementDeltaPct: null,
+    previousPeriodStartTs: prevStart,
+    previousPeriodEndTs: prevEnd,
+  };
+}
+
+function fetchQueueVisitorTimeline(db, venueId, startTs, endTs, grain) {
+  if (grain === 'hour') {
+    return safeQueryAll(db, `
+      SELECT (queue_entry_time / 3600000) * 3600000 as bucketStartTs,
+        COUNT(DISTINCT track_key) as value
+      FROM queue_sessions
+      WHERE venue_id = ? AND queue_entry_time >= ? AND queue_entry_time < ?
+        AND waiting_time_ms >= 5000
+      GROUP BY bucketStartTs ORDER BY bucketStartTs
+    `, [venueId, startTs, endTs]);
+  }
+  if (grain === 'day') {
+    return safeQueryAll(db, `
+      SELECT date(queue_entry_time / 1000, 'unixepoch', 'localtime') as date,
+        COUNT(DISTINCT track_key) as value
+      FROM queue_sessions
+      WHERE venue_id = ? AND queue_entry_time >= ? AND queue_entry_time < ?
+        AND waiting_time_ms >= 5000
+      GROUP BY date ORDER BY date
+    `, [venueId, startTs, endTs]).map(r => ({
+      bucketStartTs: Date.parse(`${r.date}T12:00:00`),
+      value: r.value || 0,
+    }));
+  }
+  return safeQueryAll(db, `
+    SELECT strftime('%Y-W%W', datetime(queue_entry_time/1000, 'unixepoch', 'localtime')) as weekKey,
+      MIN(date(queue_entry_time/1000, 'unixepoch', 'localtime')) as weekStart,
+      COUNT(DISTINCT track_key) as value
+    FROM queue_sessions
+    WHERE venue_id = ? AND queue_entry_time >= ? AND queue_entry_time < ?
+      AND waiting_time_ms >= 5000
+    GROUP BY weekKey ORDER BY weekStart
+  `, [venueId, startTs, endTs]).map(r => ({
+    bucketStartTs: Date.parse(`${r.weekStart}T12:00:00`),
+    value: r.value || 0,
+  }));
+}
+
+function mergeTimelineRows(rows, startTs, endTs, grain, openingHour, closingHour) {
+  const bucketMs = grain === 'hour' ? 3600000 : grain === 'day' ? 86400000 : 7 * 86400000;
+  const map = new Map();
+  for (const r of rows) map.set(Number(r.bucketStartTs), r);
+
+  const buckets = [];
+  let t = Math.floor(startTs / bucketMs) * bucketMs;
+  const end = Math.ceil(endTs / bucketMs) * bucketMs;
+  const maxBuckets = grain === 'hour' ? 168 : grain === 'day' ? 31 : 8;
+
+  while (t < end && buckets.length < maxBuckets) {
+    const existing = map.get(t);
+    const hour = new Date(t).getHours();
+    const label = grain === 'hour'
+      ? new Date(t).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit' })
+      : grain === 'day'
+        ? new Date(t).toLocaleDateString([], { month: 'short', day: 'numeric' })
+        : `W${new Date(t).toLocaleDateString([], { month: 'short', day: 'numeric' })}`;
+    buckets.push({
+      label,
+      bucketStartTs: t,
+      value: existing?.value || 0,
+      peak: existing?.peak || 0,
+      isOpen: grain !== 'hour' || isHourWithinStoreHours(hour, openingHour, closingHour),
+    });
+    t += bucketMs;
+  }
+  return buckets;
 }
 
 function fetchQueueLanesBreakdown(db, venueId, startTs, endTs) {
@@ -416,186 +702,198 @@ function fetchQueueLanesBreakdown(db, venueId, startTs, endTs) {
   });
 }
 
-function fetchOperationsTimeline(db, kpiCalculator, venueId, startTs, endTs, grain, storeHours) {
-  const { openingHour, closingHour, footfallRoiId } = storeHours;
+function fetchOperationsTimeline(db, venueId, startTs, endTs, grain, storeHours, dataHealth) {
+  const { openingHour, closingHour, trafficRoiIds } = storeHours;
+  const roiPlaceholders = (trafficRoiIds || []).map(() => '?').join(',');
 
-  if (grain === 'day') {
-    const visitorSql = footfallRoiId
-      ? `SELECT date, SUM(visits) as value FROM zone_kpi_daily
-         WHERE venue_id = ? AND roi_id = ?
-           AND date >= date(? / 1000, 'unixepoch', 'localtime')
-           AND date <= date(? / 1000, 'unixepoch', 'localtime')
-         GROUP BY date ORDER BY date`
-      : `SELECT date(start_time / 1000, 'unixepoch', 'localtime') as date,
+  const fetchVisitorRows = () => {
+    if (!dataHealth?.ingressRecording) {
+      return fetchQueueVisitorTimeline(db, venueId, startTs, endTs, grain);
+    }
+
+    if (grain === 'hour') {
+      return safeQueryAll(db, `
+        SELECT (start_time / 3600000) * 3600000 as bucketStartTs,
+          COUNT(DISTINCT track_key) as value
+        FROM zone_visits
+        WHERE venue_id = ? AND roi_id IN (${roiPlaceholders})
+          AND start_time >= ? AND start_time < ?
+          AND track_key NOT LIKE '%cashier%'
+        GROUP BY bucketStartTs ORDER BY bucketStartTs
+      `, [venueId, ...trafficRoiIds, startTs, endTs]);
+    }
+
+    if (grain === 'day') {
+      let rows = safeQueryAll(db, `
+        SELECT date, SUM(visits) as value FROM zone_kpi_daily
+        WHERE venue_id = ? AND roi_id IN (${roiPlaceholders})
+          AND date >= date(? / 1000, 'unixepoch', 'localtime')
+          AND date <= date(? / 1000, 'unixepoch', 'localtime')
+        GROUP BY date ORDER BY date
+      `, [venueId, ...trafficRoiIds, startTs, endTs]);
+      if (!rows.length) {
+        rows = safeQueryAll(db, `
+          SELECT date(start_time / 1000, 'unixepoch', 'localtime') as date,
             COUNT(DISTINCT track_key) as value
-         FROM zone_visits
-         WHERE venue_id = ? AND start_time >= ? AND start_time < ?
-           AND track_key NOT LIKE '%cashier%'
-         GROUP BY date ORDER BY date`;
-
-    const visitorParams = footfallRoiId
-      ? [venueId, footfallRoiId, startTs, endTs]
-      : [venueId, startTs, endTs];
-
-    const visitorRows = safeQueryAll(db, visitorSql, visitorParams);
-    const occRows = safeQueryAll(db, `
-      SELECT date(timestamp / 1000, 'unixepoch', 'localtime') as date,
-        AVG(occupancy_count) as value,
-        MAX(occupancy_count) as peak
-      FROM zone_occupancy
-      WHERE venue_id = ? AND timestamp >= ? AND timestamp < ?
-      GROUP BY date ORDER BY date
-    `, [venueId, startTs, endTs]);
-
-    return {
-      grain,
-      visitors: visitorRows.map(r => ({
-        label: r.date,
+          FROM zone_visits
+          WHERE venue_id = ? AND roi_id IN (${roiPlaceholders})
+            AND start_time >= ? AND start_time < ?
+            AND track_key NOT LIKE '%cashier%'
+          GROUP BY date ORDER BY date
+        `, [venueId, ...trafficRoiIds, startTs, endTs]);
+      }
+      return rows.map(r => ({
         bucketStartTs: Date.parse(`${r.date}T12:00:00`),
         value: r.value || 0,
-        isOpen: true,
-      })),
-      occupancy: occRows.map(r => ({
-        label: r.date,
-        bucketStartTs: Date.parse(`${r.date}T12:00:00`),
-        value: Math.round((r.value || 0) * 10) / 10,
-        peak: r.peak || 0,
-        isOpen: true,
-      })),
-    };
-  }
+      }));
+    }
 
-  if (grain === 'week') {
-    const visitorSql = footfallRoiId
-      ? `SELECT strftime('%Y-W%W', date) as weekKey,
-            MIN(date) as weekStart,
-            SUM(visits) as value
-         FROM zone_kpi_daily
-         WHERE venue_id = ? AND roi_id = ?
-           AND date >= date(? / 1000, 'unixepoch', 'localtime')
-           AND date <= date(? / 1000, 'unixepoch', 'localtime')
-         GROUP BY weekKey ORDER BY weekStart`
-      : `SELECT strftime('%Y-W%W', datetime(start_time/1000, 'unixepoch', 'localtime')) as weekKey,
-            MIN(date(start_time/1000, 'unixepoch', 'localtime')) as weekStart,
-            COUNT(DISTINCT track_key) as value
-         FROM zone_visits
-         WHERE venue_id = ? AND start_time >= ? AND start_time < ?
-           AND track_key NOT LIKE '%cashier%'
-         GROUP BY weekKey ORDER BY weekStart`;
-
-    const visitorParams = footfallRoiId
-      ? [venueId, footfallRoiId, startTs, endTs]
-      : [venueId, startTs, endTs];
-
-    const visitorRows = safeQueryAll(db, visitorSql, visitorParams);
-    const occRows = safeQueryAll(db, `
-      SELECT strftime('%Y-W%W', datetime(timestamp/1000, 'unixepoch', 'localtime')) as weekKey,
-        MIN(date(timestamp/1000, 'unixepoch', 'localtime')) as weekStart,
-        AVG(occupancy_count) as value,
-        MAX(occupancy_count) as peak
-      FROM zone_occupancy
-      WHERE venue_id = ? AND timestamp >= ? AND timestamp < ?
+    let rows = safeQueryAll(db, `
+      SELECT strftime('%Y-W%W', date) as weekKey,
+        MIN(date) as weekStart, SUM(visits) as value
+      FROM zone_kpi_daily
+      WHERE venue_id = ? AND roi_id IN (${roiPlaceholders})
+        AND date >= date(? / 1000, 'unixepoch', 'localtime')
+        AND date <= date(? / 1000, 'unixepoch', 'localtime')
       GROUP BY weekKey ORDER BY weekStart
-    `, [venueId, startTs, endTs]);
+    `, [venueId, ...trafficRoiIds, startTs, endTs]);
+    if (!rows.length) {
+      rows = safeQueryAll(db, `
+        SELECT strftime('%Y-W%W', datetime(start_time/1000, 'unixepoch', 'localtime')) as weekKey,
+          MIN(date(start_time/1000, 'unixepoch', 'localtime')) as weekStart,
+          COUNT(DISTINCT track_key) as value
+        FROM zone_visits
+        WHERE venue_id = ? AND roi_id IN (${roiPlaceholders})
+          AND start_time >= ? AND start_time < ?
+          AND track_key NOT LIKE '%cashier%'
+        GROUP BY weekKey ORDER BY weekStart
+      `, [venueId, ...trafficRoiIds, startTs, endTs]);
+    }
+    return rows.map(r => ({
+      bucketStartTs: Date.parse(`${r.weekStart}T12:00:00`),
+      value: r.value || 0,
+    }));
+  };
 
-    return {
-      grain,
-      visitors: visitorRows.map(r => ({
-        label: r.weekKey,
-        bucketStartTs: Date.parse(`${r.weekStart}T12:00:00`),
+  const fetchOccRows = () => {
+    if (grain === 'hour') {
+      return safeQueryAll(db, `
+        SELECT (ts / 3600000) * 3600000 as bucketStartTs,
+          AVG(store_total) as value,
+          MAX(store_total) as peak
+        FROM (
+          SELECT timestamp as ts, SUM(occupancy_count) as store_total
+          FROM zone_occupancy zo
+          JOIN regions_of_interest r ON r.id = zo.roi_id
+          WHERE zo.venue_id = ? AND zo.timestamp >= ? AND zo.timestamp < ?
+            AND r.name NOT LIKE '%Queue%'
+          GROUP BY timestamp
+        )
+        GROUP BY bucketStartTs ORDER BY bucketStartTs
+      `, [venueId, startTs, endTs]);
+    }
+    if (grain === 'day') {
+      return safeQueryAll(db, `
+        SELECT date(ts / 1000, 'unixepoch', 'localtime') as date,
+          AVG(store_total) as value, MAX(store_total) as peak
+        FROM (
+          SELECT timestamp as ts, SUM(occupancy_count) as store_total
+          FROM zone_occupancy
+          WHERE venue_id = ? AND timestamp >= ? AND timestamp < ?
+          GROUP BY timestamp
+        )
+        GROUP BY date ORDER BY date
+      `, [venueId, startTs, endTs]).map(r => ({
+        bucketStartTs: Date.parse(`${r.date}T12:00:00`),
         value: r.value || 0,
-        isOpen: true,
-      })),
-      occupancy: occRows.map(r => ({
-        label: r.weekKey,
-        bucketStartTs: Date.parse(`${r.weekStart}T12:00:00`),
-        value: Math.round((r.value || 0) * 10) / 10,
         peak: r.peak || 0,
-        isOpen: true,
-      })),
-    };
-  }
+      }));
+    }
+    return safeQueryAll(db, `
+      SELECT strftime('%Y-W%W', datetime(ts/1000, 'unixepoch', 'localtime')) as weekKey,
+        MIN(date(ts/1000, 'unixepoch', 'localtime')) as weekStart,
+        AVG(store_total) as value, MAX(store_total) as peak
+      FROM (
+        SELECT timestamp as ts, SUM(occupancy_count) as store_total
+        FROM zone_occupancy
+        WHERE venue_id = ? AND timestamp >= ? AND timestamp < ?
+        GROUP BY timestamp
+      )
+      GROUP BY weekKey ORDER BY weekStart
+    `, [venueId, startTs, endTs]).map(r => ({
+      bucketStartTs: Date.parse(`${r.weekStart}T12:00:00`),
+      value: r.value || 0,
+      peak: r.peak || 0,
+    }));
+  };
 
-  // hour grain — time buckets within selected range
-  const visitorFilter = footfallRoiId
-    ? 'AND roi_id = ?'
-    : "AND track_key NOT LIKE '%cashier%'";
-  const visitorParams = footfallRoiId
-    ? [venueId, startTs, endTs, footfallRoiId]
-    : [venueId, startTs, endTs];
+  const visitorRows = fetchVisitorRows();
+  const occRows = fetchOccRows();
 
-  const visitorRows = safeQueryAll(db, `
-    SELECT
-      (start_time / 3600000) * 3600000 as bucketStartTs,
-      COUNT(DISTINCT track_key) as value
-    FROM zone_visits
-    WHERE venue_id = ? AND start_time >= ? AND start_time < ?
-      ${visitorFilter}
-    GROUP BY bucketStartTs
-    ORDER BY bucketStartTs
-  `, visitorParams);
-
-  const occRows = safeQueryAll(db, `
-    SELECT
-      (timestamp / 3600000) * 3600000 as bucketStartTs,
-      AVG(occupancy_count) as value,
-      MAX(occupancy_count) as peak
-    FROM zone_occupancy
-    WHERE venue_id = ? AND timestamp >= ? AND timestamp < ?
-    GROUP BY bucketStartTs
-    ORDER BY bucketStartTs
-  `, [venueId, startTs, endTs]);
-
-  const labelForTs = (ts) => new Date(ts).toLocaleString([], {
-    month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
-  });
+  const toPoints = (rows, isOcc) => mergeTimelineRows(
+    rows.map(r => ({
+      bucketStartTs: r.bucketStartTs,
+      value: isOcc ? Math.round((r.value || 0) * 10) / 10 : (r.value || 0),
+      peak: r.peak || 0,
+    })),
+    startTs,
+    endTs,
+    grain,
+    openingHour,
+    closingHour,
+  );
 
   return {
     grain,
-    visitors: visitorRows.map(r => {
-      const hour = new Date(r.bucketStartTs).getHours();
-      return {
-        label: labelForTs(r.bucketStartTs),
-        bucketStartTs: r.bucketStartTs,
-        value: r.value || 0,
-        isOpen: isHourWithinStoreHours(hour, openingHour, closingHour),
-      };
-    }),
-    occupancy: occRows.map(r => {
-      const hour = new Date(r.bucketStartTs).getHours();
-      return {
-        label: labelForTs(r.bucketStartTs),
-        bucketStartTs: r.bucketStartTs,
-        value: Math.round((r.value || 0) * 10) / 10,
-        peak: r.peak || 0,
-        isOpen: isHourWithinStoreHours(hour, openingHour, closingHour),
-      };
-    }),
+    visitors: toPoints(visitorRows, false),
+    occupancy: toPoints(occRows, true),
+    visitorSource: dataHealth?.ingressRecording ? 'ingress' : 'queue_proxy',
   };
 }
 
-function buildFootfallSummary(db, kpiCalculator, venueId, startTs, endTs, storeHours) {
-  const { openingHour, closingHour, footfallRoiId, footfallZoneName } = storeHours;
-  if (!footfallRoiId) {
+function buildFootfallSummary(db, venueId, startTs, endTs, storeHours, dataHealth) {
+  const { openingHour, closingHour, footfallRoiId, footfallZoneName, trafficRoiIds } = storeHours;
+  const roiIds = trafficRoiIds?.length ? trafficRoiIds : (footfallRoiId ? [footfallRoiId] : []);
+
+  if (!roiIds.length) {
     return {
       configured: false,
       footfallZoneName: null,
+      dataSource: 'none',
+      ingressRecording: false,
+      warning: 'No ingress zone configured.',
       ...computeStoreFootfallFromHourly([], openingHour, closingHour),
     };
   }
 
-  const visitsByHour = kpiCalculator.getVisitsByHour(footfallRoiId, startTs, endTs);
+  const visitsByHour = fetchFootfallVisitsByHour(db, roiIds, startTs, endTs);
   const footfall = computeStoreFootfallFromHourly(visitsByHour, openingHour, closingHour);
+  const hasData = visitsByHour.some(h => h.visits > 0);
+
   return {
     configured: true,
-    footfallRoiId,
+    footfallRoiId: footfallRoiId || roiIds[0],
     footfallZoneName,
+    dataSource: hasData ? 'zone_visits' : 'empty',
+    ingressRecording: !!dataHealth?.ingressRecording,
+    warning: dataHealth?.message || null,
     ...footfall,
   };
 }
 
-function buildOperationsAlerts(kpis, periodDeltas, queueLanes) {
+function buildOperationsAlerts(kpis, periodDeltas, queueLanes, dataHealth) {
   const alerts = [];
+
+  if (dataHealth && !dataHealth.ingressRecording) {
+    alerts.push({
+      id: 'ingress-not-recording',
+      severity: 'bad',
+      title: 'Ingress zone not counting',
+      message: dataHealth.message || 'Footfall ROI recorded 0 visits — reposition zone or save footfall in Venue Settings.',
+      metric: 'ingressVisitCount',
+      value: 0,
+    });
+  }
 
   if ((kpis.avgWaitingTimeMin || 0) > 5) {
     alerts.push({

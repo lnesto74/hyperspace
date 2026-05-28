@@ -16,6 +16,9 @@ export default function OperationsFootfallPanel({ footfall }: OperationsFootfall
             {footfall.configured
               ? `${footfall.footfallZoneName || 'Ingress zone'} · ${footfall.hoursLabel}`
               : 'Configure footfall ROI in Venue Settings'}
+            {footfall.warning && !footfall.ingressRecording && (
+              <span className="block text-amber-400/90 mt-1">{footfall.warning}</span>
+            )}
           </p>
         </div>
         <div className="text-right">
