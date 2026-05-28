@@ -608,7 +608,8 @@ function fetchQueueVisitorTimeline(db, venueId, startTs, endTs, grain) {
         AND waiting_time_ms >= 5000
       GROUP BY date ORDER BY date
     `, [venueId, startTs, endTs]).map(r => ({
-      bucketStartTs: Date.parse(`${r.date}T12:00:00`),
+      label: r.date,
+      bucketStartTs: parseSqlDateMs(r.date),
       value: r.value || 0,
     }));
   }
@@ -621,39 +622,46 @@ function fetchQueueVisitorTimeline(db, venueId, startTs, endTs, grain) {
       AND waiting_time_ms >= 5000
     GROUP BY weekKey ORDER BY weekStart
   `, [venueId, startTs, endTs]).map(r => ({
-    bucketStartTs: Date.parse(`${r.weekStart}T12:00:00`),
+    label: r.weekKey,
+    bucketStartTs: parseSqlDateMs(r.weekStart),
     value: r.value || 0,
   }));
 }
 
-function mergeTimelineRows(rows, startTs, endTs, grain, openingHour, closingHour) {
-  const bucketMs = grain === 'hour' ? 3600000 : grain === 'day' ? 86400000 : 7 * 86400000;
-  const map = new Map();
-  for (const r of rows) map.set(Number(r.bucketStartTs), r);
+function parseSqlDateMs(dateStr) {
+  if (!dateStr || typeof dateStr !== 'string') return NaN;
+  const [y, m, d] = dateStr.split('-').map(Number);
+  if (!y || !m || !d) return NaN;
+  return Date.UTC(y, m - 1, d, 12, 0, 0);
+}
 
-  const buckets = [];
-  let t = Math.floor(startTs / bucketMs) * bucketMs;
-  const end = Math.ceil(endTs / bucketMs) * bucketMs;
-  const maxBuckets = grain === 'hour' ? 168 : grain === 'day' ? 31 : 8;
-
-  while (t < end && buckets.length < maxBuckets) {
-    const existing = map.get(t);
-    const hour = new Date(t).getHours();
-    const label = grain === 'hour'
-      ? new Date(t).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit' })
-      : grain === 'day'
-        ? new Date(t).toLocaleDateString([], { month: 'short', day: 'numeric' })
-        : `W${new Date(t).toLocaleDateString([], { month: 'short', day: 'numeric' })}`;
-    buckets.push({
-      label,
-      bucketStartTs: t,
-      value: existing?.value || 0,
-      peak: existing?.peak || 0,
-      isOpen: grain !== 'hour' || isHourWithinStoreHours(hour, openingHour, closingHour),
-    });
-    t += bucketMs;
-  }
-  return buckets;
+function rowsToTimelinePoints(rows, grain, openingHour, closingHour) {
+  return (rows || [])
+    .map(r => {
+      const bucketStartTs = Math.round(Number(r.bucketStartTs));
+      if (!Number.isFinite(bucketStartTs)) return null;
+      const hour = new Date(bucketStartTs).getHours();
+      let label = r.label || r.date || r.weekKey || '';
+      if (!label) {
+        if (grain === 'hour') {
+          label = new Date(bucketStartTs).toLocaleString([], {
+            month: 'short', day: 'numeric', hour: '2-digit',
+          });
+        } else if (grain === 'day') {
+          label = new Date(bucketStartTs).toLocaleDateString([], { month: 'short', day: 'numeric' });
+        } else {
+          label = new Date(bucketStartTs).toLocaleDateString([], { month: 'short', day: 'numeric' });
+        }
+      }
+      return {
+        label,
+        bucketStartTs,
+        value: Number(r.value) || 0,
+        peak: Number(r.peak) || 0,
+        isOpen: grain !== 'hour' || isHourWithinStoreHours(hour, openingHour, closingHour),
+      };
+    })
+    .filter(Boolean);
 }
 
 function fetchQueueLanesBreakdown(db, venueId, startTs, endTs) {
@@ -743,7 +751,8 @@ function fetchOperationsTimeline(db, venueId, startTs, endTs, grain, storeHours,
         `, [venueId, ...trafficRoiIds, startTs, endTs]);
       }
       return rows.map(r => ({
-        bucketStartTs: Date.parse(`${r.date}T12:00:00`),
+        label: r.date,
+        bucketStartTs: parseSqlDateMs(r.date),
         value: r.value || 0,
       }));
     }
@@ -770,7 +779,8 @@ function fetchOperationsTimeline(db, venueId, startTs, endTs, grain, storeHours,
       `, [venueId, ...trafficRoiIds, startTs, endTs]);
     }
     return rows.map(r => ({
-      bucketStartTs: Date.parse(`${r.weekStart}T12:00:00`),
+      label: r.weekKey,
+      bucketStartTs: parseSqlDateMs(r.weekStart),
       value: r.value || 0,
     }));
   };
@@ -804,7 +814,8 @@ function fetchOperationsTimeline(db, venueId, startTs, endTs, grain, storeHours,
         )
         GROUP BY date ORDER BY date
       `, [venueId, startTs, endTs]).map(r => ({
-        bucketStartTs: Date.parse(`${r.date}T12:00:00`),
+        label: r.date,
+        bucketStartTs: parseSqlDateMs(r.date),
         value: r.value || 0,
         peak: r.peak || 0,
       }));
@@ -821,7 +832,8 @@ function fetchOperationsTimeline(db, venueId, startTs, endTs, grain, storeHours,
       )
       GROUP BY weekKey ORDER BY weekStart
     `, [venueId, startTs, endTs]).map(r => ({
-      bucketStartTs: Date.parse(`${r.weekStart}T12:00:00`),
+      label: r.weekKey,
+      bucketStartTs: parseSqlDateMs(r.weekStart),
       value: r.value || 0,
       peak: r.peak || 0,
     }));
@@ -830,14 +842,13 @@ function fetchOperationsTimeline(db, venueId, startTs, endTs, grain, storeHours,
   const visitorRows = fetchVisitorRows();
   const occRows = fetchOccRows();
 
-  const toPoints = (rows, isOcc) => mergeTimelineRows(
+  const toPoints = (rows, isOcc) => rowsToTimelinePoints(
     rows.map(r => ({
-      bucketStartTs: r.bucketStartTs,
+      ...r,
+      bucketStartTs: Math.round(Number(r.bucketStartTs)),
       value: isOcc ? Math.round((r.value || 0) * 10) / 10 : (r.value || 0),
       peak: r.peak || 0,
     })),
-    startTs,
-    endTs,
     grain,
     openingHour,
     closingHour,

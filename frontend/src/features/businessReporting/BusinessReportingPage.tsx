@@ -182,14 +182,30 @@ export default function BusinessReportingPage({ onClose }: BusinessReportingPage
         params.set('grain', opsGrain);
       }
 
-      const response = await fetch(`${API_BASE}/api/reporting/summary?${params}`);
+      const controller = new AbortController();
+      const timeoutId = window.setTimeout(() => controller.abort(), 90000);
+
+      let response: Response;
+      try {
+        response = await fetch(`${API_BASE}/api/reporting/summary?${params}`, {
+          signal: controller.signal,
+        });
+      } finally {
+        window.clearTimeout(timeoutId);
+      }
 
       if (!response.ok) {
         if (response.status === 404) {
           setError('Business Reporting feature is not enabled. Set FEATURE_BUSINESS_REPORTING=true.');
           return;
         }
-        throw new Error(`Failed to fetch: ${response.statusText}`);
+        let detail = response.statusText || `HTTP ${response.status}`;
+        try {
+          const errBody = await response.json();
+          if (errBody?.message) detail = errBody.message;
+          else if (errBody?.error) detail = errBody.error;
+        } catch { /* ignore */ }
+        throw new Error(detail);
       }
 
       const data = await response.json();
@@ -198,7 +214,11 @@ export default function BusinessReportingPage({ onClose }: BusinessReportingPage
       setLastUpdated(new Date());
     } catch (err) {
       console.error('Failed to fetch reporting data:', err);
-      setError(err instanceof Error ? err.message : 'Failed to load data');
+      if (err instanceof DOMException && err.name === 'AbortError') {
+        setError('Request timed out — 7d reports can take up to 90s on a busy server. Try again or use 24h.');
+      } else {
+        setError(err instanceof Error ? err.message : 'Failed to load data');
+      }
     } finally {
       setLoading(false);
     }
@@ -208,11 +228,12 @@ export default function BusinessReportingPage({ onClose }: BusinessReportingPage
     fetchData();
   }, [selectedVenueId, selectedPersonaId, selectedTimeRange, selectedCategoryId, opsGrain]);
 
-  useEffect(() => {
-    if (selectedPersonaId !== 'store-manager') return;
-    if (selectedTimeRange === '7d' && opsGrain === 'hour') setOpsGrain('day');
-    else if ((selectedTimeRange === '1h' || selectedTimeRange === '24h') && opsGrain === 'week') setOpsGrain('hour');
-  }, [selectedTimeRange, selectedPersonaId]);
+  const handleTimeRangeChange = (rangeId: TimeRange) => {
+    setSelectedTimeRange(rangeId);
+    if (selectedPersonaId === 'store-manager') {
+      setOpsGrain(rangeId === '7d' ? 'day' : 'hour');
+    }
+  };
 
   useEffect(() => {
     if (venue?.id && !selectedVenueId) {
@@ -270,7 +291,7 @@ export default function BusinessReportingPage({ onClose }: BusinessReportingPage
             {TIME_RANGES.map(tr => (
               <button
                 key={tr.id}
-                onClick={() => setSelectedTimeRange(tr.id)}
+                onClick={() => handleTimeRangeChange(tr.id)}
                 className={`px-2 py-0.5 text-xs rounded transition-colors ${
                   selectedTimeRange === tr.id
                     ? 'bg-blue-600 text-white'

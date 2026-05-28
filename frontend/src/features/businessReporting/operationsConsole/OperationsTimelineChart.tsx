@@ -29,6 +29,7 @@ export default function OperationsTimelineChart({
   }, [visitorsHasData, occupancyHasData, forcedMode]);
 
   const points = activeMode === 'visitors' ? timeline.visitors : timeline.occupancy;
+  const altPoints = activeMode === 'visitors' ? timeline.occupancy : timeline.visitors;
   const maxVal = useMemo(
     () => Math.max(...points.map(p => p.value), 1),
     [points],
@@ -37,9 +38,19 @@ export default function OperationsTimelineChart({
   const grainLabel = timeline.grain === 'hour' ? 'Hourly' : timeline.grain === 'day' ? 'Daily' : 'Weekly';
 
   if (!points.length || !points.some(p => p.value > 0)) {
+    const altHasData = altPoints.some(p => p.value > 0);
     return (
-      <div className="rounded-lg border border-gray-700/80 bg-gray-800/40 p-4 h-[220px] flex items-center justify-center">
-        <span className="text-xs text-gray-500">No chart data for this range</span>
+      <div className="rounded-lg border border-gray-700/80 bg-gray-800/40 p-4 h-[220px] flex flex-col items-center justify-center gap-1">
+        <span className="text-xs text-gray-500">No {activeMode} data for this range</span>
+        {altHasData && !forcedMode && (
+          <button
+            type="button"
+            className="text-[10px] text-blue-400 hover:text-blue-300"
+            onClick={() => setMode(activeMode === 'visitors' ? 'occupancy' : 'visitors')}
+          >
+            Switch to {activeMode === 'visitors' ? 'occupancy' : 'queue shoppers'} →
+          </button>
+        )}
       </div>
     );
   }
