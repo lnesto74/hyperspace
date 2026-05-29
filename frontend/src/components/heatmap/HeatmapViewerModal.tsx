@@ -5,12 +5,14 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { useHeatmap } from '../../context/HeatmapContext'
 import { useRoi } from '../../context/RoiContext'
 import { useVenue } from '../../context/VenueContext'
+import { API_BASE } from '../../config/api'
 import { getHeatColor, getZoneBounds, isPointInPolygon } from './heatmapUtils'
 import {
   buildDwgWireframeGroup,
   disposeObject3D,
   type DwgWireframePlane,
 } from '../../utils/dwgWireframe3d'
+import type { RegionOfInterest } from '../../types'
 
 const KPI_OPTIONS = [
   { value: 'visits', label: 'Visits' },
@@ -38,7 +40,7 @@ interface TileTooltip {
 }
 
 export default function HeatmapViewerModal({ isOpen, onClose }: HeatmapViewerModalProps) {
-  const { venue, objects } = useVenue()
+  const { venue, objects, loadVenue } = useVenue()
   const { regions } = useRoi()
   const {
     isLoading,
@@ -56,6 +58,7 @@ export default function HeatmapViewerModal({ isOpen, onClose }: HeatmapViewerMod
   } = useHeatmap()
 
   const [selectedZoneIds, setSelectedZoneIds] = useState<Set<string>>(new Set())
+  const [modalRegions, setModalRegions] = useState<RegionOfInterest[]>([])
   const [showZoneDropdown, setShowZoneDropdown] = useState(false)
   const [showDwgWireframe, setShowDwgWireframe] = useState(true)
   const [dwgWireframePlane, setDwgWireframePlane] = useState<DwgWireframePlane>('pedestal')
@@ -75,6 +78,34 @@ export default function HeatmapViewerModal({ isOpen, onClose }: HeatmapViewerMod
   const floorRef = useRef<THREE.Mesh | null>(null)
   const gridHelperRef = useRef<THREE.GridHelper | null>(null)
   const animationFrameRef = useRef<number | null>(null)
+
+  const activeVenueId = focusRequest?.venueId || venue?.id
+  const activeRegions = modalRegions.length > 0 ? modalRegions : regions
+
+  // Load all shelf ROIs for modal — RoiContext may only hold DWG-tagged zones from MainViewport
+  useEffect(() => {
+    if (!isOpen || !activeVenueId) {
+      setModalRegions([])
+      return
+    }
+    let cancelled = false
+    fetch(`${API_BASE}/api/venues/${activeVenueId}/roi?all=true`)
+      .then(res => (res.ok ? res.json() : []))
+      .then((data: RegionOfInterest[]) => {
+        if (!cancelled) setModalRegions(data)
+      })
+      .catch(() => {
+        if (!cancelled) setModalRegions([])
+      })
+    return () => { cancelled = true }
+  }, [isOpen, activeVenueId])
+
+  useEffect(() => {
+    if (!isOpen || !activeVenueId) return
+    if (venue?.id !== activeVenueId) {
+      void loadVenue(activeVenueId)
+    }
+  }, [isOpen, activeVenueId, venue?.id, loadVenue])
 
   // Apply focus from Business Reporting category click
   useEffect(() => {
@@ -247,11 +278,11 @@ export default function HeatmapViewerModal({ isOpen, onClose }: HeatmapViewerMod
     if (!heatmapData?.tiles) return []
     if (selectedZoneIds.size === 0) return heatmapData.tiles
 
-    const selectedZones = regions.filter(r => selectedZoneIds.has(r.id))
+    const selectedZones = activeRegions.filter(r => selectedZoneIds.has(r.id))
     return heatmapData.tiles.filter(tile => {
       return selectedZones.some(zone => isPointInPolygon({ x: tile.x, z: tile.z }, zone.vertices))
     })
-  }, [heatmapData?.tiles, selectedZoneIds, regions])
+  }, [heatmapData?.tiles, selectedZoneIds, activeRegions])
 
   // Render zone outlines
   useEffect(() => {
@@ -273,8 +304,8 @@ export default function HeatmapViewerModal({ isOpen, onClose }: HeatmapViewerMod
     }
 
     const zonesToRender = selectedZoneIds.size > 0 
-      ? regions.filter(r => selectedZoneIds.has(r.id))
-      : regions
+      ? activeRegions.filter(r => selectedZoneIds.has(r.id))
+      : activeRegions
 
     zonesToRender.forEach(zone => {
       // Zone outline only (no fill to avoid extending beyond floor)
@@ -288,7 +319,7 @@ export default function HeatmapViewerModal({ isOpen, onClose }: HeatmapViewerMod
       const outline = new THREE.Line(outlineGeometry, outlineMaterial)
       group.add(outline)
     })
-  }, [regions, selectedZoneIds])
+  }, [activeRegions, selectedZoneIds])
 
   // Render heatmap tiles (elevated)
   useEffect(() => {
@@ -412,7 +443,7 @@ export default function HeatmapViewerModal({ isOpen, onClose }: HeatmapViewerMod
     let bounds: { minX: number; maxX: number; minZ: number; maxZ: number }
 
     if (selectedZoneIds.size > 0) {
-      const selectedZones = regions.filter(r => selectedZoneIds.has(r.id))
+      const selectedZones = activeRegions.filter(r => selectedZoneIds.has(r.id))
       const allVertices = selectedZones.flatMap(z => z.vertices)
       bounds = getZoneBounds(allVertices)
     } else {
@@ -432,14 +463,14 @@ export default function HeatmapViewerModal({ isOpen, onClose }: HeatmapViewerMod
       centerZ + maxDim * 0.8
     )
     controlsRef.current.update()
-  }, [selectedZoneIds, regions, venue])
+  }, [selectedZoneIds, activeRegions, venue])
 
   // Focus when selection changes
   useEffect(() => {
     if (isOpen) {
       focusOnSelectedZones()
     }
-  }, [selectedZoneIds, isOpen, focusOnSelectedZones])
+  }, [selectedZoneIds, isOpen, focusOnSelectedZones, modalRegions.length])
 
   const toggleZone = (zoneId: string) => {
     setSelectedZoneIds(prev => {
@@ -454,7 +485,7 @@ export default function HeatmapViewerModal({ isOpen, onClose }: HeatmapViewerMod
   }
 
   const selectAllZones = () => {
-    setSelectedZoneIds(new Set(regions.map(r => r.id)))
+    setSelectedZoneIds(new Set(activeRegions.map(r => r.id)))
   }
 
   const clearZoneSelection = () => {
@@ -517,10 +548,10 @@ export default function HeatmapViewerModal({ isOpen, onClose }: HeatmapViewerMod
                       Clear
                     </button>
                   </div>
-                  {regions.length === 0 ? (
+                  {activeRegions.length === 0 ? (
                     <div className="p-3 text-xs text-gray-500 text-center">No zones defined</div>
                   ) : (
-                    regions.map(zone => (
+                    activeRegions.map(zone => (
                       <button
                         key={zone.id}
                         onClick={() => toggleZone(zone.id)}

@@ -3,13 +3,14 @@ import { Expand, Loader2 } from 'lucide-react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { useHeatmap } from '../../context/HeatmapContext';
-import { useRoi } from '../../context/RoiContext';
 import { useVenue } from '../../context/VenueContext';
+import { API_BASE } from '../../config/api';
 import { getHeatColor, hexToThreeColor, isPointInPolygon } from './heatmapUtils';
 import { buildDwgWireframeGroup, disposeObject3D } from '../../utils/dwgWireframe3d';
 import { getCategoryVisual } from '../../features/businessReporting/operationsConsole/categoryVisuals';
 import type { CategoryRankingRow } from '../../features/businessReporting/components/CategoryRankingPanel';
 import type { HeatmapTile } from '../../context/HeatmapContext';
+import type { RegionOfInterest } from '../../types';
 
 type MetricMode = 'visits' | 'dwell';
 
@@ -66,7 +67,6 @@ export default function HeatmapEmbedPreview({
   onExpand,
 }: HeatmapEmbedPreviewProps) {
   const { venue, objects, loadVenue } = useVenue();
-  const { regions, loadRegions } = useRoi();
   const { heatmapData, isLoading, loadHeatmap, setTimeframe } = useHeatmap();
 
   const canvasRef = useRef<HTMLDivElement>(null);
@@ -80,11 +80,15 @@ export default function HeatmapEmbedPreview({
   const pulseLinesRef = useRef<THREE.Line[]>([]);
   const tileEntriesRef = useRef<TileEntry[]>([]);
   const animRef = useRef<number | null>(null);
-  const visibleRef = useRef(true);
+  const inViewRef = useRef(true);
+  const tabHiddenRef = useRef(false);
   const loadGenRef = useRef(0);
+  const regionsGenRef = useRef(0);
 
   const [sceneReady, setSceneReady] = useState(false);
   const [tileVersion, setTileVersion] = useState(0);
+  const [embedRegions, setEmbedRegions] = useState<RegionOfInterest[]>([]);
+  const [regionsLoading, setRegionsLoading] = useState(false);
 
   const categoryByRoiId = useMemo(() => {
     const map = new Map<string, string>();
@@ -103,12 +107,12 @@ export default function HeatmapEmbedPreview({
   }, [highlightCategory, categories]);
 
   const shelfRegions = useMemo(
-    () => regions.filter(r => categoryByRoiId.has(r.id)),
-    [regions, categoryByRoiId],
+    () => embedRegions.filter(r => categoryByRoiId.has(r.id)),
+    [embedRegions, categoryByRoiId],
   );
 
   const tileInCategory = useCallback((tile: HeatmapTile, roiIds: Set<string>) => {
-    if (!roiIds.size) return true;
+    if (!roiIds.size) return false;
     return shelfRegions.some(
       zone => roiIds.has(zone.id) && isPointInPolygon({ x: tile.x, z: tile.z }, zone.vertices),
     );
@@ -117,14 +121,41 @@ export default function HeatmapEmbedPreview({
   const heightKpi = metric === 'visits' ? 'visits' : 'dwellSec';
   const colorKpi = metric === 'visits' ? 'visits' : 'dwellSec';
 
-  // Load venue/regions once — avoid reloading global venue context on every hover
+  // Load venue for 3D scene (Business Reporting may use a venue different from main viewport)
   useEffect(() => {
     if (!venueId) return;
-    loadRegions(venueId);
-    if (venue?.id !== venueId) {
-      loadVenue(venueId);
+    void loadVenue(venueId);
+  }, [venueId, loadVenue]);
+
+  // Fetch shelf ROIs locally — do NOT use RoiContext (MainViewport overwrites it with DWG-only ROIs)
+  useEffect(() => {
+    if (!venueId) {
+      setEmbedRegions([]);
+      return;
     }
-  }, [venueId, venue?.id, loadVenue, loadRegions]);
+
+    const gen = ++regionsGenRef.current;
+    setRegionsLoading(true);
+
+    (async () => {
+      try {
+        const res = await fetch(`${API_BASE}/api/venues/${venueId}/roi?all=true`);
+        if (!res.ok) throw new Error('Failed to load shelf zones');
+        const data: RegionOfInterest[] = await res.json();
+        if (gen !== regionsGenRef.current) return;
+        setEmbedRegions(data);
+      } catch (err) {
+        console.error('[HeatmapEmbedPreview] Failed to load regions:', err);
+        if (gen === regionsGenRef.current) setEmbedRegions([]);
+      } finally {
+        if (gen === regionsGenRef.current) setRegionsLoading(false);
+      }
+    })();
+
+    return () => {
+      regionsGenRef.current += 1;
+    };
+  }, [venueId]);
 
   useEffect(() => {
     setTimeframe(timeframe);
@@ -147,13 +178,17 @@ export default function HeatmapEmbedPreview({
     if (!el) return;
 
     const io = new IntersectionObserver(
-      entries => { visibleRef.current = entries[0]?.isIntersecting ?? true; },
+      entries => { inViewRef.current = entries[0]?.isIntersecting ?? true; },
       { threshold: 0.05 },
     );
     io.observe(el);
 
     const onVis = () => {
-      if (document.hidden) visibleRef.current = false;
+      tabHiddenRef.current = document.hidden;
+      if (!document.hidden) {
+        const rect = el.getBoundingClientRect();
+        inViewRef.current = rect.top < window.innerHeight && rect.bottom > 0;
+      }
     };
     document.addEventListener('visibilitychange', onVis);
 
@@ -239,7 +274,7 @@ export default function HeatmapEmbedPreview({
     let lastFrame = 0;
     const animate = (now: number) => {
       animRef.current = requestAnimationFrame(animate);
-      if (!visibleRef.current) return;
+      if (tabHiddenRef.current || !inViewRef.current) return;
       // Cap ~30fps for embed preview — enough for orbit + pulse, half the GPU cost
       if (now - lastFrame < 33) return;
       lastFrame = now;
@@ -389,7 +424,15 @@ export default function HeatmapEmbedPreview({
     }
   }, [highlightCategory, highlightRoiIds, tileInCategory, tileVersion]);
 
-  const showEmpty = sceneReady && !isLoading && (!heatmapData?.tiles?.length || !shelfRegions.length);
+  const expectedShelfZones = useMemo(
+    () => categories.reduce((n, c) => n + (c.roiIds?.length ?? 0), 0),
+    [categories],
+  );
+
+  const showEmpty = sceneReady
+    && !isLoading
+    && !regionsLoading
+    && (!heatmapData?.tiles?.length || !shelfRegions.length);
 
   return (
     <div className="flex flex-col h-full min-h-[240px]">
@@ -408,14 +451,18 @@ export default function HeatmapEmbedPreview({
         )}
       </div>
       <div className="relative flex-1 rounded-lg border border-gray-700/60 bg-gray-950 overflow-hidden min-h-[220px]">
-        {isLoading && !heatmapData?.tiles?.length && (
-          <div className="absolute inset-0 z-10 flex items-center justify-center bg-gray-950/80">
+        {(regionsLoading || (isLoading && !heatmapData?.tiles?.length)) && (
+          <div className="absolute inset-0 z-10 flex items-center justify-center bg-gray-950/60 pointer-events-none">
             <Loader2 className="w-5 h-5 text-gray-400 animate-spin" />
           </div>
         )}
         {showEmpty && (
-          <div className="absolute inset-0 flex items-center justify-center text-[10px] text-gray-500 z-10 pointer-events-none">
-            {!shelfRegions.length ? 'Loading shelf zones…' : 'No heatmap data for this period'}
+          <div className="absolute inset-0 flex items-center justify-center text-[10px] text-gray-500 z-10 pointer-events-none px-4 text-center">
+            {!shelfRegions.length && expectedShelfZones > 0
+              ? 'Shelf zones could not be matched to the floor plan'
+              : !shelfRegions.length
+                ? 'No mapped shelf zones for categories'
+                : 'No heatmap data for this period'}
           </div>
         )}
         <div ref={canvasRef} className="absolute inset-0" />
