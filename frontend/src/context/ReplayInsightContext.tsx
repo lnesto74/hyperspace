@@ -100,7 +100,11 @@ interface ReplayInsightContextValue {
 
   // Actions
   fetchEpisodes: (options?: { period?: string; type?: string }) => Promise<void>;
-  fetchTimelineMarkers: (startTs: number, endTs: number) => Promise<void>;
+  fetchTimelineMarkers: (
+    startTs: number,
+    endTs: number,
+    options?: { minScore?: number; limit?: number },
+  ) => Promise<void>;
   selectEpisode: (episodeId: string) => Promise<void>;
   explainKpi: (kpiId: string) => Promise<void>;
   openPanel: () => void;
@@ -163,7 +167,11 @@ export function ReplayInsightProvider({ children }: { children: React.ReactNode 
   }, [venue?.id]);
 
   // ─── Fetch timeline markers ───
-  const fetchTimelineMarkers = useCallback(async (startTs: number, endTs: number) => {
+  const fetchTimelineMarkers = useCallback(async (
+    startTs: number,
+    endTs: number,
+    options: { minScore?: number; limit?: number } = {},
+  ) => {
     if (!venue?.id) return;
     try {
       const params = new URLSearchParams({
@@ -171,6 +179,12 @@ export function ReplayInsightProvider({ children }: { children: React.ReactNode 
         start: String(startTs),
         end: String(endTs),
       });
+      if (options.minScore != null && options.minScore > 0) {
+        params.set('minScore', String(options.minScore));
+      }
+      if (options.limit != null && options.limit > 0) {
+        params.set('limit', String(options.limit));
+      }
       const res = await fetch(`${API_BASE}/api/replay-insights/markers?${params}`);
       if (res.ok) {
         const data = await res.json();

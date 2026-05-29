@@ -77,7 +77,7 @@ export class PassbyBrowseDetector {
       // Significant traffic volume (not just a quiet zone)
       if (uniqueTracks >= MIN_POPULATION.zone * 2) conditionsMet++;
 
-      if (conditionsMet < 2) continue;
+      if (conditionsMet < 3) continue;
 
       const confidence = computeConfidence({
         conditionsSatisfied: conditionsMet,

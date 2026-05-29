@@ -98,7 +98,7 @@ export class BrowseNoConvertDetector {
       // Significant engaged population
       if (totalEngaged >= MIN_POPULATION.zone) conditionsMet++;
 
-      if (conditionsMet < 2) continue;
+      if (conditionsMet < 3) continue;
 
       const confidence = computeConfidence({
         conditionsSatisfied: conditionsMet,

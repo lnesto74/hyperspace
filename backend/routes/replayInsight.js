@@ -69,10 +69,12 @@ export default function createReplayInsightRoutes(orchestrator) {
    *   venueId (required)
    *   start   (required) - start timestamp
    *   end     (required) - end timestamp
+   *   minScore (optional) - minimum episode score 0-1
+   *   limit    (optional) - max markers returned (0 = no limit)
    */
   router.get('/markers', (req, res) => {
     try {
-      const { venueId, start, end } = req.query;
+      const { venueId, start, end, minScore, limit } = req.query;
 
       if (!venueId || !start || !end) {
         return res.status(400).json({ error: 'venueId, start, and end are required' });
@@ -81,7 +83,11 @@ export default function createReplayInsightRoutes(orchestrator) {
       const markers = orchestrator.getTimelineMarkers(
         venueId,
         parseInt(start),
-        parseInt(end)
+        parseInt(end),
+        {
+          minScore: minScore != null && minScore !== '' ? parseFloat(minScore) : 0,
+          limit: limit != null && limit !== '' ? parseInt(limit, 10) : 0,
+        },
       );
 
       res.json({ markers, count: markers.length });

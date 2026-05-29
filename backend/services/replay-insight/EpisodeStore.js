@@ -169,13 +169,23 @@ export class EpisodeStore {
     return rows.map(r => this._deserializeEpisode(r));
   }
 
-  getTimelineMarkers(venueId, startTs, endTs) {
-    const rows = this.db.prepare(`
+  getTimelineMarkers(venueId, startTs, endTs, { minScore = 0, limit = 0 } = {}) {
+    let sql = `
       SELECT id, episode_type, start_ts, end_ts, scope, title, confidence, score
       FROM episodes
       WHERE venue_id = ? AND end_ts >= ? AND start_ts <= ? AND is_archived = 0
-      ORDER BY start_ts ASC
-    `).all(venueId, startTs, endTs);
+    `;
+    const params = [venueId, startTs, endTs];
+    if (minScore > 0) {
+      sql += ' AND score >= ?';
+      params.push(minScore);
+    }
+    sql += ' ORDER BY score DESC, start_ts ASC';
+    if (limit > 0) {
+      sql += ' LIMIT ?';
+      params.push(limit);
+    }
+    const rows = this.db.prepare(sql).all(...params);
 
     return rows.map(r => ({
       id: r.id,

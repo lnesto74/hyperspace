@@ -1,147 +1,205 @@
 /**
- * TimelineInsightMarkers
- * 
- * Renders color-coded episode markers as an overlay on the existing timeline.
- * Absolutely positioned — does NOT modify TimelineReplay internals.
+ * Insight event rail — rendered below the KPI histogram (never on top of bars).
  */
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Zap } from 'lucide-react';
 import { useReplayInsight } from '../../context/ReplayInsightContext';
+import {
+  bucketMarkersBySlot,
+  getCategoryColor,
+  getEpisodeCategory,
+  INSIGHT_FETCH_PARAMS,
+  type InsightDisplayMode,
+} from './timelineInsightUtils';
 
-const EPISODE_COLORS: Record<string, string> = {
-  QUEUE_BUILDUP_SPIKE: '#ef4444',
-  LANE_UNDERSUPPLY: '#f97316',
-  LANE_OVERSUPPLY: '#eab308',
-  ABANDONMENT_WAVE: '#dc2626',
-  QUEUE_SWITCHING: '#f59e0b',
-  HIGH_PASSBY_LOW_BROWSE: '#8b5cf6',
-  BROWSE_NO_CONVERT_PROXY: '#a855f7',
-  BOTTLENECK_CORRIDOR: '#f97316',
-  ROUTE_DETOUR: '#f59e0b',
-  STORE_VISIT_TIME_SHIFT: '#3b82f6',
-  EXPOSURE_TO_ACTION_WIN: '#22c55e',
-  EXPOSURE_NO_FOLLOWTHROUGH: '#ef4444',
-  ATTENTION_QUALITY_DROP: '#f97316',
-};
-
-const EPISODE_SHORT_LABELS: Record<string, string> = {
-  QUEUE_BUILDUP_SPIKE: 'Queue spike',
-  LANE_UNDERSUPPLY: 'Lane gap',
-  LANE_OVERSUPPLY: 'Overcapacity',
-  ABANDONMENT_WAVE: 'Abandonments',
-  QUEUE_SWITCHING: 'Lane hopping',
-  HIGH_PASSBY_LOW_BROWSE: 'Low engagement',
-  BROWSE_NO_CONVERT_PROXY: 'Hesitation',
-  BOTTLENECK_CORRIDOR: 'Congestion',
-  ROUTE_DETOUR: 'Route detour',
-  STORE_VISIT_TIME_SHIFT: 'Visit shift',
-  EXPOSURE_TO_ACTION_WIN: 'DOOH success',
-  EXPOSURE_NO_FOLLOWTHROUGH: 'DOOH miss',
-  ATTENTION_QUALITY_DROP: 'Attention drop',
+const CATEGORY_LABELS: Record<string, string> = {
+  checkout: 'Checkout',
+  merchandising: 'Merchandising',
+  flow: 'Flow',
+  dooh: 'DOOH',
+  other: 'Other',
 };
 
 interface TimelineInsightMarkersProps {
   timelineStartTs: number;
   timelineEndTs: number;
+  slotIntervalMs: number;
   containerWidth: number;
   isVisible: boolean;
+  insightMode: InsightDisplayMode;
 }
 
 export default function TimelineInsightMarkers({
   timelineStartTs,
   timelineEndTs,
+  slotIntervalMs,
   containerWidth,
   isVisible,
+  insightMode,
 }: TimelineInsightMarkersProps) {
   const { timelineMarkers, fetchTimelineMarkers, selectEpisode } = useReplayInsight();
-  const [hoveredMarker, setHoveredMarker] = useState<string | null>(null);
-  const containerRef = useRef<HTMLDivElement>(null);
+  const [hoveredBucket, setHoveredBucket] = useState<number | null>(null);
+  const [expandedBucket, setExpandedBucket] = useState<number | null>(null);
 
-  // Fetch markers when timeline range changes
   useEffect(() => {
-    if (isVisible && timelineStartTs && timelineEndTs) {
-      fetchTimelineMarkers(timelineStartTs, timelineEndTs);
-    }
-  }, [isVisible, timelineStartTs, timelineEndTs, fetchTimelineMarkers]);
+    if (!isVisible || insightMode === 'off' || !timelineStartTs || !timelineEndTs) return;
+    const fetchOpts = INSIGHT_FETCH_PARAMS[insightMode];
+    fetchTimelineMarkers(timelineStartTs, timelineEndTs, fetchOpts);
+  }, [isVisible, insightMode, timelineStartTs, timelineEndTs, fetchTimelineMarkers]);
 
-  if (!isVisible || timelineMarkers.length === 0 || containerWidth <= 0) return null;
+  const buckets = useMemo(
+    () => bucketMarkersBySlot(timelineMarkers, timelineStartTs, slotIntervalMs),
+    [timelineMarkers, timelineStartTs, slotIntervalMs],
+  );
+
+  if (!isVisible || insightMode === 'off' || containerWidth <= 0) return null;
 
   const totalDuration = timelineEndTs - timelineStartTs;
   if (totalDuration <= 0) return null;
 
-  // Calculate x position for a timestamp
   const tsToX = (ts: number) => {
     const ratio = (ts - timelineStartTs) / totalDuration;
     return Math.max(0, Math.min(containerWidth, ratio * containerWidth));
   };
 
   return (
-    <div
-      ref={containerRef}
-      className="absolute top-0 left-0 right-0 h-full pointer-events-none z-10"
-      style={{ width: containerWidth }}
-    >
-      {timelineMarkers.map((marker) => {
-        const midTs = (marker.start_ts + marker.end_ts) / 2;
+    <div className="relative h-full w-full px-2" style={{ width: containerWidth }}>
+      {/* Category legend (compact) */}
+      <div className="absolute top-0 left-2 flex gap-2 text-[8px] text-gray-500 pointer-events-none z-0">
+        {(['checkout', 'merchandising', 'flow', 'dooh'] as const).map(cat => (
+          <span key={cat} className="inline-flex items-center gap-0.5">
+            <span
+              className="w-1.5 h-1.5 rounded-full"
+              style={{ backgroundColor: getCategoryColor(
+                cat === 'checkout' ? 'QUEUE_BUILDUP_SPIKE'
+                  : cat === 'merchandising' ? 'HIGH_PASSBY_LOW_BROWSE'
+                    : cat === 'flow' ? 'BOTTLENECK_CORRIDOR'
+                      : 'EXPOSURE_TO_ACTION_WIN',
+              ) }}
+            />
+            {CATEGORY_LABELS[cat]}
+          </span>
+        ))}
+      </div>
+
+      {buckets.length === 0 && (
+        <div className="absolute inset-0 flex items-center justify-center text-[9px] text-gray-600">
+          No insight events in this range
+        </div>
+      )}
+
+      {buckets.map(bucket => {
+        const midTs = bucket.slotKey + slotIntervalMs / 2;
         const x = tsToX(midTs);
-        const width = Math.max(4, tsToX(marker.end_ts) - tsToX(marker.start_ts));
-        const color = EPISODE_COLORS[marker.episode_type] || '#6b7280';
-        const label = EPISODE_SHORT_LABELS[marker.episode_type] || marker.episode_type;
-        const isHovered = hoveredMarker === marker.id;
+        const isMulti = bucket.markers.length > 1;
+        const isHovered = hoveredBucket === bucket.slotKey;
+        const isExpanded = expandedBucket === bucket.slotKey;
+        const color = getCategoryColor(bucket.topMarker.episode_type);
+        const category = getEpisodeCategory(bucket.topMarker.episode_type);
 
         return (
-          <div key={marker.id}>
-            {/* Episode range bar */}
-            <div
-              className="absolute top-0 h-full opacity-15 pointer-events-auto cursor-pointer transition-opacity hover:opacity-30"
-              style={{
-                left: tsToX(marker.start_ts),
-                width,
-                backgroundColor: color,
-              }}
-              onMouseEnter={() => setHoveredMarker(marker.id)}
-              onMouseLeave={() => setHoveredMarker(null)}
-              onClick={() => selectEpisode(marker.id)}
-            />
+          <div key={bucket.slotKey}>
+            {/* Thin tick — single event */}
+            {!isMulti && (
+              <button
+                type="button"
+                className="absolute bottom-1 pointer-events-auto cursor-pointer group"
+                style={{ left: x - 1 }}
+                onMouseEnter={() => setHoveredBucket(bucket.slotKey)}
+                onMouseLeave={() => setHoveredBucket(null)}
+                onMouseDown={e => e.stopPropagation()}
+                onClick={() => selectEpisode(bucket.topMarker.id)}
+                title={bucket.topMarker.title}
+              >
+                <div
+                  className="w-0.5 h-4 rounded-full transition-transform group-hover:scale-y-125"
+                  style={{ backgroundColor: color }}
+                />
+                <div
+                  className="absolute -top-0.5 left-1/2 -translate-x-1/2 w-1.5 h-1.5 rotate-45 border border-gray-900"
+                  style={{ backgroundColor: color }}
+                />
+              </button>
+            )}
 
-            {/* Marker dot */}
-            <div
-              className="absolute pointer-events-auto cursor-pointer"
-              style={{
-                left: x - 6,
-                top: -4,
-              }}
-              onMouseEnter={() => setHoveredMarker(marker.id)}
-              onMouseLeave={() => setHoveredMarker(null)}
-              onClick={() => selectEpisode(marker.id)}
-            >
-              <div
-                className="w-3 h-3 rounded-full border-2 border-gray-900 shadow-sm transition-transform"
-                style={{
-                  backgroundColor: color,
-                  transform: isHovered ? 'scale(1.5)' : 'scale(1)',
+            {/* Cluster chip — multiple events in same slot */}
+            {isMulti && (
+              <button
+                type="button"
+                className="absolute bottom-0.5 pointer-events-auto cursor-pointer"
+                style={{ left: x - 10 }}
+                onMouseEnter={() => setHoveredBucket(bucket.slotKey)}
+                onMouseLeave={() => {
+                  if (!isExpanded) setHoveredBucket(null);
                 }}
-              />
-            </div>
-
-            {/* Tooltip */}
-            {isHovered && (
-              <div
-                className="absolute z-50 pointer-events-none"
-                style={{
-                  left: Math.min(x - 80, containerWidth - 180),
-                  top: -52,
+                onMouseDown={e => e.stopPropagation()}
+                onClick={() => {
+                  if (isExpanded) {
+                    selectEpisode(bucket.topMarker.id);
+                  } else {
+                    setExpandedBucket(bucket.slotKey);
+                  }
                 }}
               >
-                <div className="bg-gray-800 text-white text-xs rounded-lg px-3 py-2 shadow-lg border border-gray-600 whitespace-nowrap">
-                  <div className="flex items-center gap-1.5 mb-0.5">
-                    <Zap className="w-3 h-3" style={{ color }} />
-                    <span className="font-medium">{label}</span>
-                  </div>
-                  <div className="text-gray-400 text-[10px]">
-                    {marker.title || 'Click to view insight'}
-                  </div>
+                <span
+                  className="inline-flex items-center justify-center min-w-[18px] h-[14px] px-1 rounded text-[9px] font-medium border border-gray-800 shadow-sm transition-transform"
+                  style={{
+                    backgroundColor: `${color}33`,
+                    color,
+                    transform: isHovered ? 'scale(1.08)' : 'scale(1)',
+                  }}
+                >
+                  {bucket.markers.length}
+                </span>
+              </button>
+            )}
+
+            {/* Tooltip / expanded list */}
+            {(isHovered || isExpanded) && (
+              <div
+                className="absolute z-50 pointer-events-auto"
+                style={{
+                  left: Math.min(Math.max(x - 70, 4), containerWidth - 150),
+                  bottom: 22,
+                }}
+                onMouseLeave={() => {
+                  setHoveredBucket(null);
+                  setExpandedBucket(null);
+                }}
+              >
+                <div className="bg-gray-800 text-white text-xs rounded-lg px-2.5 py-2 shadow-lg border border-gray-600 max-w-[160px]">
+                  {isMulti ? (
+                    <>
+                      <div className="text-[10px] text-gray-400 mb-1">
+                        {bucket.markers.length} events · {CATEGORY_LABELS[category]}
+                      </div>
+                      <ul className="space-y-0.5 max-h-24 overflow-y-auto">
+                        {bucket.markers.slice(0, 6).map(m => (
+                          <li key={m.id}>
+                            <button
+                              type="button"
+                              className="text-left w-full hover:text-white text-gray-300 text-[10px] truncate"
+                              onClick={() => selectEpisode(m.id)}
+                            >
+                              {m.title || m.episode_type}
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                      {bucket.markers.length > 6 && (
+                        <div className="text-[9px] text-gray-500 mt-0.5">+{bucket.markers.length - 6} more</div>
+                      )}
+                    </>
+                  ) : (
+                    <>
+                      <div className="flex items-center gap-1.5 mb-0.5">
+                        <Zap className="w-3 h-3 shrink-0" style={{ color }} />
+                        <span className="font-medium truncate">{bucket.topMarker.title || category}</span>
+                      </div>
+                      <div className="text-gray-400 text-[10px]">Click to view insight</div>
+                    </>
+                  )}
                 </div>
               </div>
             )}

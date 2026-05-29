@@ -3,6 +3,10 @@ import { Play, Pause, SkipBack, SkipForward, Clock, ChevronDown, MapPin, Refresh
 import { useTrackingActions } from '../../context/TrackingContext'
 import { TrackWithTrail } from '../../types'
 import TimelineInsightMarkers from '../replay-insight/TimelineInsightMarkers'
+import {
+  getTimelineIntervalMins,
+  type InsightDisplayMode,
+} from '../replay-insight/timelineInsightUtils'
 import { API_BASE } from '../../config/api'
 
 
@@ -58,8 +62,12 @@ export default function TimelineReplay({ venueId, isOpen, onTimeChange }: Timeli
   const [showZoneDropdown, setShowZoneDropdown] = useState(false)
   const [isDragging, setIsDragging] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
+  const [insightMode, setInsightMode] = useState<InsightDisplayMode>('top20')
+  const [trackWidth, setTrackWidth] = useState(0)
   const playIntervalRef = useRef<NodeJS.Timeout | null>(null)
-  const timelineRef = useRef<HTMLDivElement>(null)
+  const trackRef = useRef<HTMLDivElement>(null)
+
+  const slotIntervalMs = getTimelineIntervalMins(dateRange) * 60 * 1000
 
   // Only replace the live canvas while actively scrubbing or playing historical KPI replay.
   const historicalCanvasActive = isOpen && timelineData.length > 0 && (isPlaying || isDragging)
@@ -114,8 +122,9 @@ export default function TimelineReplay({ venueId, isOpen, onTimeChange }: Timeli
       
       const zoneParam = selectedZone !== 'all' ? `&roiId=${selectedZone}` : ''
       const refreshParam = forceRefresh ? '&refresh=true' : ''
+      const interval = getTimelineIntervalMins(dateRange)
       const res = await fetch(
-        `${API_BASE}/api/venues/${venueId}/timeline?start=${startTime}&end=${endTime}&interval=15${zoneParam}${refreshParam}`
+        `${API_BASE}/api/venues/${venueId}/timeline?start=${startTime}&end=${endTime}&interval=${interval}${zoneParam}${refreshParam}`
       )
       
       if (res.ok) {
@@ -175,7 +184,7 @@ export default function TimelineReplay({ venueId, isOpen, onTimeChange }: Timeli
     const currentSlot = timelineData[currentIndex]
     if (!currentSlot) return
     
-    const slotDuration = 15 * 60 * 1000 // 15 minutes in ms
+    const slotDuration = slotIntervalMs
     const startTime = currentSlot.timestamp
     const endTime = startTime + slotDuration
     
@@ -213,7 +222,20 @@ export default function TimelineReplay({ venueId, isOpen, onTimeChange }: Timeli
         setReplayTracks(trackMap)
       })
       .catch(err => console.error('Failed to fetch replay trajectories:', err))
-  }, [isOpen, venueId, currentIndex, timelineData, setReplayTracks])
+  }, [isOpen, venueId, currentIndex, timelineData, slotIntervalMs, setReplayTracks])
+
+  // Track width for insight rail alignment with histogram
+  useEffect(() => {
+    const el = trackRef.current
+    if (!el || !isOpen) return
+    const ro = new ResizeObserver(entries => {
+      const w = entries[0]?.contentRect.width ?? 0
+      setTrackWidth(w)
+    })
+    ro.observe(el)
+    setTrackWidth(el.clientWidth)
+    return () => ro.disconnect()
+  }, [isOpen, timelineData.length])
 
   const handleSkipBack = () => {
     setCurrentIndex(Math.max(0, currentIndex - 10))
@@ -225,8 +247,8 @@ export default function TimelineReplay({ venueId, isOpen, onTimeChange }: Timeli
 
   // Drag-to-seek handlers
   const getIndexFromMouseEvent = (e: React.MouseEvent | MouseEvent) => {
-    if (!timelineRef.current || timelineData.length === 0) return currentIndex
-    const rect = timelineRef.current.getBoundingClientRect()
+    if (!trackRef.current || timelineData.length === 0) return currentIndex
+    const rect = trackRef.current.getBoundingClientRect()
     const x = e.clientX - rect.left
     const percent = Math.max(0, Math.min(1, x / rect.width))
     return Math.floor(percent * (timelineData.length - 1))
@@ -293,7 +315,7 @@ export default function TimelineReplay({ venueId, isOpen, onTimeChange }: Timeli
   const maxKpi2 = getMaxValue(kpi2)
 
   return (
-    <div className="absolute bottom-12 left-0 right-0 h-40 bg-gray-900/95 backdrop-blur-sm border-t border-gray-700 z-40 flex flex-col">
+    <div className="absolute bottom-12 left-0 right-0 h-48 bg-gray-900/95 backdrop-blur-sm border-t border-gray-700 z-40 flex flex-col">
       {/* Header Row */}
       <div className="flex items-center justify-between px-4 py-2 border-b border-gray-700/50">
         <div className="flex items-center gap-4">
@@ -461,6 +483,30 @@ export default function TimelineReplay({ venueId, isOpen, onTimeChange }: Timeli
             )}
           </div>
           
+          {/* Insight density */}
+          <div className="flex items-center gap-0.5 text-[10px] border-l border-gray-700 pl-3">
+            <span className="text-gray-500 mr-1">Insights:</span>
+            {([
+              { id: 'off' as const, label: 'Off' },
+              { id: 'top20' as const, label: 'Top 20' },
+              { id: 'high' as const, label: 'High' },
+              { id: 'all' as const, label: 'All' },
+            ]).map(opt => (
+              <button
+                key={opt.id}
+                type="button"
+                onClick={() => setInsightMode(opt.id)}
+                className={`px-1.5 py-0.5 rounded ${
+                  insightMode === opt.id
+                    ? 'bg-white/10 text-white'
+                    : 'text-gray-500 hover:text-gray-300'
+                }`}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+
           {/* Current Time */}
           <div className="flex items-center gap-2 text-xs text-gray-400 border-l border-gray-700 pl-4">
             <Clock className="w-4 h-4" />
@@ -471,13 +517,15 @@ export default function TimelineReplay({ venueId, isOpen, onTimeChange }: Timeli
         </div>
       </div>
       
-      {/* Timeline Bar Chart with Scrubber */}
-      <div 
-        ref={timelineRef}
-        className={`flex-1 relative px-2 ${isDragging ? 'cursor-grabbing' : 'cursor-grab'}`}
+      {/* Histogram + insight rail (stacked — events never cover bars) */}
+      <div
+        ref={trackRef}
+        className={`flex-1 flex flex-col min-h-0 px-2 ${isDragging ? 'cursor-grabbing' : 'cursor-grab'}`}
         onMouseDown={handleMouseDown}
         style={{ userSelect: 'none' }}
       >
+      {/* Row 1: KPI histogram only */}
+      <div className="relative flex-[3] min-h-0">
         {isLoading ? (
           <div className="absolute inset-0 flex items-center justify-center text-gray-400 text-sm">
             <div className="flex items-center gap-2">
@@ -514,32 +562,42 @@ export default function TimelineReplay({ venueId, isOpen, onTimeChange }: Timeli
                 )
               })}
             </div>
-            
-            {/* Insight Markers Overlay (parallel system — does not modify timeline) */}
-            <TimelineInsightMarkers
-              timelineStartTs={timelineData[0]?.timestamp || 0}
-              timelineEndTs={timelineData[timelineData.length - 1]?.timestamp || 0}
-              containerWidth={timelineRef.current?.clientWidth || 0}
-              isVisible={timelineData.length > 0}
-            />
-            
-            {/* Playhead / Scrubber Line */}
-            <div 
-              className="absolute top-0 bottom-0 w-0.5 bg-white shadow-lg pointer-events-none z-10"
+          </>
+        )}
+      </div>
+
+      {/* Row 2: insight event rail */}
+      {insightMode !== 'off' && timelineData.length > 0 && (
+        <div className="relative h-7 flex-shrink-0 border-t border-gray-700/40 mt-0.5">
+          <TimelineInsightMarkers
+            timelineStartTs={timelineData[0]?.timestamp || 0}
+            timelineEndTs={
+              (timelineData[timelineData.length - 1]?.timestamp || 0) + slotIntervalMs
+            }
+            slotIntervalMs={slotIntervalMs}
+            containerWidth={trackWidth}
+            isVisible={timelineData.length > 0}
+            insightMode={insightMode}
+          />
+        </div>
+      )}
+
+        {/* Playhead spans histogram + insight rail */}
+        {timelineData.length > 0 && (
+          <>
+            <div
+              className="absolute top-0 bottom-0 w-0.5 bg-white shadow-lg pointer-events-none z-20"
               style={{
                 left: `${(currentIndex / Math.max(1, timelineData.length - 1)) * 100}%`,
                 boxShadow: '0 0 8px rgba(255,255,255,0.5)',
               }}
             >
-              {/* Playhead Handle */}
               <div className="absolute -top-1 left-1/2 -translate-x-1/2 w-3 h-3 bg-white rounded-full shadow-md" />
               <div className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-3 h-3 bg-white rounded-full shadow-md" />
             </div>
-            
-            {/* Time tooltip on drag */}
             {isDragging && currentSlot && (
-              <div 
-                className="absolute -top-8 px-2 py-1 bg-gray-800 text-white text-xs rounded shadow-lg pointer-events-none z-20"
+              <div
+                className="absolute -top-8 px-2 py-1 bg-gray-800 text-white text-xs rounded shadow-lg pointer-events-none z-30"
                 style={{
                   left: `${(currentIndex / Math.max(1, timelineData.length - 1)) * 100}%`,
                   transform: 'translateX(-50%)',

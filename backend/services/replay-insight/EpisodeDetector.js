@@ -157,9 +157,9 @@ export class EpisodeDetectorOrchestrator {
   /**
    * Get timeline markers for the timeline overlay
    */
-  getTimelineMarkers(venueId, startTs, endTs) {
+  getTimelineMarkers(venueId, startTs, endTs, options = {}) {
     if (!this.episodeStore) return [];
-    return this.episodeStore.getTimelineMarkers(venueId, startTs, endTs);
+    return this.episodeStore.getTimelineMarkers(venueId, startTs, endTs, options);
   }
 
   /**
@@ -284,7 +284,7 @@ export class EpisodeDetectorOrchestrator {
       if (allEpisodes.length === 0) continue;
 
       // Rank and select top episodes
-      const ranked = this.ranker.rankAndSelect(allEpisodes, 10);
+      const ranked = this.ranker.rankAndSelect(allEpisodes, 5);
 
       // Build replay clips for selected episodes
       const enriched = this.clipBuilder.buildClips(ranked);
