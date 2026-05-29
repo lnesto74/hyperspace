@@ -313,6 +313,15 @@ export default function TimelineReplay({ venueId, isOpen, onTimeChange }: Timeli
   const currentSlot = timelineData[currentIndex]
   const maxKpi1 = getMaxValue(kpi1)
   const maxKpi2 = getMaxValue(kpi2)
+  const slotCount = timelineData.length
+  const playheadLeftPercent = slotCount > 0 ? ((currentIndex + 0.5) / slotCount) * 100 : 0
+  const playheadTransition = isPlaying
+    ? 'left 0.4s ease-out'
+    : isDragging
+      ? 'left 0.05s linear'
+      : 'left 0.2s ease-out'
+  const currentKpi1Val = currentSlot ? getKpiValue(currentSlot, kpi1) : 0
+  const currentKpi2Val = currentSlot ? getKpiValue(currentSlot, kpi2) : 0
 
   return (
     <div className="absolute bottom-12 left-0 right-0 h-48 bg-gray-900/95 backdrop-blur-sm border-t border-gray-700 z-40 flex flex-col">
@@ -540,27 +549,74 @@ export default function TimelineReplay({ venueId, isOpen, onTimeChange }: Timeli
         ) : (
           <>
             {/* Bar Chart */}
-            <div className="absolute inset-0 flex items-end gap-px">
-              {timelineData.map((slot, _index) => {
+            <div className="absolute inset-0 top-5 flex items-end gap-px">
+              {timelineData.map((slot, index) => {
                 const kpi1Val = getKpiValue(slot, kpi1)
                 const kpi2Val = getKpiValue(slot, kpi2)
                 const heightPercent = (kpi1Val / maxKpi1) * 100
                 const colorIntensity = kpi2Val / maxKpi2
                 const baseColor = getKpiColor(kpi2)
-                
+                const isActive = index === currentIndex
+                const dimOthers = isPlaying && !isActive
+                const barOpacity = isActive
+                  ? 0.55 + colorIntensity * 0.45
+                  : dimOthers
+                    ? 0.12 + colorIntensity * 0.28
+                    : 0.3 + colorIntensity * 0.7
+
                 return (
-                  <div
-                    key={slot.timestamp}
-                    className="flex-1 min-w-[2px]"
-                    style={{
-                      height: `${Math.max(5, heightPercent)}%`,
-                      backgroundColor: baseColor,
-                      opacity: 0.3 + colorIntensity * 0.7,
-                    }}
-                    title={`${slot.time}\n${KPI_OPTIONS.find(k => k.id === kpi1)?.label}: ${kpi1Val}\n${KPI_OPTIONS.find(k => k.id === kpi2)?.label}: ${kpi2Val}`}
-                  />
+                  <div key={slot.timestamp} className="relative flex-1 min-w-[2px] h-full flex items-end">
+                    <div
+                      className={`w-full rounded-t-sm transition-all duration-300 ${
+                        isActive
+                          ? 'ring-1 ring-amber-300/90 shadow-[0_0_14px_rgba(251,191,36,0.35)]'
+                          : ''
+                      } ${isActive && isPlaying ? 'animate-pulse' : ''}`}
+                      style={{
+                        height: `${Math.max(5, heightPercent)}%`,
+                        backgroundColor: baseColor,
+                        opacity: barOpacity,
+                      }}
+                      title={`${slot.time}\n${KPI_OPTIONS.find(k => k.id === kpi1)?.label}: ${kpi1Val}\n${KPI_OPTIONS.find(k => k.id === kpi2)?.label}: ${kpi2Val}`}
+                    />
+                  </div>
                 )
               })}
+            </div>
+
+            {/* Playhead — histogram area only (pill + short stem + thin guide) */}
+            <div className="absolute inset-0 top-5 pointer-events-none z-20">
+              <div
+                className="absolute top-0 bottom-0 w-px -translate-x-1/2"
+                style={{
+                  left: `${playheadLeftPercent}%`,
+                  transition: playheadTransition,
+                  background: 'linear-gradient(to bottom, rgba(251,191,36,0.85) 0%, rgba(255,255,255,0.25) 100%)',
+                  boxShadow: '0 0 6px rgba(251,191,36,0.35)',
+                }}
+              />
+              <div
+                className="absolute top-0 flex flex-col items-center -translate-x-1/2"
+                style={{ left: `${playheadLeftPercent}%`, transition: playheadTransition }}
+              >
+                <div
+                  className={`px-2 py-0.5 rounded-md border shadow-lg backdrop-blur-sm whitespace-nowrap ${
+                    isPlaying
+                      ? 'bg-amber-950/90 border-amber-400/40 text-amber-50 ring-1 ring-amber-400/30'
+                      : isDragging
+                        ? 'bg-gray-950/95 border-white/30 text-white scale-105'
+                        : 'bg-gray-950/90 border-white/15 text-white'
+                  }`}
+                >
+                  <span className="text-[10px] font-mono font-medium">{currentSlot?.time}</span>
+                  {(isPlaying || isDragging) && currentSlot && (
+                    <span className="text-[9px] text-gray-400 ml-1.5 tabular-nums">
+                      {currentKpi1Val} · {currentKpi2Val}
+                    </span>
+                  )}
+                </div>
+                <div className="w-px h-1.5 bg-amber-400/70 shrink-0" />
+              </div>
             </div>
           </>
         )}
@@ -578,36 +634,11 @@ export default function TimelineReplay({ venueId, isOpen, onTimeChange }: Timeli
             containerWidth={trackWidth}
             isVisible={timelineData.length > 0}
             insightMode={insightMode}
+            activeSlotIndex={currentIndex}
+            slotCount={slotCount}
           />
         </div>
       )}
-
-        {/* Playhead spans histogram + insight rail */}
-        {timelineData.length > 0 && (
-          <>
-            <div
-              className="absolute top-0 bottom-0 w-0.5 bg-white shadow-lg pointer-events-none z-20"
-              style={{
-                left: `${(currentIndex / Math.max(1, timelineData.length - 1)) * 100}%`,
-                boxShadow: '0 0 8px rgba(255,255,255,0.5)',
-              }}
-            >
-              <div className="absolute -top-1 left-1/2 -translate-x-1/2 w-3 h-3 bg-white rounded-full shadow-md" />
-              <div className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-3 h-3 bg-white rounded-full shadow-md" />
-            </div>
-            {isDragging && currentSlot && (
-              <div
-                className="absolute -top-8 px-2 py-1 bg-gray-800 text-white text-xs rounded shadow-lg pointer-events-none z-30"
-                style={{
-                  left: `${(currentIndex / Math.max(1, timelineData.length - 1)) * 100}%`,
-                  transform: 'translateX(-50%)',
-                }}
-              >
-                {currentSlot.time}
-              </div>
-            )}
-          </>
-        )}
       </div>
       
       {/* Time Axis */}

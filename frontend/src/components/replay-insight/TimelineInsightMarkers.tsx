@@ -28,6 +28,8 @@ interface TimelineInsightMarkersProps {
   containerWidth: number;
   isVisible: boolean;
   insightMode: InsightDisplayMode;
+  activeSlotIndex?: number;
+  slotCount?: number;
 }
 
 export default function TimelineInsightMarkers({
@@ -37,6 +39,8 @@ export default function TimelineInsightMarkers({
   containerWidth,
   isVisible,
   insightMode,
+  activeSlotIndex = -1,
+  slotCount = 0,
 }: TimelineInsightMarkersProps) {
   const { timelineMarkers, fetchTimelineMarkers, selectEpisode } = useReplayInsight();
   const [hoveredBucket, setHoveredBucket] = useState<number | null>(null);
@@ -65,6 +69,20 @@ export default function TimelineInsightMarkers({
 
   return (
     <div className="relative h-full w-full px-2" style={{ width: containerWidth }}>
+      {/* Playhead slot tint — synced with histogram, no full-height line */}
+      {activeSlotIndex >= 0 && slotCount > 0 && (
+        <div
+          className="absolute top-0 bottom-0 pointer-events-none transition-all duration-300 ease-out rounded-sm"
+          style={{
+            left: `${(activeSlotIndex / slotCount) * 100}%`,
+            width: `${100 / slotCount}%`,
+            backgroundColor: 'rgba(251, 191, 36, 0.07)',
+            borderLeft: '1px solid rgba(251, 191, 36, 0.25)',
+            borderRight: '1px solid rgba(251, 191, 36, 0.25)',
+          }}
+        />
+      )}
+
       {/* Category legend (compact) */}
       <div className="absolute top-0 left-2 flex gap-2 text-[8px] text-gray-500 pointer-events-none z-0">
         {(['checkout', 'merchandising', 'flow', 'dooh'] as const).map(cat => (
