@@ -38,6 +38,9 @@ export default function ZoneKPIOverlayPanel() {
   const [pinnedRoiId, setPinnedRoiId] = useState<string | null>(null)
   const pinnedTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const listContainerRef = useRef<HTMLDivElement>(null)
+  const hoverFromListRef = useRef(false)
+  const isListScrollingRef = useRef(false)
+  const scrollIdleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const liveMetricsRef = useRef<Map<string, { currentOccupancy: number; totalEntries: number; peakOccupancy: number }>>(new Map())
   const [sortTick, setSortTick] = useState(0)
@@ -55,27 +58,71 @@ export default function ZoneKPIOverlayPanel() {
   }, [])
 
   useEffect(() => {
-    const id = setInterval(() => setSortTick(t => t + 1), 500)
+    const id = setInterval(() => {
+      if (!isListScrollingRef.current) setSortTick(t => t + 1)
+    }, 2000)
     return () => clearInterval(id)
   }, [])
 
-  // Map hover → pin card to top + scroll into view
+  // Track manual list scrolling so hover/scroll-into-view does not fight the user
   useEffect(() => {
-    if (hoveredRoiId) {
-      if (pinnedTimeoutRef.current) clearTimeout(pinnedTimeoutRef.current)
-      setPinnedRoiId(hoveredRoiId)
+    const el = listContainerRef.current
+    if (!el) return
 
-      requestAnimationFrame(() => {
-        const el = listContainerRef.current?.querySelector(`[data-roi-id="${hoveredRoiId}"]`)
-        el?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
-      })
-
-      pinnedTimeoutRef.current = setTimeout(() => setPinnedRoiId(null), 12000)
+    const markScrolling = () => {
+      isListScrollingRef.current = true
+      if (scrollIdleTimerRef.current) clearTimeout(scrollIdleTimerRef.current)
+      scrollIdleTimerRef.current = setTimeout(() => {
+        isListScrollingRef.current = false
+      }, 450)
     }
+
+    el.addEventListener('scroll', markScrolling, { passive: true })
+    el.addEventListener('wheel', markScrolling, { passive: true })
+    el.addEventListener('touchmove', markScrolling, { passive: true })
+
+    return () => {
+      el.removeEventListener('scroll', markScrolling)
+      el.removeEventListener('wheel', markScrolling)
+      el.removeEventListener('touchmove', markScrolling)
+      if (scrollIdleTimerRef.current) clearTimeout(scrollIdleTimerRef.current)
+    }
+  }, [])
+
+  const scrollCardIntoViewIfNeeded = useCallback((roiId: string) => {
+    const container = listContainerRef.current
+    if (!container) return
+    const el = container.querySelector(`[data-roi-id="${roiId}"]`) as HTMLElement | null
+    if (!el) return
+
+    const containerRect = container.getBoundingClientRect()
+    const elRect = el.getBoundingClientRect()
+    const visible = elRect.top >= containerRect.top && elRect.bottom <= containerRect.bottom
+    if (!visible) {
+      el.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+    }
+  }, [])
+
+  // Map hover only → pin card to top + scroll into view (not while user is scrolling the list)
+  useEffect(() => {
+    if (hoverFromListRef.current) {
+      hoverFromListRef.current = false
+      return
+    }
+
+    if (!hoveredRoiId || isListScrollingRef.current) return
+
+    if (pinnedTimeoutRef.current) clearTimeout(pinnedTimeoutRef.current)
+    setPinnedRoiId(hoveredRoiId)
+
+    requestAnimationFrame(() => scrollCardIntoViewIfNeeded(hoveredRoiId))
+
+    pinnedTimeoutRef.current = setTimeout(() => setPinnedRoiId(null), 12000)
+
     return () => {
       if (pinnedTimeoutRef.current) clearTimeout(pinnedTimeoutRef.current)
     }
-  }, [hoveredRoiId])
+  }, [hoveredRoiId, scrollCardIntoViewIfNeeded])
 
   const baseRegions = useMemo(
     () => regions.filter(roi => roi.name !== 'Zone 1' && roi.name !== 'LiDAR Coverage'),
@@ -216,8 +263,9 @@ export default function ZoneKPIOverlayPanel() {
   const handleZoneClick = (roiId: string) => openKPIPopup(roiId)
 
   const handleCardHover = (roiId: string | null) => {
+    if (isListScrollingRef.current) return
+    hoverFromListRef.current = true
     setHoveredRoiId(roiId)
-    if (roiId) setPinnedRoiId(roiId)
   }
 
   const renderCard = (roi: typeof baseRegions[0]) => (
@@ -227,7 +275,8 @@ export default function ZoneKPIOverlayPanel() {
         roiName={roiDisplayNames.get(roi.id) || roi.name}
         roiColor={roi.color}
         categoryLabel={roiCategories.get(roi.id) ?? null}
-        highlighted={roi.id === pinnedRoiId || roi.id === hoveredRoiId}
+        highlighted={roi.id === hoveredRoiId}
+        focused={roi.id === pinnedRoiId}
         compact
         onMetricsUpdate={handleMetricsUpdate}
         onClick={() => handleZoneClick(roi.id)}
@@ -314,8 +363,9 @@ export default function ZoneKPIOverlayPanel() {
       {/* Card grid */}
       <div ref={listContainerRef} className="flex-1 overflow-y-auto p-2 min-h-0">
         {pinnedRegion && (
-          <section className="mb-2">
-            <h3 className="text-[10px] uppercase tracking-wide text-white/50 font-medium mb-1 px-0.5">
+          <section className="mb-2 rounded-lg p-1.5 bg-white/[0.02]">
+            <h3 className="text-[10px] uppercase tracking-wide text-white/40 font-medium mb-1 px-0.5 flex items-center gap-1.5">
+              <span className="w-1 h-1 rounded-full bg-amber-400/80 animate-pulse" />
               Focused zone
             </h3>
             {renderCard(pinnedRegion)}

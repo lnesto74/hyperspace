@@ -11,6 +11,7 @@ interface ZoneKPIIndicatorProps {
   roiColor: string
   categoryLabel?: string | null
   highlighted?: boolean
+  focused?: boolean
   compact?: boolean
   onClick?: () => void
   onHover?: (roiId: string | null) => void
@@ -128,6 +129,7 @@ export default function ZoneKPIIndicator({
   roiColor,
   categoryLabel,
   highlighted = false,
+  focused = false,
   compact = false,
   onClick,
   onHover,
@@ -232,24 +234,48 @@ export default function ZoneKPIIndicator({
   const isQueue = roiName.toLowerCase().includes('queue')
 
   if (compact) {
+    const isActive = focused || highlighted
+
     return (
       <div
-        className={`group relative rounded-lg p-2 cursor-pointer transition-all ${
-          highlighted
-            ? 'bg-white/10 ring-1 ring-inset'
+        className={`group relative rounded-lg p-2 cursor-pointer transition-all duration-200 ${
+          isActive
+            ? 'border border-transparent'
             : 'bg-black/25 border border-white/5 hover:bg-black/35 hover:border-white/15'
         }`}
-        style={highlighted ? { boxShadow: `inset 0 0 0 1px ${roiColor}` } : undefined}
+        style={focused ? {
+          background: `linear-gradient(135deg, ${roiColor}18 0%, ${roiColor}08 55%, rgba(255,255,255,0.04) 100%)`,
+          boxShadow: `0 6px 24px ${roiColor}22`,
+        } : highlighted ? {
+          backgroundColor: 'rgba(255,255,255,0.07)',
+        } : undefined}
         onClick={onClick}
         onMouseEnter={() => onHover?.(roiId)}
         onMouseLeave={() => onHover?.(null)}
       >
-        {highlighted && (
-          <div className="absolute left-0 top-1.5 bottom-1.5 w-0.5 rounded-full" style={{ backgroundColor: roiColor }} />
+        {focused && (
+          <>
+            <div
+              className="absolute inset-y-1.5 left-0 w-[3px] rounded-full"
+              style={{ backgroundColor: roiColor, boxShadow: `0 0 10px ${roiColor}` }}
+            />
+            <div
+              className="absolute inset-0 rounded-lg pointer-events-none opacity-40"
+              style={{ background: `radial-gradient(ellipse at 20% 0%, ${roiColor}30 0%, transparent 65%)` }}
+            />
+          </>
         )}
-        <div className="flex items-center gap-1 mb-1 min-w-0">
-          <div className="w-1.5 h-1.5 rounded-full shrink-0" style={{ backgroundColor: roiColor }} />
-          <span className="text-[10px] font-medium text-white/90 truncate flex-1">{roiName}</span>
+        <div className="relative flex items-center gap-1 mb-1 min-w-0">
+          <div
+            className="w-1.5 h-1.5 rounded-full shrink-0 transition-shadow"
+            style={{
+              backgroundColor: roiColor,
+              boxShadow: isActive ? `0 0 8px ${roiColor}` : undefined,
+            }}
+          />
+          <span className={`text-[10px] font-medium truncate flex-1 ${focused ? 'text-white' : 'text-white/90'}`}>
+            {roiName}
+          </span>
           {categoryLabel && (
             <span
               className="text-[8px] px-1 py-px rounded truncate max-w-[52px]"
