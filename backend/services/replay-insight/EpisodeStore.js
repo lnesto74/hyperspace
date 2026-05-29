@@ -15,6 +15,31 @@ const __dirname = path.dirname(__filename);
 
 const DB_PATH = process.env.REPLAY_DB_PATH || path.join(__dirname, '../../database/replay_insight.db');
 
+const CHECKOUT_EPISODE_TYPES = [
+  'QUEUE_BUILDUP_SPIKE',
+  'LANE_UNDERSUPPLY',
+  'LANE_OVERSUPPLY',
+  'ABANDONMENT_WAVE',
+  'QUEUE_SWITCHING',
+];
+
+const MERCH_EPISODE_TYPES = [
+  'HIGH_PASSBY_LOW_BROWSE',
+  'BROWSE_NO_CONVERT_PROXY',
+];
+
+const FLOW_EPISODE_TYPES = [
+  'BOTTLENECK_CORRIDOR',
+  'ROUTE_DETOUR',
+  'STORE_VISIT_TIME_SHIFT',
+];
+
+const DOOH_EPISODE_TYPES = [
+  'EXPOSURE_TO_ACTION_WIN',
+  'EXPOSURE_NO_FOLLOWTHROUGH',
+  'ATTENTION_QUALITY_DROP',
+];
+
 export class EpisodeStore {
   constructor() {
     this.db = new Database(DB_PATH);
@@ -170,6 +195,62 @@ export class EpisodeStore {
   }
 
   getTimelineMarkers(venueId, startTs, endTs, { minScore = 0, limit = 0 } = {}) {
+    if (limit <= 0) {
+      return this._fetchMarkerRows(venueId, startTs, endTs, { minScore })
+        .map(r => this._mapMarkerRow(r));
+    }
+
+    // Balanced fetch — pure score ranking hides checkout when many shelf zones fire
+    const checkoutMinScore = minScore > 0 ? Math.min(minScore, 0.35) : 0;
+    const byId = new Map();
+    const addRows = (rows) => {
+      for (const row of rows) {
+        if (!byId.has(row.id)) byId.set(row.id, this._mapMarkerRow(row));
+      }
+    };
+
+    addRows(this._fetchMarkerRows(venueId, startTs, endTs, {
+      minScore: checkoutMinScore,
+      episodeTypes: CHECKOUT_EPISODE_TYPES,
+      limit: Math.max(5, Math.ceil(limit * 0.3)),
+    }));
+    addRows(this._fetchMarkerRows(venueId, startTs, endTs, {
+      minScore,
+      episodeTypes: MERCH_EPISODE_TYPES,
+      limit: Math.max(4, Math.ceil(limit * 0.35)),
+      excludeIds: [...byId.keys()],
+    }));
+    addRows(this._fetchMarkerRows(venueId, startTs, endTs, {
+      minScore,
+      episodeTypes: FLOW_EPISODE_TYPES,
+      limit: Math.max(2, Math.ceil(limit * 0.2)),
+      excludeIds: [...byId.keys()],
+    }));
+    addRows(this._fetchMarkerRows(venueId, startTs, endTs, {
+      minScore,
+      episodeTypes: DOOH_EPISODE_TYPES,
+      limit: Math.max(2, Math.ceil(limit * 0.15)),
+      excludeIds: [...byId.keys()],
+    }));
+
+    const remaining = limit - byId.size;
+    if (remaining > 0) {
+      addRows(this._fetchMarkerRows(venueId, startTs, endTs, {
+        minScore,
+        limit: remaining,
+        excludeIds: [...byId.keys()],
+      }));
+    }
+
+    return [...byId.values()].sort((a, b) => a.start_ts - b.start_ts);
+  }
+
+  _fetchMarkerRows(venueId, startTs, endTs, {
+    minScore = 0,
+    episodeTypes = null,
+    limit = 0,
+    excludeIds = [],
+  } = {}) {
     let sql = `
       SELECT id, episode_type, start_ts, end_ts, scope, title, confidence, score
       FROM episodes
@@ -180,14 +261,24 @@ export class EpisodeStore {
       sql += ' AND score >= ?';
       params.push(minScore);
     }
+    if (episodeTypes?.length) {
+      sql += ` AND episode_type IN (${episodeTypes.map(() => '?').join(',')})`;
+      params.push(...episodeTypes);
+    }
+    if (excludeIds.length) {
+      sql += ` AND id NOT IN (${excludeIds.map(() => '?').join(',')})`;
+      params.push(...excludeIds);
+    }
     sql += ' ORDER BY score DESC, start_ts ASC';
     if (limit > 0) {
       sql += ' LIMIT ?';
       params.push(limit);
     }
-    const rows = this.db.prepare(sql).all(...params);
+    return this.db.prepare(sql).all(...params);
+  }
 
-    return rows.map(r => ({
+  _mapMarkerRow(r) {
+    return {
       id: r.id,
       episode_type: r.episode_type,
       start_ts: r.start_ts,
@@ -196,7 +287,7 @@ export class EpisodeStore {
       title: r.title,
       confidence: r.confidence,
       score: r.score,
-    }));
+    };
   }
 
   getEpisodesByKpi(venueId, kpiId, episodeTypes, { limit = 5 } = {}) {

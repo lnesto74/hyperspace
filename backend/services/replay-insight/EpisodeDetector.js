@@ -284,7 +284,7 @@ export class EpisodeDetectorOrchestrator {
       if (allEpisodes.length === 0) continue;
 
       // Rank and select top episodes
-      const ranked = this.ranker.rankAndSelect(allEpisodes, 5);
+      const ranked = this.ranker.rankAndSelect(allEpisodes, 8);
 
       // Build replay clips for selected episodes
       const enriched = this.clipBuilder.buildClips(ranked);

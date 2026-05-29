@@ -41,9 +41,9 @@ export const INSIGHT_FETCH_PARAMS: Record<
   Exclude<InsightDisplayMode, 'off'>,
   { minScore?: number; limit?: number }
 > = {
-  top20: { minScore: 0.55, limit: 20 },
-  high: { minScore: 0.7, limit: 20 },
-  /** Cap fetch size; client buckets into slots — avoids thousands of dots */
+  top20: { minScore: 0.45, limit: 24 },
+  high: { minScore: 0.65, limit: 20 },
+  /** Cap fetch size; client buckets into slots — balanced server-side by category */
   all: { limit: 120 },
 };
 

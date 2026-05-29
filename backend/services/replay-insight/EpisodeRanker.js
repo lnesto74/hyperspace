@@ -6,6 +6,14 @@
  * deviation from baseline, business relevance weight.
  */
 
+const CHECKOUT_EPISODE_TYPES = new Set([
+  'QUEUE_BUILDUP_SPIKE',
+  'LANE_UNDERSUPPLY',
+  'LANE_OVERSUPPLY',
+  'ABANDONMENT_WAVE',
+  'QUEUE_SWITCHING',
+]);
+
 // Business relevance weights by episode type
 const RELEVANCE_WEIGHTS = {
   QUEUE_BUILDUP_SPIKE: 1.0,
@@ -85,9 +93,23 @@ export class EpisodeRanker {
     // Deduplicate overlapping episodes of the same type
     const deduped = this._deduplicateOverlapping(scored);
 
-    // Group by episode type
+    const selected = [];
+    const selectedIds = new Set();
+
+    // Reserve checkout slots so shelf-heavy venues still persist queue episodes
+    const checkoutCandidates = deduped
+      .filter(ep => CHECKOUT_EPISODE_TYPES.has(ep.episode_type))
+      .sort((a, b) => b.score - a.score);
+    const checkoutSlots = Math.min(2, topN, checkoutCandidates.length);
+    for (let i = 0; i < checkoutSlots; i++) {
+      selected.push(checkoutCandidates[i]);
+      selectedIds.add(checkoutCandidates[i].id);
+    }
+
+    // Group remaining by episode type
     const byType = new Map();
     for (const ep of deduped) {
+      if (selectedIds.has(ep.id)) continue;
       if (!byType.has(ep.episode_type)) byType.set(ep.episode_type, []);
       byType.get(ep.episode_type).push(ep);
     }
@@ -97,15 +119,18 @@ export class EpisodeRanker {
       group.sort((a, b) => b.score - a.score);
     }
 
-    // Round-robin selection: pick top episode from each type, then second, etc.
-    const selected = [];
+    // Round-robin selection for remaining slots
     const maxPerType = Math.max(2, Math.ceil(topN / Math.max(1, byType.size)));
     let round = 0;
 
     while (selected.length < topN && round < maxPerType) {
       for (const [, group] of byType) {
         if (round < group.length && selected.length < topN) {
-          selected.push(group[round]);
+          const ep = group[round];
+          if (!selectedIds.has(ep.id)) {
+            selected.push(ep);
+            selectedIds.add(ep.id);
+          }
         }
       }
       round++;
