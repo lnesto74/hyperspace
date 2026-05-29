@@ -556,17 +556,22 @@ export default function createKpiRoutes(db, kpiCalculator, trajectoryStorage, de
         if (row.is_engagement === 1) slot.engagements++;
       }
       
-      // Build slots from in-memory data
-      for (let ts = startTime; ts < endTime; ts += slotDuration) {
+      // Build slots from in-memory data — keys must match epoch-aligned bucket used above
+      const alignedStart = Math.floor(startTime / slotDuration) * slotDuration;
+      for (let ts = alignedStart; ts < endTime; ts += slotDuration) {
         const date = new Date(ts);
         const occ = occupancyBySlot.get(ts);
         const vis = visitsBySlot.get(ts);
         
         const avgOccupancy = occ && occ.count > 0 ? occ.sum / occ.count : 0;
+        const rangeMs = endTime - startTime;
+        const showDate = rangeMs > 36 * 60 * 60 * 1000;
         
         slots.push({
           timestamp: ts,
-          time: date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false }),
+          time: showDate
+            ? date.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false })
+            : date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false }),
           date: date.toLocaleDateString(),
           occupancy: Math.round(avgOccupancy * 10) / 10,
           peakOccupancy: occ?.peak || 0,
@@ -579,7 +584,7 @@ export default function createKpiRoutes(db, kpiCalculator, trajectoryStorage, de
       }
       
       // Cache the computed result
-      const responseData = { slots, startTime, endTime, interval: intervalMins };
+      const responseData = { slots, startTime: alignedStart, endTime, interval: intervalMins };
       timelineCache.set(cacheKey, {
         data: responseData,
         cachedAt: Date.now(),
