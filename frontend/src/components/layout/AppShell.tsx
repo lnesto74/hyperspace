@@ -19,6 +19,8 @@ import { useAutoSave } from '../../hooks/useAutoSave'
 import { useProfitRadar } from '../../context/ProfitRadarContext'
 import IntentFieldOverlay from '../../features/profitRadar/IntentFieldOverlay'
 import { useViewMode } from '../../App'
+import { useRoi } from '../../context/RoiContext'
+import ZoneKPIOverlayPanel from '../kpi/ZoneKPIOverlayPanel'
 
 export type SidebarTab = 'floorplan' | 'venueDwg' | 'venue' | 'objects' | 'lidars' | 'regions' | 'planogram'
 export type CameraView = 'perspective' | 'top' | 'isometric' | 'front'
@@ -82,6 +84,13 @@ export default function AppShell({ onOpenDwgImporter, onOpenEdgeCommissioning, s
   const { dwgLayoutId: selectedDwgLayoutId } = useDwg()
   const { intentFieldEnabled, setIntentFieldEnabled } = useProfitRadar()
   const { launchPadOpen: lpOpen, setLaunchPadOpen: setLpOpen, neuralDashboardEnabled, setNeuralDashboardEnabled } = useViewMode()
+  const { showKPIOverlays, regions } = useRoi()
+  const showKpiRail = showKPIOverlays && regions.length > 0 && !selectedObjectId && !neuralDashboardEnabled
+
+  useEffect(() => {
+    const t = window.setTimeout(() => window.dispatchEvent(new Event('resize')), 50)
+    return () => window.clearTimeout(t)
+  }, [showKpiRail])
   
   // Determine if we're in DWG venue mode
   const isDwgMode = activeTab === 'venueDwg' && selectedDwgLayoutId !== null
@@ -164,8 +173,11 @@ export default function AppShell({ onOpenDwgImporter, onOpenEdgeCommissioning, s
         {/* Mode Bar - Setup/Edit/Live toggle + Venue selector */}
         <ModeBar />
         
-        {/* 3D Viewport - with optional Neural Dashboard wrapper */}
-        <div className="flex-1 relative overflow-hidden">
+        {/* 3D Viewport + optional KPI focus rail */}
+        <div className="flex-1 relative overflow-hidden flex flex-row min-h-0">
+        {showKpiRail && <ZoneKPIOverlayPanel />}
+
+        <div className="flex-1 relative overflow-hidden min-w-0 min-h-0">
         <NeuralDashboard 
           enabled={neuralDashboardEnabled}
           leftOffset={sidebarCollapsed ? 16 : 0}
@@ -599,6 +611,7 @@ export default function AppShell({ onOpenDwgImporter, onOpenEdgeCommissioning, s
             onTimeChange={setReplayTimestamp}
           />
         )}
+        </div>
         </div>
       </div>
       

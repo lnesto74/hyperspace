@@ -18,7 +18,6 @@ import InsightModeOverlay from './components/replay-insight/InsightModeOverlay'
 import StoryGridModal from './components/replay-insight/StoryGridModal'
 import AppShell from './components/layout/AppShell'
 import ZoneKPIPopup from './components/kpi/ZoneKPIPopup'
-import ZoneKPIOverlayPanel from './components/kpi/ZoneKPIOverlayPanel'
 import ActivityLedger from './components/kpi/ActivityLedger'
 import HeatmapViewerModal from './components/heatmap/HeatmapViewerModal'
 import CheckoutManagerModal from './components/checkout/CheckoutManagerModal'
@@ -372,9 +371,6 @@ function KPIOverlayToggle() {
           onClose={() => setShowLedger(false)}
         />
       )}
-      
-      {/* KPI Overlay Panel */}
-      <ZoneKPIOverlayPanel />
       
       {/* Replay Insight Panel (parallel system — does not modify existing) */}
       <ReplayInsightPanel />

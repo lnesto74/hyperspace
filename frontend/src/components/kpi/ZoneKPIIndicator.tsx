@@ -11,8 +11,10 @@ interface ZoneKPIIndicatorProps {
   roiColor: string
   categoryLabel?: string | null
   highlighted?: boolean
+  compact?: boolean
   onClick?: () => void
-  onMetricsUpdate?: (roiId: string, metrics: { currentOccupancy: number; totalEntries: number }) => void
+  onHover?: (roiId: string | null) => void
+  onMetricsUpdate?: (roiId: string, metrics: { currentOccupancy: number; totalEntries: number; peakOccupancy?: number }) => void
 }
 
 interface LiveKPIData {
@@ -126,7 +128,9 @@ export default function ZoneKPIIndicator({
   roiColor,
   categoryLabel,
   highlighted = false,
+  compact = false,
   onClick,
+  onHover,
   onMetricsUpdate,
 }: ZoneKPIIndicatorProps) {
   const tracksRef = useTracksRef()
@@ -207,6 +211,7 @@ export default function ZoneKPIIndicator({
       onMetricsUpdate?.(roiId, {
         currentOccupancy: occupancy,
         totalEntries: totalEntriesRef.current,
+        peakOccupancy: peakOccupancyRef.current,
       })
     }
     const id = setInterval(tick, KPI_INTERVAL)
@@ -222,9 +227,62 @@ export default function ZoneKPIIndicator({
     )
   }
 
-  // Calculate occupancy percentage (against a reasonable max, e.g., 30 or peak*1.5)
   const maxCapacity = Math.max(kpiData.peakOccupancy * 1.5, 20)
   const occupancyPercent = (kpiData.currentOccupancy / maxCapacity) * 100
+  const isQueue = roiName.toLowerCase().includes('queue')
+
+  if (compact) {
+    return (
+      <div
+        className={`group relative rounded-lg p-2 cursor-pointer transition-all ${
+          highlighted
+            ? 'bg-white/10 ring-1 ring-inset'
+            : 'bg-black/25 border border-white/5 hover:bg-black/35 hover:border-white/15'
+        }`}
+        style={highlighted ? { boxShadow: `inset 0 0 0 1px ${roiColor}` } : undefined}
+        onClick={onClick}
+        onMouseEnter={() => onHover?.(roiId)}
+        onMouseLeave={() => onHover?.(null)}
+      >
+        {highlighted && (
+          <div className="absolute left-0 top-1.5 bottom-1.5 w-0.5 rounded-full" style={{ backgroundColor: roiColor }} />
+        )}
+        <div className="flex items-center gap-1 mb-1 min-w-0">
+          <div className="w-1.5 h-1.5 rounded-full shrink-0" style={{ backgroundColor: roiColor }} />
+          <span className="text-[10px] font-medium text-white/90 truncate flex-1">{roiName}</span>
+          {categoryLabel && (
+            <span
+              className="text-[8px] px-1 py-px rounded truncate max-w-[52px]"
+              style={{ color: ROI_CATEGORY_COLOR, backgroundColor: `${ROI_CATEGORY_COLOR}15` }}
+            >
+              {categoryLabel}
+            </span>
+          )}
+        </div>
+        <div className="flex items-center gap-1.5">
+          <CircularGauge value={occupancyPercent} size={32} strokeWidth={3} showPercent={false} color={roiColor} />
+          <div className="flex-1 min-w-0">
+            <div className="text-base font-bold text-white leading-none tabular-nums">{kpiData.currentOccupancy}</div>
+            <div className="text-[9px] text-white/35">PAX</div>
+          </div>
+          <div className="text-right opacity-0 group-hover:opacity-100 transition-opacity">
+            <TrendArrow current={kpiData.currentOccupancy} previous={kpiData.previousOccupancy || 0} />
+          </div>
+        </div>
+        <div className="flex justify-between mt-1 pt-1 border-t border-white/5 text-[9px]">
+          <span className="text-white/35">In <span className="text-white/70 tabular-nums">{kpiData.totalEntries}</span></span>
+          <span className="text-white/35">Peak <span className="text-white/70 tabular-nums">{kpiData.peakOccupancy}</span></span>
+          {isQueue && (
+            <span className="text-amber-400/80 tabular-nums">
+              {kpiData.avgWaitingTime && kpiData.avgWaitingTime > 0
+                ? (kpiData.avgWaitingTime < 1 ? `${Math.round(kpiData.avgWaitingTime * 60)}s` : `${kpiData.avgWaitingTime.toFixed(1)}m`)
+                : '0s'}
+            </span>
+          )}
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div 
@@ -237,6 +295,8 @@ export default function ZoneKPIIndicator({
         boxShadow: `inset 0 0 0 2px ${roiColor}`,
       } : undefined}
       onClick={onClick}
+      onMouseEnter={() => onHover?.(roiId)}
+      onMouseLeave={() => onHover?.(null)}
     >
       {highlighted && (
         <div

@@ -497,6 +497,8 @@ export default function MainViewport({
     updateVertexPosition,
     openKPIPopup,
     setHoveredRoiId,
+    showKPIOverlays,
+    hoveredRoiId,
   } = useRoi()
   
   // Replay Insight context for zone highlighting
@@ -5094,6 +5096,93 @@ export default function MainViewport({
       })
     }
   }, [isInsightMode, selectedEpisode])
+
+  // KPI overlay mode: dim non-hovered zones + sync card hover → map labels
+  useEffect(() => {
+    if (!showKPIOverlays) {
+      roiMeshesRef.current.forEach(group => {
+        group.children.forEach(child => {
+          if (child instanceof THREE.Mesh && child.userData.roiId && !child.userData.isRoiVertex) {
+            const material = child.material as THREE.MeshBasicMaterial
+            if (material.userData?.kpiDimOriginalOpacity !== undefined) {
+              material.opacity = material.userData.kpiDimOriginalOpacity
+              delete material.userData.kpiDimOriginalOpacity
+            }
+          }
+        })
+      })
+      return
+    }
+
+    const focusId = hoveredRoiId
+
+    // Sync KPI card hover to ROI label visibility
+    if (focusId !== hoveredRoiIdRef.current) {
+      if (hoveredRoiIdRef.current) {
+        const prevGroup = roiMeshesRef.current.get(hoveredRoiIdRef.current)
+        if (prevGroup) {
+          for (const child of prevGroup.children) {
+            if (child instanceof CSS2DObject && child.userData.roiId) {
+              (child.element as HTMLDivElement).style.opacity = '0'
+              break
+            }
+          }
+        }
+      }
+      if (focusId) {
+        const roi = regionsRef.current.find(r => r.id === focusId)
+        const group = roiMeshesRef.current.get(focusId)
+        if (group && roi) {
+          for (const child of group.children) {
+            if (child instanceof CSS2DObject && child.userData.roiId) {
+              const labelDiv = child.element as HTMLDivElement
+              labelDiv.style.opacity = '1'
+              const category =
+                roiCategoryCacheRef.current.get(focusId) ??
+                resolveRoiCategorySync(roi, objectsRef.current)
+              setRoiLabelHtml(labelDiv, roi.name, category, roi.color)
+              break
+            }
+          }
+        }
+      }
+      hoveredRoiIdRef.current = focusId
+    }
+
+    roiMeshesRef.current.forEach((group, roiId) => {
+      group.children.forEach(child => {
+        if (child instanceof THREE.Mesh && child.userData.roiId && !child.userData.isRoiVertex) {
+          const material = child.material as THREE.MeshBasicMaterial
+          if (material.userData?.kpiDimOriginalOpacity === undefined) {
+            material.userData = material.userData || {}
+            material.userData.kpiDimOriginalOpacity = material.opacity
+          }
+          const base = material.userData.kpiDimOriginalOpacity as number
+          if (!focusId) {
+            material.opacity = base
+          } else if (roiId === focusId) {
+            material.opacity = Math.min(1, base + 0.25)
+          } else {
+            material.opacity = base * 0.35
+          }
+        }
+      })
+    })
+
+    return () => {
+      roiMeshesRef.current.forEach(group => {
+        group.children.forEach(child => {
+          if (child instanceof THREE.Mesh && child.userData.roiId && !child.userData.isRoiVertex) {
+            const material = child.material as THREE.MeshBasicMaterial
+            if (material.userData?.kpiDimOriginalOpacity !== undefined) {
+              material.opacity = material.userData.kpiDimOriginalOpacity
+              delete material.userData.kpiDimOriginalOpacity
+            }
+          }
+        })
+      })
+    }
+  }, [showKPIOverlays, hoveredRoiId])
   
   // Toggle layer visibility - Tracks (bounding boxes + trail lines)
   const { setTrackVisibility } = useTrackingActions()
