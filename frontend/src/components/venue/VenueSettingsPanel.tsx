@@ -22,6 +22,24 @@ const DEFAULT_VISIT_SESSION: VisitSessionConfig = {
   calibrationConversionRate: null,
 }
 
+const TRACK_KEY_MODES: { value: VisitSessionConfig['trackKeyMode']; label: string; hint: string }[] = [
+  {
+    value: 'reid_chain',
+    label: 'Time + position (recommended)',
+    hint: 'Link fragments if the gap and distance match — best for grocery.',
+  },
+  {
+    value: 'suffix_alias',
+    label: 'Same perception ID suffix',
+    hint: 'Only merge when the device reuses the same short track id.',
+  },
+  {
+    value: 'exact',
+    label: 'Exact track key only',
+    hint: 'No stitching — each fragment stays separate (debug / strict).',
+  },
+]
+
 
 interface VenueSettingsPanelProps {
   venueId: string
@@ -164,7 +182,7 @@ export default function VenueSettingsPanel({
       className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 backdrop-blur-sm"
       onClick={(e) => e.target === e.currentTarget && onClose()}
     >
-      <div className="bg-gray-900 border border-gray-700 rounded-xl shadow-2xl w-full max-w-md max-h-[90vh] overflow-hidden flex flex-col">
+      <div className="bg-gray-900 border border-gray-700 rounded-xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-hidden flex flex-col">
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-3 border-b border-gray-700 bg-gray-800">
           <div className="flex items-center gap-3">
@@ -409,6 +427,74 @@ export default function VenueSettingsPanel({
                       {Math.round(visitSession.entranceMinDurationMs / 1000)}s
                     </span>
                   </div>
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-[10px] text-gray-400">Max trip length (minutes)</label>
+                  <p className="text-[10px] text-gray-600 mb-1">
+                    After someone enters, we keep stitching fragments for this long. Typical supermarket
+                    shops are 10–15 min — a 30–45 min limit is plenty; 90 min is a safe default ceiling.
+                  </p>
+                  <div className="flex items-center gap-3">
+                    <input
+                      type="range"
+                      min={15}
+                      max={120}
+                      step={5}
+                      value={Math.round(visitSession.maxVisitDurationMs / 60_000)}
+                      onChange={(e) => setVisitSession(v => ({
+                        ...v,
+                        maxVisitDurationMs: parseInt(e.target.value, 10) * 60_000,
+                      }))}
+                      className="flex-1 h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-violet-500"
+                    />
+                    <span className="w-14 text-sm text-white text-center tabular-nums">
+                      {Math.round(visitSession.maxVisitDurationMs / 60_000)}m
+                    </span>
+                  </div>
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-[10px] text-gray-400">Min in-store time for “browse” (seconds)</label>
+                  <p className="text-[10px] text-gray-600 mb-1">
+                    Shorter trips are classified as bounce / quick visit instead of in-store browse.
+                  </p>
+                  <div className="flex items-center gap-3">
+                    <input
+                      type="range"
+                      min={10}
+                      max={180}
+                      step={5}
+                      value={visitSession.minInStoreDurationSec}
+                      onChange={(e) => setVisitSession(v => ({
+                        ...v,
+                        minInStoreDurationSec: parseInt(e.target.value, 10),
+                      }))}
+                      className="flex-1 h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-violet-500"
+                    />
+                    <span className="w-12 text-sm text-white text-center tabular-nums">
+                      {visitSession.minInStoreDurationSec}s
+                    </span>
+                  </div>
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-[10px] text-gray-400">Fragment linking mode</label>
+                  <select
+                    value={visitSession.trackKeyMode}
+                    onChange={(e) => setVisitSession(v => ({
+                      ...v,
+                      trackKeyMode: e.target.value,
+                    }))}
+                    className="w-full px-2 py-1.5 bg-gray-800 border border-gray-600 rounded text-white text-sm"
+                  >
+                    {TRACK_KEY_MODES.map(m => (
+                      <option key={m.value} value={m.value}>{m.label}</option>
+                    ))}
+                  </select>
+                  <p className="text-[10px] text-gray-600">
+                    {TRACK_KEY_MODES.find(m => m.value === visitSession.trackKeyMode)?.hint}
+                  </p>
                 </div>
 
                 <div className="space-y-1">

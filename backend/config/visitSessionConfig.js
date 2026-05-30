@@ -42,6 +42,13 @@ export function normalizeVisitSessionConfig(raw) {
   if (typeof out.reidMaxDistanceM === 'number') {
     out.reidMaxDistanceM = Math.max(1, Math.min(out.reidMaxDistanceM, 15));
   }
+  if (typeof out.minInStoreDurationSec === 'number') {
+    out.minInStoreDurationSec = Math.max(5, Math.min(out.minInStoreDurationSec, 600));
+  }
+  const validModes = new Set(['reid_chain', 'suffix_alias', 'exact']);
+  if (!validModes.has(out.trackKeyMode)) {
+    out.trackKeyMode = DEFAULT_VISIT_SESSION_CONFIG.trackKeyMode;
+  }
   return out;
 }
 
