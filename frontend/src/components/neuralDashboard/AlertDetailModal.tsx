@@ -211,7 +211,7 @@ export default function AlertDetailModal({ alert, onClose }: Props) {
               </div>
               <div
                 className="rounded-md border overflow-hidden"
-                style={{ background: 'rgba(0,0,0,0.5)', borderColor: 'rgba(255,255,255,0.06)' }}
+                style={{ background: 'rgba(12, 24, 36, 0.95)', borderColor: 'rgba(34, 211, 238, 0.15)' }}
               >
                 <FloorPlanMiniMap
                   objects={objects}
@@ -223,17 +223,17 @@ export default function AlertDetailModal({ alert, onClose }: Props) {
                   height={320}
                 />
               </div>
-              <div className="flex items-center gap-4 mt-2 text-[8px] text-white/30">
+              <div className="flex items-center gap-4 mt-2 text-[8px] text-white/40">
                 <span className="flex items-center gap-1">
-                  <span className="inline-block w-2 h-2 rounded-sm border border-cyan-400/50 bg-cyan-400/10" />
+                  <span className="inline-block w-2 h-2 rounded-sm border border-cyan-200/70 bg-cyan-400/25" />
                   DWG fixtures
                 </span>
                 <span className="flex items-center gap-1">
-                  <span className="inline-block w-2 h-2 rounded-sm border border-violet-400/40 bg-violet-400/10" />
+                  <span className="inline-block w-2 h-2 rounded-sm border border-violet-300/60 bg-violet-400/20" />
                   Zones
                 </span>
                 <span className="flex items-center gap-1">
-                  <span className="inline-block w-2 h-2 rounded-sm border border-red-400 bg-red-400/30" />
+                  <span className="inline-block w-2 h-2 rounded-sm border border-red-400 bg-red-400/40" />
                   Alert ROI (pulsing)
                 </span>
               </div>

@@ -111,16 +111,20 @@ export default function FloorPlanMiniMap({
   const pulseWave = 0.5 + 0.5 * Math.sin(pulse * Math.PI * 2)
   const gridPatternId = useId().replace(/:/g, '')
   const hatchPatternId = useId().replace(/:/g, '')
+  const highContrast = mode === 'alert'
 
   const sceneW = bounds.maxX - bounds.minX || 1
   const gridStep = sceneW > 120 ? 5 : sceneW > 60 ? 2 : 1
+
+  const mapBg = highContrast ? '#0c1824' : '#050810'
+  const gridStroke = highContrast ? 'rgba(34, 211, 238, 0.16)' : 'rgba(255,255,255,0.05)'
 
   return (
     <svg
       viewBox={viewBox}
       preserveAspectRatio="xMidYMid meet"
       className="w-full block"
-      style={{ height, background: '#050810' }}
+      style={{ height, background: mapBg }}
     >
       <defs>
         <pattern
@@ -132,8 +136,8 @@ export default function FloorPlanMiniMap({
           <path
             d={`M ${gridStep} 0 L 0 0 0 ${gridStep}`}
             fill="none"
-            stroke="rgba(255,255,255,0.05)"
-            strokeWidth={gridStep * 0.02}
+            stroke={gridStroke}
+            strokeWidth={gridStep * (highContrast ? 0.035 : 0.02)}
           />
         </pattern>
         <pattern
@@ -155,16 +159,52 @@ export default function FloorPlanMiniMap({
         fill={`url(#${gridPatternId})`}
       />
 
+      {highContrast && (
+        <rect
+          x={bounds.minX}
+          y={bounds.minZ}
+          width={bounds.maxX - bounds.minX}
+          height={bounds.maxZ - bounds.minZ}
+          fill="none"
+          stroke="rgba(34, 211, 238, 0.28)"
+          strokeWidth={0.08}
+          strokeDasharray="0.4 0.25"
+        />
+      )}
+
       {fixtures.map(fixture => {
         const outline = getDrawableFixtureOutline(fixture)
         if (outline.length < 3) return null
+        const d = polygonPath(outline)
         const isCheckout = mode === 'checkoutLanes' && (
           fixture.type === 'checkout' || (fixture.name?.toLowerCase().includes('checkout') ?? false)
         )
+
+        if (highContrast) {
+          return (
+            <g key={fixture.id}>
+              <path
+                d={d}
+                fill="rgba(26, 58, 74, 0.38)"
+                stroke="rgba(6, 16, 24, 0.9)"
+                strokeWidth={0.09}
+                strokeLinejoin="round"
+              />
+              <path
+                d={d}
+                fill="rgba(0, 188, 212, 0.08)"
+                stroke="rgba(240, 253, 255, 0.82)"
+                strokeWidth={0.055}
+                strokeLinejoin="round"
+              />
+            </g>
+          )
+        }
+
         return (
           <path
             key={fixture.id}
-            d={polygonPath(outline)}
+            d={d}
             fill={isCheckout ? 'rgba(0, 210, 255, 0.12)' : 'rgba(0, 210, 255, 0.04)'}
             stroke={isCheckout ? 'rgba(0, 210, 255, 0.65)' : 'rgba(0, 210, 255, 0.28)'}
             strokeWidth={isCheckout ? 0.06 : 0.04}
@@ -267,9 +307,9 @@ export default function FloorPlanMiniMap({
           <path
             key={r.id}
             d={polygonPath(r.vertices)}
-            fill="rgba(139, 92, 246, 0.06)"
-            stroke="rgba(139, 92, 246, 0.25)"
-            strokeWidth={0.04}
+            fill="rgba(139, 92, 246, 0.1)"
+            stroke="rgba(167, 139, 250, 0.52)"
+            strokeWidth={0.05}
           />
         )
       })}
@@ -277,13 +317,20 @@ export default function FloorPlanMiniMap({
       {mode === 'alert' && mapRegions.map(r => {
         if (!highlightIds.has(r.id)) return null
         return (
-          <path
-            key={`hl-${r.id}`}
-            d={polygonPath(r.vertices)}
-            fill={`rgba(255, 40, 40, ${0.18 + pulseWave * 0.22})`}
-            stroke={`rgba(255, 50, 50, ${0.7 + pulseWave * 0.3})`}
-            strokeWidth={0.07 + pulseWave * 0.05}
-          />
+          <g key={`hl-${r.id}`}>
+            <path
+              d={polygonPath(r.vertices)}
+              fill={`rgba(255, 40, 40, ${0.22 + pulseWave * 0.18})`}
+              stroke="rgba(80, 10, 10, 0.85)"
+              strokeWidth={0.1 + pulseWave * 0.04}
+            />
+            <path
+              d={polygonPath(r.vertices)}
+              fill="none"
+              stroke={`rgba(255, 90, 90, ${0.85 + pulseWave * 0.15})`}
+              strokeWidth={0.06 + pulseWave * 0.03}
+            />
+          </g>
         )
       })}
 
