@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from 'react'
-import { Upload, Search, Filter, Package, Trash2, ChevronDown, GripVertical, HardDrive, Cloud, Link2, X, Folder, FileSpreadsheet, ArrowLeft, Loader2 } from 'lucide-react'
+import { Upload, Search, Filter, Package, Trash2, ChevronDown, GripVertical, HardDrive, Cloud, Link2, X, Folder, FileSpreadsheet, ArrowLeft, Loader2, Globe } from 'lucide-react'
 import { usePlanogram } from '../../context/PlanogramContext'
+import type { CatalogCrawlProgress } from '../../context/PlanogramContext'
 
 // Google OAuth config - only needs Client ID
 const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID || ''
@@ -18,6 +19,7 @@ export default function SkuLibraryPanel() {
     activeCatalog,
     loadCatalog,
     importCatalog,
+    crawlCatalogFromWeb,
     deleteCatalog,
     filteredSkuItems,
     selectedSkuIds,
@@ -40,7 +42,13 @@ export default function SkuLibraryPanel() {
   const [showFilters, setShowFilters] = useState(false)
   const [showImportMenu, setShowImportMenu] = useState(false)
   const [showUrlModal, setShowUrlModal] = useState(false)
+  const [showCrawlModal, setShowCrawlModal] = useState(false)
   const [importUrl, setImportUrl] = useState('')
+  const [crawlUrl, setCrawlUrl] = useState('https://spesaonline.esselunga.it/commerce/nav/supermercato/store')
+  const [crawlName, setCrawlName] = useState('')
+  const [crawlMode, setCrawlMode] = useState<'extract' | 'crawl'>('extract')
+  const [crawlMaxPages, setCrawlMaxPages] = useState(10)
+  const [crawlProgress, setCrawlProgress] = useState<CatalogCrawlProgress | null>(null)
   const [importLoading, setImportLoading] = useState(false)
   const importMenuRef = useRef<HTMLDivElement>(null)
   
@@ -253,6 +261,51 @@ export default function SkuLibraryPanel() {
     }
     setImportLoading(false)
   }
+
+  const resetCrawlModal = () => {
+    setShowCrawlModal(false)
+    setCrawlProgress(null)
+    setImportLoading(false)
+  }
+
+  const handleWebCrawl = async () => {
+    if (!crawlUrl.trim()) return
+
+    setImportLoading(true)
+    setCrawlProgress({
+      status: 'running',
+      progress: { finished: 0, total: 0, message: 'Starting ScrapeGraphAI…' },
+    })
+
+    try {
+      const result = await crawlCatalogFromWeb({
+        url: crawlUrl.trim(),
+        name: crawlName.trim() || undefined,
+        mode: crawlMode,
+        maxPages: crawlMode === 'crawl' ? crawlMaxPages : undefined,
+        onProgress: setCrawlProgress,
+      })
+      setCrawlProgress({
+        status: 'completed',
+        progress: {
+          finished: 1,
+          total: 1,
+          message: `Imported ${result.itemCount} products`,
+        },
+        itemCount: result.itemCount,
+        catalogId: result.catalogId,
+      })
+      setTimeout(resetCrawlModal, 1200)
+    } catch (err) {
+      console.error('Web crawl failed:', err)
+      setCrawlProgress((prev) => ({
+        status: 'failed',
+        progress: prev?.progress || { finished: 0, total: 0, message: 'Failed' },
+        error: err instanceof Error ? err.message : 'Crawl failed',
+      }))
+      setImportLoading(false)
+    }
+  }
   
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
@@ -308,12 +361,12 @@ export default function SkuLibraryPanel() {
   
   return (
     <div className="w-72 bg-panel-bg border-r border-border-dark flex flex-col h-full">
-      {/* URL Import Modal */}
+      {/* Spreadsheet URL Import Modal (unchanged — direct file download) */}
       {showUrlModal && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
           <div className="bg-gray-800 rounded-lg p-4 w-96 border border-gray-700">
             <div className="flex items-center justify-between mb-3">
-              <h3 className="text-sm font-semibold text-white">Import from URL</h3>
+              <h3 className="text-sm font-semibold text-white">Import spreadsheet from URL</h3>
               <button
                 onClick={() => { setShowUrlModal(false); setImportUrl('') }}
                 className="p-1 text-gray-400 hover:text-white"
@@ -341,6 +394,147 @@ export default function SkuLibraryPanel() {
                 className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 disabled:bg-gray-600 rounded text-sm text-white"
               >
                 {importLoading ? 'Importing...' : 'Import'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ScrapeGraphAI Web Crawl Modal */}
+      {showCrawlModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-gray-800 rounded-lg p-4 w-[440px] border border-gray-700">
+            <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center gap-2">
+                <Globe className="w-4 h-4 text-emerald-400" />
+                <h3 className="text-sm font-semibold text-white">Crawl website (ScrapeGraphAI)</h3>
+              </div>
+              <button
+                onClick={resetCrawlModal}
+                className="p-1 text-gray-400 hover:text-white"
+                disabled={importLoading && crawlProgress?.status === 'running'}
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <p className="text-xs text-gray-400 mb-3">
+              Extract grocery products from a store URL. Powered by{' '}
+              <a href="https://scrapegraphai.com/" target="_blank" rel="noreferrer" className="text-emerald-400 hover:underline">
+                ScrapeGraphAI
+              </a>{' '}
+              (free tier: 500 credits).
+            </p>
+
+            <label className="text-xs text-gray-400 block mb-1">Store / category URL</label>
+            <input
+              type="text"
+              value={crawlUrl}
+              onChange={(e) => setCrawlUrl(e.target.value)}
+              placeholder="https://spesaonline.esselunga.it/..."
+              disabled={importLoading}
+              className="w-full px-3 py-2 bg-gray-900 border border-gray-600 rounded text-sm text-white placeholder-gray-500 mb-3 disabled:opacity-60"
+            />
+
+            <label className="text-xs text-gray-400 block mb-1">Catalog name (optional)</label>
+            <input
+              type="text"
+              value={crawlName}
+              onChange={(e) => setCrawlName(e.target.value)}
+              placeholder="Esselunga Store"
+              disabled={importLoading}
+              className="w-full px-3 py-2 bg-gray-900 border border-gray-600 rounded text-sm text-white placeholder-gray-500 mb-3 disabled:opacity-60"
+            />
+
+            <div className="flex gap-2 mb-3">
+              <button
+                type="button"
+                onClick={() => setCrawlMode('extract')}
+                disabled={importLoading}
+                className={`flex-1 px-2 py-1.5 rounded text-xs border ${
+                  crawlMode === 'extract'
+                    ? 'bg-emerald-700 border-emerald-500 text-white'
+                    : 'bg-gray-900 border-gray-600 text-gray-300'
+                }`}
+              >
+                Single page
+                <span className="block text-[10px] opacity-70">~10 credits</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setCrawlMode('crawl')}
+                disabled={importLoading}
+                className={`flex-1 px-2 py-1.5 rounded text-xs border ${
+                  crawlMode === 'crawl'
+                    ? 'bg-emerald-700 border-emerald-500 text-white'
+                    : 'bg-gray-900 border-gray-600 text-gray-300'
+                }`}
+              >
+                Multi-page crawl
+                <span className="block text-[10px] opacity-70">more products</span>
+              </button>
+            </div>
+
+            {crawlMode === 'crawl' && (
+              <div className="mb-3">
+                <label className="text-xs text-gray-400 block mb-1">Max pages: {crawlMaxPages}</label>
+                <input
+                  type="range"
+                  min={3}
+                  max={30}
+                  value={crawlMaxPages}
+                  onChange={(e) => setCrawlMaxPages(Number(e.target.value))}
+                  disabled={importLoading}
+                  className="w-full"
+                />
+              </div>
+            )}
+
+            {crawlProgress && (
+              <div className="mb-3 p-2 bg-gray-900 rounded border border-gray-700">
+                <div className="flex items-center gap-2 text-xs text-gray-300 mb-1">
+                  {(crawlProgress.status === 'running' || crawlProgress.status === 'queued') && (
+                    <Loader2 className="w-3.5 h-3.5 animate-spin text-emerald-400" />
+                  )}
+                  <span>{crawlProgress.progress.message}</span>
+                </div>
+                {crawlProgress.progress.total > 0 && (
+                  <div className="h-1.5 bg-gray-700 rounded overflow-hidden">
+                    <div
+                      className="h-full bg-emerald-500 transition-all duration-300"
+                      style={{
+                        width: `${Math.min(100, (crawlProgress.progress.finished / crawlProgress.progress.total) * 100)}%`,
+                      }}
+                    />
+                  </div>
+                )}
+                {crawlProgress.error && (
+                  <p className="text-xs text-red-400 mt-2">{crawlProgress.error}</p>
+                )}
+              </div>
+            )}
+
+            <div className="flex justify-end gap-2">
+              <button
+                onClick={resetCrawlModal}
+                disabled={importLoading && crawlProgress?.status === 'running'}
+                className="px-3 py-1.5 text-sm text-gray-400 hover:text-white disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleWebCrawl}
+                disabled={!crawlUrl.trim() || importLoading}
+                className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 disabled:bg-gray-600 rounded text-sm text-white flex items-center gap-1.5"
+              >
+                {importLoading ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    Crawling…
+                  </>
+                ) : (
+                  'Start crawl'
+                )}
               </button>
             </div>
           </div>
@@ -497,7 +691,18 @@ export default function SkuLibraryPanel() {
                   className="w-full flex items-center gap-2 px-3 py-2 text-sm text-white hover:bg-gray-700 text-left"
                 >
                   <Link2 className="w-4 h-4 text-green-400" />
-                  Import from URL
+                  Spreadsheet URL
+                </button>
+                <button
+                  onClick={() => {
+                    setShowImportMenu(false)
+                    setShowCrawlModal(true)
+                    setCrawlProgress(null)
+                  }}
+                  className="w-full flex items-center gap-2 px-3 py-2 text-sm text-white hover:bg-gray-700 text-left"
+                >
+                  <Globe className="w-4 h-4 text-emerald-400" />
+                  Crawl website
                 </button>
               </div>
             )}

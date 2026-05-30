@@ -68,6 +68,23 @@ export interface Planogram {
   shelves: ShelfPlanogram[]
 }
 
+export interface CatalogCrawlProgress {
+  status: string
+  progress: { finished: number; total: number; message: string }
+  itemCount?: number
+  catalogId?: string
+  error?: string | null
+}
+
+export interface CatalogCrawlOptions {
+  url: string
+  name?: string
+  mode?: 'extract' | 'crawl'
+  maxPages?: number
+  maxDepth?: number
+  onProgress?: (update: CatalogCrawlProgress) => void
+}
+
 interface PlanogramContextType {
   // Catalogs
   catalogs: SkuCatalog[]
@@ -75,6 +92,7 @@ interface PlanogramContextType {
   loadCatalogs: () => Promise<void>
   loadCatalog: (id: string) => Promise<void>
   importCatalog: (file: File, name?: string) => Promise<void>
+  crawlCatalogFromWeb: (options: CatalogCrawlOptions) => Promise<{ catalogId: string; itemCount: number }>
   deleteCatalog: (id: string) => Promise<void>
   
   // Planograms
@@ -208,6 +226,67 @@ export function PlanogramProvider({ children }: { children: ReactNode }) {
       throw err
     }
     setLoading(false)
+  }, [loadCatalogs, loadCatalog])
+
+  // Import catalog from website via ScrapeGraphAI (additive — does not replace file import)
+  const crawlCatalogFromWeb = useCallback(async (options: CatalogCrawlOptions) => {
+    setLoading(true)
+    try {
+      const res = await fetch(`${API_BASE}/api/planogram/sku-catalogs/crawl`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          url: options.url,
+          name: options.name,
+          mode: options.mode || 'extract',
+          maxPages: options.maxPages,
+          maxDepth: options.maxDepth,
+          stealth: true,
+        }),
+      })
+      const startData = await res.json()
+      if (!res.ok) throw new Error(startData.error || 'Failed to start crawl')
+
+      const jobId = startData.jobId as string
+      options.onProgress?.({
+        status: 'running',
+        progress: { finished: 0, total: 0, message: 'Starting crawl…' },
+      })
+
+      const pollUntilDone = async (): Promise<{ catalogId: string; itemCount: number }> => {
+        const statusRes = await fetch(`${API_BASE}/api/planogram/sku-catalogs/crawl/${jobId}`)
+        const job = await statusRes.json()
+        if (!statusRes.ok) throw new Error(job.error || 'Failed to get crawl status')
+
+        options.onProgress?.({
+          status: job.status,
+          progress: job.progress,
+          itemCount: job.itemCount,
+          catalogId: job.catalogId,
+          error: job.error,
+        })
+
+        if (job.status === 'completed' && job.catalogId) {
+          return { catalogId: job.catalogId, itemCount: job.itemCount }
+        }
+        if (job.status === 'failed' || job.status === 'cancelled') {
+          throw new Error(job.error || 'Crawl failed')
+        }
+
+        await new Promise((r) => setTimeout(r, 2000))
+        return pollUntilDone()
+      }
+
+      const result = await pollUntilDone()
+      await loadCatalogs()
+      await loadCatalog(result.catalogId)
+      return result
+    } catch (err) {
+      console.error('Failed to crawl catalog:', err)
+      throw err
+    } finally {
+      setLoading(false)
+    }
   }, [loadCatalogs, loadCatalog])
   
   // Delete catalog
@@ -523,6 +602,7 @@ export function PlanogramProvider({ children }: { children: ReactNode }) {
       loadCatalogs,
       loadCatalog,
       importCatalog,
+      crawlCatalogFromWeb,
       deleteCatalog,
       planograms,
       activePlanogram,

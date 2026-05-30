@@ -5,6 +5,7 @@ import * as XLSX from 'xlsx';
 import { skuCatalogQueries, skuItemQueries, planogramQueries, shelfPlanogramQueries } from '../database/schema.js';
 import { placeSkusOnShelf, computeShelfSlots } from '../services/PlacementService.js';
 import { resolveShelfCategories } from '../services/ShelfCategoryResolver.js';
+import { getCatalogCrawlJobStore } from '../services/CatalogCrawlJobStore.js';
 
 const upload = multer({ storage: multer.memoryStorage() });
 
@@ -18,6 +19,79 @@ export default function createPlanogramRoutes(db) {
     try {
       const catalogs = skuCatalogQueries.getAll(db);
       res.json(catalogs);
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // ==================== SCRAPEGRAPHAI WEB CRAWL (additive — does not replace XLS import) ====================
+  // NOTE: These routes MUST be registered before /sku-catalogs/:id
+
+  router.post('/sku-catalogs/crawl', (req, res) => {
+    try {
+      const { url, name, description, mode, maxPages, maxDepth, stealth, renderMode } = req.body;
+
+      if (!url || typeof url !== 'string') {
+        return res.status(400).json({ error: 'url is required' });
+      }
+
+      let parsed;
+      try {
+        parsed = new URL(url);
+      } catch {
+        return res.status(400).json({ error: 'Invalid URL' });
+      }
+      if (!['http:', 'https:'].includes(parsed.protocol)) {
+        return res.status(400).json({ error: 'URL must use http or https' });
+      }
+
+      const crawlMode = mode === 'crawl' ? 'crawl' : 'extract';
+      const jobStore = getCatalogCrawlJobStore(db);
+      const jobId = jobStore.createJob({
+        url: parsed.href,
+        name,
+        description,
+        mode: crawlMode,
+        maxPages: maxPages != null ? Number(maxPages) : undefined,
+        maxDepth: maxDepth != null ? Number(maxDepth) : undefined,
+        stealth: stealth !== false,
+        renderMode,
+      });
+
+      res.status(202).json({
+        jobId,
+        status: 'queued',
+        mode: crawlMode,
+        message: 'Catalog crawl started. Poll GET /sku-catalogs/crawl/:jobId for progress.',
+      });
+    } catch (err) {
+      console.error('[CatalogCrawl] Start error:', err);
+      const status = err.message?.includes('SGAI_API_KEY') ? 503 : 500;
+      res.status(status).json({ error: err.message });
+    }
+  });
+
+  router.get('/sku-catalogs/crawl/:jobId', (req, res) => {
+    try {
+      const jobStore = getCatalogCrawlJobStore(db);
+      const job = jobStore.getJob(req.params.jobId);
+      if (!job) {
+        return res.status(404).json({ error: 'Crawl job not found' });
+      }
+      res.json(job);
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  router.delete('/sku-catalogs/crawl/:jobId', (req, res) => {
+    try {
+      const jobStore = getCatalogCrawlJobStore(db);
+      const ok = jobStore.cancelJob(req.params.jobId);
+      if (!ok) {
+        return res.status(404).json({ error: 'Crawl job not found' });
+      }
+      res.json({ success: true, status: 'cancelled' });
     } catch (err) {
       res.status(500).json({ error: err.message });
     }

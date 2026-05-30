@@ -91,6 +91,7 @@ services:
       - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID:-}
       - SUPERADMIN_EMAIL=${SUPERADMIN_EMAIL:-ln@ulisse.tech}
       - JWT_SECRET=${JWT_SECRET:-hyperspace-prod-secret-change-me}
+      - SGAI_API_KEY=${SGAI_API_KEY}
       - UPLOADS_DIR=/data/uploads
       - MODELS_DIR=/data/models
       - REPLAY_DB_PATH=/data/db/replay_insight.db
