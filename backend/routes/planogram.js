@@ -3,9 +3,10 @@ import { v4 as uuidv4 } from 'uuid';
 import multer from 'multer';
 import * as XLSX from 'xlsx';
 import { skuCatalogQueries, skuItemQueries, planogramQueries, shelfPlanogramQueries } from '../database/schema.js';
-import { placeSkusOnShelf, computeShelfSlots } from '../services/PlacementService.js';
+import { placeSkusOnShelf, computeShelfSlots, initializeSlots } from '../services/PlacementService.js';
 import { resolveShelfCategories } from '../services/ShelfCategoryResolver.js';
 import { getCatalogCrawlJobStore } from '../services/CatalogCrawlJobStore.js';
+import { computeMagicAssign, applyMagicAssignments } from '../services/MagicAssignService.js';
 
 const upload = multer({ storage: multer.memoryStorage() });
 
@@ -593,6 +594,148 @@ export default function createPlanogramRoutes(db) {
         totalItems: items.length,
       });
     } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Magic assign — random fill all shelves from catalog (preview + apply)
+  router.post('/planograms/:planogramId/magic-assign', (req, res) => {
+    try {
+      const { planogramId } = req.params;
+      const {
+        catalogId,
+        shelves,
+        onlyUnplaced = true,
+        dryRun = true,
+        assignments: clientAssignments,
+      } = req.body;
+
+      const planogram = planogramQueries.getById(db, planogramId);
+      if (!planogram) {
+        return res.status(404).json({ error: 'Planogram not found' });
+      }
+
+      if (!Array.isArray(shelves) || shelves.length === 0) {
+        return res.status(400).json({ error: 'shelves array is required' });
+      }
+
+      // Apply mode — persist a previously previewed assignment list
+      if (dryRun === false && Array.isArray(clientAssignments) && clientAssignments.length > 0) {
+        const shelfPlanograms = shelfPlanogramQueries.getByPlanogramId(db, planogramId);
+        const shelfSlotState = new Map();
+
+        for (const shelf of shelves) {
+          const existing = shelfPlanograms.find((sp) => sp.shelfId === shelf.shelfId)
+            || shelfPlanogramQueries.getByShelfId(db, planogramId, shelf.shelfId);
+          const numLevels = existing?.numLevels || shelf.numLevels || 4;
+          const slotWidthM = existing?.slotWidthM || shelf.slotWidthM || 0.1;
+          const shelfWidth = shelf.shelfWidth || 2.0;
+          const slotsPerLevel = Math.max(1, Math.floor(shelfWidth / slotWidthM));
+          const slots = existing?.slots?.levels?.length
+            ? JSON.parse(JSON.stringify(existing.slots))
+            : { levels: [] };
+
+          if (!slots.levels?.length) {
+            Object.assign(slots, initializeSlots(numLevels, slotsPerLevel));
+          }
+
+          shelfSlotState.set(shelf.shelfId, { numLevels, slotWidthM, shelfWidth, slots, slotsPerLevel });
+        }
+
+        const updates = applyMagicAssignments(clientAssignments, shelfSlotState);
+        const now = new Date().toISOString();
+
+        for (const update of updates) {
+          const existing = shelfPlanogramQueries.getByShelfId(db, planogramId, update.shelfId);
+          shelfPlanogramQueries.upsert(db, {
+            id: uuidv4(),
+            planogramId,
+            shelfId: update.shelfId,
+            numLevels: update.numLevels,
+            slotWidthM: update.slotWidthM,
+            levelHeightM: existing?.levelHeightM || null,
+            slotFacings: existing?.slotFacings || [],
+            slots: update.slots,
+            createdAt: now,
+            updatedAt: now,
+          });
+        }
+
+        return res.json({
+          totalPlaced: clientAssignments.length,
+          overflow: 0,
+          assignments: clientAssignments,
+          applied: true,
+        });
+      }
+
+      if (!catalogId) {
+        return res.status(400).json({ error: 'catalogId is required' });
+      }
+
+      const catalogItems = skuItemQueries.getByCatalogId(db, catalogId);
+      if (catalogItems.length === 0) {
+        return res.status(400).json({ error: 'Catalog has no items' });
+      }
+
+      const shelfPlanograms = shelfPlanogramQueries.getByPlanogramId(db, planogramId);
+      const placedSkuItemIds = new Set();
+      for (const sp of shelfPlanograms) {
+        sp.slots?.levels?.forEach((level) => {
+          level.slots?.forEach((slot) => {
+            if (slot.skuItemId) placedSkuItemIds.add(slot.skuItemId);
+          });
+        });
+      }
+
+      const enrichedShelves = shelves.map((shelf) => {
+        const existing = shelfPlanograms.find((sp) => sp.shelfId === shelf.shelfId)
+          || shelfPlanogramQueries.getByShelfId(db, planogramId, shelf.shelfId);
+        return {
+          ...shelf,
+          numLevels: existing?.numLevels || shelf.numLevels || 4,
+          slotWidthM: existing?.slotWidthM || shelf.slotWidthM || 0.1,
+          existingSlots: existing?.slots || { levels: [] },
+        };
+      });
+
+      const preview = computeMagicAssign({
+        catalogItems,
+        placedSkuItemIds,
+        shelves: enrichedShelves,
+        onlyUnplaced,
+      });
+
+      if (dryRun === false) {
+        const now = new Date().toISOString();
+        const updates = applyMagicAssignments(preview.assignments, preview.shelfSlotState);
+        for (const update of updates) {
+          const existing = shelfPlanogramQueries.getByShelfId(db, planogramId, update.shelfId);
+          shelfPlanogramQueries.upsert(db, {
+            id: uuidv4(),
+            planogramId,
+            shelfId: update.shelfId,
+            numLevels: update.numLevels,
+            slotWidthM: update.slotWidthM,
+            levelHeightM: existing?.levelHeightM || null,
+            slotFacings: existing?.slotFacings || [],
+            slots: update.slots,
+            createdAt: now,
+            updatedAt: now,
+          });
+        }
+      }
+
+      res.json({
+        totalPlaced: preview.totalPlaced,
+        overflow: preview.overflow,
+        emptySlotCount: preview.emptySlotCount,
+        availableSkuCount: preview.availableSkuCount,
+        assignments: preview.assignments,
+        applied: dryRun === false,
+      });
+    } catch (err) {
+      console.error('[MagicAssign] Error:', err);
       res.status(500).json({ error: err.message });
     }
   });

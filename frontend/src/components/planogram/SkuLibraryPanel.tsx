@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
-import { Upload, Search, Filter, Package, Trash2, ChevronDown, GripVertical, HardDrive, Cloud, Link2, X, Folder, FileSpreadsheet, ArrowLeft, Loader2, Globe } from 'lucide-react'
+import { Upload, Search, Filter, Package, Trash2, ChevronDown, GripVertical, HardDrive, Cloud, Link2, X, Folder, FileSpreadsheet, ArrowLeft, Loader2, Globe, Wand2 } from 'lucide-react'
 import { usePlanogram } from '../../context/PlanogramContext'
 import type { CatalogCrawlProgress } from '../../context/PlanogramContext'
 
@@ -21,6 +21,9 @@ export default function SkuLibraryPanel() {
     importCatalog,
     crawlCatalogFromWeb,
     deleteCatalog,
+    runMagicAssignRandom,
+    magicAssignActive,
+    activePlanogram,
     filteredSkuItems,
     selectedSkuIds,
     toggleSkuSelection,
@@ -50,6 +53,7 @@ export default function SkuLibraryPanel() {
   const [crawlMaxPages, setCrawlMaxPages] = useState(10)
   const [crawlMergeIntoCurrent, setCrawlMergeIntoCurrent] = useState(true)
   const [crawlProgress, setCrawlProgress] = useState<CatalogCrawlProgress | null>(null)
+  const [magicAssignLoading, setMagicAssignLoading] = useState(false)
   const [importLoading, setImportLoading] = useState(false)
   const importMenuRef = useRef<HTMLDivElement>(null)
   
@@ -313,6 +317,25 @@ export default function SkuLibraryPanel() {
       setImportLoading(false)
     }
   }
+
+  const handleMagicAssign = async () => {
+    if (!activeCatalog || !activePlanogram) return
+    setMagicAssignLoading(true)
+    try {
+      await runMagicAssignRandom()
+    } catch (err) {
+      console.error('Magic assign failed:', err)
+      alert(err instanceof Error ? err.message : 'Magic assign failed')
+      setMagicAssignLoading(false)
+    }
+  }
+
+  // magicAssignLoading cleared when animation completes (magicAssignActive goes false)
+  useEffect(() => {
+    if (!magicAssignActive && magicAssignLoading) {
+      setMagicAssignLoading(false)
+    }
+  }, [magicAssignActive, magicAssignLoading])
   
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
@@ -927,7 +950,29 @@ export default function SkuLibraryPanel() {
       
       {/* Footer with catalog info */}
       {activeCatalog && (
-        <div className="p-2 border-t border-border-dark flex flex-col gap-1">
+        <div className="p-2 border-t border-border-dark flex flex-col gap-2">
+          <button
+            type="button"
+            onClick={handleMagicAssign}
+            disabled={!activePlanogram || magicAssignLoading || magicAssignActive}
+            className="w-full flex items-center justify-center gap-2 py-2 px-3 rounded-lg bg-gradient-to-r from-violet-600 to-amber-600 hover:from-violet-500 hover:to-amber-500 disabled:from-gray-700 disabled:to-gray-700 disabled:text-gray-500 text-white text-xs font-semibold shadow-lg transition-all"
+            title="Randomly fill all empty shelf slots from this catalog"
+          >
+            {(magicAssignLoading || magicAssignActive) ? (
+              <>
+                <Loader2 className="w-4 h-4 animate-spin" />
+                {magicAssignActive ? 'Placing on shelves…' : 'Preparing…'}
+              </>
+            ) : (
+              <>
+                <Wand2 className="w-4 h-4" />
+                Magic Fill Shelves
+              </>
+            )}
+          </button>
+          <p className="text-[9px] text-gray-500 text-center leading-snug">
+            Flies unplaced SKUs from the basket onto all empty slots — random order
+          </p>
           <div className="flex items-center justify-between text-[10px]">
             <span className="text-gray-500">{filteredSkuItems.length} of {activeCatalog.items.length} items</span>
             {placedSkuIds.size > 0 && (

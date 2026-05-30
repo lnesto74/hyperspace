@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useCallback, useEffect, ReactNode } from 'react'
+import { createContext, useContext, useState, useCallback, useEffect, useRef, ReactNode } from 'react'
 import { useVenue } from './VenueContext'
 import { API_BASE } from '../config/api'
 
@@ -88,6 +88,16 @@ export interface CatalogCrawlOptions {
   onProgress?: (update: CatalogCrawlProgress) => void
 }
 
+export interface MagicAssignAssignment {
+  shelfId: string
+  levelIndex: number
+  slotIndex: number
+  skuItemId: string
+  skuCode: string
+  name: string
+  imageUrl: string | null
+}
+
 interface PlanogramContextType {
   // Catalogs
   catalogs: SkuCatalog[]
@@ -120,6 +130,13 @@ interface PlanogramContextType {
   saveShelfPlanogram: (shelfId: string, data: Partial<ShelfPlanogram>) => Promise<void>
   placeSkusOnShelf: (shelfId: string, skuItemIds: string[], dropTarget: any, shelfWidth: number, options?: { fillOrder?: 'sequential' | 'random' }) => Promise<any>
   autoFillShelf: (shelfId: string, params: any) => Promise<any>
+  runMagicAssignRandom: () => Promise<{ totalPlaced: number; overflow: number } | null>
+  commitMagicAssign: () => Promise<void>
+  magicAssignActive: boolean
+  magicAssignAssignments: MagicAssignAssignment[]
+  planogramDataVersion: number
+  setProjectSlotToScreen: (fn: ((shelfId: string, levelIndex: number, slotIndex: number) => { x: number; y: number } | null) | null) => void
+  projectSlotToScreen: ((shelfId: string, levelIndex: number, slotIndex: number) => { x: number; y: number } | null) | null
   
   // Selection
   selectedSkuIds: string[]
@@ -154,7 +171,7 @@ interface PlanogramContextType {
 const PlanogramContext = createContext<PlanogramContextType | null>(null)
 
 export function PlanogramProvider({ children }: { children: ReactNode }) {
-  const { venue } = useVenue()
+  const { venue, objects } = useVenue()
   
   // Catalogs
   const [catalogs, setCatalogs] = useState<SkuCatalog[]>([])
@@ -184,6 +201,44 @@ export function PlanogramProvider({ children }: { children: ReactNode }) {
   
   // Track all placed SKUs across shelves in active planogram
   const [allShelfPlanograms, setAllShelfPlanograms] = useState<Map<string, ShelfPlanogram>>(new Map())
+  const [planogramDataVersion, setPlanogramDataVersion] = useState(0)
+  const [magicAssignActive, setMagicAssignActive] = useState(false)
+  const [magicAssignAssignments, setMagicAssignAssignments] = useState<MagicAssignAssignment[]>([])
+  const [projectSlotToScreen, setProjectSlotToScreenState] = useState<
+    ((shelfId: string, levelIndex: number, slotIndex: number) => { x: number; y: number } | null) | null
+  >(null)
+  const magicAssignPendingRef = useRef<MagicAssignAssignment[]>([])
+  const magicAssignShelvesRef = useRef<{ shelfId: string; shelfWidth: number }[]>([])
+
+  const setProjectSlotToScreen = useCallback((fn: typeof projectSlotToScreen) => {
+    setProjectSlotToScreenState(() => fn)
+  }, [])
+
+  const getVenueShelves = useCallback(() => {
+    return objects.filter(o =>
+      o.type.toLowerCase().includes('shelf') ||
+      o.type.toLowerCase().includes('rack') ||
+      o.type.toLowerCase().includes('gondola')
+    )
+  }, [objects])
+
+  const refreshAllShelfPlanograms = useCallback(async () => {
+    if (!activePlanogram?.id) return
+    const shelfObjs = getVenueShelves()
+    const map = new Map<string, ShelfPlanogram>()
+    for (const shelf of shelfObjs) {
+      try {
+        const res = await fetch(`${API_BASE}/api/planogram/planograms/${activePlanogram.id}/shelves/${shelf.id}`)
+        const data = await res.json()
+        if (data?.slots?.levels?.length) {
+          map.set(shelf.id, data)
+        }
+      } catch {
+        /* empty shelf */
+      }
+    }
+    setAllShelfPlanograms(map)
+  }, [activePlanogram?.id, getVenueShelves])
   
   // Load catalogs
   const loadCatalogs = useCallback(async () => {
@@ -459,6 +514,81 @@ export function PlanogramProvider({ children }: { children: ReactNode }) {
       console.error('Failed to auto-fill shelf:', err)
     }
   }, [activePlanogram?.id, loadShelfPlanogram])
+
+  const runMagicAssignRandom = useCallback(async () => {
+    if (!activePlanogram?.id || !activeCatalog?.id) {
+      throw new Error('Select a catalog and planogram first')
+    }
+
+    const shelfObjs = getVenueShelves()
+    if (shelfObjs.length === 0) {
+      throw new Error('No shelves found in this venue')
+    }
+
+    const shelves = shelfObjs.map(s => ({
+      shelfId: s.id,
+      shelfWidth: s.scale?.x || 2.0,
+    }))
+    magicAssignShelvesRef.current = shelves
+
+    const res = await fetch(`${API_BASE}/api/planogram/planograms/${activePlanogram.id}/magic-assign`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        catalogId: activeCatalog.id,
+        shelves,
+        onlyUnplaced: true,
+        dryRun: true,
+      }),
+    })
+    const data = await res.json()
+    if (!res.ok) throw new Error(data.error || 'Magic assign preview failed')
+
+    if (!data.totalPlaced || data.assignments.length === 0) {
+      throw new Error(
+        data.availableSkuCount === 0
+          ? 'All catalog SKUs are already placed on shelves'
+          : 'No empty shelf slots available — clear a shelf or add more shelves'
+      )
+    }
+
+    magicAssignPendingRef.current = data.assignments
+    setMagicAssignAssignments(data.assignments)
+    setMagicAssignActive(true)
+    return { totalPlaced: data.totalPlaced, overflow: data.overflow }
+  }, [activePlanogram?.id, activeCatalog?.id, getVenueShelves])
+
+  const commitMagicAssign = useCallback(async () => {
+    const assignments = magicAssignPendingRef.current
+    if (!activePlanogram?.id || !activeCatalog?.id || assignments.length === 0) {
+      setMagicAssignActive(false)
+      setMagicAssignAssignments([])
+      return
+    }
+
+    const res = await fetch(`${API_BASE}/api/planogram/planograms/${activePlanogram.id}/magic-assign`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        catalogId: activeCatalog.id,
+        shelves: magicAssignShelvesRef.current,
+        dryRun: false,
+        assignments,
+      }),
+    })
+    const data = await res.json()
+    if (!res.ok) throw new Error(data.error || 'Failed to save magic assign')
+
+    magicAssignPendingRef.current = []
+    setMagicAssignActive(false)
+    setMagicAssignAssignments([])
+    setPlanogramDataVersion(v => v + 1)
+    await loadPlanogram(activePlanogram.id)
+    await refreshAllShelfPlanograms()
+    if (activeShelfId) {
+      await loadShelfPlanogram(activeShelfId)
+    }
+  }, [activePlanogram?.id, activeCatalog?.id, activeShelfId, loadPlanogram, refreshAllShelfPlanograms, loadShelfPlanogram])
   
   // Toggle SKU selection
   const toggleSkuSelection = useCallback((id: string) => {
@@ -639,6 +769,13 @@ export function PlanogramProvider({ children }: { children: ReactNode }) {
       saveShelfPlanogram,
       placeSkusOnShelf,
       autoFillShelf,
+      runMagicAssignRandom,
+      commitMagicAssign,
+      magicAssignActive,
+      magicAssignAssignments,
+      planogramDataVersion,
+      setProjectSlotToScreen,
+      projectSlotToScreen,
       selectedSkuIds,
       setSelectedSkuIds,
       toggleSkuSelection,

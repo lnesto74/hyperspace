@@ -5,6 +5,8 @@ import { Layers, Eye, EyeOff } from 'lucide-react'
 import { useVenue } from '../../context/VenueContext'
 import { usePlanogram, ShelfPlanogram, SkuItem, SlotFacing } from '../../context/PlanogramContext'
 import { API_BASE } from '../../config/api'
+import MagicAssignFlyOverlay from './MagicAssignFlyOverlay'
+import { getSlotLocalPosition } from './planogramSlotGeometry'
 
 
 // Tooltip component for 3D viewport
@@ -150,6 +152,11 @@ export default function PlanogramViewport() {
     placeSkusOnShelf,
     saveShelfPlanogram,
     hoveredSkuId,
+    magicAssignActive,
+    magicAssignAssignments,
+    commitMagicAssign,
+    setProjectSlotToScreen,
+    planogramDataVersion,
   } = usePlanogram()
   
   // State for face selection mode
@@ -206,7 +213,7 @@ export default function PlanogramViewport() {
     }
     
     loadAllShelfPlanograms()
-  }, [activePlanogram?.id, shelves.length])
+  }, [activePlanogram?.id, shelves.length, planogramDataVersion])
   
   // Update shelf planogram in cache when active one changes
   useEffect(() => {
@@ -228,6 +235,39 @@ export default function PlanogramViewport() {
       level.slots?.some(slot => slot.skuItemId)
     )
   }, [allShelfPlanograms])
+  
+  const projectSlot = useCallback((shelfId: string, levelIndex: number, slotIndex: number) => {
+    const shelf = shelves.find(s => s.id === shelfId)
+    const group = shelfMeshesRef.current.get(shelfId)
+    const camera = cameraRef.current
+    const renderer = rendererRef.current
+    if (!shelf || !group || !camera || !renderer) return null
+
+    const planogramData = allShelfPlanograms.get(shelfId)
+    const local = getSlotLocalPosition(
+      shelf.scale?.x || 2.0,
+      shelf.scale?.y || 1.5,
+      shelf.scale?.z || 0.5,
+      planogramData,
+      levelIndex,
+      slotIndex,
+    )
+    if (!local) return null
+
+    const world = new THREE.Vector3(local.x, local.y, local.z)
+    group.localToWorld(world)
+    const ndc = world.clone().project(camera)
+    const rect = renderer.domElement.getBoundingClientRect()
+    return {
+      x: rect.left + ((ndc.x + 1) / 2) * rect.width,
+      y: rect.top + ((1 - ndc.y) / 2) * rect.height,
+    }
+  }, [shelves, allShelfPlanograms])
+
+  useEffect(() => {
+    setProjectSlotToScreen(() => projectSlot)
+    return () => setProjectSlotToScreen(null)
+  }, [projectSlot, setProjectSlotToScreen])
   
   // Load ROIs and their shelf categories when venue changes
   useEffect(() => {
@@ -1012,6 +1052,15 @@ export default function PlanogramViewport() {
           </div>
         )}
       </div>
+
+      <MagicAssignFlyOverlay
+        assignments={magicAssignAssignments}
+        active={magicAssignActive}
+        projectSlot={projectSlot}
+        onComplete={() => {
+          commitMagicAssign().catch((err) => console.error('Magic assign commit failed:', err))
+        }}
+      />
     </div>
   )
 }
