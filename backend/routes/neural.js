@@ -18,6 +18,7 @@ import {
 import { getCheckoutLanes } from '../services/CheckoutLiveStatus.js';
 import { resolveKpiContext, demoCacheSuffix } from '../utils/demoKpiContext.js';
 import { resolveShelfCategories } from '../services/ShelfCategoryResolver.js';
+import { isTrafficZoneName } from '../lib/storeHours.js';
 
 // Stale-while-revalidate cache with staggered background recomputes.
 // On cache HIT: return data instantly.
@@ -317,106 +318,14 @@ export default function createNeuralRoutes(db, trackAggregator, demoSessionServi
    * GET /api/neural/venue-kpis?venueId=X
    * 
    * Real-time aggregated KPIs for the Metrics Tower:
-   * - avgVelocity, avgDwell, drawRate, bounceRate
-   * - topZones (by occupancy)
-   * - occupancy history (last 12 data points for sparkline)
+   * - uniqueVisitors (entrance ROI, quality-filtered), visitorSource
    */
   router.get('/venue-kpis', (req, res) => {
     try {
       const { venueId } = req.query;
       if (!venueId) return res.status(400).json({ error: 'venueId required' });
 
-      const result = cached(`venue-kpis:${venueId}`, 45000, () => {
-        const now = Date.now();
-        const hour = now - 60 * 60 * 1000;
-        const fiveMin = now - 5 * 60 * 1000;
-
-        let avgVelocity = 0;
-        try {
-          const vel = db.prepare(`
-            SELECT AVG(velocity_x * velocity_x + velocity_z * velocity_z) AS avg_sq
-            FROM track_positions
-            WHERE venue_id = ? AND timestamp >= ?
-          `).get(venueId, fiveMin);
-          avgVelocity = vel && vel.avg_sq ? parseFloat(Math.sqrt(vel.avg_sq).toFixed(2)) : 0;
-        } catch (e) {}
-
-        let avgDwellSec = 0;
-        try {
-          const dw = db.prepare(`
-            SELECT AVG(duration_ms) AS avg_ms
-            FROM zone_visits
-            WHERE venue_id = ? AND start_time >= ? AND duration_ms > 0
-          `).get(venueId, hour);
-          avgDwellSec = dw && dw.avg_ms ? parseFloat((dw.avg_ms / 1000).toFixed(1)) : 0;
-        } catch (e) {}
-
-        let drawRate = 0, bounceRate = 0;
-        try {
-          const flow = db.prepare(`
-            SELECT 
-              COUNT(DISTINCT track_key) AS total,
-              COUNT(DISTINCT CASE WHEN is_dwell = 1 THEN track_key END) AS dwelled,
-              COUNT(DISTINCT CASE WHEN duration_ms < 5000 THEN track_key END) AS bounced
-            FROM zone_visits
-            WHERE venue_id = ? AND start_time >= ?
-          `).get(venueId, hour);
-          if (flow && flow.total > 0) {
-            drawRate = parseFloat(((flow.dwelled / flow.total) * 100).toFixed(1));
-            bounceRate = parseFloat(((flow.bounced / flow.total) * 100).toFixed(1));
-          }
-        } catch (e) {}
-
-        let uniqueVisitors = 0;
-        try {
-          const uv = db.prepare(`
-            SELECT COUNT(DISTINCT track_key) AS cnt
-            FROM zone_visits
-            WHERE venue_id = ? AND start_time >= ?
-          `).get(venueId, hour);
-          uniqueVisitors = uv?.cnt || 0;
-        } catch (e) {}
-
-        let topZones = [];
-        try {
-          topZones = db.prepare(`
-            SELECT r.name, zo.roi_id, MAX(zo.occupancy_count) AS peak, AVG(zo.occupancy_count) AS avg_occ
-            FROM zone_occupancy zo
-            JOIN regions_of_interest r ON zo.roi_id = r.id
-            WHERE zo.venue_id = ? AND zo.timestamp >= ?
-            GROUP BY zo.roi_id
-            ORDER BY avg_occ DESC
-            LIMIT 5
-          `).all(venueId, fiveMin).map(z => ({
-            name: simplifyZoneName(z.name),
-            peak: z.peak,
-            avg: parseFloat((z.avg_occ || 0).toFixed(1)),
-          }));
-        } catch (e) {}
-
-        let sparkline = new Array(12).fill(0);
-        try {
-          const bucketMs = 5 * 60 * 1000;
-          const hourAgo = now - 12 * bucketMs;
-          const rows = db.prepare(`
-            SELECT 
-              CAST((timestamp - ?) / ? AS INTEGER) AS bucket,
-              AVG(occupancy_count) AS val
-            FROM zone_occupancy
-            WHERE venue_id = ? AND timestamp >= ?
-            GROUP BY bucket
-            ORDER BY bucket
-          `).all(hourAgo, bucketMs, venueId, hourAgo);
-          
-          for (const row of rows) {
-            if (row.bucket >= 0 && row.bucket < 12) {
-              sparkline[row.bucket] = parseFloat((row.val || 0).toFixed(1));
-            }
-          }
-        } catch (e) {}
-
-        return { avgVelocity, avgDwellSec, drawRate, bounceRate, uniqueVisitors, topZones, sparkline };
-      });
+      const result = cached(`venue-kpis:${venueId}`, 45000, () => computeVenueKpis(db, venueId));
 
       res.json(result);
     } catch (err) {
@@ -550,13 +459,11 @@ function computeVenueKpis(db, venueId) {
   } catch (e) {}
 
   let uniqueVisitors = 0;
+  let visitorSource = 'none';
   try {
-    const uv = db.prepare(`
-      SELECT COUNT(DISTINCT track_key) AS cnt
-      FROM zone_visits
-      WHERE venue_id = ? AND start_time >= ?
-    `).get(venueId, hour);
-    uniqueVisitors = uv?.cnt || 0;
+    const entrance = computeEntranceVisitors(db, venueId, hour);
+    uniqueVisitors = entrance.uniqueVisitors;
+    visitorSource = entrance.visitorSource;
   } catch (e) {}
 
   let topZones = [];
@@ -596,7 +503,7 @@ function computeVenueKpis(db, venueId) {
     }
   } catch (e) {}
 
-  return { avgVelocity, avgDwellSec, drawRate, bounceRate, uniqueVisitors, topZones, sparkline };
+  return { avgVelocity, avgDwellSec, drawRate, bounceRate, uniqueVisitors, visitorSource, topZones, sparkline };
 }
 
 function classifyFunnelRoi(name) {
@@ -606,6 +513,56 @@ function classifyFunnelRoi(name) {
   if (/checkout|register|cashier|\bservice\b/.test(n)) return 'checkout';
   if (/shelf|gondola|aisle|product|display|fridge|promo|engagement/.test(n)) return 'shelf';
   return 'other';
+}
+
+/** Entrance / footfall ROIs for visitor counting (saved footfall + traffic-named zones). */
+function resolveEntranceRoiIds(db, venueId) {
+  const rois = db.prepare(
+    'SELECT id, name FROM regions_of_interest WHERE venue_id = ?'
+  ).all(venueId);
+
+  let savedFootfallId = null;
+  try {
+    const venue = db.prepare('SELECT footfall_roi_id FROM venues WHERE id = ?').get(venueId);
+    savedFootfallId = venue?.footfall_roi_id || null;
+  } catch (e) { /* ignore */ }
+
+  const ids = new Set();
+  if (savedFootfallId) ids.add(savedFootfallId);
+  for (const r of rois) {
+    if (isTrafficZoneName(r.name)) ids.add(r.id);
+  }
+  return [...ids];
+}
+
+/**
+ * Phase A footfall: entrance ROI only, quality filter (≥30s or non-bounce ≥5s).
+ * Excludes cashier ghost keys and incomplete flicker visits.
+ */
+function computeEntranceVisitors(db, venueId, startTime) {
+  const roiIds = resolveEntranceRoiIds(db, venueId);
+  if (!roiIds.length) {
+    return { uniqueVisitors: 0, visitorSource: 'none' };
+  }
+
+  try {
+    const placeholders = roiIds.map(() => '?').join(',');
+    const row = db.prepare(`
+      SELECT COUNT(DISTINCT track_key) AS cnt
+      FROM zone_visits
+      WHERE venue_id = ?
+        AND roi_id IN (${placeholders})
+        AND start_time >= ?
+        AND (duration_ms >= 30000 OR duration_ms >= 5000)
+        AND track_key NOT LIKE '%cashier%'
+    `).get(venueId, ...roiIds, startTime);
+    return {
+      uniqueVisitors: row?.cnt || 0,
+      visitorSource: 'entrance',
+    };
+  } catch (e) {
+    return { uniqueVisitors: 0, visitorSource: 'none' };
+  }
 }
 
 function countDistinctFunnelTracks(db, venueId, roiIds, startTime, endTime, extraWhere = '') {

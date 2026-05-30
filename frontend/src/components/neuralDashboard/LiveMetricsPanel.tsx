@@ -27,6 +27,7 @@ interface VenueKpis {
   drawRate: number
   bounceRate: number
   uniqueVisitors: number
+  visitorSource?: 'entrance' | 'none'
   topZones: { name: string; peak: number; avg: number }[]
   sparkline: number[]
 }
@@ -49,17 +50,7 @@ export default function LiveMetricsPanel({
   const [kpis, setKpis] = useState<VenueKpis | null>(null)
   const [checkoutMetrics, setCheckoutMetrics] = useState<CheckoutMetrics | null>(null)
   const [throughput, setThroughput] = useState(0)
-  const prevPaxRef = useRef(totalPax)
-  const entriesRef = useRef(0)
   const [, setTick] = useState(0)
-  
-  // Track entries over time
-  useEffect(() => {
-    if (totalPax > prevPaxRef.current) {
-      entriesRef.current += totalPax - prevPaxRef.current
-    }
-    prevPaxRef.current = totalPax
-  }, [totalPax])
 
   // Use batch data if available, otherwise fall back to individual polling
   useEffect(() => {
@@ -117,6 +108,10 @@ export default function LiveMetricsPanel({
   const sparkMax = kpis ? Math.max(...kpis.sparkline, 1) : 1
   const zoneMax = kpis?.topZones?.length ? Math.max(...kpis.topZones.map(z => z.avg), 1) : 1
 
+  const visitorTip = kpis?.visitorSource === 'none'
+    ? 'No entrance/footfall zone configured — set footfall ROI in Venue Settings'
+    : 'Distinct entrants through entrance zones (visit ≥30s or ≥5s non-bounce), last hour'
+
   return (
     <div className="h-full flex flex-col p-3 font-mono text-[10px] overflow-y-auto neural-scrollbar">
       {/* ── HEADER ── */}
@@ -169,7 +164,12 @@ export default function LiveMetricsPanel({
       {/* ── KPI GRID ── */}
       <div className="grid grid-cols-2 gap-x-3 gap-y-2 mb-3 pb-2 border-b border-white/[0.04]">
         <TowerMetric label="PEAK" value={peakOccupancy} tip="Highest simultaneous occupancy this session" />
-        <TowerMetric label="VISITORS" value={kpis?.uniqueVisitors ?? entriesRef.current} suffix="/hr" tip="Unique visitors tracked in the last hour" />
+        <TowerMetric
+          label="ENTRANTS"
+          value={kpis?.uniqueVisitors ?? '—'}
+          suffix={kpis ? '/ 1h' : undefined}
+          tip={visitorTip}
+        />
         <TowerMetric label="ZONES" value={activeZones} suffix="active" tip="Zones with at least 1 person detected" />
         <TowerMetric label="AVG/ZONE" value={avgOccupancy.toFixed(1)} tip="Average people per zone across all regions" />
       </div>
