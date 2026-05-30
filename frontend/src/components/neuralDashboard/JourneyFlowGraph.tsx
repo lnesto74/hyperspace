@@ -12,6 +12,13 @@ import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { createPortal } from 'react-dom'
 import { useVenue } from '../../context/VenueContext'
 import { API_BASE } from '../../config/api'
+import MetricLabel from './MetricLabel'
+import Tooltip from './Tooltip'
+import {
+  NEURAL_MODAL_DIVIDER,
+  neuralModalBackdropStyle,
+  neuralModalPanelStyle,
+} from './neuralModalStyles'
 
 // ─── Types ───────────────────────────────────────────────────
 
@@ -68,11 +75,32 @@ const PATTERN_COLORS: Record<string, string> = {
 }
 
 const PATTERN_COLORS_DIM: Record<string, string> = {
-  'full-shop': 'rgba(74, 222, 128, 0.15)',
-  'category-specialist': 'rgba(96, 165, 250, 0.15)',
-  'browse-and-bail': 'rgba(251, 191, 36, 0.15)',
-  'quick-run': 'rgba(167, 139, 250, 0.15)',
+  'full-shop': 'rgba(74, 222, 128, 0.22)',
+  'category-specialist': 'rgba(96, 165, 250, 0.22)',
+  'browse-and-bail': 'rgba(251, 191, 36, 0.22)',
+  'quick-run': 'rgba(167, 139, 250, 0.22)',
 }
+
+const METRIC_HELP = {
+  tracks:
+    'Unique LiDAR tracks with at least one dwell visit in the selected window (zone_visits where is_dwell = 1).',
+  converted:
+    'Tracks that visited a checkout ROI at least once during their journey.',
+  avgDuration:
+    'Mean elapsed time from each track’s first dwell visit to its last, in seconds.',
+  conversion:
+    'Converted tracks in this pattern ÷ total pattern tracks. Conversion = reached checkout.',
+  typicalPath:
+    'Most common category sequence (up to 7 steps). Shelf zones roll up to product categories; consecutive same-category stops are merged.',
+  categoryDwell:
+    'Average seconds spent in each shopping category for tracks in this pattern. Entrance and checkout dwell are excluded.',
+  peakHours:
+    'Local hour when journeys in this pattern started — one count per track, bucketed into 24 hours.',
+  flowChart:
+    'Each bar is a product category. Count = journeys that visited that category at least once. Width scales to the busiest category. Curved lines = category-to-category transitions.',
+  patternTypes:
+    'Full Shop: 4+ shopping categories. Category Specialist: ≤2 categories, >5s dwell, converted. Browse & Bail: browsed but no checkout. Quick Run: all other journeys.',
+} as const
 
 // ─── Helpers ─────────────────────────────────────────────────
 
@@ -114,7 +142,7 @@ function computeFlowLayout(flow: CategoryFlow, W: number, H: number): FlowLayout
 
   const PAD_X = 60
   const PAD_Y = 50
-  const NODE_H = 8
+  const NODE_H = 10
   const usableW = W - PAD_X * 2
   const usableH = H - PAD_Y * 2
 
@@ -189,8 +217,8 @@ function drawFlow(
     if (!from || !to) return
 
     const isHighlighted = hoveredNode === edge.from || hoveredNode === edge.to
-    const thickness = Math.max(1.5, (edge.count / maxEdgeCount) * 8)
-    const alpha = isHighlighted ? 0.45 : 0.12
+    const thickness = Math.max(2, (edge.count / maxEdgeCount) * 8)
+    const alpha = isHighlighted ? 0.55 : 0.22
 
     const x1 = from.x + from.w / 2
     const y1 = from.y + from.h
@@ -213,10 +241,10 @@ function drawFlow(
   nodes.forEach((node, id) => {
     const isHovered = hoveredNode === id
     let color: string
-    if (node.isEntrance) color = 'rgba(96, 165, 250, 0.7)'
-    else if (node.isCheckout) color = 'rgba(0, 255, 136, 0.7)'
-    else if (isHovered) color = 'rgba(255, 200, 50, 0.8)'
-    else color = selectedPattern ? patternColor.replace('rgb(', 'rgba(').replace(')', ', 0.5)') : 'rgba(100, 180, 255, 0.5)'
+    if (node.isEntrance) color = 'rgba(96, 165, 250, 0.85)'
+    else if (node.isCheckout) color = 'rgba(0, 255, 136, 0.85)'
+    else if (isHovered) color = 'rgba(255, 210, 80, 0.9)'
+    else color = selectedPattern ? patternColor.replace('rgb(', 'rgba(').replace(')', ', 0.72)') : 'rgba(120, 195, 255, 0.72)'
 
     // Node bar
     ctx.fillStyle = color
@@ -234,12 +262,12 @@ function drawFlow(
     // Label left of node
     ctx.font = `${fontSize}px monospace`
     ctx.textAlign = 'right'
-    ctx.fillStyle = isHovered ? 'rgba(255,255,255,0.9)' : 'rgba(255,255,255,0.55)'
+    ctx.fillStyle = isHovered ? 'rgba(255,255,255,0.95)' : 'rgba(255,255,255,0.78)'
     ctx.fillText(node.name, node.x - 10, node.y + node.h / 2 + fontSize / 3)
 
     // Count right of node
     ctx.textAlign = 'left'
-    ctx.fillStyle = 'rgba(255,255,255,0.3)'
+    ctx.fillStyle = isHovered ? 'rgba(255,255,255,0.75)' : 'rgba(255,255,255,0.55)'
     ctx.font = `10px monospace`
     ctx.fillText(`${node.count}`, node.x + node.w + 10, node.y + node.h / 2 + 4)
 
@@ -257,6 +285,7 @@ export default function JourneyFlowGraph() {
   const [modalOpen, setModalOpen] = useState(false)
   const [selectedPattern, setSelectedPattern] = useState<string | null>(null)
   const [hoveredNode, setHoveredNode] = useState<string | null>(null)
+  const [tooltipPos, setTooltipPos] = useState<{ x: number; y: number } | null>(null)
 
   // Fetch data
   const fetchData = useCallback(async () => {
@@ -295,11 +324,12 @@ export default function JourneyFlowGraph() {
   const MODAL_H = Math.min(640, Math.floor(window.innerHeight * 0.7))
   const FLOW_W = Math.floor(MODAL_W * 0.4)
   const FLOW_H = MODAL_H - 60
+  const FLOW_CANVAS_H = FLOW_H - 28
 
   const modalLayout = useMemo(() => {
     if (!activeFlow || !modalOpen) return null
-    return computeFlowLayout(activeFlow, FLOW_W, FLOW_H)
-  }, [activeFlow, modalOpen, FLOW_W, FLOW_H])
+    return computeFlowLayout(activeFlow, FLOW_W, FLOW_CANVAS_H)
+  }, [activeFlow, modalOpen, FLOW_W, FLOW_CANVAS_H])
 
   useEffect(() => {
     const canvas = modalCanvasRef.current
@@ -325,7 +355,23 @@ export default function JourneyFlowGraph() {
       }
     })
     setHoveredNode(found)
+    setTooltipPos(found ? { x: mx, y: my } : null)
   }, [modalLayout])
+
+  const handleCanvasMouseLeave = useCallback(() => {
+    setHoveredNode(null)
+    setTooltipPos(null)
+  }, [])
+
+  const flowTooltipTotal = useMemo(() => {
+    if (!data) return 0
+    if (selectedPattern) {
+      return data.patterns.find(p => p.type === selectedPattern)?.trackCount ?? data.totalTracks
+    }
+    return data.totalTracks
+  }, [data, selectedPattern])
+
+  const hoveredFlowNode = hoveredNode && modalLayout ? modalLayout.nodes.get(hoveredNode) ?? null : null
 
   const hasData = data && data.patterns.length > 0
 
@@ -431,20 +477,28 @@ export default function JourneyFlowGraph() {
         <div
           className="fixed inset-0 flex items-center justify-center"
           onClick={() => setModalOpen(false)}
-          style={{ zIndex: 99999, background: 'rgba(0, 0, 0, 0.75)', backdropFilter: 'blur(6px)' }}
+          style={neuralModalBackdropStyle}
         >
           <div
-            className="relative rounded-lg border border-white/[0.08] font-mono flex flex-col overflow-hidden"
-            style={{ width: MODAL_W, height: MODAL_H, background: 'rgba(13, 13, 20, 0.97)' }}
+            className="relative rounded-lg border font-mono flex flex-col overflow-hidden"
+            style={{ width: MODAL_W, height: MODAL_H, ...neuralModalPanelStyle }}
             onClick={e => e.stopPropagation()}
           >
             {/* Modal header */}
-            <div className="flex items-center justify-between px-5 py-3 border-b border-white/[0.06] flex-shrink-0">
+            <div
+              className="flex items-center justify-between px-5 py-3 flex-shrink-0"
+              style={{ borderBottom: `1px solid ${NEURAL_MODAL_DIVIDER}` }}
+            >
               <div className="flex items-center gap-3">
-                <span className="text-[13px] text-white/60 tracking-wider uppercase">Journey Patterns</span>
-                <span className="text-white/25 text-[10px] tabular-nums">
-                  {data.totalTracks} tracks · {data.convertedTracks} converted ({pct(data.convertedTracks, data.totalTracks)})
-                </span>
+                <span className="text-[13px] text-white/75 tracking-wider uppercase">Journey Patterns</span>
+                <Tooltip
+                  text={`${METRIC_HELP.tracks} ${METRIC_HELP.converted}`}
+                  wrap
+                >
+                  <span className="text-white/45 text-[10px] tabular-nums cursor-help border-b border-dotted border-white/20">
+                    {data.totalTracks} tracks · {data.convertedTracks} converted ({pct(data.convertedTracks, data.totalTracks)})
+                  </span>
+                </Tooltip>
               </div>
               <div className="flex items-center gap-3">
                 <div className="flex gap-1">
@@ -453,7 +507,7 @@ export default function JourneyFlowGraph() {
                       key={r}
                       onClick={() => setRange(r)}
                       className={`px-2 py-1 rounded text-[10px] transition-colors ${
-                        range === r ? 'bg-white/10 text-white' : 'text-white/30 hover:text-white/50'
+                        range === r ? 'bg-white/12 text-white' : 'text-white/45 hover:text-white/65'
                       }`}
                     >
                       {r}
@@ -462,7 +516,7 @@ export default function JourneyFlowGraph() {
                 </div>
                 <button
                   onClick={() => setModalOpen(false)}
-                  className="text-white/30 hover:text-white/60 text-[16px] transition-colors w-7 h-7 flex items-center justify-center rounded hover:bg-white/[0.06]"
+                  className="text-white/45 hover:text-white/75 text-[16px] transition-colors w-7 h-7 flex items-center justify-center rounded hover:bg-white/[0.08]"
                 >
                   ×
                 </button>
@@ -473,23 +527,26 @@ export default function JourneyFlowGraph() {
             <div className="flex flex-1 overflow-hidden">
 
               {/* LEFT: Pattern selector */}
-              <div className="w-[200px] border-r border-white/[0.06] overflow-y-auto flex-shrink-0 py-2">
+              <div
+                className="w-[200px] overflow-y-auto flex-shrink-0 py-2"
+                style={{ borderRight: `1px solid ${NEURAL_MODAL_DIVIDER}` }}
+              >
                 {/* All patterns option */}
                 <button
                   onClick={() => setSelectedPattern(null)}
                   className={`w-full text-left px-4 py-2.5 transition-colors text-[11px] ${
                     selectedPattern === null
-                      ? 'bg-white/[0.06] text-white/80'
-                      : 'text-white/40 hover:bg-white/[0.03] hover:text-white/60'
+                      ? 'bg-white/[0.08] text-white/90'
+                      : 'text-white/55 hover:bg-white/[0.05] hover:text-white/75'
                   }`}
                 >
                   <div className="flex items-center justify-between">
                     <span className="font-medium">All Journeys</span>
-                    <span className="text-[10px] tabular-nums text-white/30">{data.totalTracks}</span>
+                    <span className="text-[10px] tabular-nums text-white/45">{data.totalTracks}</span>
                   </div>
                 </button>
 
-                <div className="mx-4 my-1 border-t border-white/[0.04]" />
+                <div className="mx-4 my-1" style={{ borderTop: `1px solid ${NEURAL_MODAL_DIVIDER}` }} />
 
                 {data.patterns.map(pattern => {
                   const isActive = selectedPattern === pattern.type
@@ -500,8 +557,8 @@ export default function JourneyFlowGraph() {
                       onClick={() => setSelectedPattern(pattern.type)}
                       className={`w-full text-left px-4 py-2.5 transition-all ${
                         isActive
-                          ? 'text-white/90'
-                          : 'text-white/40 hover:bg-white/[0.03] hover:text-white/60'
+                          ? 'text-white/95'
+                          : 'text-white/55 hover:bg-white/[0.05] hover:text-white/75'
                       }`}
                       style={isActive ? { background: PATTERN_COLORS_DIM[pattern.type] || 'rgba(255,255,255,0.06)' } : undefined}
                     >
@@ -510,10 +567,10 @@ export default function JourneyFlowGraph() {
                         <span className="text-[11px] font-medium truncate">{pattern.label}</span>
                       </div>
                       <div className="flex items-center justify-between ml-4">
-                        <span className="text-[10px] tabular-nums text-white/30">
+                        <span className="text-[10px] tabular-nums text-white/45">
                           {pattern.trackCount} tracks
                         </span>
-                        <span className="text-[10px] tabular-nums text-white/30">
+                        <span className="text-[10px] tabular-nums text-white/45">
                           {pct(pattern.trackCount, data.totalTracks)}
                         </span>
                       </div>
@@ -534,24 +591,69 @@ export default function JourneyFlowGraph() {
               </div>
 
               {/* CENTER: Category flow canvas */}
-              <div className="flex-1 relative">
+              <div className="flex-1 relative flex flex-col min-w-0">
+                <div className="flex items-center justify-between px-3 py-1.5 flex-shrink-0">
+                  <MetricLabel
+                    label="Category flow"
+                    help={METRIC_HELP.flowChart}
+                    className="text-[9px] text-white/50 uppercase tracking-wider"
+                  />
+                  {selectedPattern && (
+                    <span className="text-[9px] text-white/40 truncate ml-2">
+                      {data.patterns.find(p => p.type === selectedPattern)?.label ?? selectedPattern}
+                    </span>
+                  )}
+                </div>
+                <div className="flex-1 relative">
                 {modalLayout ? (
+                  <>
                   <canvas
                     ref={modalCanvasRef}
-                    style={{ width: FLOW_W, height: FLOW_H }}
-                    className="absolute inset-0"
+                    style={{ width: FLOW_W, height: FLOW_CANVAS_H, cursor: hoveredNode ? 'pointer' : 'default' }}
+                    className="absolute inset-0 top-7"
                     onMouseMove={handleCanvasMouseMove}
-                    onMouseLeave={() => setHoveredNode(null)}
+                    onMouseLeave={handleCanvasMouseLeave}
                   />
+                  {hoveredFlowNode && tooltipPos && (
+                    <div
+                      className="absolute pointer-events-none z-10 px-2.5 py-2 rounded border shadow-lg font-mono text-[9px] leading-snug"
+                      style={{
+                        left: Math.min(tooltipPos.x + 14, FLOW_W - 200),
+                        top: Math.max(36, tooltipPos.y - 8),
+                        background: 'rgba(34, 36, 50, 0.97)',
+                        borderColor: 'rgba(255,255,255,0.18)',
+                        maxWidth: 196,
+                      }}
+                    >
+                      <div className="text-white/90 font-medium mb-1">{hoveredFlowNode.name}</div>
+                      <div className="text-white/65 tabular-nums">
+                        {hoveredFlowNode.count.toLocaleString()} journeys visited
+                      </div>
+                      <div className="text-white/50 tabular-nums">
+                        {pct(hoveredFlowNode.count, flowTooltipTotal)} of {selectedPattern ? 'pattern' : 'all'} tracks
+                      </div>
+                      {hoveredFlowNode.isEntrance && (
+                        <div className="text-blue-300/70 mt-1">Store entry — every journey starts here</div>
+                      )}
+                      {hoveredFlowNode.isCheckout && (
+                        <div className="text-emerald-300/70 mt-1">Checkout zone — counts as conversion</div>
+                      )}
+                    </div>
+                  )}
+                  </>
                 ) : (
-                  <div className="h-full flex items-center justify-center text-white/20 text-[11px]">
+                  <div className="h-full flex items-center justify-center text-white/35 text-[11px] pt-7">
                     No flow data for this pattern
                   </div>
                 )}
+                </div>
               </div>
 
               {/* RIGHT: Detail panel */}
-              <div className="w-[240px] border-l border-white/[0.06] overflow-y-auto flex-shrink-0">
+              <div
+                className="w-[240px] overflow-y-auto flex-shrink-0"
+                style={{ borderLeft: `1px solid ${NEURAL_MODAL_DIVIDER}` }}
+              >
                 {selectedPattern === null ? (
                   <OverviewPanel data={data} />
                 ) : activePatternDetail ? (
@@ -591,33 +693,45 @@ function OverviewPanel({ data }: { data: JourneyPatternsData }) {
   return (
     <div className="p-4 space-y-4">
       <div>
-        <div className="text-[10px] text-white/30 uppercase tracking-wider mb-2">Overview</div>
-        <div className="text-[22px] text-white/80 font-light tabular-nums">{data.totalTracks}</div>
-        <div className="text-[10px] text-white/30">total journeys tracked</div>
+        <MetricLabel
+          label="Overview"
+          help={METRIC_HELP.tracks}
+          className="text-[10px] text-white/50 uppercase tracking-wider mb-2"
+        />
+        <div className="text-[22px] text-white/90 font-light tabular-nums">{data.totalTracks}</div>
+        <div className="text-[10px] text-white/45">total journeys tracked</div>
       </div>
 
       <div>
-        <div className="text-[10px] text-white/30 uppercase tracking-wider mb-1">Conversion</div>
+        <MetricLabel
+          label="Conversion"
+          help={`${METRIC_HELP.converted} ${METRIC_HELP.conversion}`}
+          className="text-[10px] text-white/50 uppercase tracking-wider mb-1"
+        />
         <div className="flex items-baseline gap-2">
-          <span className="text-[18px] text-emerald-400/80 font-light tabular-nums">{convRate}%</span>
-          <span className="text-[10px] text-white/25 tabular-nums">{data.convertedTracks} / {data.totalTracks}</span>
+          <span className="text-[18px] text-emerald-400/90 font-light tabular-nums">{convRate}%</span>
+          <span className="text-[10px] text-white/40 tabular-nums">{data.convertedTracks} / {data.totalTracks}</span>
         </div>
-        <div className="mt-1 h-[4px] rounded-full bg-white/[0.06]">
+        <div className="mt-1 h-[4px] rounded-full bg-white/[0.08]">
           <div
-            className="h-full rounded-full bg-emerald-400/60"
+            className="h-full rounded-full bg-emerald-400/70"
             style={{ width: `${convRate}%` }}
           />
         </div>
       </div>
 
       <div>
-        <div className="text-[10px] text-white/30 uppercase tracking-wider mb-2">Pattern Breakdown</div>
+        <MetricLabel
+          label="Pattern Breakdown"
+          help={METRIC_HELP.patternTypes}
+          className="text-[10px] text-white/50 uppercase tracking-wider mb-2"
+        />
         <div className="space-y-2">
           {data.patterns.map(p => (
             <div key={p.type} className="flex items-center gap-2">
               <div className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: PATTERN_COLORS[p.type] }} />
-              <span className="text-[10px] text-white/50 flex-1 truncate">{p.label}</span>
-              <span className="text-[10px] text-white/30 tabular-nums">{pct(p.trackCount, data.totalTracks)}</span>
+              <span className="text-[10px] text-white/65 flex-1 truncate">{p.label}</span>
+              <span className="text-[10px] text-white/45 tabular-nums">{pct(p.trackCount, data.totalTracks)}</span>
             </div>
           ))}
         </div>
@@ -625,12 +739,16 @@ function OverviewPanel({ data }: { data: JourneyPatternsData }) {
 
       {topCategories.length > 0 && (
         <div>
-          <div className="text-[10px] text-white/30 uppercase tracking-wider mb-2">Top Category Dwells</div>
+          <MetricLabel
+            label="Top Category Dwells"
+            help={METRIC_HELP.categoryDwell}
+            className="text-[10px] text-white/50 uppercase tracking-wider mb-2"
+          />
           <div className="space-y-1.5">
             {topCategories.map(([cat, sec]) => (
               <div key={cat} className="flex items-center justify-between">
-                <span className="text-[10px] text-white/45 truncate flex-1">{cat}</span>
-                <span className="text-[10px] text-white/25 tabular-nums ml-2">{formatDuration(sec)}</span>
+                <span className="text-[10px] text-white/60 truncate flex-1">{cat}</span>
+                <span className="text-[10px] text-white/40 tabular-nums ml-2">{formatDuration(sec)}</span>
               </div>
             ))}
           </div>
@@ -652,34 +770,44 @@ function PatternDetailPanel({ pattern, totalTracks }: { pattern: JourneyPattern;
       <div>
         <div className="flex items-center gap-2 mb-1">
           <div className="w-2.5 h-2.5 rounded-full" style={{ background: PATTERN_COLORS[pattern.type] }} />
-          <span className="text-[13px] text-white/80 font-medium">{pattern.label}</span>
+          <span className="text-[13px] text-white/90 font-medium">{pattern.label}</span>
         </div>
-        <div className="text-[10px] text-white/30">
-          {pattern.trackCount} tracks ({pct(pattern.trackCount, totalTracks)} of total)
-        </div>
+        <Tooltip text={METRIC_HELP.patternTypes} wrap>
+          <div className="text-[10px] text-white/45 cursor-help border-b border-dotted border-transparent hover:border-white/15 inline-block">
+            {pattern.trackCount} tracks ({pct(pattern.trackCount, totalTracks)} of total)
+          </div>
+        </Tooltip>
       </div>
 
       {/* Duration */}
       <div>
-        <div className="text-[10px] text-white/30 uppercase tracking-wider mb-1">Avg Duration</div>
-        <div className="text-[18px] text-white/70 font-light tabular-nums">{formatDuration(pattern.avgDurationSec)}</div>
+        <MetricLabel
+          label="Avg Duration"
+          help={METRIC_HELP.avgDuration}
+          className="text-[10px] text-white/50 uppercase tracking-wider mb-1"
+        />
+        <div className="text-[18px] text-white/85 font-light tabular-nums">{formatDuration(pattern.avgDurationSec)}</div>
       </div>
 
       {/* Conversion */}
       <div>
-        <div className="text-[10px] text-white/30 uppercase tracking-wider mb-1">Conversion</div>
+        <MetricLabel
+          label="Conversion"
+          help={METRIC_HELP.conversion}
+          className="text-[10px] text-white/50 uppercase tracking-wider mb-1"
+        />
         <div className="flex items-baseline gap-2">
-          <span className={`text-[18px] font-light tabular-nums ${convPct > 50 ? 'text-emerald-400/80' : convPct > 0 ? 'text-amber-400/80' : 'text-red-400/60'}`}>
+          <span className={`text-[18px] font-light tabular-nums ${convPct > 50 ? 'text-emerald-400/90' : convPct > 0 ? 'text-amber-400/90' : 'text-red-400/75'}`}>
             {convPct}%
           </span>
         </div>
-        <div className="mt-1 h-[4px] rounded-full bg-white/[0.06]">
+        <div className="mt-1 h-[4px] rounded-full bg-white/[0.08]">
           <div
             className="h-full rounded-full"
             style={{
               width: `${convPct}%`,
               background: PATTERN_COLORS[pattern.type] || '#60a5fa',
-              opacity: 0.6,
+              opacity: 0.7,
             }}
           />
         </div>
@@ -687,19 +815,23 @@ function PatternDetailPanel({ pattern, totalTracks }: { pattern: JourneyPattern;
 
       {/* Typical path */}
       <div>
-        <div className="text-[10px] text-white/30 uppercase tracking-wider mb-2">Typical Path</div>
+        <MetricLabel
+          label="Typical Path"
+          help={METRIC_HELP.typicalPath}
+          className="text-[10px] text-white/50 uppercase tracking-wider mb-2"
+        />
         <div className="flex flex-wrap gap-1 items-center">
           {pattern.categorySequence.map((cat, i) => (
             <span key={i} className="flex items-center gap-1">
               <span className={`text-[10px] px-1.5 py-0.5 rounded ${
-                cat === 'Entrance' ? 'bg-blue-500/15 text-blue-400/70' :
-                cat === 'Checkout' ? 'bg-emerald-500/15 text-emerald-400/70' :
-                'bg-white/[0.05] text-white/50'
+                cat === 'Entrance' ? 'bg-blue-500/20 text-blue-300/85' :
+                cat === 'Checkout' ? 'bg-emerald-500/20 text-emerald-300/85' :
+                'bg-white/[0.07] text-white/65'
               }`}>
                 {cat}
               </span>
               {i < pattern.categorySequence.length - 1 && (
-                <span className="text-[8px] text-white/15">→</span>
+                <span className="text-[8px] text-white/30">→</span>
               )}
             </span>
           ))}
@@ -709,23 +841,27 @@ function PatternDetailPanel({ pattern, totalTracks }: { pattern: JourneyPattern;
       {/* Category dwell breakdown */}
       {pattern.categoryDwell.length > 0 && (
         <div>
-          <div className="text-[10px] text-white/30 uppercase tracking-wider mb-2">Category Dwell</div>
+          <MetricLabel
+            label="Category Dwell"
+            help={METRIC_HELP.categoryDwell}
+            className="text-[10px] text-white/50 uppercase tracking-wider mb-2"
+          />
           <div className="space-y-1.5">
             {pattern.categoryDwell.slice(0, 6).map(cd => {
               const maxDwell = pattern.categoryDwell[0]?.avgSec || 1
               return (
                 <div key={cd.category}>
                   <div className="flex items-center justify-between mb-0.5">
-                    <span className="text-[10px] text-white/45 truncate">{cd.category}</span>
-                    <span className="text-[10px] text-white/25 tabular-nums">{formatDuration(cd.avgSec)}</span>
+                    <span className="text-[10px] text-white/60 truncate">{cd.category}</span>
+                    <span className="text-[10px] text-white/40 tabular-nums">{formatDuration(cd.avgSec)}</span>
                   </div>
-                  <div className="h-[2px] rounded-full bg-white/[0.06]">
+                  <div className="h-[2px] rounded-full bg-white/[0.08]">
                     <div
                       className="h-full rounded-full"
                       style={{
                         width: `${Math.max(3, (cd.avgSec / maxDwell) * 100)}%`,
                         background: PATTERN_COLORS[pattern.type] || '#60a5fa',
-                        opacity: 0.4,
+                        opacity: 0.55,
                       }}
                     />
                   </div>
@@ -738,27 +874,35 @@ function PatternDetailPanel({ pattern, totalTracks }: { pattern: JourneyPattern;
 
       {/* Temporal distribution */}
       <div>
-        <div className="text-[10px] text-white/30 uppercase tracking-wider mb-2">Peak Hours</div>
+        <MetricLabel
+          label="Peak Hours"
+          help={METRIC_HELP.peakHours}
+          className="text-[10px] text-white/50 uppercase tracking-wider mb-2"
+        />
         <div className="flex items-end gap-px h-[32px]">
           {pattern.temporalDistribution.map((count, hour) => (
-            <div
+            <Tooltip
               key={hour}
-              className="flex-1 rounded-t-sm"
-              style={{
-                height: `${Math.max(2, (count / hourlyMax) * 100)}%`,
-                background: PATTERN_COLORS[pattern.type] || '#60a5fa',
-                opacity: count > 0 ? 0.3 + (count / hourlyMax) * 0.5 : 0.05,
-              }}
-              title={`${hour}:00 — ${count} tracks`}
-            />
+              text={`${hour}:00–${hour + 1}:00 · ${count} journey${count === 1 ? '' : 's'}`}
+              className="flex-1 flex min-w-0 h-full items-end"
+            >
+              <div
+                className="w-full rounded-t-sm cursor-help"
+                style={{
+                  height: `${Math.max(2, (count / hourlyMax) * 100)}%`,
+                  background: PATTERN_COLORS[pattern.type] || '#60a5fa',
+                  opacity: count > 0 ? 0.35 + (count / hourlyMax) * 0.55 : 0.08,
+                }}
+              />
+            </Tooltip>
           ))}
         </div>
         <div className="flex justify-between mt-0.5">
-          <span className="text-[8px] text-white/15">0h</span>
-          <span className="text-[8px] text-white/15">6h</span>
-          <span className="text-[8px] text-white/15">12h</span>
-          <span className="text-[8px] text-white/15">18h</span>
-          <span className="text-[8px] text-white/15">24h</span>
+          <span className="text-[8px] text-white/30">0h</span>
+          <span className="text-[8px] text-white/30">6h</span>
+          <span className="text-[8px] text-white/30">12h</span>
+          <span className="text-[8px] text-white/30">18h</span>
+          <span className="text-[8px] text-white/30">24h</span>
         </div>
       </div>
     </div>

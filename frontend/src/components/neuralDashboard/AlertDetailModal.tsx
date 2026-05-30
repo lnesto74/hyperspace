@@ -3,6 +3,11 @@ import { createPortal } from 'react-dom'
 import { useRoi } from '../../context/RoiContext'
 import { useVenue } from '../../context/VenueContext'
 import { API_BASE } from '../../config/api'
+import {
+  NEURAL_MODAL_SECTION_BG,
+  neuralModalBackdropStyle,
+  neuralModalPanelStyle,
+} from './neuralModalStyles'
 import FloorPlanMiniMap from '../shared/FloorPlanMiniMap'
 import { normalizeFloorVertex, type MapRegion } from '../../utils/venueFloorPlanMap'
 
@@ -119,21 +124,21 @@ export default function AlertDetailModal({ alert, onClose }: Props) {
     <div
       className="fixed inset-0 flex items-center justify-center"
       onClick={onClose}
-      style={{ zIndex: 99999, background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(8px)' }}
+      style={neuralModalBackdropStyle}
     >
       <div
         className="relative rounded-lg border font-mono"
         style={{
           width: Math.min(720, window.innerWidth - 40),
           maxHeight: window.innerHeight - 60,
-          background: 'rgba(13,13,20,0.97)',
-          borderColor: `${meta.color}33`,
+          ...neuralModalPanelStyle,
+          borderColor: `${meta.color}44`,
         }}
         onClick={e => e.stopPropagation()}
       >
         <button
           onClick={onClose}
-          className="absolute top-3 right-3 w-8 h-8 flex items-center justify-center rounded text-white/30 hover:text-white/60 hover:bg-white/[0.06] transition-colors text-lg z-10"
+          className="absolute top-3 right-3 w-8 h-8 flex items-center justify-center rounded text-white/45 hover:text-white/75 hover:bg-white/[0.08] transition-colors text-lg z-10"
         >
           ×
         </button>
@@ -158,21 +163,21 @@ export default function AlertDetailModal({ alert, onClose }: Props) {
                   {alert.severity}
                 </span>
               </div>
-              <div className="text-[10px] text-white/40 mt-0.5">
+              <div className="text-[10px] text-white/55 mt-0.5">
                 {meta.label} · {timeAgo(alert.firstSeen)}
               </div>
             </div>
           </div>
 
-          <div className="rounded-md p-4 mb-4" style={{ background: 'rgba(255,255,255,0.03)', borderLeft: `3px solid ${meta.color}44` }}>
-            <div className="text-[13px] text-white/85 leading-relaxed">
+          <div className="rounded-md p-4 mb-4" style={{ background: NEURAL_MODAL_SECTION_BG, borderLeft: `3px solid ${meta.color}55` }}>
+            <div className="text-[13px] text-white/90 leading-relaxed">
               {alert.message}
             </div>
           </div>
 
           {alert.categories && alert.categories.length > 0 && (
-            <div className="rounded-md p-3 mb-4" style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.06)' }}>
-              <div className="text-[9px] text-white/35 uppercase tracking-wider mb-2">
+            <div className="rounded-md p-3 mb-4" style={{ background: NEURAL_MODAL_SECTION_BG, border: '1px solid rgba(255,255,255,0.10)' }}>
+              <div className="text-[9px] text-white/50 uppercase tracking-wider mb-2">
                 Affected Product Categories{alert.shelfName ? ` · ${alert.shelfName}` : ''}
               </div>
               <div className="flex flex-wrap gap-1.5">
@@ -189,12 +194,12 @@ export default function AlertDetailModal({ alert, onClose }: Props) {
             </div>
           )}
 
-          <div className="text-[11px] text-white/45 leading-relaxed mb-4">
+          <div className="text-[11px] text-white/60 leading-relaxed mb-4">
             {meta.description}
           </div>
 
           <div className="flex items-center gap-2 mb-5">
-            <span className="text-[11px] text-white/30">RECOMMENDED →</span>
+            <span className="text-[11px] text-white/45">RECOMMENDED →</span>
             <span className="text-[12px] italic" style={{ color: `${meta.color}cc` }}>
               {alert.action}
             </span>
@@ -203,8 +208,8 @@ export default function AlertDetailModal({ alert, onClose }: Props) {
           {hasMapData && (
             <div>
               <div className="flex items-center justify-between mb-2">
-                <div className="text-[9px] text-white/30 uppercase tracking-wider">Zone Map</div>
-                <div className="text-[8px] text-white/25">
+                <div className="text-[9px] text-white/45 uppercase tracking-wider">Zone Map</div>
+                <div className="text-[8px] text-white/40">
                   {objects.length} fixtures · {mapRegions.length} zones
                   {highlightCount > 0 ? ` · ${highlightCount} highlighted` : ''}
                 </div>
@@ -223,7 +228,7 @@ export default function AlertDetailModal({ alert, onClose }: Props) {
                   height={320}
                 />
               </div>
-              <div className="flex items-center gap-4 mt-2 text-[8px] text-white/40">
+              <div className="flex items-center gap-4 mt-2 text-[8px] text-white/50">
                 <span className="flex items-center gap-1">
                   <span className="inline-block w-2 h-2 rounded-sm border border-cyan-200/70 bg-cyan-400/25" />
                   DWG fixtures

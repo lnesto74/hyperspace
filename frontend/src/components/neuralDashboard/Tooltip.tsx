@@ -5,9 +5,11 @@ interface TooltipProps {
   text: string
   children: ReactNode
   className?: string
+  /** Allow multi-line explanatory copy instead of a single nowrap line. */
+  wrap?: boolean
 }
 
-export default function Tooltip({ text, children, className = '' }: TooltipProps) {
+export default function Tooltip({ text, children, className = '', wrap = false }: TooltipProps) {
   const [visible, setVisible] = useState(false)
   const [coords, setCoords] = useState({ x: 0, y: 0, above: true })
   const ref = useRef<HTMLDivElement>(null)
@@ -65,8 +67,9 @@ export default function Tooltip({ text, children, className = '' }: TooltipProps
         >
           <div
             className={`px-2.5 py-1.5 rounded text-[9px] leading-snug font-mono
-              bg-[#1a1a24] border border-white/15 text-white/90 shadow-xl shadow-black/60
-              whitespace-nowrap ${coords.above ? 'mb-1' : 'mt-1'}`}
+              bg-[#222230] border border-white/20 text-white/90 shadow-xl shadow-black/60
+              ${wrap ? 'max-w-[240px] whitespace-normal' : 'whitespace-nowrap'}
+              ${coords.above ? 'mb-1' : 'mt-1'}`}
             style={coords.above ? { transform: 'translateY(-100%)' } : {}}
           >
             {text}
