@@ -6,6 +6,7 @@ import {
   fetchAllCrawlPages,
   productsFromCrawlPages,
   normalizeScrapedProducts,
+  filterNewCatalogItems,
 } from './ScrapeGraphCatalogService.js';
 import { skuCatalogQueries, skuItemQueries } from '../database/schema.js';
 
@@ -34,6 +35,8 @@ export class CatalogCrawlJobStore {
       progress: { finished: 0, total: 0, message: 'Queued…' },
       catalogId: null,
       itemCount: 0,
+      itemsAdded: 0,
+      itemsSkipped: 0,
       categories: [],
       brands: [],
       error: null,
@@ -79,6 +82,8 @@ export class CatalogCrawlJobStore {
       progress: job.progress,
       catalogId: job.catalogId,
       itemCount: job.itemCount,
+      itemsAdded: job.itemsAdded ?? 0,
+      itemsSkipped: job.itemsSkipped ?? 0,
       categories: job.categories,
       brands: job.brands,
       error: job.error,
@@ -149,55 +154,95 @@ export class CatalogCrawlJobStore {
 
     if (signal.aborted) return;
 
-    const catalogId = uuidv4();
     const now = new Date().toISOString();
-    const hostname = (() => {
-      try {
-        return new URL(job.url).hostname.replace(/^www\./, '');
-      } catch {
-        return 'website';
+    const mergeIntoCatalogId = params.mergeIntoCatalogId || null;
+    let catalogId = mergeIntoCatalogId;
+    let itemsAdded = 0;
+    let itemsSkipped = 0;
+
+    if (mergeIntoCatalogId) {
+      const existing = skuCatalogQueries.getById(this.db, mergeIntoCatalogId);
+      if (!existing) {
+        throw new Error('Target catalog not found — select a catalog or disable merge mode');
       }
-    })();
-
-    const catalogName = job.name || storeName || `Catalog from ${hostname}`;
-    const catalogDescription = job.description
-      || `Imported via ScrapeGraphAI from ${job.url} (${job.mode})`;
-
-    skuCatalogQueries.create(this.db, {
-      id: catalogId,
-      name: catalogName,
-      description: catalogDescription,
-      createdAt: now,
-      updatedAt: now,
-    });
-
-    const items = normalizeScrapedProducts(rawProducts, catalogId, job.url);
-
-    if (items.length === 0) {
-      skuCatalogQueries.delete(this.db, catalogId);
-      throw new Error(
-        'No products found on this page. Try crawl mode, enable stealth, or use a product listing URL.'
+      const existingItems = skuItemQueries.getByCatalogId(this.db, mergeIntoCatalogId);
+      const normalized = normalizeScrapedProducts(rawProducts, mergeIntoCatalogId, job.url);
+      const { added, skipped } = filterNewCatalogItems(
+        normalized,
+        existingItems.map((i) => i.skuCode)
       );
+      itemsAdded = added.length;
+      itemsSkipped = skipped;
+      if (added.length > 0) {
+        skuItemQueries.bulkCreate(this.db, added);
+        skuCatalogQueries.update(this.db, mergeIntoCatalogId, {
+          name: existing.name,
+          description: existing.description,
+        });
+      }
+      if (itemsAdded === 0 && itemsSkipped === 0 && normalized.length === 0) {
+        throw new Error(
+          'No products found on this page. Try a category URL, multi-page crawl, or a different listing page.'
+        );
+      }
+    } else {
+      catalogId = uuidv4();
+      const hostname = (() => {
+        try {
+          return new URL(job.url).hostname.replace(/^www\./, '');
+        } catch {
+          return 'website';
+        }
+      })();
+
+      const catalogName = job.name || storeName || `Catalog from ${hostname}`;
+      const catalogDescription = job.description
+        || `Imported via ScrapeGraphAI from ${job.url} (${job.mode})`;
+
+      skuCatalogQueries.create(this.db, {
+        id: catalogId,
+        name: catalogName,
+        description: catalogDescription,
+        createdAt: now,
+        updatedAt: now,
+      });
+
+      const items = normalizeScrapedProducts(rawProducts, catalogId, job.url);
+      if (items.length === 0) {
+        skuCatalogQueries.delete(this.db, catalogId);
+        throw new Error(
+          'No products found on this page. Try crawl mode, enable stealth, or use a product listing URL.'
+        );
+      }
+      skuItemQueries.bulkCreate(this.db, items);
+      itemsAdded = items.length;
+      itemsSkipped = 0;
     }
 
-    skuItemQueries.bulkCreate(this.db, items);
-
-    const categories = [...new Set(items.map((i) => i.category).filter(Boolean))];
-    const brands = [...new Set(items.map((i) => i.brand).filter(Boolean))];
+    const allItems = skuItemQueries.getByCatalogId(this.db, catalogId);
+    const categories = [...new Set(allItems.map((i) => i.category).filter(Boolean))];
+    const brands = [...new Set(allItems.map((i) => i.brand).filter(Boolean))];
 
     job.catalogId = catalogId;
-    job.itemCount = items.length;
+    job.itemCount = allItems.length;
+    job.itemsAdded = itemsAdded;
+    job.itemsSkipped = itemsSkipped;
     job.categories = categories;
     job.brands = brands;
     job.status = 'completed';
+    const doneMsg = mergeIntoCatalogId
+      ? (itemsAdded > 0
+        ? `Done — ${itemsAdded} new products added (${itemsSkipped} duplicates skipped)`
+        : `Done — no new products (${itemsSkipped} duplicates skipped)`)
+      : `Done — ${itemsAdded} products imported`;
     job.progress = {
       finished: job.progress.total || 1,
       total: job.progress.total || 1,
-      message: `Done — ${items.length} products imported`,
+      message: doneMsg,
     };
     job.updatedAt = Date.now();
 
-    console.log(`[CatalogCrawl] Job ${job.id.slice(0, 8)} completed: ${items.length} SKUs`);
+    console.log(`[CatalogCrawl] Job ${job.id.slice(0, 8)} completed: +${itemsAdded} new, ${itemsSkipped} skipped, ${allItems.length} total`);
   }
 
   _cleanupOldJobs() {

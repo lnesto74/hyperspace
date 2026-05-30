@@ -72,6 +72,8 @@ export interface CatalogCrawlProgress {
   status: string
   progress: { finished: number; total: number; message: string }
   itemCount?: number
+  itemsAdded?: number
+  itemsSkipped?: number
   catalogId?: string
   error?: string | null
 }
@@ -82,6 +84,7 @@ export interface CatalogCrawlOptions {
   mode?: 'extract' | 'crawl'
   maxPages?: number
   maxDepth?: number
+  mergeIntoCatalogId?: string
   onProgress?: (update: CatalogCrawlProgress) => void
 }
 
@@ -92,7 +95,12 @@ interface PlanogramContextType {
   loadCatalogs: () => Promise<void>
   loadCatalog: (id: string) => Promise<void>
   importCatalog: (file: File, name?: string) => Promise<void>
-  crawlCatalogFromWeb: (options: CatalogCrawlOptions) => Promise<{ catalogId: string; itemCount: number }>
+  crawlCatalogFromWeb: (options: CatalogCrawlOptions) => Promise<{
+    catalogId: string
+    itemCount: number
+    itemsAdded: number
+    itemsSkipped: number
+  }>
   deleteCatalog: (id: string) => Promise<void>
   
   // Planograms
@@ -241,6 +249,7 @@ export function PlanogramProvider({ children }: { children: ReactNode }) {
           mode: options.mode || 'extract',
           maxPages: options.maxPages,
           maxDepth: options.maxDepth,
+          mergeIntoCatalogId: options.mergeIntoCatalogId,
           stealth: true,
         }),
       })
@@ -253,7 +262,12 @@ export function PlanogramProvider({ children }: { children: ReactNode }) {
         progress: { finished: 0, total: 0, message: 'Starting crawl…' },
       })
 
-      const pollUntilDone = async (): Promise<{ catalogId: string; itemCount: number }> => {
+      const pollUntilDone = async (): Promise<{
+        catalogId: string
+        itemCount: number
+        itemsAdded: number
+        itemsSkipped: number
+      }> => {
         const statusRes = await fetch(`${API_BASE}/api/planogram/sku-catalogs/crawl/${jobId}`)
         const job = await statusRes.json()
         if (!statusRes.ok) throw new Error(job.error || 'Failed to get crawl status')
@@ -262,12 +276,19 @@ export function PlanogramProvider({ children }: { children: ReactNode }) {
           status: job.status,
           progress: job.progress,
           itemCount: job.itemCount,
+          itemsAdded: job.itemsAdded,
+          itemsSkipped: job.itemsSkipped,
           catalogId: job.catalogId,
           error: job.error,
         })
 
         if (job.status === 'completed' && job.catalogId) {
-          return { catalogId: job.catalogId, itemCount: job.itemCount }
+          return {
+            catalogId: job.catalogId,
+            itemCount: job.itemCount,
+            itemsAdded: job.itemsAdded ?? 0,
+            itemsSkipped: job.itemsSkipped ?? 0,
+          }
         }
         if (job.status === 'failed' || job.status === 'cancelled') {
           throw new Error(job.error || 'Crawl failed')

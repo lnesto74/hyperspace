@@ -29,7 +29,7 @@ export default function createPlanogramRoutes(db) {
 
   router.post('/sku-catalogs/crawl', (req, res) => {
     try {
-      const { url, name, description, mode, maxPages, maxDepth, stealth, renderMode } = req.body;
+      const { url, name, description, mode, maxPages, maxDepth, stealth, renderMode, mergeIntoCatalogId } = req.body;
 
       if (!url || typeof url !== 'string') {
         return res.status(400).json({ error: 'url is required' });
@@ -56,6 +56,7 @@ export default function createPlanogramRoutes(db) {
         maxDepth: maxDepth != null ? Number(maxDepth) : undefined,
         stealth: stealth !== false,
         renderMode,
+        mergeIntoCatalogId: mergeIntoCatalogId || null,
       });
 
       res.status(202).json({

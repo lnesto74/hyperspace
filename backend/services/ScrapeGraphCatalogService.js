@@ -127,24 +127,26 @@ export function normalizeScrapedProducts(rawProducts, catalogId, sourceUrl) {
       price = null;
     }
 
-    const imageUrl = raw.image_url || raw.imageUrl || raw.image || null;
+    const rawImage = raw.image_url || raw.imageUrl || raw.image || null;
+    const imageUrl = inferEsselungaImageUrl(skuCode, rawImage, sourceUrl);
     const productUrl = raw.product_url || raw.url || raw.link || null;
+    const clean = (v) => (isEmptyScrapedValue(v) ? null : String(v).trim());
 
     items.push({
       id: uuidv4(),
       catalogId,
       skuCode,
       name,
-      brand: raw.brand ? String(raw.brand) : null,
-      category: raw.category ? String(raw.category) : null,
-      subcategory: raw.subcategory ? String(raw.subcategory) : null,
-      size: raw.size ? String(raw.size) : null,
+      brand: clean(raw.brand),
+      category: clean(raw.category),
+      subcategory: clean(raw.subcategory),
+      size: clean(raw.size),
       widthM: null,
       heightM: null,
       depthM: null,
       price,
       margin: null,
-      imageUrl: imageUrl ? String(imageUrl) : null,
+      imageUrl: imageUrl || null,
       meta: productUrl || sourceUrl
         ? { sourceUrl, productUrl: productUrl ? String(productUrl) : null }
         : null,
@@ -152,6 +154,63 @@ export function normalizeScrapedProducts(rawProducts, catalogId, sourceUrl) {
   }
 
   return items;
+}
+
+/** ScrapeGraphAI placeholder when a field is not visible on the page. */
+const EMPTY_SENTINELS = new Set([
+  '',
+  'no content available',
+  'n/a',
+  'na',
+  'none',
+  'null',
+  'undefined',
+]);
+
+export function isEmptyScrapedValue(value) {
+  if (value == null) return true;
+  const s = String(value).trim().toLowerCase();
+  return EMPTY_SENTINELS.has(s);
+}
+
+/** Esselunga product images follow a stable CDN pattern from sku_code. */
+export function inferEsselungaImageUrl(skuCode, imageUrl, sourceUrl) {
+  if (!isEmptyScrapedValue(imageUrl) && String(imageUrl).startsWith('http')) {
+    return String(imageUrl).trim();
+  }
+  const code = String(skuCode || '').trim();
+  if (!/^\d{5,7}$/.test(code)) return null;
+  try {
+    const host = sourceUrl ? new URL(sourceUrl).hostname : '';
+    if (!host.includes('esselunga')) return null;
+  } catch {
+    return null;
+  }
+  return `https://images.services.esselunga.it/html/img_prodotti/esselunga/big/${code}.jpg`;
+}
+
+/**
+ * Drop items whose sku_code already exists in the target catalog.
+ */
+export function filterNewCatalogItems(items, existingSkuCodes) {
+  const seen = new Set(
+    [...existingSkuCodes].map((c) => String(c).trim().toLowerCase()).filter(Boolean)
+  );
+  const added = [];
+  let skipped = 0;
+
+  for (const item of items) {
+    const key = String(item.skuCode || '').trim().toLowerCase()
+      || String(item.name || '').trim().toLowerCase();
+    if (!key || seen.has(key)) {
+      skipped++;
+      continue;
+    }
+    seen.add(key);
+    added.push(item);
+  }
+
+  return { added, skipped };
 }
 
 /**

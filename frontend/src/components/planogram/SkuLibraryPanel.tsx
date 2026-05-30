@@ -48,6 +48,7 @@ export default function SkuLibraryPanel() {
   const [crawlName, setCrawlName] = useState('')
   const [crawlMode, setCrawlMode] = useState<'extract' | 'crawl'>('extract')
   const [crawlMaxPages, setCrawlMaxPages] = useState(10)
+  const [crawlMergeIntoCurrent, setCrawlMergeIntoCurrent] = useState(true)
   const [crawlProgress, setCrawlProgress] = useState<CatalogCrawlProgress | null>(null)
   const [importLoading, setImportLoading] = useState(false)
   const importMenuRef = useRef<HTMLDivElement>(null)
@@ -283,16 +284,22 @@ export default function SkuLibraryPanel() {
         name: crawlName.trim() || undefined,
         mode: crawlMode,
         maxPages: crawlMode === 'crawl' ? crawlMaxPages : undefined,
+        mergeIntoCatalogId: crawlMergeIntoCurrent && activeCatalog ? activeCatalog.id : undefined,
         onProgress: setCrawlProgress,
       })
+      const summary = result.itemsSkipped > 0
+        ? `${result.itemsAdded} new, ${result.itemsSkipped} skipped (${result.itemCount} total)`
+        : `${result.itemCount} products`
       setCrawlProgress({
         status: 'completed',
         progress: {
           finished: 1,
           total: 1,
-          message: `Imported ${result.itemCount} products`,
+          message: `Imported ${summary}`,
         },
         itemCount: result.itemCount,
+        itemsAdded: result.itemsAdded,
+        itemsSkipped: result.itemsSkipped,
         catalogId: result.catalogId,
       })
       setTimeout(resetCrawlModal, 1200)
@@ -489,6 +496,27 @@ export default function SkuLibraryPanel() {
                 />
               </div>
             )}
+
+            <label className="flex items-start gap-2 mb-3 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={crawlMergeIntoCurrent}
+                onChange={(e) => setCrawlMergeIntoCurrent(e.target.checked)}
+                disabled={importLoading || !activeCatalog}
+                className="mt-0.5"
+              />
+              <span className="text-xs text-gray-300">
+                Add to current catalog — skip duplicates by SKU code
+                {!activeCatalog && (
+                  <span className="block text-[10px] text-gray-500">Select a catalog first, or uncheck to create a new one</span>
+                )}
+                {activeCatalog && crawlMergeIntoCurrent && (
+                  <span className="block text-[10px] text-emerald-400/80">
+                    Keeps shelf placements; only new SKUs are added ({activeCatalog.items.length} existing)
+                  </span>
+                )}
+              </span>
+            </label>
 
             {crawlProgress && (
               <div className="mb-3 p-2 bg-gray-900 rounded border border-gray-700">

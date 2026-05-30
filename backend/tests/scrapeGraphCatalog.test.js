@@ -2,6 +2,9 @@ import { describe, it, expect } from 'vitest';
 import {
   parseProductPayload,
   normalizeScrapedProducts,
+  filterNewCatalogItems,
+  inferEsselungaImageUrl,
+  isEmptyScrapedValue,
 } from '../services/ScrapeGraphCatalogService.js';
 
 describe('ScrapeGraphCatalogService', () => {
@@ -25,5 +28,25 @@ describe('ScrapeGraphCatalogService', () => {
     expect(items[0].imageUrl).toBe('https://img/a.jpg');
     expect(items[1].skuCode).toBe('WEB-3');
     expect(items[1].price).toBe(2.5);
+  });
+
+  it('infers Esselunga image URL from sku_code', () => {
+    const url = inferEsselungaImageUrl(
+      '321326',
+      'No content available',
+      'https://spesaonline.esselunga.it/store'
+    );
+    expect(url).toBe('https://images.services.esselunga.it/html/img_prodotti/esselunga/big/321326.jpg');
+  });
+
+  it('filterNewCatalogItems skips existing sku codes', () => {
+    const items = [
+      { skuCode: '111', name: 'A' },
+      { skuCode: '222', name: 'B' },
+    ];
+    const { added, skipped } = filterNewCatalogItems(items, ['111', '333']);
+    expect(added).toHaveLength(1);
+    expect(added[0].skuCode).toBe('222');
+    expect(skipped).toBe(1);
   });
 });
