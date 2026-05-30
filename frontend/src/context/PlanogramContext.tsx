@@ -566,27 +566,30 @@ export function PlanogramProvider({ children }: { children: ReactNode }) {
       return
     }
 
-    const res = await fetch(`${API_BASE}/api/planogram/planograms/${activePlanogram.id}/magic-assign`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        catalogId: activeCatalog.id,
-        shelves: magicAssignShelvesRef.current,
-        dryRun: false,
-        assignments,
-      }),
-    })
-    const data = await res.json()
-    if (!res.ok) throw new Error(data.error || 'Failed to save magic assign')
+    try {
+      const res = await fetch(`${API_BASE}/api/planogram/planograms/${activePlanogram.id}/magic-assign`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          catalogId: activeCatalog.id,
+          shelves: magicAssignShelvesRef.current,
+          dryRun: false,
+          assignments,
+        }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Failed to save magic assign')
 
-    magicAssignPendingRef.current = []
-    setMagicAssignActive(false)
-    setMagicAssignAssignments([])
-    setPlanogramDataVersion(v => v + 1)
-    await loadPlanogram(activePlanogram.id)
-    await refreshAllShelfPlanograms()
-    if (activeShelfId) {
-      await loadShelfPlanogram(activeShelfId)
+      magicAssignPendingRef.current = []
+      setPlanogramDataVersion(v => v + 1)
+      await loadPlanogram(activePlanogram.id)
+      await refreshAllShelfPlanograms()
+      if (activeShelfId) {
+        await loadShelfPlanogram(activeShelfId)
+      }
+    } finally {
+      setMagicAssignActive(false)
+      setMagicAssignAssignments([])
     }
   }, [activePlanogram?.id, activeCatalog?.id, activeShelfId, loadPlanogram, refreshAllShelfPlanograms, loadShelfPlanogram])
   

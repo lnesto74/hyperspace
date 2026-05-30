@@ -49,12 +49,10 @@ export function getSlotLocalPosition(
   levelIndex: number,
   slotIndex: number,
 ): { x: number; y: number; z: number } | null {
-  if (!planogramData) return null
-
-  const numLevels = planogramData.numLevels || 4
-  const slotWidthM = planogramData.slotWidthM || 0.1
+  const numLevels = planogramData?.numLevels || 4
+  const slotWidthM = planogramData?.slotWidthM || 0.1
   const levelHeight = shelfHeight / numLevels
-  const facings = getSlotFacings(shelfWidth, shelfDepth, planogramData.slotFacings || [])
+  const facings = getSlotFacings(shelfWidth, shelfDepth, planogramData?.slotFacings || [])
   const facing = facings[0]
   const faceParams = getFaceParams(facing, shelfWidth, shelfHeight, shelfDepth)
 

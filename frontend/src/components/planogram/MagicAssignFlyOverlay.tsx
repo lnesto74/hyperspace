@@ -24,6 +24,10 @@ interface MagicAssignFlyOverlayProps {
   onComplete: () => void
 }
 
+function assignmentRunKey(assignments: MagicAssignAssignment[]): string {
+  return assignments.map(a => `${a.shelfId}:${a.levelIndex}:${a.slotIndex}:${a.skuItemId}`).join('|')
+}
+
 export default function MagicAssignFlyOverlay({
   assignments,
   active,
@@ -32,6 +36,13 @@ export default function MagicAssignFlyOverlay({
 }: MagicAssignFlyOverlayProps) {
   const [items, setItems] = useState<FlyingItem[]>([])
   const completedRef = useRef(false)
+  const projectSlotRef = useRef(projectSlot)
+  const onCompleteRef = useRef(onComplete)
+
+  projectSlotRef.current = projectSlot
+  onCompleteRef.current = onComplete
+
+  const runKey = active && assignments.length > 0 ? assignmentRunKey(assignments) : ''
 
   useEffect(() => {
     if (!active || assignments.length === 0) {
@@ -44,7 +55,7 @@ export default function MagicAssignFlyOverlay({
     const basketY = window.innerHeight * BASKET_Y_OFFSET
 
     const prepared: FlyingItem[] = assignments.map((a, i) => {
-      const target = projectSlot(a.shelfId, a.levelIndex, a.slotIndex)
+      const target = projectSlotRef.current(a.shelfId, a.levelIndex, a.slotIndex)
       return {
         ...a,
         key: `${a.shelfId}-${a.levelIndex}-${a.slotIndex}-${i}`,
@@ -66,6 +77,8 @@ export default function MagicAssignFlyOverlay({
       }, i * STAGGER_MS))
     })
 
+    const totalMs = prepared.length * STAGGER_MS + FLIGHT_MS + 180
+
     const landTimer = window.setTimeout(() => {
       setItems((prev) => prev.map((item) => ({ ...item, landed: true })))
     }, prepared.length * STAGGER_MS + FLIGHT_MS)
@@ -73,22 +86,30 @@ export default function MagicAssignFlyOverlay({
     const doneTimer = window.setTimeout(() => {
       if (!completedRef.current) {
         completedRef.current = true
-        onComplete()
+        onCompleteRef.current()
       }
-    }, prepared.length * STAGGER_MS + FLIGHT_MS + 180)
+    }, totalMs)
+
+    // Safety net — never leave the UI stuck if timers were interrupted
+    const safetyTimer = window.setTimeout(() => {
+      if (!completedRef.current) {
+        completedRef.current = true
+        onCompleteRef.current()
+      }
+    }, totalMs + 2000)
 
     return () => {
       launchTimers.forEach(clearTimeout)
       clearTimeout(landTimer)
       clearTimeout(doneTimer)
+      clearTimeout(safetyTimer)
     }
-  }, [active, assignments, projectSlot, onComplete])
+  }, [active, runKey, assignments.length])
 
   if (!active || items.length === 0) return null
 
   return (
     <div className="fixed inset-0 z-[200] pointer-events-none overflow-hidden">
-      {/* Basket glow origin */}
       <div
         className="absolute w-16 h-16 rounded-full bg-amber-500/20 blur-xl animate-pulse"
         style={{ left: BASKET_X - 32, top: `calc(${BASKET_Y_OFFSET * 100}% - 32px)` }}

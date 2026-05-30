@@ -1,4 +1,4 @@
-import { useRef, useEffect, useCallback, useState } from 'react'
+import { useRef, useEffect, useCallback, useState, useMemo } from 'react'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { Layers, Eye, EyeOff } from 'lucide-react'
@@ -180,11 +180,14 @@ export default function PlanogramViewport() {
   const [hoveredRoi, setHoveredRoi] = useState<any | null>(null)
   const roiMeshesRef = useRef<Map<string, THREE.Mesh>>(new Map())
   
-  // Get shelf objects
-  const shelves = objects.filter(o => 
-    o.type.toLowerCase().includes('shelf') || 
-    o.type.toLowerCase().includes('rack') ||
-    o.type.toLowerCase().includes('gondola')
+  // Get shelf objects (memoized — projectSlot depends on this reference)
+  const shelves = useMemo(
+    () => objects.filter(o =>
+      o.type.toLowerCase().includes('shelf') ||
+      o.type.toLowerCase().includes('rack') ||
+      o.type.toLowerCase().includes('gondola')
+    ),
+    [objects],
   )
   
   // Load all shelf planograms when planogram changes
@@ -268,6 +271,13 @@ export default function PlanogramViewport() {
     setProjectSlotToScreen(() => projectSlot)
     return () => setProjectSlotToScreen(null)
   }, [projectSlot, setProjectSlotToScreen])
+
+  const handleMagicAssignComplete = useCallback(() => {
+    commitMagicAssign().catch((err) => {
+      console.error('Magic assign commit failed:', err)
+      alert(err instanceof Error ? err.message : 'Failed to save shelf placements')
+    })
+  }, [commitMagicAssign])
   
   // Load ROIs and their shelf categories when venue changes
   useEffect(() => {
@@ -1057,9 +1067,7 @@ export default function PlanogramViewport() {
         assignments={magicAssignAssignments}
         active={magicAssignActive}
         projectSlot={projectSlot}
-        onComplete={() => {
-          commitMagicAssign().catch((err) => console.error('Magic assign commit failed:', err))
-        }}
+        onComplete={handleMagicAssignComplete}
       />
     </div>
   )
