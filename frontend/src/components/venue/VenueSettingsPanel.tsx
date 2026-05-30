@@ -327,8 +327,6 @@ export default function VenueSettingsPanel({
                 </div>
               </div>
 
-              </div>
-
               {/* Journey session stitching */}
               <div className="space-y-3 p-3 bg-violet-900/20 border border-violet-700/40 rounded-lg">
                 <div className="flex items-center gap-2">
