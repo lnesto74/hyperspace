@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { ShelfKPIEnricher } from '../services/ShelfKPIEnricher.js';
 import { resolveShelfCategories } from '../services/ShelfCategoryResolver.js';
 import { shelfPlanogramQueries, planogramQueries } from '../database/schema.js';
+import { loadVenueSkuSlots, detectSkusAtPosition } from '../services/planogramSlotGeometry.js';
 
 // Timeline cache - stores computed timeline data
 const timelineCache = new Map();
@@ -973,234 +974,21 @@ export default function createKpiRoutes(db, kpiCalculator, trajectoryStorage, de
    */
   router.post('/kpi/sku-detection/detect', (req, res) => {
     try {
-      const { venueId, position, velocity } = req.body;
-      
+      const { venueId, position } = req.body;
+
       if (!venueId || !position) {
         return res.status(400).json({ error: 'venueId and position required' });
       }
-      
+
       const { x, z } = position;
-      const ENGAGEMENT_DISTANCE = 1.5; // meters - max distance to be "engaging" with shelf
-      
-      console.log(`[SKU Debug] ═══════════════════════════════════════════`);
-      console.log(`[SKU Debug] Person position: (${x.toFixed(2)}, ${z.toFixed(2)})`);
-      
-      // Get all shelves that have planograms (only these have SKUs)
-      const shelvesWithPlanograms = db.prepare(`
-        SELECT 
-          vo.id, vo.name, vo.position_x, vo.position_z, vo.rotation_y, vo.scale_x, vo.scale_y, vo.scale_z,
-          sp.id as planogram_config_id, sp.planogram_id, sp.slot_width_m, sp.num_levels, sp.slots_json, sp.slot_facings
-        FROM venue_objects vo
-        JOIN shelf_planograms sp ON vo.id = sp.shelf_id
-        WHERE vo.venue_id = ? AND vo.type = 'shelf'
-      `).all(venueId);
-      
-      console.log(`[SKU Debug] Found ${shelvesWithPlanograms.length} shelves with planograms`);
-      
-      // Calculate distance to nearest point on each shelf (not center!)
-      // Shelves are long rectangles running along Z axis
-      let closestShelf = null;
-      let minDistance = Infinity;
-      
-      for (const shelf of shelvesWithPlanograms) {
-        const shelfLength = shelf.scale_z || 1;
-        const shelfWidth = shelf.scale_x || 1;
-        const shelfZStart = shelf.position_z - shelfLength / 2;
-        const shelfZEnd = shelf.position_z + shelfLength / 2;
-        const shelfXStart = shelf.position_x - shelfWidth / 2;
-        const shelfXEnd = shelf.position_x + shelfWidth / 2;
-        
-        // Clamp person position to shelf bounds to find nearest point
-        const nearestX = Math.max(shelfXStart, Math.min(shelfXEnd, x));
-        const nearestZ = Math.max(shelfZStart, Math.min(shelfZEnd, z));
-        
-        // Distance from person to nearest point on shelf
-        const dx = x - nearestX;
-        const dz = z - nearestZ;
-        const distance = Math.sqrt(dx * dx + dz * dz);
-        
-        console.log(`[SKU Debug]   Shelf "${shelf.id.slice(0,8)}..." Z:[${shelfZStart.toFixed(1)}-${shelfZEnd.toFixed(1)}] → nearest:(${nearestX.toFixed(1)},${nearestZ.toFixed(1)}) dist:${distance.toFixed(2)}m`);
-        
-        if (distance < minDistance) {
-          minDistance = distance;
-          closestShelf = shelf;
-        }
-      }
-      
-      // Check if person is within engagement distance
-      if (!closestShelf || minDistance > ENGAGEMENT_DISTANCE) {
-        console.log(`[SKU Debug] No shelf within engagement distance (${ENGAGEMENT_DISTANCE}m). Closest: ${minDistance.toFixed(2)}m`);
-        return res.json({
-          position: { x, z },
-          detectedSkus: [],
-          timestamp: Date.now(),
-          debug: { closestShelfDistance: minDistance, engagementThreshold: ENGAGEMENT_DISTANCE }
-        });
-      }
-      
-      console.log(`[SKU Debug] ✓ Closest shelf: "${closestShelf.id.slice(0,8)}..." at ${minDistance.toFixed(2)}m`);
-      console.log(`[SKU Debug]   Position: (${closestShelf.position_x.toFixed(2)}, ${closestShelf.position_z.toFixed(2)})`);
-      console.log(`[SKU Debug]   Rotation: ${closestShelf.rotation_y?.toFixed(2) || 0} rad`);
-      console.log(`[SKU Debug]   Width (X): ${closestShelf.scale_x}m, Length (Z): ${closestShelf.scale_z}m`);
-      
-      // Calculate which slot person is facing
-      const shelfPos = { x: closestShelf.position_x, z: closestShelf.position_z };
-      const shelfRotY = closestShelf.rotation_y || 0;
-      const shelfWidth = closestShelf.scale_x || 1;  // X dimension (narrow)
-      const shelfDepth = closestShelf.scale_z || 1;  // Z dimension (long)
-      
-      // Auto-detect facing direction (same logic as frontend PlanogramViewport)
-      // If width < depth, use 'left' facing (slots along Z), else 'front' (slots along X)
-      const storedFacings = JSON.parse(closestShelf.slot_facings || '[]');
-      const autoFacing = shelfWidth >= shelfDepth ? 'front' : 'left';
-      const effectiveFacing = storedFacings.length > 0 ? storedFacings[0] : autoFacing;
-      const slotsAlongZ = effectiveFacing === 'left' || effectiveFacing === 'right';
-      
-      console.log(`[SKU Debug]   Width: ${shelfWidth.toFixed(2)}m, Depth: ${shelfDepth.toFixed(2)}m`);
-      console.log(`[SKU Debug]   Facing: ${effectiveFacing} (auto=${autoFacing}), slots along ${slotsAlongZ ? 'Z' : 'X'}`);
-      
-      // Calculate relative position to shelf center
-      const dx = x - shelfPos.x;
-      const dz = z - shelfPos.z;
-      
-      // Determine which side of shelf person is on
-      const zoneType = dx > 0 ? 'right' : 'left';
-      
-      // Get slot configuration
-      const slots = JSON.parse(closestShelf.slots_json || '{}');
-      const slotWidth = closestShelf.slot_width_m || 0.1;
-      const slotSpan = slotsAlongZ ? shelfDepth : shelfWidth;
-      const numSlotsPerLevel = Math.max(1, Math.floor(slotSpan / slotWidth));
-      
-      // Calculate slot start position based on facing (matches frontend getFaceParams)
-      // For 'left' facing: slots start at Z = center - depth/2, X = center - width/2
-      // For 'right' facing: slots start at Z = center - depth/2, X = center + width/2
-      // For 'front' facing: slots start at X = center - width/2, Z = center + depth/2
-      // For 'back' facing: slots start at X = center - width/2, Z = center - depth/2
-      let slotStartX, slotStartZ, slotOffsetX, slotOffsetZ;
-      
-      if (slotsAlongZ) {
-        // Left/Right facing: slots distributed along Z
-        slotStartZ = shelfPos.z - shelfDepth / 2;
-        slotOffsetX = effectiveFacing === 'left' ? -shelfWidth / 2 : shelfWidth / 2;
-        slotStartX = shelfPos.x + slotOffsetX;
-      } else {
-        // Front/Back facing: slots distributed along X
-        slotStartX = shelfPos.x - shelfWidth / 2;
-        slotOffsetZ = effectiveFacing === 'front' ? shelfDepth / 2 : -shelfDepth / 2;
-        slotStartZ = shelfPos.z + slotOffsetZ;
-      }
-      
-      console.log(`[SKU Debug]   Slot start: X=${slotStartX.toFixed(2)}, Z=${slotStartZ.toFixed(2)}`);
-      console.log(`[SKU Debug]   slotSpan=${slotSpan.toFixed(2)}, slotWidth=${slotWidth}, numSlots=${numSlotsPerLevel}`);
-      
-      // Collect ALL slots with SKUs and their world positions
-      const skuSlots = [];
-      const levels = slots.levels || [];
-      
-      for (const level of levels) {
-        for (const slot of (level.slots || [])) {
-          if (slot.skuItemId) {
-            let slotWorldX, slotWorldZ;
-            
-            if (slotsAlongZ) {
-              // Slots along Z axis
-              slotWorldX = slotStartX;
-              slotWorldZ = slotStartZ + (slot.slotIndex + 0.5) * slotWidth;
-            } else {
-              // Slots along X axis
-              slotWorldX = slotStartX + (slot.slotIndex + 0.5) * slotWidth;
-              slotWorldZ = slotStartZ;
-            }
-            
-            // Calculate 2D distance from person to slot
-            const distX = x - slotWorldX;
-            const distZ = z - slotWorldZ;
-            const distanceToSlot = Math.sqrt(distX * distX + distZ * distZ);
-            
-            skuSlots.push({
-              levelIndex: level.levelIndex,
-              slot,
-              slotWorldX,
-              slotWorldZ,
-              distanceToSlot,
-            });
-          }
-        }
-      }
-      
-      // Sort by 2D distance to slot position
-      skuSlots.sort((a, b) => a.distanceToSlot - b.distanceToSlot);
-      
-      console.log(`[SKU Debug]   Found ${skuSlots.length} SKU slots total`);
-      if (skuSlots.length > 0) {
-        console.log(`[SKU Debug]   Nearest SKU at (${skuSlots[0].slotWorldX.toFixed(2)}, ${skuSlots[0].slotWorldZ.toFixed(2)}), dist=${skuSlots[0].distanceToSlot.toFixed(2)}m`);
-      }
-      
-      // Only include SKUs within 2 meters of person's position (2D distance to slot)
-      const MAX_SKU_DISTANCE = 2.0; // meters
-      const detectedSkus = [];
-      
-      for (const skuSlot of skuSlots) {
-        if (skuSlot.distanceToSlot > MAX_SKU_DISTANCE) continue;
-        
-        const sku = db.prepare('SELECT * FROM sku_items WHERE id = ?').get(skuSlot.slot.skuItemId);
-        
-        if (sku) {
-          // Position score based on level (eye level = best)
-          const levelIndex = skuSlot.levelIndex;
-          let positionScore = 0.5;
-          if (levelIndex === 1 || levelIndex === 2) positionScore = 1.0; // Eye/chest level
-          else if (levelIndex === 0) positionScore = 0.6; // Waist level
-          else positionScore = 0.4; // Top/bottom
-          
-          // Attention score based on proximity (closer = higher score)
-          const attentionScore = Math.max(0, 1 - (skuSlot.distanceToSlot / MAX_SKU_DISTANCE));
-          
-          detectedSkus.push({
-            skuId: sku.id,
-            skuCode: sku.sku_code,
-            name: sku.name,
-            brand: sku.brand,
-            category: sku.category,
-            price: sku.price,
-            shelfId: closestShelf.id,
-            shelfName: closestShelf.name,
-            shelfPosition: { x: closestShelf.position_x, z: closestShelf.position_z },
-            shelfRotation: shelfRotY,
-            slotWorldPosition: { x: skuSlot.slotWorldX, z: skuSlot.slotWorldZ },
-            levelIndex,
-            slotIndex: skuSlot.slot.slotIndex,
-            positionScore,
-            attentionScore,
-            zoneType,
-            distanceToShelf: minDistance,
-          });
-        }
-      }
-      
-      // Sort by attention score (closest slot first)
-      detectedSkus.sort((a, b) => b.attentionScore - a.attentionScore);
-      
-      console.log(`[SKU Debug] ✓ Found ${detectedSkus.length} SKUs, returning top 3`);
-      if (detectedSkus.length > 0) {
-        console.log(`[SKU Debug]   Top SKUs:`, detectedSkus.slice(0, 3).map(s => 
-          `${s.name} (L${s.levelIndex} S${s.slotIndex}, att=${s.attentionScore.toFixed(2)})`
-        ));
-      }
-      console.log(`[SKU Debug] ═══════════════════════════════════════════`);
-      
+      const { shelves, slots } = loadVenueSkuSlots(db, venueId);
+      const { detectedSkus, debug } = detectSkusAtPosition(x, z, { shelves, slots });
+
       res.json({
         position: { x, z },
-        detectedSkus: detectedSkus.slice(0, 3),
+        detectedSkus,
         timestamp: Date.now(),
-        debug: {
-          closestShelfId: closestShelf.id,
-          closestShelfPosition: { x: closestShelf.position_x, z: closestShelf.position_z },
-          distanceToShelf: minDistance,
-          nearestSlotIndex: detectedSkus.length > 0 ? detectedSkus[0].slotIndex : null,
-          totalSkusFound: detectedSkus.length,
-        }
+        debug,
       });
     } catch (err) {
       console.error('SKU detection error:', err);

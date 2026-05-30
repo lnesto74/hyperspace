@@ -20,6 +20,15 @@ import { resolveKpiContext, demoCacheSuffix } from '../utils/demoKpiContext.js';
 import { resolveShelfCategories } from '../services/ShelfCategoryResolver.js';
 import { isTrafficZoneName } from '../lib/storeHours.js';
 import {
+  computeVenueSkuPerformance,
+  buildSkuPerformanceAlerts,
+} from '../services/SkuSlotMetricsEngine.js';
+import {
+  loadVenueSkuSlots,
+  distanceToShelfFootprint,
+  distance2D,
+} from '../services/planogramSlotGeometry.js';
+import {
   buildVisitSessions,
   classifySessionArchetype,
   loadVisitSessionConfigForVenue,
@@ -262,6 +271,32 @@ export default function createNeuralRoutes(db, trackAggregator, demoSessionServi
     } catch (err) {
       console.error('[Neural] alerts error:', err.message);
       res.status(500).json({ error: 'Failed to compute alerts' });
+    }
+  });
+
+  /**
+   * GET /api/neural/sku-performance?venueId=X&windowMs=30000
+   * Per-slot Attraction / Attention indices for planogram SKUs.
+   */
+  router.get('/sku-performance', (req, res) => {
+    try {
+      const { venueId, windowMs } = req.query;
+      if (!venueId) return res.status(400).json({ error: 'venueId required' });
+
+      const cacheKey = `sku-perf:${venueId}:${windowMs || 30000}`;
+      const result = cached(cacheKey, 25000, () => {
+        const perf = computeVenueSkuPerformance(db, venueId, {
+          windowMs: parseInt(windowMs, 10) || 30000,
+        });
+        return {
+          ...perf,
+          alerts: buildSkuPerformanceAlerts(perf),
+        };
+      });
+      res.json(result);
+    } catch (err) {
+      console.error('[Neural] sku-performance error:', err.message);
+      res.status(500).json({ error: 'Failed to compute SKU performance' });
     }
   });
 
@@ -826,7 +861,18 @@ function computeAlerts(db, venueId, trackAggregator) {
     } catch (e) {}
   }
 
+  // 5. SKU best / worst performers (rolling 30s, planogram + proximity)
+  try {
+    const perf = computeVenueSkuPerformance(db, venueId, { windowMs: 30000 });
+    alerts.push(...buildSkuPerformanceAlerts(perf, now));
+  } catch (e) {
+    console.error('[Neural] sku performance:', e.message);
+  }
+
   alerts.sort((a, b) => {
+    const typeBoost = { sku_worst: 1, sku_best: 1 };
+    const boostDiff = (typeBoost[b.type] || 0) - (typeBoost[a.type] || 0);
+    if (boostDiff !== 0) return boostDiff;
     const sev = { high: 3, medium: 2, low: 1 };
     const sevDiff = (sev[b.severity] || 0) - (sev[a.severity] || 0);
     if (sevDiff !== 0) return sevDiff;
@@ -835,7 +881,9 @@ function computeAlerts(db, venueId, trackAggregator) {
 
   // Enrich alerts with product categories from planogram data
   try {
-    const sliced = alerts.slice(0, 15);
+    const skuAlerts = alerts.filter((a) => a.type === 'sku_best' || a.type === 'sku_worst');
+    const otherAlerts = alerts.filter((a) => a.type !== 'sku_best' && a.type !== 'sku_worst');
+    const sliced = [...skuAlerts, ...otherAlerts].slice(0, 15);
     const allZoneIds = new Set();
     for (const a of sliced) {
       if (a.zoneId) allZoneIds.add(a.zoneId);

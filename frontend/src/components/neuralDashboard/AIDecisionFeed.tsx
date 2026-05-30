@@ -15,7 +15,7 @@ import AlertDetailModal from './AlertDetailModal'
 
 interface Alert {
   id: string
-  type: 'queue_risk' | 'low_engagement' | 'bottleneck' | 'media_roi'
+  type: 'queue_risk' | 'low_engagement' | 'bottleneck' | 'media_roi' | 'sku_best' | 'sku_worst'
   severity: 'high' | 'medium' | 'low'
   title: string
   message: string
@@ -26,6 +26,21 @@ interface Alert {
   categories?: string[]
   shelfName?: string
   firstSeen: number
+  // SKU performance alerts
+  skuItemId?: string
+  skuCode?: string
+  skuName?: string
+  brand?: string
+  imageUrl?: string | null
+  shelfId?: string
+  levelIndex?: number
+  slotIndex?: number
+  attractionIndex?: number
+  attentionIndex?: number
+  compositeScore?: number
+  viewers?: number
+  audience?: number
+  rank?: 'best' | 'worst'
 }
 
 const TYPE_CONFIG: Record<string, { icon: string; color: string; glow: string; tip: string }> = {
@@ -33,6 +48,8 @@ const TYPE_CONFIG: Record<string, { icon: string; color: string; glow: string; t
   low_engagement: { icon: '◇', color: 'rgba(255, 180, 50, 0.8)',  glow: 'rgba(255, 180, 50, 0.15)', tip: 'Product zone with below-average dwell rates' },
   bottleneck:     { icon: '⬡', color: 'rgba(255, 120, 50, 0.8)',  glow: 'rgba(255, 120, 50, 0.15)', tip: 'Zone with slow flow and high occupancy' },
   media_roi:      { icon: '◈', color: 'rgba(180, 100, 255, 0.8)', glow: 'rgba(180, 100, 255, 0.15)', tip: 'DOOH campaign underperforming targets' },
+  sku_best:       { icon: '★', color: 'rgba(74, 222, 128, 0.9)',  glow: 'rgba(74, 222, 128, 0.12)',  tip: 'Highest Attraction + Attention in the last 30 seconds' },
+  sku_worst:      { icon: '▼', color: 'rgba(251, 146, 60, 0.9)',  glow: 'rgba(251, 146, 60, 0.12)',  tip: 'Lowest shopper interest at shelf slot in the last 30 seconds' },
 }
 
 export default function AIDecisionFeed({ batchAlerts }: { batchAlerts?: { alerts: any[]; count: number } | null } = {}) {
@@ -173,6 +190,54 @@ export default function AIDecisionFeed({ batchAlerts }: { batchAlerts?: { alerts
               </button>
 
               <div className="p-2.5 pr-6">
+                {/* SKU performance — product thumbnail + KPIs */}
+                {(alert.type === 'sku_best' || alert.type === 'sku_worst') && (
+                  <div className="flex gap-2.5 mb-2">
+                    <div className="w-11 h-11 rounded-md border border-white/10 bg-white/[0.04] overflow-hidden flex-shrink-0 flex items-center justify-center">
+                      {alert.imageUrl ? (
+                        <img
+                          src={alert.imageUrl}
+                          alt=""
+                          className="w-full h-full object-cover"
+                          onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }}
+                        />
+                      ) : (
+                        <span className="text-[8px] text-white/30 text-center px-0.5 leading-tight">NO IMG</span>
+                      )}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-[9px] text-white/90 font-semibold truncate leading-snug">
+                        {alert.skuName || alert.message.split(' — ')[0]}
+                      </div>
+                      {alert.skuCode && (
+                        <div className="text-[8px] text-amber-400/80 font-mono">{alert.skuCode}</div>
+                      )}
+                      {alert.shelfName && (
+                        <div className="text-[7px] text-white/35 truncate">
+                          {alert.shelfName}
+                          {alert.levelIndex != null && alert.slotIndex != null && (
+                            <> · L{alert.levelIndex + 1} S{alert.slotIndex + 1}</>
+                          )}
+                        </div>
+                      )}
+                      {(alert.attractionIndex != null || alert.attentionIndex != null) && (
+                        <div className="flex gap-2 mt-1">
+                          {alert.attractionIndex != null && (
+                            <span className="text-[7px] text-white/50">
+                              ATTRACT <span className="text-white/75">{(alert.attractionIndex * 100).toFixed(0)}%</span>
+                            </span>
+                          )}
+                          {alert.attentionIndex != null && (
+                            <span className="text-[7px] text-white/50">
+                              ATTENTION <span className="text-white/75">{alert.attentionIndex.toFixed(1)}</span>
+                            </span>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+
                 {/* Top row: icon + title + severity */}
                 <div className="flex items-center gap-1.5 mb-1">
                   <Tooltip text={cfg.tip}>
@@ -190,10 +255,19 @@ export default function AIDecisionFeed({ batchAlerts }: { batchAlerts?: { alerts
                   )}
                 </div>
 
-                {/* Message */}
-                <div className="text-white/70 text-[9px] leading-relaxed mb-1">
-                  {alert.message}
-                </div>
+                {/* Message — skip redundant title for SKU cards */}
+                {!(alert.type === 'sku_best' || alert.type === 'sku_worst') && (
+                  <div className="text-white/70 text-[9px] leading-relaxed mb-1">
+                    {alert.message}
+                  </div>
+                )}
+                {(alert.type === 'sku_best' || alert.type === 'sku_worst') && (
+                  <div className="text-white/55 text-[8px] leading-relaxed mb-1">
+                    {alert.viewers != null && alert.audience != null && (
+                      <span>{alert.viewers}/{alert.audience} viewers · last 30s</span>
+                    )}
+                  </div>
+                )}
 
                 {/* Product categories */}
                 {alert.categories && alert.categories.length > 0 && (

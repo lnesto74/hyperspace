@@ -13,7 +13,7 @@ import { normalizeFloorVertex, type MapRegion } from '../../utils/venueFloorPlan
 
 interface AlertData {
   id: string
-  type: 'queue_risk' | 'low_engagement' | 'bottleneck' | 'media_roi'
+  type: 'queue_risk' | 'low_engagement' | 'bottleneck' | 'media_roi' | 'sku_best' | 'sku_worst'
   severity: 'high' | 'medium' | 'low'
   title: string
   message: string
@@ -24,6 +24,20 @@ interface AlertData {
   zoneIds?: string[]
   categories?: string[]
   shelfName?: string
+  skuItemId?: string
+  skuCode?: string
+  skuName?: string
+  brand?: string
+  imageUrl?: string | null
+  shelfId?: string
+  levelIndex?: number
+  slotIndex?: number
+  attractionIndex?: number
+  attentionIndex?: number
+  compositeScore?: number
+  viewers?: number
+  audience?: number
+  rank?: 'best' | 'worst'
 }
 
 const TYPE_META: Record<string, { label: string; color: string; accent: string; description: string }> = {
@@ -31,6 +45,8 @@ const TYPE_META: Record<string, { label: string; color: string; accent: string; 
   low_engagement: { label: 'Low Engagement', color: '#ffb432', accent: 'rgba(255,180,50,0.25)',  description: 'Product zones with below-average dwell rates. Visitors pass through without stopping, suggesting low product appeal or poor placement.' },
   bottleneck:     { label: 'Friction Zone',  color: '#ff7832', accent: 'rgba(255,120,50,0.25)',  description: 'Zone with slow pedestrian flow and high occupancy. Could indicate an obstruction, narrow aisle, or confusing layout.' },
   media_roi:      { label: 'Media ROI',      color: '#b464ff', accent: 'rgba(180,100,255,0.25)', description: 'Digital out-of-home campaign under-performing conversion targets. Review creative, placement, or audience targeting.' },
+  sku_best:       { label: 'Top SKU',        color: '#4ade80', accent: 'rgba(74,222,128,0.2)',   description: 'Highest combined Attraction and Attention index in the last 30 seconds. Shoppers are stopping and looking at this product on the shelf.' },
+  sku_worst:      { label: 'Underperforming SKU', color: '#fb923c', accent: 'rgba(251,146,60,0.2)', description: 'Lowest shopper interest at this shelf slot in the last 30 seconds. Consider repositioning, signage, or facing changes.' },
 }
 
 const SEV_BADGE: Record<string, { bg: string; text: string }> = {
@@ -149,7 +165,7 @@ export default function AlertDetailModal({ alert, onClose }: Props) {
               className="w-10 h-10 rounded-lg flex items-center justify-center text-xl"
               style={{ background: meta.accent, color: meta.color }}
             >
-              {alert.type === 'queue_risk' ? '⏱' : alert.type === 'low_engagement' ? '◇' : alert.type === 'bottleneck' ? '⬡' : '◈'}
+              {alert.type === 'queue_risk' ? '⏱' : alert.type === 'low_engagement' ? '◇' : alert.type === 'bottleneck' ? '⬡' : alert.type === 'sku_best' ? '★' : alert.type === 'sku_worst' ? '▼' : '◈'}
             </div>
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2">
@@ -168,6 +184,46 @@ export default function AlertDetailModal({ alert, onClose }: Props) {
               </div>
             </div>
           </div>
+
+          {(alert.type === 'sku_best' || alert.type === 'sku_worst') && (
+            <div className="rounded-md p-4 mb-4 flex gap-4" style={{ background: NEURAL_MODAL_SECTION_BG, border: '1px solid rgba(255,255,255,0.10)' }}>
+              <div className="w-20 h-20 rounded-lg border border-white/10 bg-white/[0.04] overflow-hidden flex-shrink-0 flex items-center justify-center">
+                {alert.imageUrl ? (
+                  <img src={alert.imageUrl} alt="" className="w-full h-full object-cover" />
+                ) : (
+                  <span className="text-[9px] text-white/30 text-center px-1">No image</span>
+                )}
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="text-[14px] text-white/95 font-semibold leading-snug mb-1">{alert.skuName}</div>
+                {alert.skuCode && <div className="text-[11px] text-amber-400/90 font-mono mb-1">{alert.skuCode}</div>}
+                {alert.brand && <div className="text-[10px] text-white/50 mb-2">{alert.brand}</div>}
+                <div className="grid grid-cols-2 gap-2 text-[10px]">
+                  <div className="rounded px-2 py-1.5 bg-white/[0.04]">
+                    <div className="text-white/40 uppercase tracking-wider text-[8px]">Attraction</div>
+                    <div className="text-white/90">{((alert.attractionIndex ?? 0) * 100).toFixed(0)}%</div>
+                  </div>
+                  <div className="rounded px-2 py-1.5 bg-white/[0.04]">
+                    <div className="text-white/40 uppercase tracking-wider text-[8px]">Attention</div>
+                    <div className="text-white/90">{(alert.attentionIndex ?? 0).toFixed(1)}</div>
+                  </div>
+                  <div className="rounded px-2 py-1.5 bg-white/[0.04]">
+                    <div className="text-white/40 uppercase tracking-wider text-[8px]">Viewers</div>
+                    <div className="text-white/90">{alert.viewers ?? 0} / {alert.audience ?? 0}</div>
+                  </div>
+                  <div className="rounded px-2 py-1.5 bg-white/[0.04]">
+                    <div className="text-white/40 uppercase tracking-wider text-[8px]">Slot</div>
+                    <div className="text-white/90">
+                      {alert.shelfName || 'Shelf'}
+                      {alert.levelIndex != null && alert.slotIndex != null && (
+                        <> · L{alert.levelIndex + 1} S{alert.slotIndex + 1}</>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
 
           <div className="rounded-md p-4 mb-4" style={{ background: NEURAL_MODAL_SECTION_BG, borderLeft: `3px solid ${meta.color}55` }}>
             <div className="text-[13px] text-white/90 leading-relaxed">
