@@ -258,36 +258,56 @@ export default function ActivityMatrix({ monochrome = false }: ActivityMatrixPro
   }, [dwellGrid])
 
   return (
-    <div className="h-full flex flex-col p-3 font-mono text-[11px] min-h-0">
-      {/* Header */}
-      <div className="shrink-0 mb-1">
-        <div className="flex items-center justify-between gap-2">
-          <div className="flex items-center gap-2 min-w-0">
+    <div className="h-full flex flex-col p-2 font-mono text-[11px] min-h-0 overflow-hidden">
+      {/* Header + toggles (always visible — bottom was clipped in 280px panel) */}
+      <div className="shrink-0 mb-1 space-y-1">
+        <div className="flex items-start justify-between gap-1">
+          <div className="flex items-center gap-1.5 min-w-0">
             <div className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse shadow-[0_0_8px_rgba(34,211,238,0.5)] shrink-0" />
             <Tooltip text="Live spatial map — density, flow trail, and dwell by floor cell">
-              <span className="text-[10px] uppercase tracking-[0.2em] text-white/50 cursor-help truncate">
+              <span className="text-[9px] uppercase tracking-[0.15em] text-white/50 cursor-help leading-tight">
                 SPATIAL ACTIVITY
               </span>
             </Tooltip>
           </div>
-          <span className="text-[10px] text-cyan-400/70 tabular-nums shrink-0">{displayTrackCount} live</span>
+          <span className="text-[9px] text-cyan-400/70 tabular-nums shrink-0 pt-0.5">{displayTrackCount} live</span>
         </div>
-        <div className="text-[9px] text-white/40 tabular-nums mt-1 pl-4 truncate">
+
+        <div className="flex items-center justify-between gap-1 pl-3.5">
+          <div className="flex rounded overflow-hidden border border-white/10 shrink-0">
+            <ModeButton active={viewMode === 'density'} onClick={() => setViewMode('density')} label="Density" tip="Live headcount — cyan normal, amber hotspots" />
+            <ModeButton active={viewMode === 'dwell'} onClick={() => setViewMode('dwell')} label="Dwell" tip="Time spent in each cell (recent memory)" />
+          </div>
+          <Tooltip text="Show venue floor outline for spatial context">
+            <button
+              type="button"
+              onClick={() => setShowGhost(v => !v)}
+              className={`px-1.5 py-0.5 text-[7px] uppercase tracking-wider rounded border transition-colors shrink-0 ${
+                showGhost
+                  ? 'bg-cyan-500/15 border-cyan-500/40 text-cyan-300'
+                  : 'border-white/10 text-white/40 hover:text-white/60'
+              }`}
+            >
+              Ghost
+            </button>
+          </Tooltip>
+        </div>
+
+        <div className="text-[8px] text-white/40 tabular-nums pl-3.5 truncate">
           {viewMode === 'density' ? (
             <>
-              {stats.hotSpots} hot spots · peak cell {stats.peakCell} · {stats.activeCells} active cells
+              {stats.hotSpots} hot · peak {stats.peakCell} · {stats.activeCells} cells
             </>
           ) : (
             <>
-              {stats.activeCells} active cells
-              {dwellSubtitle ? ` · ${dwellSubtitle}` : ''}
+              {stats.activeCells} cells{dwellSubtitle ? ` · ${dwellSubtitle}` : ''}
             </>
           )}
         </div>
       </div>
 
-      {/* Canvas */}
-      <div ref={wrapperRef} className="flex-1 flex items-center justify-center min-h-0 relative">
+      {/* Canvas — capped so header + legend always fit in 280px panel */}
+      <div ref={wrapperRef} className="flex-1 flex items-center justify-center min-h-0 max-h-[168px] relative">
         <canvas
           ref={canvasRef}
           className="opacity-95 max-w-full max-h-full"
@@ -318,41 +338,22 @@ export default function ActivityMatrix({ monochrome = false }: ActivityMatrixPro
         )}
       </div>
 
-      {/* Controls + legend */}
-      <div className="shrink-0 mt-2 pt-2 border-t border-white/[0.04] space-y-2">
-        <div className="flex items-center justify-between gap-2">
-          <div className="flex rounded overflow-hidden border border-white/10">
-            <ModeButton active={viewMode === 'density'} onClick={() => setViewMode('density')} label="Density" tip="Live headcount — cyan normal, amber hotspots" />
-            <ModeButton active={viewMode === 'dwell'} onClick={() => setViewMode('dwell')} label="Dwell" tip="Time spent in each cell (recent memory)" />
-          </div>
-          <Tooltip text="Show venue floor outline for spatial context">
-            <button
-              type="button"
-              onClick={() => setShowGhost(v => !v)}
-              className={`px-2 py-0.5 text-[8px] uppercase tracking-wider rounded border transition-colors ${
-                showGhost
-                  ? 'bg-cyan-500/15 border-cyan-500/40 text-cyan-300'
-                  : 'border-white/10 text-white/40 hover:text-white/60'
-              }`}
-            >
-              Ghost
-            </button>
-          </Tooltip>
-        </div>
-        <div className="flex items-center justify-between text-[8px] text-white/35">
+      {/* Legend only (controls moved to header) */}
+      <div className="shrink-0 mt-1 pt-1 border-t border-white/[0.04]">
+        <div className="flex items-center justify-between text-[7px] text-white/35 px-0.5">
           <span>{viewMode === 'density' ? 'quiet' : 'brief'}</span>
-          <div className="flex items-center gap-1.5">
+          <div className="flex items-center gap-1">
             {viewMode === 'density' ? (
               <>
-                <span className="w-2 h-2 rounded-full" style={{ backgroundColor: getDualToneColor(0.5, false) }} />
-                <span className="w-8 h-0.5 rounded" style={{ background: 'linear-gradient(90deg, hsl(195,70%,42%), hsl(38,90%,52%))' }} />
-                <span className="w-2 h-2 rounded-full" style={{ backgroundColor: getDualToneColor(1, true) }} />
+                <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: getDualToneColor(0.5, false) }} />
+                <span className="w-6 h-0.5 rounded" style={{ background: 'linear-gradient(90deg, hsl(195,70%,42%), hsl(38,90%,52%))' }} />
+                <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: getDualToneColor(1, true) }} />
               </>
             ) : (
               <>
-                <span className="w-2 h-2 rounded-full" style={{ backgroundColor: getDwellColor(0.2) }} />
-                <span className="w-8 h-0.5 rounded" style={{ background: 'linear-gradient(90deg, hsl(195,70%,42%), hsl(280,75%,55%))' }} />
-                <span className="w-2 h-2 rounded-full" style={{ backgroundColor: getDwellColor(1) }} />
+                <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: getDwellColor(0.2) }} />
+                <span className="w-6 h-0.5 rounded" style={{ background: 'linear-gradient(90deg, hsl(195,70%,42%), hsl(280,75%,55%))' }} />
+                <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: getDwellColor(1) }} />
               </>
             )}
           </div>
