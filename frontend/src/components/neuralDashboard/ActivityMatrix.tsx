@@ -12,6 +12,10 @@ import { useMemo, useRef, useEffect, useState, useCallback } from 'react'
 import { useTracksRef, useLiveMetricsRef } from '../../context/TrackingContext'
 import { useVenue } from '../../context/VenueContext'
 import { countLiveFrameTracks } from '../../lib/frameOccupancy'
+import {
+  getDrawableFixtureOutline,
+  venueObjectsToFixtures,
+} from '../../utils/venueFloorPlanMap'
 import Tooltip from './Tooltip'
 
 const DOT_SIZE = 8
@@ -45,7 +49,7 @@ interface HoverCell {
 export default function ActivityMatrix({ monochrome = false }: ActivityMatrixProps) {
   const tracksRef = useTracksRef()
   const liveMetricsRef = useLiveMetricsRef()
-  const { venue } = useVenue()
+  const { venue, objects } = useVenue()
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const wrapperRef = useRef<HTMLDivElement>(null)
 
@@ -185,6 +189,24 @@ export default function ActivityMatrix({ monochrome = false }: ActivityMatrixPro
     return vals[Math.floor(vals.length * HOTSPOT_PERCENTILE)] ?? 1
   }, [liveGrid, maxVal, viewMode])
 
+  const ghostFixturePaths = useMemo(() => {
+    if (objects.length === 0) return [] as { x: number; y: number }[][]
+    const cellW = venueW / GRID_COLS
+    const cellH = venueD / GRID_ROWS
+    const step = DOT_SIZE + DOT_GAP
+    const fixtures = venueObjectsToFixtures(objects)
+    const paths: { x: number; y: number }[][] = []
+    for (const fixture of fixtures) {
+      const outline = getDrawableFixtureOutline(fixture)
+      if (outline.length < 3) continue
+      paths.push(outline.map(p => ({
+        x: (p.x / cellW) * step + DOT_SIZE / 2,
+        y: (p.z / cellH) * step + DOT_SIZE / 2,
+      })))
+    }
+    return paths
+  }, [objects, venueW, venueD, GRID_COLS, GRID_ROWS])
+
   useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas) return
@@ -197,7 +219,13 @@ export default function ActivityMatrix({ monochrome = false }: ActivityMatrixPro
     canvas.height = height
     ctx.clearRect(0, 0, width, height)
 
-    if (showGhost) drawFloorGhost(ctx, width, height)
+    // Dark canvas base so ghost layers read clearly
+    ctx.fillStyle = '#060b14'
+    ctx.fillRect(0, 0, width, height)
+
+    if (showGhost) {
+      drawFloorGhost(ctx, width, height, GRID_COLS, GRID_ROWS, ghostFixturePaths)
+    }
 
     renderGrid.forEach((row, rowIdx) => {
       row.forEach((val, colIdx) => {
@@ -225,7 +253,7 @@ export default function ActivityMatrix({ monochrome = false }: ActivityMatrixPro
         ctx.shadowBlur = 0
       })
     })
-  }, [renderGrid, liveGrid, maxVal, hotspotThreshold, monochrome, viewMode, showGhost, GRID_COLS, GRID_ROWS])
+  }, [renderGrid, liveGrid, maxVal, hotspotThreshold, monochrome, viewMode, showGhost, GRID_COLS, GRID_ROWS, ghostFixturePaths])
 
   const handleCanvasMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
     const canvas = canvasRef.current
@@ -278,7 +306,7 @@ export default function ActivityMatrix({ monochrome = false }: ActivityMatrixPro
             <ModeButton active={viewMode === 'density'} onClick={() => setViewMode('density')} label="Density" tip="Live headcount — cyan normal, amber hotspots" />
             <ModeButton active={viewMode === 'dwell'} onClick={() => setViewMode('dwell')} label="Dwell" tip="Time spent in each cell (recent memory)" />
           </div>
-          <Tooltip text="Show venue floor outline for spatial context">
+          <Tooltip text="Show floor grid + DWG fixture wireframe for spatial context">
             <button
               type="button"
               onClick={() => setShowGhost(v => !v)}
@@ -384,25 +412,70 @@ function emptyGrid(rows: number, cols: number): number[][] {
   return Array(rows).fill(null).map(() => Array(cols).fill(0))
 }
 
-function drawFloorGhost(ctx: CanvasRenderingContext2D, width: number, height: number) {
-  const pad = 2
+function drawFloorGhost(
+  ctx: CanvasRenderingContext2D,
+  width: number,
+  height: number,
+  cols: number,
+  rows: number,
+  fixturePaths: { x: number; y: number }[][],
+) {
+  const pad = 3
+  const step = DOT_SIZE + DOT_GAP
+
   ctx.save()
-  ctx.strokeStyle = 'rgba(34, 211, 238, 0.12)'
-  ctx.lineWidth = 1
-  ctx.setLineDash([4, 4])
-  ctx.strokeRect(pad, pad, width - pad * 2, height - pad * 2)
-  ctx.setLineDash([])
-  ctx.fillStyle = 'rgba(34, 211, 238, 0.03)'
+
+  // Full cell lattice — makes the matrix structure visible
+  ctx.fillStyle = 'rgba(34, 211, 238, 0.07)'
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const x = c * step + DOT_SIZE / 2
+      const y = r * step + DOT_SIZE / 2
+      ctx.beginPath()
+      ctx.arc(x, y, 1.2, 0, Math.PI * 2)
+      ctx.fill()
+    }
+  }
+
+  // Venue boundary
+  ctx.fillStyle = 'rgba(34, 211, 238, 0.06)'
   ctx.fillRect(pad, pad, width - pad * 2, height - pad * 2)
+  ctx.strokeStyle = 'rgba(34, 211, 238, 0.55)'
+  ctx.lineWidth = 1.5
+  ctx.setLineDash([5, 4])
+  ctx.strokeRect(pad + 0.5, pad + 0.5, width - pad * 2 - 1, height - pad * 2 - 1)
+  ctx.setLineDash([])
+
+  // Center crosshairs
   const cx = width / 2
   const cy = height / 2
-  ctx.strokeStyle = 'rgba(255,255,255,0.04)'
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.14)'
+  ctx.lineWidth = 1
   ctx.beginPath()
   ctx.moveTo(cx, pad)
   ctx.lineTo(cx, height - pad)
   ctx.moveTo(pad, cy)
   ctx.lineTo(width - pad, cy)
   ctx.stroke()
+
+  // DWG fixture wireframe (heatmap-style underlay)
+  if (fixturePaths.length > 0) {
+    ctx.lineJoin = 'round'
+    for (const path of fixturePaths) {
+      ctx.beginPath()
+      ctx.moveTo(path[0].x, path[0].y)
+      for (let i = 1; i < path.length; i++) {
+        ctx.lineTo(path[i].x, path[i].y)
+      }
+      ctx.closePath()
+      ctx.fillStyle = 'rgba(0, 188, 212, 0.12)'
+      ctx.fill()
+      ctx.strokeStyle = 'rgba(240, 253, 255, 0.38)'
+      ctx.lineWidth = 0.75
+      ctx.stroke()
+    }
+  }
+
   ctx.restore()
 }
 
