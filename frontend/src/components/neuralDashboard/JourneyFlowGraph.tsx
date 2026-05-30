@@ -30,7 +30,9 @@ interface CategoryDwell {
 interface JourneyPattern {
   type: string
   label: string
+  description?: string
   trackCount: number
+  sessionCount?: number
   conversionRate: number
   avgDurationSec: number
   categorySequence: string[]
@@ -57,12 +59,27 @@ interface CategoryFlow {
   edges: FlowEdge[]
 }
 
+interface SessionStats {
+  entranceSessions: number
+  convertedSessions: number
+  conversionRate: number
+  unattributedCheckoutFragments: number
+  unattributedBrowseFragments: number
+  rawTrackKeys: number
+  stitchedTrackKeys: number
+  sessionModel: string
+}
+
 interface JourneyPatternsData {
   totalTracks: number
+  totalSessions?: number
   convertedTracks: number
+  convertedSessions?: number
   patterns: JourneyPattern[]
   categoryFlow: CategoryFlow
   patternFlows: Record<string, CategoryFlow>
+  sessionStats?: SessionStats
+  sessionModel?: string
 }
 
 // ─── Constants ───────────────────────────────────────────────
@@ -83,23 +100,23 @@ const PATTERN_COLORS_DIM: Record<string, string> = {
 
 const METRIC_HELP = {
   tracks:
-    'Unique LiDAR tracks with at least one dwell visit in the selected window (zone_visits where is_dwell = 1).',
+    'Entrance-anchored store visits in the selected window. Fragmented LiDAR track IDs are stitched into one session per shopper where possible.',
   converted:
-    'Tracks that visited a checkout ROI at least once during their journey.',
+    'Visit sessions where any stitched track fragment reached a checkout ROI.',
   avgDuration:
-    'Mean elapsed time from each track’s first dwell visit to its last, in seconds.',
+    'Mean elapsed time from session start (entrance crossing) to last linked zone visit, in seconds.',
   conversion:
-    'Converted tracks in this pattern ÷ total pattern tracks. Conversion = reached checkout.',
+    'Sessions in this pattern that reached checkout ÷ total sessions in the pattern.',
   typicalPath:
-    'Most common category sequence (up to 7 steps). Shelf zones roll up to product categories; consecutive same-category stops are merged.',
+    'Most common stitched category sequence (up to 7 steps). Shelf zones roll up to product categories; consecutive same-category stops are merged.',
   categoryDwell:
-    'Average seconds spent in each shopping category for tracks in this pattern. Entrance and checkout dwell are excluded.',
+    'Average seconds spent in each shopping category across all stitched fragments in this pattern.',
   peakHours:
-    'Local hour when journeys in this pattern started — one count per track, bucketed into 24 hours.',
+    'Local hour when visit sessions in this pattern started (entrance crossing), bucketed into 24 hours.',
   flowChart:
-    'Each bar is a product category. Count = journeys that visited that category at least once. Width scales to the busiest category. Curved lines = category-to-category transitions.',
+    'Each bar is a product category. Count = stitched visit sessions that visited that category at least once. Width scales to the busiest category.',
   patternTypes:
-    'Full Shop: 4+ shopping categories. Category Specialist: ≤2 categories, >5s dwell, converted. Browse & Bail: browsed but no checkout. Quick Run: all other journeys.',
+    'Multi-Aisle Shop: 4+ categories. Focused Shop: converted, ≤2 categories. In-Store (No Checkout): meaningful dwell, no linked checkout. Short Visit: bounce or sub-threshold dwell.',
 } as const
 
 // ─── Helpers ─────────────────────────────────────────────────
@@ -451,7 +468,7 @@ export default function JourneyFlowGraph() {
 
                   {/* Stats row */}
                   <div className="flex items-center gap-2 mt-0.5 text-[8px] text-white/20">
-                    <span className="tabular-nums">{pattern.trackCount} tracks</span>
+                    <span className="text-[9px] text-white/30 tabular-nums">{pattern.trackCount} sessions</span>
                     <span>·</span>
                     <span className="tabular-nums">{formatDuration(pattern.avgDurationSec)}</span>
                     <span>·</span>
@@ -466,7 +483,7 @@ export default function JourneyFlowGraph() {
         {/* Footer summary */}
         {hasData && (
           <div className="px-3 py-1.5 border-t border-white/[0.04] text-[8px] text-white/25 flex items-center justify-between">
-            <span>{data!.totalTracks} tracks · {data!.convertedTracks} converted</span>
+            <span>{data!.totalSessions ?? data!.totalTracks} sessions · {data!.convertedSessions ?? data!.convertedTracks} converted</span>
             <span>{data!.patterns.length} patterns</span>
           </div>
         )}
@@ -496,7 +513,7 @@ export default function JourneyFlowGraph() {
                   wrap
                 >
                   <span className="text-white/45 text-[10px] tabular-nums cursor-help border-b border-dotted border-white/20">
-                    {data.totalTracks} tracks · {data.convertedTracks} converted ({pct(data.convertedTracks, data.totalTracks)})
+                    {(data.totalSessions ?? data.totalTracks).toLocaleString()} sessions · {data.convertedSessions ?? data.convertedTracks} converted ({pct(data.convertedSessions ?? data.convertedTracks, data.totalSessions ?? data.totalTracks)})
                   </span>
                 </Tooltip>
               </div>
@@ -568,7 +585,7 @@ export default function JourneyFlowGraph() {
                       </div>
                       <div className="flex items-center justify-between ml-4">
                         <span className="text-[10px] tabular-nums text-white/45">
-                          {pattern.trackCount} tracks
+                          {pattern.trackCount} sessions
                         </span>
                         <span className="text-[10px] tabular-nums text-white/45">
                           {pct(pattern.trackCount, data.totalTracks)}
@@ -627,10 +644,10 @@ export default function JourneyFlowGraph() {
                     >
                       <div className="text-white/90 font-medium mb-1">{hoveredFlowNode.name}</div>
                       <div className="text-white/65 tabular-nums">
-                        {hoveredFlowNode.count.toLocaleString()} journeys visited
+                        {hoveredFlowNode.count.toLocaleString()} sessions visited
                       </div>
                       <div className="text-white/50 tabular-nums">
-                        {pct(hoveredFlowNode.count, flowTooltipTotal)} of {selectedPattern ? 'pattern' : 'all'} tracks
+                        {pct(hoveredFlowNode.count, flowTooltipTotal)} of {selectedPattern ? 'pattern' : 'all'} sessions
                       </div>
                       {hoveredFlowNode.isEntrance && (
                         <div className="text-blue-300/70 mt-1">Store entry — every journey starts here</div>
@@ -698,8 +715,13 @@ function OverviewPanel({ data }: { data: JourneyPatternsData }) {
           help={METRIC_HELP.tracks}
           className="text-[10px] text-white/50 uppercase tracking-wider mb-2"
         />
-        <div className="text-[22px] text-white/90 font-light tabular-nums">{data.totalTracks}</div>
-        <div className="text-[10px] text-white/45">total journeys tracked</div>
+        <div className="text-[22px] text-white/90 font-light tabular-nums">{data.totalSessions ?? data.totalTracks}</div>
+        <div className="text-[10px] text-white/45">entrance-anchored visit sessions</div>
+        {data.sessionStats && (
+          <div className="text-[9px] text-white/35 mt-1">
+            {data.sessionStats.rawTrackKeys} raw tracks → {data.sessionStats.stitchedTrackKeys} stitched
+          </div>
+        )}
       </div>
 
       <div>
@@ -774,9 +796,12 @@ function PatternDetailPanel({ pattern, totalTracks }: { pattern: JourneyPattern;
         </div>
         <Tooltip text={METRIC_HELP.patternTypes} wrap>
           <div className="text-[10px] text-white/45 cursor-help border-b border-dotted border-transparent hover:border-white/15 inline-block">
-            {pattern.trackCount} tracks ({pct(pattern.trackCount, totalTracks)} of total)
+            {pattern.trackCount} sessions ({pct(pattern.trackCount, totalTracks)} of total)
           </div>
         </Tooltip>
+        {pattern.description && (
+          <div className="text-[9px] text-white/40 mt-1 leading-snug">{pattern.description}</div>
+        )}
       </div>
 
       {/* Duration */}

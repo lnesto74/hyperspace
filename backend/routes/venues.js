@@ -3,6 +3,10 @@ import { v4 as uuidv4 } from 'uuid';
 import { venueQueries, objectQueries, placementQueries } from '../database/schema.js';
 import { normalizePerceptionTransform } from '../services/PerceptionTransform.js';
 import { normalizeReconcilerConfig, DEFAULT_CONFIG as RECONCILER_DEFAULT } from '../services/TrajectoryReconciler.js';
+import {
+  normalizeVisitSessionConfig,
+  DEFAULT_VISIT_SESSION_CONFIG,
+} from '../config/visitSessionConfig.js';
 
 function normalizeDwgTransformJson(value) {
   if (!value) return null;
@@ -604,6 +608,56 @@ export default function venuesRoutes(db, { mqttService, io, visualTrackService }
     } catch (error) {
       console.error('Get reconciler stats error:', error);
       res.status(500).json({ error: 'Failed to read reconciler stats' });
+    }
+  });
+
+  // ============================================
+  // Visit session stitching (entrance-anchored journeys)
+  // ============================================
+  router.get('/:id/visit-session-config', (req, res) => {
+    try {
+      const venue = venueQueries.getById(db, req.params.id);
+      if (!venue) return res.status(404).json({ error: 'Venue not found' });
+      const transformJson = parseDwgTransform(venue.dwg_transform_json);
+      const saved = transformJson.visit_session || null;
+      res.json({
+        venueId: venue.id,
+        visitSession: saved
+          ? normalizeVisitSessionConfig(saved)
+          : { ...DEFAULT_VISIT_SESSION_CONFIG, _defaults: true },
+      });
+    } catch (error) {
+      console.error('Get visit session config error:', error);
+      res.status(500).json({ error: 'Failed to read visit session config' });
+    }
+  });
+
+  router.patch('/:id/visit-session-config', (req, res) => {
+    try {
+      const venueId = req.params.id;
+      const venue = venueQueries.getById(db, venueId);
+      if (!venue) return res.status(404).json({ error: 'Venue not found' });
+
+      const incoming = req.body?.visitSession ?? req.body?.visit_session;
+      const cleared = incoming === null;
+      const normalized = cleared ? null : normalizeVisitSessionConfig(incoming);
+
+      const existing = parseDwgTransform(venue.dwg_transform_json);
+      const nextJson = {
+        ...existing,
+        visit_session: normalized ? { ...normalized, updated_at: new Date().toISOString() } : null,
+      };
+      if (!normalized) delete nextJson.visit_session;
+
+      db.prepare(`
+        UPDATE venues SET dwg_transform_json = ?, updated_at = datetime('now')
+        WHERE id = ?
+      `).run(JSON.stringify(nextJson), venueId);
+
+      res.json({ success: true, venueId, visitSession: normalized });
+    } catch (error) {
+      console.error('Update visit session config error:', error);
+      res.status(500).json({ error: 'Failed to update visit session config' });
     }
   });
 

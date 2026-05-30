@@ -1,6 +1,26 @@
 import { useState, useEffect, useCallback } from 'react'
-import { X, Settings, Save, Building2, Users, Clock, Activity, DoorOpen } from 'lucide-react'
+import { X, Settings, Save, Building2, Users, Clock, Activity, DoorOpen, Route } from 'lucide-react'
 import { API_BASE } from '../../config/api'
+
+interface VisitSessionConfig {
+  maxVisitDurationMs: number
+  reidMaxGapMs: number
+  reidMaxDistanceM: number
+  entranceMinDurationMs: number
+  minInStoreDurationSec: number
+  trackKeyMode: string
+  calibrationConversionRate: number | null
+}
+
+const DEFAULT_VISIT_SESSION: VisitSessionConfig = {
+  maxVisitDurationMs: 90 * 60 * 1000,
+  reidMaxGapMs: 10_000,
+  reidMaxDistanceM: 4.5,
+  entranceMinDurationMs: 5_000,
+  minInStoreDurationSec: 30,
+  trackKeyMode: 'reid_chain',
+  calibrationConversionRate: null,
+}
 
 
 interface VenueSettingsPanelProps {
@@ -48,15 +68,18 @@ export default function VenueSettingsPanel({
     footfallRoiId: null,
   })
   const [roiOptions, setRoiOptions] = useState<RoiOption[]>([])
+  const [visitSession, setVisitSession] = useState<VisitSessionConfig>(DEFAULT_VISIT_SESSION)
+  const [calibrationPct, setCalibrationPct] = useState<string>('')
   const [saving, setSaving] = useState(false)
   const [loading, setLoading] = useState(true)
 
   const fetchSettings = useCallback(async () => {
     setLoading(true)
     try {
-      const [venueRes, roiRes] = await Promise.all([
+      const [venueRes, roiRes, sessionRes] = await Promise.all([
         fetch(`${API_BASE}/api/venues/${venueId}`),
         fetch(`${API_BASE}/api/venues/${venueId}/roi?all=true`),
+        fetch(`${API_BASE}/api/venues/${venueId}/visit-session-config`),
       ])
       if (venueRes.ok) {
         const data = await venueRes.json()
@@ -76,6 +99,16 @@ export default function VenueSettingsPanel({
         )
         setRoiOptions(traffic.length > 0 ? traffic : (rois as RoiOption[]))
       }
+      if (sessionRes.ok) {
+        const data = await sessionRes.json()
+        const vs = { ...DEFAULT_VISIT_SESSION, ...(data.visitSession || {}) }
+        setVisitSession(vs)
+        setCalibrationPct(
+          vs.calibrationConversionRate != null
+            ? String(Math.round(vs.calibrationConversionRate * 100))
+            : ''
+        )
+      }
     } catch (err) {
       console.error('Failed to fetch venue settings:', err)
     } finally {
@@ -92,11 +125,27 @@ export default function VenueSettingsPanel({
   const handleSave = async () => {
     setSaving(true)
     try {
-      await fetch(`${API_BASE}/api/venues/${venueId}/settings`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(settings),
-      })
+      const calibration = calibrationPct.trim() === ''
+        ? null
+        : Math.max(0, Math.min(100, parseFloat(calibrationPct) || 0)) / 100
+
+      await Promise.all([
+        fetch(`${API_BASE}/api/venues/${venueId}/settings`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(settings),
+        }),
+        fetch(`${API_BASE}/api/venues/${venueId}/visit-session-config`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            visitSession: {
+              ...visitSession,
+              calibrationConversionRate: calibration,
+            },
+          }),
+        }),
+      ])
       onSaved?.()
       onClose()
     } catch (err) {
@@ -275,6 +324,110 @@ export default function VenueSettingsPanel({
                     className="w-20 px-2 py-1 bg-gray-800 border border-gray-600 rounded text-white text-sm text-center"
                   />
                   <span className="text-xs text-gray-500">seconds</span>
+                </div>
+              </div>
+
+              </div>
+
+              {/* Journey session stitching */}
+              <div className="space-y-3 p-3 bg-violet-900/20 border border-violet-700/40 rounded-lg">
+                <div className="flex items-center gap-2">
+                  <Route className="w-4 h-4 text-violet-400" />
+                  <label className="text-sm font-medium text-white">Journey stitching</label>
+                </div>
+                <p className="text-xs text-gray-500">
+                  How the Neural Dashboard glues broken LiDAR tracks into one shopping trip (entrance → aisles → checkout).
+                </p>
+
+                <div className="space-y-1">
+                  <label className="text-[10px] text-gray-400">Fragment gap (seconds)</label>
+                  <p className="text-[10px] text-gray-600 mb-1">
+                    Max pause before we treat the next blip as the same person. Your site: usually 5–10 s.
+                  </p>
+                  <div className="flex items-center gap-3">
+                    <input
+                      type="range"
+                      min={2}
+                      max={30}
+                      step={1}
+                      value={Math.round(visitSession.reidMaxGapMs / 1000)}
+                      onChange={(e) => setVisitSession(v => ({
+                        ...v,
+                        reidMaxGapMs: parseInt(e.target.value, 10) * 1000,
+                      }))}
+                      className="flex-1 h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-violet-500"
+                    />
+                    <span className="w-12 text-sm text-white text-center tabular-nums">
+                      {Math.round(visitSession.reidMaxGapMs / 1000)}s
+                    </span>
+                  </div>
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-[10px] text-gray-400">Re-link distance (meters)</label>
+                  <p className="text-[10px] text-gray-600 mb-1">
+                    How far the person can move between fragments and still count as one trip.
+                  </p>
+                  <div className="flex items-center gap-3">
+                    <input
+                      type="range"
+                      min={1}
+                      max={15}
+                      step={0.5}
+                      value={visitSession.reidMaxDistanceM}
+                      onChange={(e) => setVisitSession(v => ({
+                        ...v,
+                        reidMaxDistanceM: parseFloat(e.target.value),
+                      }))}
+                      className="flex-1 h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-violet-500"
+                    />
+                    <span className="w-12 text-sm text-white text-center tabular-nums">
+                      {visitSession.reidMaxDistanceM}m
+                    </span>
+                  </div>
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-[10px] text-gray-400">Door stopwatch (seconds)</label>
+                  <p className="text-[10px] text-gray-600 mb-1">
+                    Like a bouncer with a stopwatch: how long someone must be at the entrance before we start
+                    one shopping trip. Too short = people just walking past count as shoppers. Too long = fast
+                    walk-ins are missed. (This is separate from the footfall counter on the KPI rail.)
+                  </p>
+                  <div className="flex items-center gap-3">
+                    <input
+                      type="range"
+                      min={1}
+                      max={60}
+                      step={1}
+                      value={Math.round(visitSession.entranceMinDurationMs / 1000)}
+                      onChange={(e) => setVisitSession(v => ({
+                        ...v,
+                        entranceMinDurationMs: parseInt(e.target.value, 10) * 1000,
+                      }))}
+                      className="flex-1 h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-violet-500"
+                    />
+                    <span className="w-12 text-sm text-white text-center tabular-nums">
+                      {Math.round(visitSession.entranceMinDurationMs / 1000)}s
+                    </span>
+                  </div>
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-[10px] text-gray-400">Expected checkout rate (%)</label>
+                  <p className="text-[10px] text-gray-600 mb-1">
+                    Optional. Your best guess of what % of real shoppers buy (e.g. 70). Dashboard shows measured vs this.
+                    Leave empty to hide.
+                  </p>
+                  <input
+                    type="number"
+                    min={0}
+                    max={100}
+                    placeholder="e.g. 70"
+                    value={calibrationPct}
+                    onChange={(e) => setCalibrationPct(e.target.value)}
+                    className="w-full px-2 py-1.5 bg-gray-800 border border-gray-600 rounded text-white text-sm"
+                  />
                 </div>
               </div>
 

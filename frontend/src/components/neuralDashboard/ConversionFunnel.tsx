@@ -24,6 +24,14 @@ interface FunnelData {
   stages: FunnelStage[]
   biggestLeak: { from: string; to: string; dropPct: number; lost: number } | null
   range: string
+  entrySource?: string
+  sessionStats?: {
+    entranceSessions: number
+    convertedSessions: number
+    conversionRate: number
+    rawTrackKeys: number
+    stitchedTrackKeys: number
+  }
 }
 
 const STAGE_COLORS = [
@@ -35,11 +43,11 @@ const STAGE_COLORS = [
 ]
 
 const STAGE_TIPS: Record<string, string> = {
-  entry: 'Visitors who crossed an entrance/traffic zone',
-  shop: 'Visitors who entered at least 1 product/shelf zone',
-  engage: 'Visitors who dwelled in a product zone',
-  basket: 'Visitors engaged in 3+ different product zones',
-  checkout: 'Visitors who reached a checkout service zone (not queue waiting)',
+  entry: 'Entrance-anchored visit sessions (stitched from fragmented track IDs)',
+  shop: 'Sessions that visited at least one product/shelf zone',
+  engage: 'Sessions with dwell in a product zone',
+  basket: 'Sessions with dwell in 3+ different shelf zones',
+  checkout: 'Sessions where any stitched fragment reached checkout',
 }
 
 type FunnelRange = '1h' | '24h' | '7d'
@@ -170,6 +178,13 @@ export default function ConversionFunnel({ batchFunnel, range: controlledRange, 
               <span className="text-red-400/70">({data.biggestLeak.lost} lost, -{data.biggestLeak.dropPct}%)</span>
             </span>
           </div>
+        </div>
+      )}
+
+      {data?.sessionStats && data.sessionStats.entranceSessions > 0 && (
+        <div className="mt-2 pt-2 border-t border-white/[0.06] text-[8px] text-white/40">
+          Stitched sessions · {Math.round(data.sessionStats.conversionRate * 100)}% checkout rate
+          · {data.sessionStats.rawTrackKeys} raw → {data.sessionStats.stitchedTrackKeys} linked tracks
         </div>
       )}
 

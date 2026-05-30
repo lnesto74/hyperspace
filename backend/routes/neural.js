@@ -19,6 +19,12 @@ import { getCheckoutLanes } from '../services/CheckoutLiveStatus.js';
 import { resolveKpiContext, demoCacheSuffix } from '../utils/demoKpiContext.js';
 import { resolveShelfCategories } from '../services/ShelfCategoryResolver.js';
 import { isTrafficZoneName } from '../lib/storeHours.js';
+import {
+  buildVisitSessions,
+  classifySessionArchetype,
+  loadVisitSessionConfigForVenue,
+  resolveVenueRoiContext,
+} from '../services/VisitSessionStitcher.js';
 
 // Stale-while-revalidate cache with staggered background recomputes.
 // On cache HIT: return data instantly.
@@ -605,61 +611,21 @@ function intersectTrackSets(a, b) {
 
 function computeFunnel(db, venueId, range) {
   const { startTime, endTime } = resolveRange(range);
+  const roiContext = resolveVenueRoiContext(db, venueId);
+  const config = loadVisitSessionConfigForVenue(db, venueId);
+  const roiIdSet = roiContext.rois.map(r => r.id);
+  const categoryMap = resolveZoneCategories(db, roiIdSet);
+  const roiToCategory = buildRoiToCategoryMap(roiContext.rois, categoryMap);
 
-  const rois = db.prepare(
-    `SELECT id, name FROM regions_of_interest WHERE venue_id = ?`
-  ).all(venueId);
-
-  const entryRoiIds = rois.filter(r => classifyFunnelRoi(r.name) === 'entry').map(r => r.id);
-  const shelfRoiIds = rois.filter(r => classifyFunnelRoi(r.name) === 'shelf').map(r => r.id);
-  const checkoutRoiIds = rois.filter(r => classifyFunnelRoi(r.name) === 'checkout').map(r => r.id);
-  const footfallRoiIds = rois.filter(r => classifyFunnelRoi(r.name) !== 'queue').map(r => r.id);
-
-  let entrySet = distinctFunnelTrackKeys(db, venueId, entryRoiIds, startTime, endTime);
-  let entrySource = 'entrance';
-
-  if (entrySet.size === 0 && footfallRoiIds.length > 0) {
-    entrySet = distinctFunnelTrackKeys(db, venueId, footfallRoiIds, startTime, endTime);
-    entrySource = entryRoiIds.length > 0 ? 'footfall_fallback' : 'footfall';
-  }
-
-  const shopAll = distinctFunnelTrackKeys(db, venueId, shelfRoiIds, startTime, endTime);
-  const shopSet = entrySet.size > 0 ? intersectTrackSets(entrySet, shopAll) : shopAll;
-
-  const engageAll = distinctFunnelTrackKeys(
-    db, venueId, shelfRoiIds, startTime, endTime, FUNNEL_DWELL_WHERE
+  const { sessions, stats } = buildVisitSessions(
+    db, venueId, startTime, endTime, config, roiContext, roiToCategory
   );
-  const engageSet = intersectTrackSets(shopSet, engageAll);
 
-  let basketSet = new Set();
-  if (shelfRoiIds.length > 0) {
-    const basketRows = db.prepare(`
-      SELECT track_key, COUNT(DISTINCT roi_id) AS zone_count
-      FROM zone_visits
-      WHERE venue_id = ? AND roi_id IN (${shelfRoiIds.map(() => '?').join(',')})
-        ${FUNNEL_DWELL_WHERE}
-        AND start_time >= ? AND start_time < ?
-      GROUP BY track_key
-      HAVING zone_count >= 3
-    `).all(venueId, ...shelfRoiIds, startTime, endTime);
-    basketSet = intersectTrackSets(engageSet, new Set(basketRows.map(r => r.track_key)));
-  }
-
-  const checkoutAll = distinctFunnelTrackKeys(db, venueId, checkoutRoiIds, startTime, endTime);
-  const checkoutSet = entrySet.size > 0
-    ? intersectTrackSets(entrySet, checkoutAll)
-    : intersectTrackSets(shopSet, checkoutAll);
-
-  if (entrySet.size === 0 && shopSet.size > 0) {
-    entrySet = shopSet;
-    entrySource = 'shop_anchor';
-  }
-
-  const entry = entrySet.size;
-  const shop = shopSet.size;
-  const engage = engageSet.size;
-  const basket = basketSet.size;
-  const checkout = checkoutSet.size;
+  const entry = sessions.length;
+  const shop = sessions.filter(s => s.visitedShelf).length;
+  const engage = sessions.filter(s => s.engagedShelf).length;
+  const basket = sessions.filter(s => s.shelfZoneCount >= 3).length;
+  const checkout = sessions.filter(s => s.converted).length;
 
   const stages = [
     { id: 'entry', label: 'ENTRY', count: entry },
@@ -702,7 +668,15 @@ function computeFunnel(db, venueId, range) {
     }
   }
 
-  return { stages, biggestLeak, range, venueId, entrySource };
+  return {
+    stages,
+    biggestLeak,
+    range,
+    venueId,
+    entrySource: 'entrance_session',
+    sessionStats: stats,
+    sessionModel: stats.sessionModel,
+  };
 }
 
 function computeAlerts(db, venueId, trackAggregator) {
@@ -1268,141 +1242,115 @@ function computeCentroid(verticesJson) {
 // JOURNEY PATTERNS COMPUTATION
 // ============================================
 
-function computeJourneyPatterns(db, venueId, range) {
-  const { startTime, endTime } = resolveRange(range);
+const PATTERN_LABELS = {
+  'full-shop': 'Multi-Aisle Shop',
+  'category-specialist': 'Focused Shop (Converted)',
+  'browse-and-bail': 'In-Store (No Checkout)',
+  'quick-run': 'Short Visit / Bounce',
+};
 
-  const visits = db.prepare(`
-    SELECT zv.track_key, zv.roi_id, zv.start_time, zv.end_time, zv.is_dwell,
-           r.name AS zone_name
-    FROM zone_visits zv
-    JOIN regions_of_interest r ON zv.roi_id = r.id
-    WHERE zv.venue_id = ? AND zv.start_time >= ? AND zv.start_time < ?
-      AND zv.is_dwell = 1
-    ORDER BY zv.track_key, zv.start_time
-  `).all(venueId, startTime, endTime);
+const PATTERN_DESCRIPTIONS = {
+  'full-shop': 'Stitched visit: 4+ shopping categories. May or may not include checkout.',
+  'category-specialist': 'Stitched visit: reached checkout with ≤2 shopping categories and meaningful dwell.',
+  'browse-and-bail': 'Stitched visit: meaningful in-store time but no linked checkout fragment.',
+  'quick-run': 'Stitched visit: very short or no shelf engagement (< min in-store duration).',
+};
 
-  if (visits.length === 0) {
-    return { totalTracks: 0, convertedTracks: 0, patterns: [], categoryFlow: { nodes: [], edges: [] } };
-  }
-
-  const rois = db.prepare(
-    `SELECT id, name FROM regions_of_interest WHERE venue_id = ?`
-  ).all(venueId);
-
-  const roiIdSet = rois.map(r => r.id);
-  const categoryMap = resolveZoneCategories(db, roiIdSet);
-  const checkoutRois = new Set();
+function buildRoiToCategoryMap(rois, categoryMap) {
   const roiToCategory = new Map();
-
   for (const r of rois) {
     const nameLower = (r.name || '').toLowerCase();
-    if (/checkout/i.test(r.name)) {
-      checkoutRois.add(r.id);
+    if (/checkout|register|cashier|\bservice\b/.test(nameLower)) {
       roiToCategory.set(r.id, 'Checkout');
     } else {
       const info = categoryMap.get(r.id);
-      if (info && info.categories && info.categories.length > 0) {
+      if (info?.categories?.length) {
         roiToCategory.set(r.id, info.categories[0]);
       } else if (nameLower.includes('shelf')) {
         roiToCategory.set(r.id, 'Other');
-      } else if (nameLower.includes('entrance') || nameLower.includes('entry')) {
+      } else if (nameLower.includes('entrance') || nameLower.includes('entry') || isTrafficZoneName(r.name)) {
         roiToCategory.set(r.id, 'Entrance');
       } else {
         roiToCategory.set(r.id, 'Other');
       }
     }
   }
+  return roiToCategory;
+}
 
-  // Build per-track journey sequences at category level
-  const trackJourneys = new Map(); // track_key -> { categories: string[], dwellPerCat: Map, startTime, endTime, converted }
-
-  let prevTrack = null;
-  let currentJourney = null;
-
-  for (const v of visits) {
-    if (v.track_key !== prevTrack) {
-      if (currentJourney) trackJourneys.set(prevTrack, currentJourney);
-      currentJourney = {
-        categories: ['Entrance'],
-        dwellPerCat: new Map(),
-        startTime: v.start_time,
-        endTime: v.end_time || v.start_time,
-        converted: false,
-        lastCategory: null,
-      };
-      prevTrack = v.track_key;
-    }
-
-    const cat = roiToCategory.get(v.roi_id) || 'Other';
-    if (checkoutRois.has(v.roi_id)) currentJourney.converted = true;
-
-    // Only add category if different from last (deduplicate consecutive same-category visits)
-    if (cat !== currentJourney.lastCategory) {
-      currentJourney.categories.push(cat);
-      currentJourney.lastCategory = cat;
-    }
-
-    const dwellMs = (v.end_time || v.start_time) - v.start_time;
-    currentJourney.dwellPerCat.set(cat, (currentJourney.dwellPerCat.get(cat) || 0) + dwellMs);
-    currentJourney.endTime = Math.max(currentJourney.endTime, v.end_time || v.start_time);
+function sessionJourneysMapFromSessions(sessions) {
+  const map = new Map();
+  for (const s of sessions) {
+    const cats = s.categories?.length ? [...s.categories] : ['Entrance'];
+    if (cats[0] !== 'Entrance') cats.unshift('Entrance');
+    map.set(s.sessionId, {
+      categories: cats,
+      dwellPerCat: s.dwellPerCat,
+      converted: s.converted,
+      durationSec: s.durationSec,
+      startTime: s.startTime,
+    });
   }
-  if (currentJourney) trackJourneys.set(prevTrack, currentJourney);
+  return map;
+}
 
-  // Classify each journey into an archetype
-  const archetypes = new Map(); // type -> { tracks: [], ... }
+function computeJourneyPatterns(db, venueId, range) {
+  const { startTime, endTime } = resolveRange(range);
+  const roiContext = resolveVenueRoiContext(db, venueId);
+  const config = loadVisitSessionConfigForVenue(db, venueId);
+  const roiIdSet = roiContext.rois.map(r => r.id);
+  const categoryMap = resolveZoneCategories(db, roiIdSet);
+  const roiToCategory = buildRoiToCategoryMap(roiContext.rois, categoryMap);
+
+  const { sessions, stats, config: sessionConfig } = buildVisitSessions(
+    db, venueId, startTime, endTime, config, roiContext, roiToCategory
+  );
+
+  const empty = {
+    totalTracks: 0,
+    totalSessions: 0,
+    convertedTracks: 0,
+    convertedSessions: 0,
+    patterns: [],
+    categoryFlow: { nodes: [], edges: [] },
+    patternFlows: {},
+    sessionStats: stats,
+    sessionModel: stats.sessionModel,
+    sessionConfig,
+    patternDescriptions: PATTERN_DESCRIPTIONS,
+  };
+
+  if (sessions.length === 0) return empty;
+
+  const sessionJourneys = sessionJourneysMapFromSessions(sessions);
+
+  const archetypes = new Map();
   const TYPES = ['full-shop', 'category-specialist', 'browse-and-bail', 'quick-run'];
   for (const t of TYPES) archetypes.set(t, { type: t, tracks: [] });
 
-  let totalTracks = 0;
-  let convertedTracks = 0;
-
-  for (const [trackKey, journey] of trackJourneys) {
-    totalTracks++;
-    if (journey.converted) convertedTracks++;
-
-    const uniqueCats = new Set(journey.categories.filter(c => c !== 'Entrance' && c !== 'Checkout'));
-    const catCount = uniqueCats.size;
-    const totalDwellSec = [...journey.dwellPerCat.values()].reduce((s, v) => s + v, 0) / 1000;
-    const durationSec = (journey.endTime - journey.startTime) / 1000;
-
-    let type;
-    if (catCount >= 4) {
-      type = 'full-shop';
-    } else if (catCount <= 2 && totalDwellSec > 5 && journey.converted) {
-      type = 'category-specialist';
-    } else if (!journey.converted && catCount >= 1) {
-      type = 'browse-and-bail';
-    } else {
-      type = 'quick-run';
-    }
-
+  let convertedSessions = 0;
+  for (const session of sessions) {
+    if (session.converted) convertedSessions++;
+    const journey = sessionJourneys.get(session.sessionId);
+    const type = classifySessionArchetype(session, sessionConfig);
     archetypes.get(type).tracks.push({
-      trackKey,
+      sessionId: session.sessionId,
+      trackKeys: session.trackKeys,
       categories: journey.categories,
       dwellPerCat: journey.dwellPerCat,
-      converted: journey.converted,
-      durationSec,
-      startTime: journey.startTime,
+      converted: session.converted,
+      durationSec: session.durationSec,
+      startTime: session.startTime,
     });
   }
-
-  // Build patterns response
-  const LABELS = {
-    'full-shop': 'Full Shop',
-    'category-specialist': 'Category Specialist',
-    'browse-and-bail': 'Browse & Bail',
-    'quick-run': 'Quick Run',
-  };
 
   const patterns = [];
   for (const [type, data] of archetypes) {
     if (data.tracks.length === 0) continue;
     const n = data.tracks.length;
-
     const convertedCount = data.tracks.filter(t => t.converted).length;
     const avgDurationSec = Math.round(data.tracks.reduce((s, t) => s + t.durationSec, 0) / n);
 
-    // Category dwell aggregation
     const catDwellTotals = new Map();
     const catDwellCounts = new Map();
     for (const t of data.tracks) {
@@ -1418,7 +1366,6 @@ function computeJourneyPatterns(db, venueId, range) {
     }
     categoryDwell.sort((a, b) => b.avgSec - a.avgSec);
 
-    // Most common category sequence (mode of first 5 categories)
     const seqCounts = new Map();
     for (const t of data.tracks) {
       const key = t.categories.slice(0, 7).join(' → ');
@@ -1430,39 +1377,58 @@ function computeJourneyPatterns(db, venueId, range) {
       if (count > topSeqCount) { topSeq = seq; topSeqCount = count; }
     }
 
-    // Temporal distribution (24 hourly buckets)
     const hourly = new Array(24).fill(0);
     for (const t of data.tracks) {
-      const hour = new Date(t.startTime).getHours();
-      hourly[hour]++;
+      hourly[new Date(t.startTime).getHours()]++;
     }
 
     patterns.push({
       type,
-      label: LABELS[type] || type,
+      label: PATTERN_LABELS[type] || type,
+      description: PATTERN_DESCRIPTIONS[type] || '',
       trackCount: n,
+      sessionCount: n,
       conversionRate: n > 0 ? +(convertedCount / n).toFixed(2) : 0,
       avgDurationSec,
-      categorySequence: topSeq.split(' → '),
+      categorySequence: topSeq ? topSeq.split(' → ') : ['Entrance'],
       categoryDwell: categoryDwell.slice(0, 8),
       temporalDistribution: hourly,
     });
   }
   patterns.sort((a, b) => b.trackCount - a.trackCount);
 
-  // Build category-level flow graph (all tracks, and per-pattern)
-  const categoryFlow = buildCategoryFlow(trackJourneys, null);
+  const categoryFlow = buildCategoryFlow(sessionJourneys, null);
   const patternFlows = {};
   for (const [type, data] of archetypes) {
     if (data.tracks.length === 0) continue;
     const subMap = new Map();
     for (const t of data.tracks) {
-      subMap.set(t.trackKey, trackJourneys.get(t.trackKey));
+      subMap.set(t.sessionId, sessionJourneys.get(t.sessionId));
     }
     patternFlows[type] = buildCategoryFlow(subMap, type);
   }
 
-  return { totalTracks, convertedTracks, patterns, categoryFlow, patternFlows };
+  const totalSessions = sessions.length;
+  return {
+    totalTracks: totalSessions,
+    totalSessions,
+    convertedTracks: convertedSessions,
+    convertedSessions,
+    patterns,
+    categoryFlow,
+    patternFlows,
+    sessionStats: stats,
+    sessionModel: stats.sessionModel,
+    sessionConfig,
+    patternDescriptions: PATTERN_DESCRIPTIONS,
+    calibration: config.calibrationConversionRate != null
+      ? {
+          expectedConversionRate: config.calibrationConversionRate,
+          measuredConversionRate: stats.conversionRate,
+          delta: +(stats.conversionRate - config.calibrationConversionRate).toFixed(3),
+        }
+      : null,
+  };
 }
 
 function buildCategoryFlow(trackJourneys, patternType) {

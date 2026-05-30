@@ -3,6 +3,9 @@ import fs from 'fs';
 import { writeFile } from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { visitSessionManager } from './VisitSessionManager.js';
+import { loadVisitSessionConfigForVenue } from './VisitSessionStitcher.js';
+import { isTrafficZoneName } from '../lib/storeHours.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -29,6 +32,8 @@ export class TrajectoryStorageService extends EventEmitter {
     this.queueSessions = new Map(); // trackKey -> { queueZoneId, queueEntryTime, ... }
     this.zoneLinks = new Map(); // queueZoneId -> serviceZoneId (loaded from DB)
     this.zoneThresholds = new Map(); // roiId -> { dwellMs, engagementMs } (cached from DB)
+    /** venueId -> { entranceRoiIds, checkoutRoiIds, config, loadedAt } */
+    this.visitSessionContextCache = new Map();
     this.dataDir = options.dataDir || path.join(__dirname, '../data/trajectories');
     this.quiet = options.quiet === true;
     this.flushInterval = null;
@@ -308,7 +313,6 @@ export class TrajectoryStorageService extends EventEmitter {
         this.db.exec(`ALTER TABLE zone_settings ADD COLUMN lane_number INTEGER`);
         console.log('📊 Added lane_number column to zone_settings');
       }
-      // Add is_open to track if lane is accepting queue sessions
       if (!colNames.includes('is_open')) {
         this.db.exec(`ALTER TABLE zone_settings ADD COLUMN is_open INTEGER DEFAULT 1`);
         console.log('📊 Added is_open column to zone_settings');
@@ -316,8 +320,56 @@ export class TrajectoryStorageService extends EventEmitter {
     } catch (err) {
       console.log('Queue threshold columns migration:', err.message);
     }
+
+    try {
+      const visitCols = this.db.prepare('PRAGMA table_info(zone_visits)').all().map(c => c.name);
+      if (!visitCols.includes('visitor_session_id')) {
+        this.db.exec(`ALTER TABLE zone_visits ADD COLUMN visitor_session_id TEXT`);
+        this.db.exec(`CREATE INDEX IF NOT EXISTS idx_zone_visits_session ON zone_visits(venue_id, visitor_session_id, start_time)`);
+        console.log('📊 Added visitor_session_id column to zone_visits');
+      }
+    } catch (err) {
+      console.log('zone_visits visitor_session_id migration:', err.message);
+    }
     
     console.log('📊 Trajectory storage tables initialized');
+  }
+
+  /** Cached entrance/checkout ROI sets + visit session config for live stitching. */
+  getVisitSessionContext(venueId) {
+    const cached = this.visitSessionContextCache.get(venueId);
+    if (cached && Date.now() - cached.loadedAt < 120_000) return cached;
+
+    const entranceRoiIds = new Set();
+    const checkoutRoiIds = new Set();
+    try {
+      let savedFootfallId = null;
+      const venue = this.db.prepare('SELECT footfall_roi_id FROM venues WHERE id = ?').get(venueId);
+      savedFootfallId = venue?.footfall_roi_id || null;
+      if (savedFootfallId) entranceRoiIds.add(savedFootfallId);
+
+      const rois = this.db.prepare(
+        'SELECT id, name FROM regions_of_interest WHERE venue_id = ?'
+      ).all(venueId);
+      for (const r of rois) {
+        const n = (r.name || '').toLowerCase();
+        if (isTrafficZoneName(r.name) || /entrance|entry|ingress|ingresso/.test(n)) {
+          entranceRoiIds.add(r.id);
+        }
+        if (/checkout|register|cashier|\bservice\b/.test(n)) {
+          checkoutRoiIds.add(r.id);
+        }
+      }
+    } catch { /* ignore */ }
+
+    const ctx = {
+      entranceRoiIds,
+      checkoutRoiIds,
+      config: loadVisitSessionConfigForVenue(this.db, venueId),
+      loadedAt: Date.now(),
+    };
+    this.visitSessionContextCache.set(venueId, ctx);
+    return ctx;
   }
 
   /**
@@ -1061,6 +1113,16 @@ export class TrajectoryStorageService extends EventEmitter {
       return;
     }
     this.lastSampleTime.set(track.trackKey, now);
+
+    const vsCtx = this.getVisitSessionContext(venueId);
+    visitSessionManager.registerTrackSample(
+      venueId,
+      track.trackKey,
+      track.stableId || null,
+      now,
+      track.venuePosition,
+      vsCtx.config,
+    );
     
     // Determine which ROI(s) this track is in
     const currentRois = this.findContainingRois(track.venuePosition, rois);
@@ -1088,7 +1150,7 @@ export class TrajectoryStorageService extends EventEmitter {
     
     // Update visit sessions for each ROI
     for (const roi of currentRois) {
-      this.updateVisitSession(venueId, track.trackKey, roi.id, positionData);
+      this.updateVisitSession(venueId, track.trackKey, roi.id, positionData, track.stableId || null);
       
       // Track queue sessions for queue zones (per queue theory)
       // Only call if this ROI is a linked queue zone
@@ -1149,7 +1211,7 @@ export class TrajectoryStorageService extends EventEmitter {
   /**
    * Update visit session for a track in an ROI
    */
-  updateVisitSession(venueId, trackKey, roiId, positionData) {
+  updateVisitSession(venueId, trackKey, roiId, positionData, stableId = null) {
     const sessionKey = `${trackKey}:${roiId}`;
     const now = Date.now();
     
@@ -1158,6 +1220,7 @@ export class TrajectoryStorageService extends EventEmitter {
       this.visitSessions.set(sessionKey, {
         venueId,
         trackKey,
+        stableId,
         roiId,
         startTime: now,
         lastSeen: now,
@@ -1168,6 +1231,7 @@ export class TrajectoryStorageService extends EventEmitter {
       // Update existing session (limit positions to prevent memory leak)
       const session = this.visitSessions.get(sessionKey);
       session.lastSeen = now;
+      if (stableId) session.stableId = stableId;
       if (session.positions.length < this.MAX_POSITIONS_PER_SESSION) {
         session.positions.push(positionData);
       }
@@ -1218,6 +1282,23 @@ export class TrajectoryStorageService extends EventEmitter {
     
     // Get thresholds from zone/venue settings (cached)
     const thresholds = this.getThresholdsForROI(session.roiId, session.venueId);
+    const vsCtx = this.getVisitSessionContext(session.venueId);
+    const isEntranceRoi = vsCtx.entranceRoiIds.has(session.roiId);
+    const isCheckoutRoi = vsCtx.checkoutRoiIds.has(session.roiId);
+
+    const visitorSessionId = visitSessionManager.resolveForVisit(
+      session.venueId,
+      {
+        trackKey: session.trackKey,
+        stableId: session.stableId || null,
+        startTime: session.startTime,
+        endTime: session.lastSeen,
+        durationMs: duration,
+        entryPosition: session.entryPosition,
+        exitPosition: { x: lastPos.x, z: lastPos.z },
+      },
+      { isEntranceRoi, isCheckoutRoi, config: vsCtx.config },
+    );
     
     const visit = {
       id: `visit-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
@@ -1230,6 +1311,8 @@ export class TrajectoryStorageService extends EventEmitter {
       isCompleteTrack: this.isCompleteTrack(session),
       isDwell: duration >= thresholds.dwellMs,
       isEngagement: duration >= thresholds.engagementMs,
+      isConversion: isCheckoutRoi ? 1 : 0,
+      visitorSessionId: visitorSessionId || null,
       entryPosition: session.entryPosition,
       exitPosition: { x: lastPos.x, z: lastPos.z },
     };
@@ -1494,8 +1577,8 @@ export class TrajectoryStorageService extends EventEmitter {
       }
       
       const insertStmt = this.db.prepare(`
-        INSERT OR IGNORE INTO zone_visits (id, venue_id, roi_id, track_key, start_time, end_time, duration_ms, is_complete_track, is_dwell, is_engagement, entry_position_x, entry_position_z, exit_position_x, exit_position_z)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT OR IGNORE INTO zone_visits (id, venue_id, roi_id, track_key, start_time, end_time, duration_ms, is_complete_track, is_dwell, is_engagement, is_conversion, visitor_session_id, entry_position_x, entry_position_z, exit_position_x, exit_position_z)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
       
       let insertedCount = 0;
@@ -1512,6 +1595,8 @@ export class TrajectoryStorageService extends EventEmitter {
             v.isCompleteTrack ? 1 : 0,
             v.isDwell ? 1 : 0,
             v.isEngagement ? 1 : 0,
+            v.isConversion ? 1 : 0,
+            v.visitorSessionId || null,
             v.entryPosition?.x,
             v.entryPosition?.z,
             v.exitPosition?.x,
