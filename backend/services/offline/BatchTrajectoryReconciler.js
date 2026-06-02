@@ -252,6 +252,12 @@ async function streamBatchTimelineToFile(mergedTracks, venueId, ws, devicePrefix
     .filter(t => t.samples?.length)
     .map(t => ({ stableId: t.stableId, samples: t.samples, idx: 0, last: null }));
 
+  // A track is only emitted while it is actually alive: hold its last position
+  // for a short window after its final sample, then drop it. Without this a
+  // chain would be re-emitted (frozen at its last point) in every subsequent
+  // batch until the end of the capture — flooding the map and bloating the
+  // artifact to tens of GB on dense (v2) reconciliations.
+  const HOLD_MS = 1000;
   let batchCount = 0;
   for (let t0 = firstTs; t0 <= lastTs; t0 += OFFLINE_BATCH_MS) {
     const t1 = t0 + OFFLINE_BATCH_MS;
@@ -265,6 +271,7 @@ async function streamBatchTimelineToFile(mergedTracks, venueId, ws, devicePrefix
         if (tr.idx >= tr.samples.length) tr.samples = null;
       }
       if (!tr.last) continue;
+      if (t0 - tr.last.t > HOLD_MS) { tr.last = null; continue; } // expired → stop emitting (no frozen ghosts)
       const s = tr.last;
       tracks.push({
         id: tr.stableId,
