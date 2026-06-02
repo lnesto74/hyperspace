@@ -38,9 +38,10 @@ export default function replayRoutes({ replayService, mqttRecordService, mqttSer
       let playReconciled = !!reconciled;
       let resolvedArtifact = artifactPath ? String(artifactPath) : null;
       let playbackVenueId = bodyVenueId ? String(bodyVenueId) : null;
+      let job = null;
 
       if (jobId && offlineReconcileService) {
-        const job = offlineReconcileService.getJob(String(jobId));
+        job = offlineReconcileService.getJob(String(jobId));
         if (!job) {
           return res.status(400).json({ error: 'Reconciliation job not found' });
         }
@@ -69,7 +70,7 @@ export default function replayRoutes({ replayService, mqttRecordService, mqttSer
           resolvedArtifact = verified;
         }
         await replayService.stop();
-        const batchHint = job.meta?.batchCount ?? job.meta?.metrics?.batch_count ?? null;
+        const batchHint = job?.meta?.batchCount ?? job?.meta?.metrics?.batch_count ?? null;
         const playPromise = replayService.startReconciledArtifact({
           file: resolvedArtifact || playFile,
           speed,
