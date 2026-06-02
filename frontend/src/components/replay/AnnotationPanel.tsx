@@ -60,7 +60,9 @@ export default function AnnotationPanel({ onClose }: { onClose: () => void }) {
     try {
       const r = await fetch(`${API_BASE}/api/replay/files`)
       const j = await r.json()
-      const files: string[] = (j.files || []).filter((f: string) => !f.endsWith('.reconciled.jsonl'))
+      const files: string[] = (j.files || [])
+        .map((f: string | { name?: string }) => (typeof f === 'string' ? f : f?.name || ''))
+        .filter((name: string) => name && !name.endsWith('.reconciled.jsonl'))
       setCaptures(files)
       if (!capture && files.length) setCapture(files[0])
     } catch { /* ignore */ }
