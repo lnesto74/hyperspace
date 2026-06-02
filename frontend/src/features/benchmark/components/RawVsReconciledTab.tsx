@@ -239,9 +239,9 @@ export default function RawVsReconciledTab({ detail, onOpenCoverage, onOpenTrack
       {/* Hero KPIs */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
         <HeroStat
-          label="Fragmentation factor"
-          raw={fmt(summary.frag?.raw, 1)}
-          reconciled={fmt(summary.frag?.reconciled, 1)}
+          label={summary.headline?.id === 'fragments_per_shopper' ? 'Fragments / real shopper' : 'Fragmentation factor'}
+          raw={fmt(summary.headline?.raw, 1)}
+          reconciled={fmt(summary.headline?.reconciled, 1)}
           suffix="×"
           accent="text-purple-300"
         />

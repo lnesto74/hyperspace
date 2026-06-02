@@ -159,13 +159,20 @@ export function buildRawVsReconciledRows(
 
 export function summarizeComparison(rows: RawVsReconciledRow[]) {
   const frag = rows.find(r => r.id === 'fragmentation')
+  // Honest, shared-denominator metric (tracks ÷ real shoppers at the gate). This
+  // is what the headline should report — the per-engine `fragmentation` row uses
+  // a different denominator on each side and is misleading.
+  const fps = rows.find(r => r.id === 'fragments_per_shopper')
   const ids = rows.find(r => r.id === 'identity_count')
   const lifetime = rows.find(r => r.id === 'lifetime')
   const shopper = rows.find(r => r.id === 'shopper_grade')
 
+  // Prefer the honest fragments-per-shopper reduction; fall back to the old
+  // factor only when footfall is unavailable.
+  const headline = fps?.raw != null && fps.reconciled != null ? fps : frag
   const fragReduction =
-    frag?.raw != null && frag.reconciled != null && frag.raw > 0
-      ? (1 - frag.reconciled / frag.raw) * 100
+    headline?.raw != null && headline.reconciled != null && headline.raw > 0
+      ? (1 - headline.reconciled / headline.raw) * 100
       : null
 
   const idReduction =
@@ -173,7 +180,7 @@ export function summarizeComparison(rows: RawVsReconciledRow[]) {
       ? (1 - ids.reconciled / ids.raw) * 100
       : null
 
-  return { fragReduction, idReduction, lifetime, shopper, frag, ids }
+  return { fragReduction, idReduction, lifetime, shopper, frag, fps, headline, ids }
 }
 
 export function formatDelta(
