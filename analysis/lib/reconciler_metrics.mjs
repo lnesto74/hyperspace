@@ -1,4 +1,6 @@
 import { TrajectoryReconciler, normalizeReconcilerConfig, DEFAULT_CONFIG } from '../../backend/services/TrajectoryReconciler.js';
+import { reconcileV2Pipeline } from '../../backend/services/offline/reconcileV2/reconcileV2.js';
+import { IDENTITY_TRANSFORM } from '../../backend/services/PerceptionTransform.js';
 import { streamMessages } from './load_jsonl.mjs';
 
 function createTrackRollup(t, x, z) {
@@ -196,6 +198,60 @@ export async function runReconcilerStream(filePath, overrides, { venueId, afterM
     first_ts: firstTs,
     last_ts: lastTs,
     raw_messages: totalRaw,
+    spatial,
+    ...metrics,
+  };
+}
+
+/**
+ * Map-aware v2 reconciler scored in the SAME shape as runReconcilerStream.
+ *
+ * v2 is a batch/map engine (tracklets + geodesic association), not a streaming
+ * reconciler — so this runs the full v2 pipeline in-memory and then scores the
+ * resulting chains. To stay directly comparable with the raw + v1 rows it runs
+ * in the raw perception frame (identity transform) and builds its walkability
+ * grid from this capture's own coverage (no external cache / DB obstacles).
+ */
+export async function runReconcileV2Stream(filePath, overrides, { venueId, afterMs, beforeMs, label, onProgress, transform, db } = {}) {
+  const { engine, ...cfgRest } = overrides || {};
+  const {
+    mergedTracks, totalRaw, perceptionIdCount, firstTs, lastTs, trackletCount, stats,
+  } = await reconcileV2Pipeline({
+    filePath,
+    venueId,
+    transform: transform || IDENTITY_TRANSFORM,
+    configOverrides: { ...cfgRest, logGraph: false },
+    db: db || null,
+    afterMs,
+    beforeMs,
+    onProgress: onProgress ? (p) => { if (p.messages) onProgress(p.messages, label); } : undefined,
+  });
+
+  const rollups = new Map();
+  const timelineBuckets = new Map();
+  for (const [cid, tr] of mergedTracks) {
+    for (const s of tr.samples) {
+      const r = rollups.get(cid);
+      if (!r) rollups.set(cid, createTrackRollup(s.t, s.x, s.z));
+      else updateTrackRollup(r, s.t, s.x, s.z);
+      const t0 = Math.floor(s.t / BUCKET_MS) * BUCKET_MS;
+      let bucket = timelineBuckets.get(t0);
+      if (!bucket) { bucket = []; timelineBuckets.set(t0, bucket); }
+      if (bucket.length < 2000) bucket.push({ x: s.x, z: s.z });
+    }
+  }
+
+  // v2 drops nothing as "ghost" the way v1 does; report a comparable proxy of 0.
+  const metrics = scoreStableTracks(rollups, totalRaw, perceptionIdCount, { ghost_dropped: 0 });
+  const spatial = buildReconcilerSpatial(rollups, metrics, label, firstTs, lastTs, timelineBuckets);
+  return {
+    config: { engine: 'v2', ...cfgRest },
+    engine: 'v2',
+    first_ts: firstTs,
+    last_ts: lastTs,
+    raw_messages: totalRaw,
+    tracklets: trackletCount,
+    links_accepted: stats?.links_accepted ?? null,
     spatial,
     ...metrics,
   };

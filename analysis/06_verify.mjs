@@ -8,7 +8,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { VERIFY_CONFIGS } from './lib/configs.mjs';
 import { detectPrimaryVenue, parseWhen } from './lib/load_jsonl.mjs';
-import { runReconcilerStream } from './lib/reconciler_metrics.mjs';
+import { runReconcilerStream, runReconcileV2Stream } from './lib/reconciler_metrics.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -60,9 +60,11 @@ const main = async () => {
   const outPath = path.join(outDir, '06_verify.json');
   const results = [];
   for (const [name, cfg] of VERIFY_CONFIGS) {
-    console.log(`Running ${name} (streaming) ...`);
+    const isV2 = cfg?.engine === 'v2';
+    console.log(`Running ${name} (${isV2 ? 'map-aware v2, batch' : 'streaming'}) ...`);
     const t0 = Date.now();
-    const r = await runReconcilerStream(filePath, cfg, {
+    const runner = isV2 ? runReconcileV2Stream : runReconcilerStream;
+    const r = await runner(filePath, cfg, {
       venueId,
       afterMs,
       beforeMs,

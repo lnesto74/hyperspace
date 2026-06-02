@@ -54,9 +54,18 @@ function obstaclesFromDb(db, venueId) {
   return out;
 }
 
-export async function runReconcileV2ToFile({
-  filePath, artifactPath, venueId, transform = IDENTITY_TRANSFORM,
-  configOverrides = {}, meta = {}, onProgress, db = null,
+/**
+ * Steps 1–4 of the v2 pipeline (stream → grid → tracklets → association →
+ * smoothed merged tracks), with NO artifact write. Shared by the replay-artifact
+ * writer and the benchmark metrics path so both measure the exact same chains.
+ *
+ * Returns { mergedTracks, chains*, stats, graph, grid, totalRaw, perceptionIdCount,
+ *           firstTs, lastTs, trackletCount }. (chains is already consumed into
+ *           mergedTracks; use mergedTracks for downstream scoring/playback.)
+ */
+export async function reconcileV2Pipeline({
+  filePath, venueId, transform = IDENTITY_TRANSFORM,
+  configOverrides = {}, onProgress, db = null, afterMs = null, beforeMs = null,
 }) {
   const normT = normalizePerceptionTransform(transform);
   const cfg = configOverrides || {};
@@ -73,6 +82,8 @@ export async function runReconcileV2ToFile({
     if (!d?.position) continue;
     if (venueId && d.venueId && d.venueId !== venueId) continue;
     const t = Number(d.timestamp) || 0; if (!t) continue;
+    if (afterMs && t < afterMs) continue;
+    if (beforeMs && t > beforeMs) continue;
     const fp = perceptionToFloor(normT.input_frame, d.position);
     const fv = perceptionToFloor(normT.input_frame, d.velocity || { x: 0, y: 0, z: 0 });
     const v = applyTransformToPoint(normT, fp);
@@ -89,6 +100,7 @@ export async function runReconcileV2ToFile({
     }
     if (onProgress && total % 250000 === 0) onProgress({ phase: 'forward', messages: total });
   }
+  const perceptionIdCount = byId.size;
 
   // 2) walkability grid: prefer prebuilt per-venue cache
   let grid = null;
@@ -129,6 +141,17 @@ export async function runReconcileV2ToFile({
     mergedTracks.set(cid, { stableId: cid, samples: smoothSamples(samples, alpha) });
   }
   chains.clear();
+
+  return { mergedTracks, stats, graph, grid, totalRaw: total, perceptionIdCount, firstTs, lastTs, trackletCount };
+}
+
+export async function runReconcileV2ToFile({
+  filePath, artifactPath, venueId, transform = IDENTITY_TRANSFORM,
+  configOverrides = {}, meta = {}, onProgress, db = null,
+}) {
+  const {
+    mergedTracks, stats, graph, grid, totalRaw: total, firstTs, lastTs, trackletCount,
+  } = await reconcileV2Pipeline({ filePath, venueId, transform, configOverrides, onProgress, db });
 
   // 5) write byte-compatible replay artifact
   const ws = fs.createWriteStream(artifactPath, { flags: 'w' });

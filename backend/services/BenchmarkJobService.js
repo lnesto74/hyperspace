@@ -128,6 +128,9 @@ export default class BenchmarkJobService {
         PYTHON: process.env.PYTHON || '/opt/pybench/bin/python3',
         PATH: `/opt/pybench/bin:${process.env.PATH || ''}`,
         NODE_PATH: nodePath,
+        // v2 reconciler loads the whole capture in-memory for batch association;
+        // give the runner + its node children a larger heap.
+        NODE_OPTIONS: [process.env.NODE_OPTIONS, '--max-old-space-size=4096'].filter(Boolean).join(' '),
       },
       detached: false,
       stdio: ['ignore', logFd, logFd],

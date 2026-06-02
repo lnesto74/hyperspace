@@ -93,6 +93,16 @@ export const VERIFY_CONFIGS = [
     active_to_lost_timeout_ms: 1500,
     trail_max_length: 32,
   }],
+  // Map-aware v2 (batch): tracklets + geodesic probabilistic association.
+  // Runs in the raw perception frame with a capture-derived walkability grid so
+  // it stays directly comparable to the raw + v1 rows above.
+  ['GROCERY_V2_MAP', {
+    engine: 'v2',
+    smoothing_alpha: 0.6,
+    min_chain_life_ms: 0,
+    tracklet: {},
+    associate: {},
+  }],
 ];
 
 /** All reconciler preset names emitted in benchmark scorecards. */

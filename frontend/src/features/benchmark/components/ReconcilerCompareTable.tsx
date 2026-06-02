@@ -8,6 +8,7 @@ const CONFIGS = [
   'GROCERY_CONSERVATIVE',
   'RAJ_v1_CONSERVATIVE',
   'RAJ_v1_BALANCED',
+  'GROCERY_V2_MAP',
 ] as const
 
 function fmt(n: number | undefined | null, d = 1) {
