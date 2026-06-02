@@ -14,9 +14,11 @@ export function readFirstJsonLine(fullPath) {
     const buf = Buffer.alloc(HEAD_READ_BYTES);
     const n = fs.readSync(fd, buf, 0, buf.length, 0);
     if (n <= 0) return null;
-    const nl = buf.indexOf('\n', 0, n);
-    if (nl <= 0) return null;
-    return buf.slice(0, nl).toString('utf8').trim();
+    const head = buf.subarray(0, n);
+    const nl = head.indexOf(0x0A); // search for '\n' within the bytes actually read
+    if (nl < 0) return head.toString('utf8').trim() || null; // single line, no trailing newline
+    if (nl === 0) return null;
+    return head.subarray(0, nl).toString('utf8').trim();
   } finally {
     fs.closeSync(fd);
   }
