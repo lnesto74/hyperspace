@@ -38,6 +38,7 @@ export default function ReconcilerCompareTable({ reconciler, highlight = 'RAJ_v1
             <th className="px-3 py-2 font-medium">Config</th>
             <th className="px-3 py-2 font-medium text-right">Stable</th>
             <th className="px-3 py-2 font-medium text-right">Frag ×</th>
+            <th className="px-3 py-2 font-medium text-right" title="Stable tracks ÷ people counted at the entrance gate. Same denominator for every row — honest, comparable. Target < 20.">Frag/shopper</th>
             <th className="px-3 py-2 font-medium text-right">Lifetime</th>
             <th className="px-3 py-2 font-medium text-right">Disp (m)</th>
             <th className="px-3 py-2 font-medium text-right">tp/1k</th>
@@ -60,6 +61,9 @@ export default function ReconcilerCompareTable({ reconciler, highlight = 'RAJ_v1
                 </td>
                 <td className="px-3 py-2 text-right text-gray-300">{r.stable_tracks ?? '—'}</td>
                 <td className="px-3 py-2 text-right text-gray-300">{fmt(r.fragmentation_x, 2)}</td>
+                <td className={`px-3 py-2 text-right font-medium ${r.fragments_per_shopper != null && r.fragments_per_shopper < 20 ? 'text-emerald-400' : 'text-amber-300'}`}>
+                  {r.fragments_per_shopper != null ? `${fmt(r.fragments_per_shopper, 1)}×` : '—'}
+                </td>
                 <td className="px-3 py-2 text-right text-gray-300">{fmt(r.mean_lifetime_s)}s</td>
                 <td className="px-3 py-2 text-right text-gray-300">{fmt(r.mean_displacement_m)}</td>
                 <td className="px-3 py-2 text-right text-gray-300">{fmt(r.teleports_per_1k, 2)}</td>

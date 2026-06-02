@@ -78,6 +78,18 @@ export function buildRawVsReconciledRows(
       note: 'IDs per estimated real shopper — lower is cleaner identity continuity.',
     },
     {
+      id: 'fragments_per_shopper',
+      label: 'Fragments per real shopper',
+      unit: '×',
+      raw: num(perception?.fragments_per_shopper),
+      reconciled: num(reconciled?.fragments_per_shopper),
+      delta: delta(num(perception?.fragments_per_shopper), num(reconciled?.fragments_per_shopper)),
+      deltaPct: deltaPct(num(perception?.fragments_per_shopper), num(reconciled?.fragments_per_shopper)),
+      direction: 'lower_better',
+      highlight: true,
+      note: 'HONEST comparison: tracks ÷ people counted at the entrance gate. Same denominator on both sides — target < 20. (Raw and Reconciled use the identical footfall number.)',
+    },
+    {
       id: 'lifetime',
       label: 'Mean track lifetime',
       unit: 's',

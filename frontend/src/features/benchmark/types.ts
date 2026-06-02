@@ -24,6 +24,7 @@ export interface PerceptionLayer {
   mean_lifetime_s?: number
   mean_displacement_m?: number
   fragmentation_factor?: number
+  fragments_per_shopper?: number
   teleports_per_1k?: number
   pct_ids_under_2s?: number
   shopper_grade_ge_30m?: number
@@ -33,11 +34,21 @@ export interface PerceptionLayer {
 export interface ReconcilerConfigMetrics {
   stable_tracks?: number
   fragmentation_x?: number
+  fragments_per_shopper?: number
   mean_lifetime_s?: number
   mean_displacement_m?: number
   teleports_per_1k?: number
   ghost_pct?: number
   shopper_grade_ge_30m?: number
+}
+
+export interface FootfallLayer {
+  entrance_footfall?: number
+  method?: string
+  roi?: { id: string; name: string } | null
+  counted_tracks_inclusive?: number
+  dominant_dir_deg?: number
+  directional_purity?: number
 }
 
 export interface StructuralLayer {
@@ -63,6 +74,7 @@ export interface BenchmarkScorecard {
     perception?: PerceptionLayer | null
     reconciler?: Record<string, ReconcilerConfigMetrics> | null
     structural?: StructuralLayer | null
+    footfall?: FootfallLayer | null
   }
   notes?: string | null
 }

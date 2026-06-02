@@ -9,6 +9,7 @@ import { fileURLToPath } from 'url';
 import { VERIFY_CONFIGS } from './lib/configs.mjs';
 import { detectPrimaryVenue, parseWhen } from './lib/load_jsonl.mjs';
 import { runReconcilerStream, runReconcileV2Stream } from './lib/reconciler_metrics.mjs';
+import { loadEntranceContext, computeEntranceFootfall } from './lib/footfall.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -57,6 +58,30 @@ const main = async () => {
   }
   console.log(`Venue: ${venueId}`);
 
+  // Entrance-gate footfall — one shared "real shoppers" denominator for every row.
+  // Computed once; raw + every reconciler divide their track count by this number,
+  // so fragments-per-shopper is an honest apples-to-apples comparison.
+  let footfall = null;
+  try {
+    const { roi, transform, error } = loadEntranceContext(venueId);
+    if (error) console.log(`Footfall: skipped (${error})`);
+    if (roi) {
+      console.log(`Footfall: counting entrants across "${roi.name}" ...`);
+      footfall = await computeEntranceFootfall(filePath, {
+        venueId, roiVertices: roi.vertices, transform, afterMs, beforeMs,
+        onProgress: (n) => process.stdout.write(`\r  … ${n.toLocaleString()} messages`),
+      });
+      process.stdout.write('\n');
+      footfall.roi = { id: roi.id, name: roi.name };
+      fs.writeFileSync(path.join(outDir, 'entrance_footfall.json'), JSON.stringify(footfall, null, 2));
+      console.log(`  → entrance_footfall.json (${footfall.footfall} entrants, dominant ${footfall.dominant_dir_deg}°, purity ${footfall.directional_purity})`);
+    } else {
+      console.log('Footfall: no entrance ROI found for venue — fragments-per-shopper will be unavailable');
+    }
+  } catch (e) {
+    console.log(`Footfall: failed (${e.message})`);
+  }
+
   const outPath = path.join(outDir, '06_verify.json');
   const results = [];
   for (const [name, cfg] of VERIFY_CONFIGS) {
@@ -79,18 +104,23 @@ const main = async () => {
       fs.writeFileSync(spatialPath, JSON.stringify(spatial, null, 2));
       console.log(`  → ${path.basename(spatialPath)} (${spatial.counts?.stable_tracks?.toLocaleString()} stable tracks)`);
     }
-    results.push({ name, ...metricsOnly, elapsed_s });
+    const fps = footfall?.footfall ? r.n_stable / footfall.footfall : null;
+    results.push({ name, ...metricsOnly, fragments_per_shopper: fps, elapsed_s });
     fs.writeFileSync(outPath, JSON.stringify(results, null, 2));
     console.log(
-      `  stable=${r.n_stable} frag=${r.fragmentation_factor.toFixed(2)} lt=${r.lt_mean.toFixed(1)}s tp/1k=${r.teleports_per_1k.toFixed(2)} ghost=${r.ghost_pct.toFixed(1)}% (${elapsed_s.toFixed(0)}s)`,
+      `  stable=${r.n_stable} frag=${r.fragmentation_factor.toFixed(2)}${fps != null ? ` frag/shopper=${fps.toFixed(1)}` : ''} lt=${r.lt_mean.toFixed(1)}s tp/1k=${r.teleports_per_1k.toFixed(2)} ghost=${r.ghost_pct.toFixed(1)}% (${elapsed_s.toFixed(0)}s)`,
     );
   }
 
-  console.log('\nname                  stable   frag_x  lt_mean  disp_mean  shopper_qty  tp/1k   ghost%');
-  console.log('───────────────────── ────── ──────── ──────── ────────── ──────────── ─────── ───────');
+  if (footfall?.footfall) {
+    console.log(`\nEntrance-gate footfall (shared denominator): ${footfall.footfall} real shoppers`);
+  }
+  console.log('\nname                  stable   frag_x  frag/shopper  lt_mean  disp_mean  shopper_qty  tp/1k   ghost%');
+  console.log('───────────────────── ────── ──────── ──────────── ──────── ────────── ──────────── ─────── ───────');
   for (const r of results) {
+    const fps = r.fragments_per_shopper != null ? `${r.fragments_per_shopper.toFixed(1)}×` : '—';
     console.log(
-      `${r.name.padEnd(21)} ${String(r.n_stable).padStart(6)}  ${r.fragmentation_factor.toFixed(2).padStart(6)}  ${r.lt_mean.toFixed(1).padStart(6)}s  ${r.disp_mean.toFixed(1).padStart(7)}m  ${String(r.real_shopper_count).padStart(11)}  ${r.teleports_per_1k.toFixed(2).padStart(5)}  ${r.ghost_pct.toFixed(1).padStart(5)}%`,
+      `${r.name.padEnd(21)} ${String(r.n_stable).padStart(6)}  ${r.fragmentation_factor.toFixed(2).padStart(6)}  ${fps.padStart(12)}  ${r.lt_mean.toFixed(1).padStart(6)}s  ${r.disp_mean.toFixed(1).padStart(7)}m  ${String(r.real_shopper_count).padStart(11)}  ${r.teleports_per_1k.toFixed(2).padStart(5)}  ${r.ghost_pct.toFixed(1).padStart(5)}%`,
     );
   }
 };

@@ -9,10 +9,11 @@ function readJson(p) {
   }
 }
 
-function pickRaw(summary, continuity) {
+function pickRaw(summary, continuity, footfall) {
   if (!summary) return null;
   const n = summary.unique_perception_ids || 0;
   const est = summary.estimated_real_shoppers || continuity?.estimated_unique_shoppers || 0;
+  const ff = footfall?.footfall || 0;
   return {
     messages: summary.messages,
     unique_perception_ids: summary.unique_perception_ids,
@@ -20,6 +21,9 @@ function pickRaw(summary, continuity) {
     mean_lifetime_s: summary.mean_lifetime_s ?? summary.median_lifetime_s,
     mean_displacement_m: summary.mean_displacement_m ?? summary.median_total_disp,
     fragmentation_factor: est > 0 ? n / est : null,
+    // Honest, shared-denominator fragmentation: raw IDs per real shopper counted
+    // at the entrance gate. Comparable directly with the reconciler layer.
+    fragments_per_shopper: ff > 0 ? n / ff : null,
     teleports_per_1k: summary.teleports_per_1k,
     pct_ids_under_2s: summary.pct_ids_under_2s,
     shopper_grade_ge_30m: summary.shopper_grade_ge_30m,
@@ -58,6 +62,8 @@ function pickReconciled(verifyRows) {
     out[name] = {
       stable_tracks: r.n_stable,
       fragmentation_x: r.fragmentation_factor,
+      // Honest, shared-denominator: stable tracks per real shopper (entrance gate).
+      fragments_per_shopper: r.fragments_per_shopper ?? null,
       mean_lifetime_s: r.lt_mean,
       mean_displacement_m: r.disp_mean,
       teleports_per_1k: r.teleports_per_1k,
@@ -73,6 +79,7 @@ export function buildScorecard({ meta, artifactsDir, verifyRows, startedAt, fini
   const spatial = readJson(path.join(artifactsDir, '02_spatial_summary.json'));
   const continuity = readJson(path.join(artifactsDir, '05_continuity.json'));
   const fragmentation = readJson(path.join(artifactsDir, '05_fragmentation.json'));
+  const footfall = readJson(path.join(artifactsDir, 'entrance_footfall.json'));
 
   return {
     schema_version: 1,
@@ -86,9 +93,19 @@ export function buildScorecard({ meta, artifactsDir, verifyRows, startedAt, fini
     run_started_at: startedAt,
     run_finished_at: finishedAt,
     layers: {
-      perception: pickRaw(summary, continuity),
+      perception: pickRaw(summary, continuity, footfall),
       reconciler: pickReconciled(verifyRows),
       structural: pickSpatial(spatial, continuity, fragmentation),
+      footfall: footfall
+        ? {
+            entrance_footfall: footfall.footfall,
+            method: footfall.method,
+            roi: footfall.roi || null,
+            counted_tracks_inclusive: footfall.counted_tracks_inclusive,
+            dominant_dir_deg: footfall.dominant_dir_deg,
+            directional_purity: footfall.directional_purity,
+          }
+        : null,
     },
     notes: meta.notes || null,
   };
