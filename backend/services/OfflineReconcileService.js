@@ -7,6 +7,7 @@ import path from 'path';
 import { randomUUID } from 'crypto';
 import { getOfflinePreset, listOfflinePresets } from '../config/offlineReconcilePresets.js';
 import { runBatchReconciliationToFile } from './offline/BatchTrajectoryReconciler.js';
+import { runReconcileV2ToFile } from './offline/reconcileV2/reconcileV2.js';
 import { normalizePerceptionTransform, IDENTITY_TRANSFORM } from './PerceptionTransform.js';
 import { venueQueries } from '../database/schema.js';
 import { readStoriesFile, storiesPathForArtifact } from './offline/storyBuilder.js';
@@ -351,37 +352,54 @@ export class OfflineReconcileService {
         }
       }
 
-      console.log(`[OfflineReconcile] Start ${id} preset=${ctx.preset.id} file=${ctx.base}`);
+      const engine = ctx.preset.config?.engine || ctx.preset.engine || 'v1';
+      console.log(`[OfflineReconcile] Start ${id} preset=${ctx.preset.id} engine=${engine} file=${ctx.base}`);
 
-      const result = await runBatchReconciliationToFile({
-        filePath: ctx.fullPath,
-        artifactPath: ctx.artifactPath,
+      const jobMeta = {
+        jobId: id,
+        sourceFile: ctx.base,
+        presetId: ctx.preset.id,
+        presetLabel: ctx.preset.label,
         venueId: ctx.venueId,
-        transform,
-        configOverrides: ctx.preset.config,
-        meta: {
-          jobId: id,
-          sourceFile: ctx.base,
-          presetId: ctx.preset.id,
-          presetLabel: ctx.preset.label,
+      };
+      const onProgress = (payload) => {
+        if (this._isCancelled(id)) throw new Error('cancelled');
+        const p = mapProgress(payload);
+        this.db.prepare('UPDATE offline_reconcile_jobs SET progress = ? WHERE id = ?').run(p, id);
+        if (payload.phase === 'merge') {
+          console.log(`[OfflineReconcile] ${id} merge (${payload.fragments} fragments)`);
+        } else if (payload.phase === 'write' && payload.batches) {
+          console.log(`[OfflineReconcile] ${id} writing batches (${payload.batches})`);
+          this.db.prepare(`UPDATE offline_reconcile_jobs SET progress = ?, error = NULL WHERE id = ?`).run(mapProgress(payload), id);
+        } else if (payload.phase === 'write' && payload.progress >= 0.995) {
+          console.log(`[OfflineReconcile] ${id} finalizing artifact (${payload.batches ?? '?'} batches)`);
+        }
+      };
+
+      let result;
+      if (engine === 'v2') {
+        const walkabilityCachePath = path.join(this.replayDir, `walkability_${ctx.venueId || 'default'}.json`);
+        result = await runReconcileV2ToFile({
+          filePath: ctx.fullPath,
+          artifactPath: ctx.artifactPath,
           venueId: ctx.venueId,
-        },
-        onProgress: (payload) => {
-          if (this._isCancelled(id)) throw new Error('cancelled');
-          const p = mapProgress(payload);
-          this.db.prepare('UPDATE offline_reconcile_jobs SET progress = ? WHERE id = ?').run(p, id);
-          if (payload.phase === 'merge') {
-            console.log(`[OfflineReconcile] ${id} merge (${payload.fragments} fragments)`);
-          } else if (payload.phase === 'write' && payload.batches) {
-            console.log(`[OfflineReconcile] ${id} writing batches (${payload.batches})`);
-            this.db.prepare(`
-              UPDATE offline_reconcile_jobs SET progress = ?, error = NULL WHERE id = ?
-            `).run(mapProgress(payload), id);
-          } else if (payload.phase === 'write' && payload.progress >= 0.995) {
-            console.log(`[OfflineReconcile] ${id} finalizing artifact (${payload.batches ?? '?'} batches)`);
-          }
-        },
-      });
+          transform,
+          configOverrides: { ...ctx.preset.config, walkabilityCachePath },
+          meta: jobMeta,
+          onProgress,
+          db: this.db,
+        });
+      } else {
+        result = await runBatchReconciliationToFile({
+          filePath: ctx.fullPath,
+          artifactPath: ctx.artifactPath,
+          venueId: ctx.venueId,
+          transform,
+          configOverrides: ctx.preset.config,
+          meta: jobMeta,
+          onProgress,
+        });
+      }
 
       if (this._isCancelled(id)) throw new Error('cancelled');
 

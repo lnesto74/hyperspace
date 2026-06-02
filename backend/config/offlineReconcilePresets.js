@@ -99,6 +99,19 @@ export const OFFLINE_RECONCILE_PRESETS = [
     }),
   },
   {
+    id: 'GROCERY_V2_MAP',
+    label: 'Grocery — Map-aware v2 (beta)',
+    description: 'Map-constrained physics reconciler: tracklets + geodesic probabilistic association (motion vector + density + EXIT). Routes around shelves, no teleports. Conservative (fewer false merges).',
+    engine: 'v2',
+    config: {
+      engine: 'v2',
+      smoothing_alpha: 0.6,
+      min_chain_life_ms: 0,
+      tracklet: {},   // tracklets.js defaults
+      associate: {},  // associate.js defaults
+    },
+  },
+  {
     id: 'BASELINE_DEFAULT',
     label: 'Baseline (production default)',
     description: 'Standard online reconciler params — for comparison only.',

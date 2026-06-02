@@ -462,6 +462,9 @@ export async function runBatchReconciliationToFile({
   return { metrics, meta: { venueId, firstTs, lastTs, presetConfig: cfg } };
 }
 
+// Reused by the map-aware v2 engine so its artifact is byte-compatible with replay.
+export { streamBatchTimelineToFile, writeStreamLine, parseCaptureLine, smoothSamples };
+
 /**
  * Run full offline reconciliation on a capture file (in-memory batches — small files only).
  * @returns {{ batches, metrics, meta }}
