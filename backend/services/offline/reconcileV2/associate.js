@@ -35,6 +35,19 @@ const DEFAULTS = {
 const wrapPi = (a) => { while (a > Math.PI) a -= 2 * Math.PI; while (a < -Math.PI) a += 2 * Math.PI; return a; };
 const speed = (v) => Math.hypot(v.x || 0, v.z || 0);
 
+/** Downsample a chain's samples to a compact polyline [[x,z,t], …] for the annotation UI. */
+function chainPolyline(samples, stepM = 0.7, cap = 48) {
+  if (!samples.length) return null;
+  const pts = []; let last = null;
+  for (const s of samples) {
+    if (!last || Math.hypot(s.x - last.x, s.z - last.z) >= stepM) { pts.push([+s.x.toFixed(1), +s.z.toFixed(1), s.t]); last = s; }
+  }
+  const lastS = samples[samples.length - 1];
+  if (!pts.length || pts[pts.length - 1][2] !== lastS.t) pts.push([+lastS.x.toFixed(1), +lastS.z.toFixed(1), lastS.t]);
+  if (pts.length > cap) { const out = []; const stride = pts.length / cap; for (let k = 0; k < cap; k++) out.push(pts[Math.floor(k * stride)]); out.push(pts[pts.length - 1]); return out; }
+  return pts;
+}
+
 /** Interpolate the walkable geodesic path between two samples as synthetic points
  *  (so a bridged trajectory routes around shelves, not through them). */
 function geodesicBridge(grid, a, b) {
@@ -180,16 +193,17 @@ export function associateTracklets(tracklets, grid, opts = {}) {
   let accepted = 0, rejectedAmbig = 0, rejectedCmax = 0;
 
   for (const e of edges) {
-    if (outUsed[e.i] || inUsed[e.j]) continue;
-    if (e.cost > p.C_max) { rejectedCmax++; continue; }
+    if (outUsed[e.i] || inUsed[e.j]) { if (!e.dec) e.dec = 'occupied'; continue; }
+    if (e.cost > p.C_max) { e.dec = 'cmax'; rejectedCmax++; continue; }
     const bf = bestForI.get(e.i);
     // ambiguity: only accept the clear best for i; if 2nd-best is within margin, split
     if (bf && (bf.second - e.cost) < p.margin && bf.cost === e.cost) {
       // this IS the best edge but it's ambiguous vs second → prefer EXIT (split)
-      rejectedAmbig++; continue;
+      e.dec = 'ambiguous'; rejectedAmbig++; continue;
     }
-    if (bf && e.cost > bf.cost) continue; // only link i to its best
+    if (bf && e.cost > bf.cost) { e.dec = 'suboptimal'; continue; } // only link i to its best
     succ[e.i] = e.j; pred[e.j] = e.i; outUsed[e.i] = 1; inUsed[e.j] = 1;
+    e.dec = 'accepted';
     links.push({ from: tracklets[e.i].trackletId, to: tracklets[e.j].trackletId, cost: +e.cost.toFixed(3), gapS: +e.dt.toFixed(2), geo: +e.geo.toFixed(2), rho: e.rho });
     accepted++;
   }
@@ -198,15 +212,18 @@ export function associateTracklets(tracklets, grid, opts = {}) {
   // Between two stitched tracklets, insert the GEODESIC path so the bridged
   // trajectory walks AROUND shelves instead of teleporting straight across.
   const chains = new Map();
+  const chainMembers = opts.logGraph ? [] : null; // [{ stableId, tracklets:[trackletId] }]
   let chainSeq = 0, bridgePoints = 0;
   for (let i = 0; i < N; i++) {
     if (pred[i] !== -1) continue; // not a head
     const chainId = `v2-${chainSeq++}`;
     const merged = [];
+    const members = chainMembers ? [] : null;
     let cur = i;
     const guard = new Set();
     while (cur !== -1 && !guard.has(cur)) {
       guard.add(cur);
+      if (members) members.push(tracklets[cur].trackletId);
       for (const s of tracklets[cur].samples) {
         if (merged.length && s.t < merged[merged.length - 1].t) continue;
         merged.push(s);
@@ -221,10 +238,41 @@ export function associateTracklets(tracklets, grid, opts = {}) {
       cur = nxt;
     }
     chains.set(chainId, merged);
+    if (chainMembers) {
+      const entry = { stableId: chainId, tracklets: members };
+      let disp = 0;
+      for (let k = 1; k < merged.length; k++) disp += Math.hypot(merged[k].x - merged[k - 1].x, merged[k].z - merged[k - 1].z);
+      const life = merged.length ? merged[merged.length - 1].t - merged[0].t : 0;
+      // only attach a renderable polyline for meaningful journeys (keeps the sidecar light + the UI uncluttered)
+      if (merged.length >= 4 && life >= 3000 && disp >= 2) {
+        entry.path = chainPolyline(merged);
+        entry.t0 = merged[0].t; entry.t1 = merged[merged.length - 1].t;
+        entry.disp = +disp.toFixed(1);
+      }
+      chainMembers.push(entry);
+    }
+  }
+
+  // training substrate: tracklet endpoints + candidate edges (with accept/reject) + chain membership
+  let graph = null;
+  if (opts.logGraph) {
+    graph = {
+      params: p,
+      tracklets: tracklets.map(t => ({
+        id: t.trackletId, src: t.sourceId, t0: t.firstTs, t1: t.lastTs, n: t.samples.length,
+        sx: +t.start.x.toFixed(2), sz: +t.start.z.toFixed(2), ex: +t.end.x.toFixed(2), ez: +t.end.z.toFixed(2),
+      })),
+      chains: chainMembers,
+      edges: edges.map(e => ({
+        from: tracklets[e.i].trackletId, to: tracklets[e.j].trackletId,
+        cost: +e.cost.toFixed(3), gapS: +e.dt.toFixed(2), geo: +e.geo.toFixed(2), rho: e.rho,
+        dec: e.dec || 'unseen',
+      })),
+    };
   }
 
   return {
-    chains, links,
+    chains, links, graph,
     stats: {
       tracklets: N, candidate_edges: edges.length, geo_calls: geoCalls,
       links_accepted: accepted, rejected_ambiguous: rejectedAmbig, rejected_cmax: rejectedCmax,

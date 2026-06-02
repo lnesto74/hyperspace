@@ -114,7 +114,8 @@ export async function runReconcileV2ToFile({
   const tracklets = extractTracklets(byId, grid, cfg.tracklet || {});
   byId.clear();
   const trackletCount = tracklets.length;
-  const { chains, stats } = associateTracklets(tracklets.slice(), grid, cfg.associate || {});
+  const logGraph = cfg.logGraph !== false; // emit training sidecar by default
+  const { chains, stats, graph } = associateTracklets(tracklets.slice(), grid, { ...(cfg.associate || {}), logGraph });
 
   if (onProgress) onProgress({ phase: 'smooth', merged: chains.size });
 
@@ -141,6 +142,18 @@ export async function runReconcileV2ToFile({
   ws.end();
   await finished(ws);
 
+  // training substrate sidecar (consumed by the annotation tuner)
+  let graphPath = null;
+  if (graph) {
+    graphPath = artifactPath.replace(/\.reconciled\.jsonl$/, '.graph.json');
+    try {
+      fs.writeFileSync(graphPath, JSON.stringify({
+        jobId: meta.jobId || null, venueId: venueId || null, sourceFile: meta.sourceFile || null,
+        presetId: meta.presetId || null, firstTs, lastTs, ...graph,
+      }));
+    } catch (e) { graphPath = null; console.warn('[reconcileV2] graph sidecar write failed:', e.message); }
+  }
+
   const mergedCount = mergedTracks.size;
   mergedTracks.clear();
 
@@ -156,6 +169,7 @@ export async function runReconcileV2ToFile({
     bridge_points: stats.bridge_points,
     merge_reduction: trackletCount - stats.chains,
     walkability: grid ? 'grid' : 'none',
+    graph_path: graphPath,
   };
   return { metrics, meta: { venueId, firstTs, lastTs } };
 }

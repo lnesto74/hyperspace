@@ -346,6 +346,68 @@ export default function replayRoutes({ replayService, mqttRecordService, mqttSer
     }
   });
 
+  // ---- Merge annotations (human labels for reconciliation tuning) ----
+
+  router.get('/reconcile/annotations', (req, res) => {
+    try {
+      if (!offlineReconcileService) return res.status(503).json({ error: 'Offline reconciliation not available' });
+      const { jobId, sourceFile } = req.query;
+      res.json({
+        annotations: offlineReconcileService.listAnnotations({
+          jobId: jobId ? String(jobId) : undefined,
+          sourceFile: sourceFile ? String(sourceFile) : undefined,
+        }),
+      });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  router.post('/reconcile/annotations', (req, res) => {
+    try {
+      if (!offlineReconcileService) return res.status(503).json({ error: 'Offline reconciliation not available' });
+      const annotation = offlineReconcileService.createAnnotation(req.body || {});
+      res.json({ success: true, annotation });
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  router.delete('/reconcile/annotations/:id', (req, res) => {
+    try {
+      if (!offlineReconcileService) return res.status(503).json({ error: 'Offline reconciliation not available' });
+      res.json({ success: true, ...offlineReconcileService.deleteAnnotation(req.params.id) });
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  router.get('/reconcile/graph', (req, res) => {
+    try {
+      if (!offlineReconcileService) return res.status(503).json({ error: 'Offline reconciliation not available' });
+      const { sourceFile } = req.query;
+      if (!sourceFile) return res.status(400).json({ error: 'sourceFile is required' });
+      const full = String(req.query.full || '') === '1';
+      const graph = offlineReconcileService.getGraphForSource(String(sourceFile), { full });
+      if (!graph) return res.status(404).json({ error: 'No graph for this capture yet — generate it (reconcile_graph) first.' });
+      res.json({ success: true, graph });
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  router.get('/reconcile/jobs/:id/graph', (req, res) => {
+    try {
+      if (!offlineReconcileService) return res.status(503).json({ error: 'Offline reconciliation not available' });
+      const full = String(req.query.full || '') === '1';
+      const graph = offlineReconcileService.getGraphForJob(String(req.params.id), { full });
+      if (!graph) return res.status(404).json({ error: 'Graph sidecar not found — re-run v2 post-process on this capture.' });
+      res.json({ success: true, graph });
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
   router.get('/stories/status', (_req, res) => {
     try {
       if (!storyReplayService) return res.status(503).json({ error: 'Story replay not available' });

@@ -473,6 +473,118 @@ export class OfflineReconcileService {
     return this.listJobs({ sourceFile: base }).filter(j => j.status === 'complete' && this.resolveArtifactPath(j));
   }
 
+  // ---- Merge annotations (human labels for reconciliation tuning) ----
+
+  createAnnotation(a = {}) {
+    if (!a.kind || !['same', 'different', 'bad_jump'].includes(a.kind)) {
+      throw new Error("kind must be 'same', 'different', or 'bad_jump'");
+    }
+    const id = randomUUID();
+    const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : null);
+    this.db.prepare(`
+      INSERT INTO reconcile_merge_annotations
+        (id, job_id, venue_id, source_file, preset_id, kind,
+         track_a, perception_a, ts_a, x_a, z_a,
+         track_b, perception_b, ts_b, x_b, z_b, note)
+      VALUES (@id,@job_id,@venue_id,@source_file,@preset_id,@kind,
+              @track_a,@perception_a,@ts_a,@x_a,@z_a,
+              @track_b,@perception_b,@ts_b,@x_b,@z_b,@note)
+    `).run({
+      id,
+      job_id: a.jobId || null,
+      venue_id: a.venueId || null,
+      source_file: a.sourceFile ? path.basename(String(a.sourceFile)) : null,
+      preset_id: a.presetId || null,
+      kind: a.kind,
+      track_a: a.trackA != null ? String(a.trackA) : null,
+      perception_a: a.perceptionA != null ? String(a.perceptionA) : null,
+      ts_a: num(a.tsA),
+      x_a: num(a.xA), z_a: num(a.zA),
+      track_b: a.trackB != null ? String(a.trackB) : null,
+      perception_b: a.perceptionB != null ? String(a.perceptionB) : null,
+      ts_b: num(a.tsB),
+      x_b: num(a.xB), z_b: num(a.zB),
+      note: a.note ? String(a.note).slice(0, 500) : null,
+    });
+    return this.getAnnotation(id);
+  }
+
+  getAnnotation(id) {
+    const row = this.db.prepare('SELECT * FROM reconcile_merge_annotations WHERE id = ?').get(id);
+    return row ? this._rowToAnnotation(row) : null;
+  }
+
+  listAnnotations({ jobId, sourceFile } = {}) {
+    let rows;
+    if (jobId) {
+      rows = this.db.prepare('SELECT * FROM reconcile_merge_annotations WHERE job_id = ? ORDER BY created_at DESC').all(String(jobId));
+    } else if (sourceFile) {
+      rows = this.db.prepare('SELECT * FROM reconcile_merge_annotations WHERE source_file = ? ORDER BY created_at DESC').all(path.basename(String(sourceFile)));
+    } else {
+      rows = this.db.prepare('SELECT * FROM reconcile_merge_annotations ORDER BY created_at DESC LIMIT 1000').all();
+    }
+    return rows.map(r => this._rowToAnnotation(r));
+  }
+
+  deleteAnnotation(id) {
+    const info = this.db.prepare('DELETE FROM reconcile_merge_annotations WHERE id = ?').run(String(id));
+    return { deleted: info.changes };
+  }
+
+  /** Path to the v2 training graph sidecar for a completed job (or null). */
+  graphPathForJob(jobId) {
+    const artifact = this.resolveArtifactPath(this.getJob(jobId));
+    if (!artifact) return null;
+    const p = artifact.replace(/\.reconciled\.jsonl$/, '.graph.json');
+    return fs.existsSync(p) ? p : null;
+  }
+
+  /** Locate a graph sidecar for a capture (prefers a graph-only sidecar). */
+  graphPathForSource(sourceFile) {
+    const base = path.parse(path.basename(String(sourceFile))).name;
+    let files = [];
+    try { files = fs.readdirSync(this.artifactDir); } catch { return null; }
+    const matches = files.filter(f => f.endsWith('.graph.json') && f.startsWith(base));
+    if (!matches.length) return null;
+    matches.sort((a, b) => (b.includes('GRAPHONLY') ? 1 : 0) - (a.includes('GRAPHONLY') ? 1 : 0));
+    return path.join(this.artifactDir, matches[0]);
+  }
+
+  getGraphForSource(sourceFile, { full = false } = {}) {
+    const p = this.graphPathForSource(sourceFile);
+    if (!p) return null;
+    return this._readGraph(p, full);
+  }
+
+  /** Compact summary of the training graph (full edge/tracklet arrays omitted unless full=true). */
+  getGraphForJob(jobId, { full = false } = {}) {
+    const p = this.graphPathForJob(jobId);
+    if (!p) return null;
+    return this._readGraph(p, full);
+  }
+
+  _readGraph(p, full) {
+    const g = JSON.parse(fs.readFileSync(p, 'utf8'));
+    if (full) return g;
+    const decCounts = {};
+    for (const e of g.edges || []) decCounts[e.dec] = (decCounts[e.dec] || 0) + 1;
+    return {
+      jobId: g.jobId, venueId: g.venueId, sourceFile: g.sourceFile, presetId: g.presetId,
+      firstTs: g.firstTs, lastTs: g.lastTs, params: g.params,
+      counts: { tracklets: g.tracklets?.length || 0, chains: g.chains?.length || 0, edges: g.edges?.length || 0, edge_decisions: decCounts },
+    };
+  }
+
+  _rowToAnnotation(r) {
+    return {
+      id: r.id, jobId: r.job_id, venueId: r.venue_id, sourceFile: r.source_file, presetId: r.preset_id,
+      kind: r.kind,
+      a: { track: r.track_a, perception: r.perception_a, ts: r.ts_a, x: r.x_a, z: r.z_a },
+      b: { track: r.track_b, perception: r.perception_b, ts: r.ts_b, x: r.x_b, z: r.z_b },
+      note: r.note, createdAt: r.created_at,
+    };
+  }
+
   _rowToJob(row) {
     let meta = null;
     try { meta = row.meta_json ? JSON.parse(row.meta_json) : null; } catch { /* ignore */ }

@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Eye, Grid3X3, Box, ArrowUp, Sun, X, Radio, History, Crosshair, LayoutGrid, ChevronLeft, ChevronRight, Compass, Sparkles, FileVideo } from 'lucide-react'
+import { Eye, Grid3X3, Box, ArrowUp, Sun, X, Radio, History, Crosshair, LayoutGrid, ChevronLeft, ChevronRight, Compass, Sparkles, FileVideo, Tag } from 'lucide-react'
 import Sidebar from './Sidebar'
 import RightPanel from './RightPanel'
 import ModeBar from './ModeBar'
@@ -11,6 +11,7 @@ import { NeuralDashboard } from '../neuralDashboard'
 import MatchingTunerPanel from '../matching/MatchingTunerPanel'
 import TrajectoryQualityPanel from '../matching/TrajectoryQualityPanel'
 import ReplayPanel from '../replay/ReplayPanel'
+import AnnotationPanel from '../replay/AnnotationPanel'
 import { TRACK_STORIES_LAUNCH_KEY, type TrackStoriesLaunch } from '../../types/trackStories'
 import { useVenue } from '../../context/VenueContext'
 import { useLidar } from '../../context/LidarContext'
@@ -76,6 +77,7 @@ export default function AppShell({ onOpenDwgImporter, onOpenEdgeCommissioning, s
   const [showMatchingTuner, setShowMatchingTuner] = useState(false)
   const [showTrajectoryQuality, setShowTrajectoryQuality] = useState(false)
   const [showReplayPanel, setShowReplayPanel] = useState(false)
+  const [showAnnotationPanel, setShowAnnotationPanel] = useState(false)
   const [trackStoriesLaunch, setTrackStoriesLaunch] = useState<TrackStoriesLaunch | null>(null)
   const [lighting, setLighting] = useState<LightingSettings>(defaultLighting)
   const [tracking, setTracking] = useState<TrackingSettings>(defaultTracking)
@@ -215,6 +217,11 @@ export default function AppShell({ onOpenDwgImporter, onOpenEdgeCommissioning, s
             }}
             launch={trackStoriesLaunch}
           />
+        )}
+
+        {/* Reconciliation merge annotation panel — fully isolated 2D viewer, does not touch the live 3D */}
+        {showAnnotationPanel && (
+          <AnnotationPanel onClose={() => setShowAnnotationPanel(false)} />
         )}
 
 
@@ -529,6 +536,17 @@ export default function AppShell({ onOpenDwgImporter, onOpenEdgeCommissioning, s
               title="Replay a recorded MQTT capture"
             >
               <FileVideo className="w-3.5 h-3.5" />
+            </button>
+            <button
+              onClick={() => setShowAnnotationPanel(v => !v)}
+              className={`p-1.5 rounded transition-colors ${
+                showAnnotationPanel
+                  ? 'bg-sky-600 text-white'
+                  : 'text-gray-400 hover:text-white hover:bg-gray-700'
+              }`}
+              title="Annotate reconciliation merges (isolated 2D)"
+            >
+              <Tag className="w-3.5 h-3.5" />
             </button>
             <button
               onClick={() => setIntentFieldEnabled(!intentFieldEnabled)}

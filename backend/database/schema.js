@@ -936,6 +936,29 @@ export function initDatabase() {
 
     CREATE INDEX IF NOT EXISTS idx_offline_reconcile_source ON offline_reconcile_jobs(source_file);
     CREATE INDEX IF NOT EXISTS idx_offline_reconcile_status ON offline_reconcile_jobs(status);
+
+    -- Human merge annotations for reconciliation tuning (label correct/incorrect merges in 3D replay)
+    CREATE TABLE IF NOT EXISTS reconcile_merge_annotations (
+      id TEXT PRIMARY KEY,
+      job_id TEXT,
+      venue_id TEXT,
+      source_file TEXT,
+      preset_id TEXT,
+      kind TEXT NOT NULL,            -- 'same' (should merge) | 'different' (should not merge) | 'bad_jump'
+      track_a TEXT,                  -- stableId (e.g. v2-12) or perception id at pick time
+      perception_a TEXT,
+      ts_a INTEGER,
+      x_a REAL, z_a REAL,
+      track_b TEXT,
+      perception_b TEXT,
+      ts_b INTEGER,
+      x_b REAL, z_b REAL,
+      note TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_merge_annot_job ON reconcile_merge_annotations(job_id);
+    CREATE INDEX IF NOT EXISTS idx_merge_annot_source ON reconcile_merge_annotations(source_file);
   `);
 
   // Migration: Add DWG-related columns to venues table if they don't exist
