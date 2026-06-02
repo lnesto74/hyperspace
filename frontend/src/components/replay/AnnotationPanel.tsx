@@ -26,6 +26,9 @@ interface Annotation {
 }
 
 const CW = 560, CH = 480, PAD = 14
+const REID_MAX_GAP_S = 12          // re-ID rule: don't merge across gaps longer than this
+const WIN_LENGTHS = [10, 30, 60, 120] // time-window lengths (seconds)
+const fmtClock = (ms: number) => { const s = Math.max(0, Math.round(ms / 1000)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}` }
 
 export default function AnnotationPanel({ onClose }: { onClose: () => void }) {
   const { venue } = useVenue()
@@ -41,6 +44,11 @@ export default function AnnotationPanel({ onClose }: { onClose: () => void }) {
   const [entranceOnly, setEntranceOnly] = useState(false)
   const [minDisp, setMinDisp] = useState(0)
   const [mode, setMode] = useState<'pair' | 'badjump'>('pair')
+
+  // time-aware viewing: only show tracks active in a sliding window, coloured by time
+  const [timeWindowOn, setTimeWindowOn] = useState(true)
+  const [winStartMs, setWinStartMs] = useState(0) // offset from tMin
+  const [winLenS, setWinLenS] = useState(30)
 
   const [selA, setSelA] = useState<Pick | null>(null)
   const [selB, setSelB] = useState<Pick | null>(null)
@@ -99,17 +107,46 @@ export default function AnnotationPanel({ onClose }: { onClose: () => void }) {
   useEffect(() => {
     if (!capture) return
     localStorage.setItem('hyperspace.annotate.capture', capture)
-    setSelA(null); setSelB(null); setBadPoint(null)
+    setSelA(null); setSelB(null); setBadPoint(null); setWinStartMs(0)
     loadGraph(capture); refreshAnnotations(capture)
   }, [capture, loadGraph, refreshAnnotations])
+
+  // ---- global time range of the capture (for the window scrubber + colour ramp) ----
+  const timeRange = useMemo(() => {
+    if (!graph) return null
+    let lo = Infinity, hi = -Infinity
+    for (const c of graph.chains) {
+      if (!c.path || c.path.length < 2) continue
+      const t0 = c.t0 ?? c.path[0][2]
+      const t1 = c.t1 ?? c.path[c.path.length - 1][2]
+      if (t0 < lo) lo = t0
+      if (t1 > hi) hi = t1
+    }
+    if (!Number.isFinite(lo)) return null
+    return { tMin: lo, tMax: hi, dur: Math.max(1, hi - lo) }
+  }, [graph])
+
+  const maxStartMs = timeRange ? Math.max(0, timeRange.dur - winLenS * 1000) : 0
+  const startMs = Math.min(winStartMs, maxStartMs)
+  const winT0 = timeRange ? timeRange.tMin + startMs : 0
+  const winT1 = winT0 + winLenS * 1000
+  const windowing = timeWindowOn && !!timeRange
 
   // ---- filtered render set ----
   const renderChains = useMemo(() => {
     if (!graph) return []
-    return graph.chains.filter(c => c.path && c.path.length > 1
-      && (!entranceOnly || c.entr)
-      && (!minDisp || (c.disp ?? 0) >= minDisp))
-  }, [graph, entranceOnly, minDisp])
+    return graph.chains.filter(c => {
+      if (!c.path || c.path.length <= 1) return false
+      if (entranceOnly && !c.entr) return false
+      if (minDisp && (c.disp ?? 0) < minDisp) return false
+      if (windowing) {
+        const t0 = c.t0 ?? c.path[0][2]
+        const t1 = c.t1 ?? c.path[c.path.length - 1][2]
+        if (!(t0 <= winT1 && t1 >= winT0)) return false // no temporal overlap with window
+      }
+      return true
+    })
+  }, [graph, entranceOnly, minDisp, windowing, winT0, winT1])
 
   const stats = useMemo(() => {
     if (!graph) return null
@@ -135,14 +172,34 @@ export default function AnnotationPanel({ onClose }: { onClose: () => void }) {
     const ctx = off.getContext('2d')!
     ctx.fillStyle = '#0b0e14'; ctx.fillRect(0, 0, CW, CH)
     const toPx = (x: number, z: number): [number, number] => [x * scale + ox, CH - (z * scale + oz)]
+    const within = (t: number) => !windowing || (t >= winT0 && t <= winT1)
+    // colour ramp: blue (window start) → red (window end); when no window, by absolute time
+    const tColor = (t: number) => {
+      let u: number
+      if (windowing) u = (t - winT0) / Math.max(1, winT1 - winT0)
+      else if (timeRange) u = (t - timeRange.tMin) / timeRange.dur
+      else u = 0.5
+      u = Math.max(0, Math.min(1, u))
+      return `hsl(${Math.round(220 - 220 * u)}, 80%, 62%)`
+    }
 
-    // chains: entrance brighter, others dim
+    // chains: when windowing, draw per-segment coloured by time and clipped to window;
+    // otherwise entrance brighter / others dim (single colour, whole path)
     for (const c of renderChains) {
-      ctx.beginPath()
       const p = c.path!
-      for (let i = 0; i < p.length; i++) { const [px, py] = toPx(p[i][0], p[i][1]); if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py) }
-      ctx.strokeStyle = c.entr ? 'rgba(96,165,250,0.55)' : 'rgba(120,130,145,0.30)'
-      ctx.lineWidth = 1; ctx.stroke()
+      if (windowing) {
+        for (let i = 0; i < p.length - 1; i++) {
+          if (!within(p[i][2]) && !within(p[i + 1][2])) continue
+          const [x1, y1] = toPx(p[i][0], p[i][1]); const [x2, y2] = toPx(p[i + 1][0], p[i + 1][1])
+          ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2)
+          ctx.strokeStyle = tColor(p[i][2]); ctx.lineWidth = 1.4; ctx.stroke()
+        }
+      } else {
+        ctx.beginPath()
+        for (let i = 0; i < p.length; i++) { const [px, py] = toPx(p[i][0], p[i][1]); if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py) }
+        ctx.strokeStyle = c.entr ? 'rgba(96,165,250,0.55)' : 'rgba(120,130,145,0.30)'
+        ctx.lineWidth = 1; ctx.stroke()
+      }
     }
     // entrance ROI
     if (graph?.entrance?.vertices?.length) {
@@ -156,14 +213,15 @@ export default function AnnotationPanel({ onClose }: { onClose: () => void }) {
     const hash = new Map<string, number[]>()
     const cell = 1.5
     renderChains.forEach((c, idx) => {
-      for (const [x, z] of c.path!) {
+      for (const [x, z, t] of c.path!) {
+        if (!within(t)) continue // only let the user pick visible (in-window) points
         const key = `${Math.floor(x / cell)},${Math.floor(z / cell)}`
         let arr = hash.get(key); if (!arr) { arr = []; hash.set(key, arr) }
         if (arr[arr.length - 1] !== idx) arr.push(idx)
       }
     })
     hashRef.current = hash
-  }, [graph, renderChains])
+  }, [graph, renderChains, windowing, winT0, winT1, timeRange])
 
   // ---- composite draw (base + highlights) ----
   const draw = useCallback(() => {
@@ -216,13 +274,14 @@ export default function AnnotationPanel({ onClose }: { onClose: () => void }) {
         if (seen.has(idx)) continue; seen.add(idx)
         const c = renderChainsRef.current[idx]; if (!c?.path) continue
         for (const [x, z, t] of c.path) {
+          if (windowing && (t < winT0 || t > winT1)) continue
           const d = (x - wx) ** 2 + (z - wz) ** 2
           if (d < bestD) { bestD = d; best = { stableId: c.stableId, x, z, t } }
         }
       }
     }
     return bestD <= 0.8 * 0.8 ? best : null // ~0.8m pick radius (world)
-  }, [])
+  }, [windowing, winT0, winT1])
 
   const onMove = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
     const p = pickAt(e.clientX, e.clientY)
@@ -282,6 +341,22 @@ export default function AnnotationPanel({ onClose }: { onClose: () => void }) {
     return c
   }, [annotations])
 
+  // temporal relationship of the selected pair (drives the SAME-gate + readout)
+  const pairInfo = useMemo(() => {
+    if (!selA || !selB || !graph) return null
+    const find = (id: string) => graph.chains.find(c => c.stableId === id)
+    const ca = find(selA.stableId), cb = find(selB.stableId)
+    if (!ca || !cb) return null
+    const a0 = ca.t0 ?? (ca.path ? ca.path[0][2] : selA.t)
+    const a1 = ca.t1 ?? (ca.path ? ca.path[ca.path.length - 1][2] : selA.t)
+    const b0 = cb.t0 ?? (cb.path ? cb.path[0][2] : selB.t)
+    const b1 = cb.t1 ?? (cb.path ? cb.path[cb.path.length - 1][2] : selB.t)
+    const overlap = a0 <= b1 && b0 <= a1
+    let gapS = 0
+    if (!overlap) gapS = (a1 <= b0 ? b0 - a1 : a0 - b1) / 1000
+    return { overlap, gapS: Math.round(gapS), tooLong: gapS > REID_MAX_GAP_S }
+  }, [selA, selB, graph])
+
   return (
     <div ref={panelRef} className="absolute z-30 w-[36rem] bg-gray-900/95 backdrop-blur border border-sky-700/60 rounded-xl shadow-2xl text-gray-200 text-xs" style={panelStyle}>
       <div {...headerProps} className={`flex items-center gap-2 px-3 py-2 border-b border-gray-700/80 select-none touch-none ${dragging ? 'cursor-grabbing' : 'cursor-grab'}`} title="Drag to move">
@@ -329,6 +404,33 @@ export default function AnnotationPanel({ onClose }: { onClose: () => void }) {
               {stats && <span className="text-gray-500 ml-auto">{stats.shown.toLocaleString()} shown · {stats.entr} entrance</span>}
             </div>
 
+            {/* time-window scrubber: only show tracks active in this slice, coloured by time */}
+            {timeRange && (
+              <div className="space-y-0.5">
+                <div className="flex items-center gap-2">
+                  <label className="flex items-center gap-1.5 cursor-pointer shrink-0">
+                    <input type="checkbox" checked={timeWindowOn} onChange={e => setTimeWindowOn(e.target.checked)} className="accent-sky-500" />
+                    <span>Time window</span>
+                  </label>
+                  <input
+                    type="range" min={0} max={maxStartMs} step={1000} value={startMs}
+                    onChange={e => setWinStartMs(Number(e.target.value))}
+                    disabled={!timeWindowOn}
+                    className="flex-1 accent-sky-500 disabled:opacity-40"
+                  />
+                  <select value={winLenS} onChange={e => setWinLenS(Number(e.target.value))} disabled={!timeWindowOn}
+                    className="bg-gray-800 border border-gray-700 rounded px-1.5 py-1 disabled:opacity-40">
+                    {WIN_LENGTHS.map(s => <option key={s} value={s}>{s}s</option>)}
+                  </select>
+                </div>
+                {timeWindowOn && (
+                  <div className="text-[10px] text-gray-500">
+                    showing <span className="text-gray-300">{fmtClock(startMs)}–{fmtClock(startMs + winLenS * 1000)}</span> of {fmtClock(timeRange.dur)} · colour = time (blue→red)
+                  </div>
+                )}
+              </div>
+            )}
+
             <div className="flex items-center gap-1.5">
               <span className="text-gray-400">Mode</span>
               <button onClick={() => setMode('pair')} className={`px-2 py-1 rounded ${mode === 'pair' ? 'bg-sky-600 text-white' : 'bg-gray-800 text-gray-300 hover:bg-gray-700'}`}>Pair (A/B)</button>
@@ -349,8 +451,14 @@ export default function AnnotationPanel({ onClose }: { onClose: () => void }) {
                 <>
                   <span className="px-1.5 py-0.5 rounded bg-emerald-900/50 text-emerald-300">A: {selA?.stableId ?? '—'}</span>
                   <span className="px-1.5 py-0.5 rounded bg-amber-900/50 text-amber-300">B: {selB?.stableId ?? '—'}</span>
+                  {pairInfo && (
+                    <span className={`px-1.5 py-0.5 rounded ${pairInfo.tooLong ? 'bg-red-900/60 text-red-300' : pairInfo.overlap ? 'bg-yellow-900/50 text-yellow-300' : 'bg-gray-800 text-gray-300'}`}
+                      title={pairInfo.tooLong ? `Gap exceeds the ${REID_MAX_GAP_S}s re-ID limit — these are almost certainly different people` : ''}>
+                      {pairInfo.overlap ? 'concurrent' : `gap ${pairInfo.gapS}s`}{pairInfo.tooLong ? ' · too long' : ''}
+                    </span>
+                  )}
                   <div className="flex-1" />
-                  <button disabled={!selA || !selB || saving} onClick={() => submit('same')} className="px-2 py-1 rounded bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white flex items-center gap-1"><Users className="w-3 h-3" /> SAME</button>
+                  <button disabled={!selA || !selB || saving || !!pairInfo?.tooLong} onClick={() => submit('same')} className="px-2 py-1 rounded bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white flex items-center gap-1" title={pairInfo?.tooLong ? `Blocked: gap > ${REID_MAX_GAP_S}s` : 'Mark as the same person'}><Users className="w-3 h-3" /> SAME</button>
                   <button disabled={!selA || !selB || saving} onClick={() => submit('different')} className="px-2 py-1 rounded bg-rose-600 hover:bg-rose-500 disabled:opacity-40 text-white flex items-center gap-1"><UserX className="w-3 h-3" /> DIFFERENT</button>
                 </>
               ) : (
@@ -364,7 +472,7 @@ export default function AnnotationPanel({ onClose }: { onClose: () => void }) {
 
             <div className="text-[10px] text-gray-500 leading-tight">
               {mode === 'pair'
-                ? 'Click one track, then another. SAME = should be one person (false split). DIFFERENT = wrongly merged into one chain.'
+                ? 'Use the time window so overlapping tracks are real candidates (not same-spot/different-time lookalikes). Click one track, then another. SAME = should be one person (false split); blocked when the gap exceeds the re-ID limit. DIFFERENT = wrongly merged into one chain.'
                 : 'Click the point on a track where the trajectory makes an impossible jump.'}
             </div>
 
