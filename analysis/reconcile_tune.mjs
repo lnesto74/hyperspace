@@ -145,11 +145,14 @@ async function run() {
   }
   console.log(`annotations: ${anns.length} loaded, ${labelPairs.length} mapped to tracklet pairs`);
 
-  // search space (coordinate-ish grid over the merge-aggressiveness knobs)
-  const C_maxes = [5, 6, 7, 8, 10];
-  const margins = [0.3, 0.5, 0.7];
-  const T_maxes = [10, 12];
-  const D_maxes = [4, 5];
+  // search space (coordinate-ish grid over the merge-aggressiveness knobs).
+  // Widened to explore how low fragments/person can go before label violations
+  // appear — i.e. the honest trade-off curve. T_max_s / D_max_m are the gap &
+  // distance ceilings; pushing them up bridges longer occlusions (more merging).
+  const C_maxes = [6, 8, 10, 12];
+  const margins = [0.3, 0.5];
+  const T_maxes = [10, 15, 20, 30, 45];
+  const D_maxes = [4, 6, 8];
   const results = [];
   let n = 0; const totalRuns = C_maxes.length * margins.length * T_maxes.length * D_maxes.length;
   for (const C_max of C_maxes) for (const margin of margins) for (const T_max_s of T_maxes) for (const D_max_m of D_maxes) {
@@ -176,6 +179,20 @@ async function run() {
   const best = results[0];
   console.log('\nRECOMMENDED associate params:', JSON.stringify(best.params));
   console.log(`→ ${best.chains} chains, ${best.entrance_chains} entrance, fragments/person ${best.fragments_per_person}, label violations ${best.label_violations}`);
+
+  // trade-off curve: how low can fragments/person go, and what does it cost in
+  // label violations? (sorted most-merging first)
+  const curve = [...results].sort((a, b) => (a.fragments_per_person ?? 1e9) - (b.fragments_per_person ?? 1e9));
+  console.log('\n=== trade-off curve (lowest fragments/person first) ===');
+  console.log('frag/pp  chains  entr | viol (same✓/✗ diff✓/✗) | C_max margin T_max D_max');
+  curve.slice(0, 15).forEach((r) => {
+    const p = r.params;
+    console.log(
+      `${String(r.fragments_per_person).padStart(7)} ${String(r.chains).padStart(6)} ${String(r.entrance_chains).padStart(5)} | `
+      + `${String(r.label_violations).padStart(4)}  (${r.same_ok}/${r.same_bad} ${r.diff_ok}/${r.diff_bad}) | `
+      + `${String(p.C_max).padStart(5)} ${String(p.margin).padStart(6)} ${String(p.T_max_s).padStart(5)} ${String(p.D_max_m).padStart(5)}`,
+    );
+  });
 
   if (outPath) {
     fs.writeFileSync(outPath, JSON.stringify({ capture: path.basename(file), venueId, rawIds, tracklets: tracklets.length, annotations: anns.length, mapped_pairs: labelPairs.length, results }, null, 2));
