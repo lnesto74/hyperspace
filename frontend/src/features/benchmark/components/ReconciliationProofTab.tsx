@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { MouseEvent as ReactMouseEvent } from 'react'
-import { Play, Pause, SkipBack, Loader2, Film, Users, Eraser, Palette, LayoutGrid } from 'lucide-react'
+import { Play, Pause, SkipBack, Loader2, Film, Users, Eraser, Palette, LayoutGrid, ChevronLeft, ChevronRight } from 'lucide-react'
 import { API_BASE } from '../../../config/api'
 import type { BenchmarkRunDetail } from '../types'
 
@@ -22,6 +22,7 @@ interface Graph {
 interface WireObj { x: number; z: number; w: number; d: number; rot: number }
 interface Seg { t: number; x1: number; z1: number; x2: number; z2: number; id: string; stable: string }
 interface Beat { stable: string; t0: number; t1: number; gapS: number; frags: number; caption: string }
+interface RankEntry { stable: string; frags: number; durS: number; gapS: number; t0: number; t1: number; score: number }
 type ViewMode = 'window' | 'trails' | 'cohort'
 
 const CW = 470, CH = 430, PAD = 12
@@ -155,19 +156,24 @@ export default function ReconciliationProofTab({ detail }: { detail: BenchmarkRu
     for (const L of rawLife.values()) { churn.rawBirth[bi(L.t0)]++; churn.rawDeath[bi(L.t1)]++ }
     for (const L of recLife.values()) { churn.recBirth[bi(L.t0)]++; churn.recDeath[bi(L.t1)]++ }
 
-    const beats: Beat[] = []
+    const ranked: RankEntry[] = []
     for (const c of graph.chains) {
-      if (!c.path || (c.tracklets?.length ?? 0) < 2) continue
+      const stable = c.stableId
+      const frags = fragCount.get(stable) ?? 0
+      if (!c.path || frags < 2) continue
       const tks = (c.tracklets || []).map((id) => trackletMap.get(id)).filter(Boolean) as GraphTracklet[]
       tks.sort((a, b) => a.t0 - b.t0)
       let maxGap = 0
       for (let i = 1; i < tks.length; i++) maxGap = Math.max(maxGap, (tks[i].t0 - tks[i - 1].t1) / 1000)
-      const frags = new Set(tks.map((t) => t.src)).size
-      if (maxGap > 0 && frags >= 2) beats.push({ stable: c.stableId, t0: (c.t0 ?? 0) - t0Global, t1: (c.t1 ?? 0) - t0Global, gapS: maxGap, frags, caption: `1 shopper reconstructed from ${frags} raw IDs — LiDAR lost them for ${maxGap.toFixed(1)}s (behind a shelf); reconciliation bridged the gap.` })
+      const L = recLife.get(stable)
+      const t0 = L ? L.t0 : 0, t1 = L ? L.t1 : 0
+      ranked.push({ stable, frags, durS: (t1 - t0) / 1000, gapS: maxGap, t0, t1, score: frags * 100 + maxGap + (t1 - t0) / 2000 })
     }
-    beats.sort((a, b) => b.gapS - a.gapS)
+    ranked.sort((a, b) => b.score - a.score)
+    const beats: Beat[] = [...ranked].filter((r) => r.gapS > 0).sort((a, b) => b.gapS - a.gapS).slice(0, 6)
+      .map((r) => ({ stable: r.stable, t0: r.t0, t1: r.t1, gapS: r.gapS, frags: r.frags, caption: `1 shopper reconstructed from ${r.frags} raw IDs — LiDAR lost them for ${r.gapS.toFixed(1)}s (behind a shelf); reconciliation bridged the gap.` }))
 
-    return { rawSegs, recSegs, rawBuckets, recBuckets, rawByTrack, recByTrack, rawLife, recLife, fragCount, churn, nB, dur, beats: beats.slice(0, 6) }
+    return { rawSegs, recSegs, rawBuckets, recBuckets, rawByTrack, recByTrack, rawLife, recLife, fragCount, churn, nB, dur, beats, ranked: ranked.slice(0, 24) }
   }, [graph])
 
   const totalDur = model?.dur ?? 1
@@ -342,6 +348,30 @@ export default function ReconciliationProofTab({ detail }: { detail: BenchmarkRu
     return { frags, durS: life ? (life.t1 - life.t0) / 1000 : 0 }
   }, [selected, model])
 
+  const focusChain = useCallback((e: RankEntry) => {
+    setStoryOn(false); setPlaying(false); setSelected(e.stable)
+    setTNow(viewMode === 'cohort' ? Math.max(0, e.t0 - 2000) : e.t1)
+  }, [viewMode])
+
+  const stepRank = useCallback((dir: number) => {
+    const list = model?.ranked; if (!list?.length) return
+    let i = list.findIndex((r) => r.stable === selected)
+    i = i < 0 ? (dir > 0 ? 0 : list.length - 1) : (i + dir + list.length) % list.length
+    focusChain(list[i])
+  }, [model, selected, focusChain])
+
+  useEffect(() => {
+    if (!model?.ranked.length) return
+    const h = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement)?.tagName
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return
+      if (e.key === 'ArrowRight') { e.preventDefault(); stepRank(1) }
+      else if (e.key === 'ArrowLeft') { e.preventDefault(); stepRank(-1) }
+    }
+    window.addEventListener('keydown', h)
+    return () => window.removeEventListener('keydown', h)
+  }, [model, stepRank])
+
   const startStory = () => {
     if (!model?.beats.length) return
     setViewMode('trails'); setStoryOn(true); setSelected(model.beats[0].stable); setStoryIdx(0)
@@ -426,6 +456,27 @@ export default function ReconciliationProofTab({ detail }: { detail: BenchmarkRu
           <span className="text-gray-500">avg duration {spanStats.rawDurS.toFixed(0)}s → <span className="text-emerald-300">{spanStats.recDurS.toFixed(0)}s</span></span>
         </div>
       )}
+
+      {/* top-reconstructions navigator — surfaces the most dramatic stitched journeys */}
+      {model && model.ranked.length > 0 && (() => {
+        const cur = model.ranked.findIndex((r) => r.stable === selected)
+        return (
+          <div className="flex items-center gap-2 rounded-lg border border-purple-800/40 bg-purple-950/15 px-3 py-2">
+            <span className="text-[10px] uppercase tracking-wide text-purple-300/80 whitespace-nowrap">Top reconstructions</span>
+            <button type="button" onClick={() => stepRank(-1)} title="Previous (←)" className="p-1 rounded text-gray-300 hover:text-white hover:bg-gray-700"><ChevronLeft className="w-4 h-4" /></button>
+            <span className="text-xs text-gray-400 w-12 text-center font-mono">{cur >= 0 ? cur + 1 : '–'}/{model.ranked.length}</span>
+            <button type="button" onClick={() => stepRank(1)} title="Next (→)" className="p-1 rounded text-gray-300 hover:text-white hover:bg-gray-700"><ChevronRight className="w-4 h-4" /></button>
+            <div className="flex gap-1 overflow-x-auto py-0.5">
+              {model.ranked.map((r) => (
+                <button key={r.stable} type="button" onClick={() => focusChain(r)} title={`${r.frags} raw IDs → ${r.durS.toFixed(0)}s journey${r.gapS > 0 ? `, bridged ${r.gapS.toFixed(1)}s gap` : ''}`}
+                  className={`px-2 py-0.5 rounded text-[11px] whitespace-nowrap font-mono ${selected === r.stable ? 'bg-purple-600 text-white' : 'bg-gray-800 text-gray-300 hover:text-white'}`}>
+                  ×{r.frags}·{r.durS.toFixed(0)}s
+                </button>
+              ))}
+            </div>
+          </div>
+        )
+      })()}
 
       {/* dual maps */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
