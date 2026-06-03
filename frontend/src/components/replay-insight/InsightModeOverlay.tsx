@@ -125,7 +125,9 @@ export default function InsightModeOverlay() {
   useEffect(() => {
     if (!isPlaying || duration === 0) return;
 
-    const playbackSpeed = 10; // 10x speed (episode time / real time)
+    // Play the whole clip in a fixed wall-clock time regardless of how long the
+    // episode window is, so it never crawls (a 15-min window at a flat 10x took 90s).
+    const TARGET_PLAYBACK_MS = 16000;
     const animate = (timestamp: number) => {
       if (lastFrameTimeRef.current === 0) {
         lastFrameTimeRef.current = timestamp;
@@ -134,8 +136,8 @@ export default function InsightModeOverlay() {
       const deltaMs = timestamp - lastFrameTimeRef.current;
       lastFrameTimeRef.current = timestamp;
 
-      // Advance progress
-      const deltaProgress = (deltaMs * playbackSpeed) / duration;
+      // Advance progress so the clip completes in ~TARGET_PLAYBACK_MS.
+      const deltaProgress = deltaMs / TARGET_PLAYBACK_MS;
       
       setProgress(prev => {
         const next = prev + deltaProgress;

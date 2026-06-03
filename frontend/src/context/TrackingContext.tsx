@@ -257,7 +257,9 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
   }, [applyVisualizationMode])
   
   // Historical timeline/insight replay uses DB snapshots; MQTT JSONL replay uses live socket.
-  const useHistoricalTracks = isReplayMode && !mqttReplayActive && replayTracks.size > 0
+  // During historical replay we show ONLY the replay tracks (live is suppressed even if the
+  // clip is momentarily empty), so live shoppers never leak into an episode replay.
+  const useHistoricalTracks = isReplayMode && !mqttReplayActive
   const tracks = useHistoricalTracks ? replayTracks : liveTracks
   
   // Stable ref always points to latest tracks — consumers using useTracksRef() 
@@ -433,7 +435,9 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
         if (isTrackingDiag()) console.warn(`[DIAG] tracks IGNORED  eventVenue=${data.venueId}  subscribed=${subscribedVenueRef.current}  n=${data.tracks.length}  t=${Date.now()}`)
         return
       }
-      if (isReplayModeRef.current && !mqttReplayActiveRef.current && !storyReplayActiveRef.current && replayTracksRef.current.size > 0) return
+      // While historical (insight) replay is active, ignore live MQTT so live shoppers
+      // don't keep flowing underneath the episode replay (even if the clip is empty).
+      if (isReplayModeRef.current && !mqttReplayActiveRef.current && !storyReplayActiveRef.current) return
 
       const now = Date.now()
 
