@@ -44,6 +44,7 @@ import { useVenue } from './context/VenueContext'
 import { API_BASE } from './config/api'
 import LoginPage from './components/auth/LoginPage'
 import CompaniesPage from './components/admin/CompaniesPage'
+import StoryMode from './components/storymode/StoryMode'
 
 // App view mode context
 type ViewMode = 'main' | 'planogram' | 'dwgImporter' | 'lidarPlanner' | 'edgeCommissioning' | 'doohAnalytics' | 'doohEffectiveness' | 'businessReporting' | 'profitRadar' | 'benchmark'
@@ -646,6 +647,14 @@ function MainApp() {
             Return to LaunchPad
           </button>
         )}
+
+        {/* Demo storytelling overlay — opt-in, additive; restores state on exit */}
+        <StoryMode
+          viewMode={viewMode}
+          setViewMode={setViewMode}
+          neuralEnabled={neuralDashboardEnabled}
+          setNeuralEnabled={setNeuralDashboardEnabled}
+        />
       </PlanogramProvider>
     </ViewModeContext.Provider>
   )
