@@ -364,3 +364,33 @@ reconcile_model(                   # promoted params/model versions
 2. Is a 1 m grid fine, or do you want 0.5 m near the entrance/aisles for finer geodesics?
 3. For Phase B, start with logistic regression (most interpretable) — agreed?
 ```
+
+---
+
+## 13. Sweep result (capture 0106, 2026-06-03) — the floor of sequential association
+
+Ran `analysis/reconcile_tune.mjs` (120 configs, gap 10→45 s, distance 4→8 m,
+C_max 6→12) scored against 21 human labels (17 `same`, 4 `different`).
+
+**Result:** even at the most aggressive physically-plausible settings, fragments/person
+only fell from **~57 → ~43**. Best config `{C_max:12, margin:0.3, T_max_s:45, D_max_m:8}`
+— now the v2 default (preset + benchmark). Zero `different`-label violations at every setting.
+
+**Why it can't reach <20 — `analysis/reconcile_explain.mjs` on the 17 `same` labels:**
+
+| Blocker | Count | Meaning |
+|---|---|---|
+| **CONCURRENT** | **11 (65%)** | The two IDs overlap in time — same person, two simultaneous IDs (multi-sensor / split). Sequential association (A.end→B.start) **cannot** merge these by design. |
+| FEASIBLE | 2 | Should merge — suspect R_max nearest-K pruning / cost ranking. |
+| TOO_FAR | 2 | One is likely a mislabel (14 m in 1.2 s ⇒ 15 m/s). |
+| UNREACHABLE | 2 | geodesic = ∞; one is only 3.5 m apart ⇒ walkability **over-blocking** (over-inflated shelf sealing a real walkway). |
+
+**Conclusion:** the dominant fragmentation cause is **concurrent duplicate IDs**, which the
+purely-sequential associator structurally ignores. Parameter tuning is at its floor.
+
+**Recommended next step (deferred — "hold" chosen):** add a **Stage-0 concurrent-duplicate
+fusion pass** before association — cluster tracklets that overlap in time AND stay within
+~1.5 m for the overlap, fuse into one identity. Then sequential association bridges the
+genuine occlusion gaps. Secondary: relax walkability inflation near the UNREACHABLE spots;
+investigate R_max/cost for the 2 FEASIBLE pairs. A few labels (25 m "same", 15 m/s) look
+mistaken and are worth re-checking in the annotation panel.

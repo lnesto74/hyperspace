@@ -101,7 +101,9 @@ export const VERIFY_CONFIGS = [
     smoothing_alpha: 0.6,
     min_chain_life_ms: 0,
     tracklet: {},
-    associate: {},
+    // Best params from the label-scored sweep (capture 0106): ~43 frag/person
+    // (vs ~57) with zero 'different'-label violations. See reconcile_tune.mjs.
+    associate: { C_max: 12, margin: 0.3, T_max_s: 45, D_max_m: 8 },
   }],
 ];
 

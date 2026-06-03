@@ -108,7 +108,11 @@ export const OFFLINE_RECONCILE_PRESETS = [
       smoothing_alpha: 0.6,
       min_chain_life_ms: 0,
       tracklet: {},   // tracklets.js defaults
-      associate: {},  // associate.js defaults
+      // Best params from the label-scored sweep (capture 0106): pushes gap/distance
+      // ceilings to their physically-plausible limits → ~43 frag/person (vs ~57) with
+      // ZERO label violations on the 4 'different' guards. (Floor is gated by concurrent
+      // duplicate IDs that need a separate fusion pass — see RECONCILIATION_V2_DESIGN.)
+      associate: { C_max: 12, margin: 0.3, T_max_s: 45, D_max_m: 8 },
     },
   },
   {
