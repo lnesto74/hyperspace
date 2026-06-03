@@ -129,6 +129,7 @@ const BEATS: Beat[] = [
     outcome: '0 blind spots \u00b7 sensors green',
     component: 'Digital Twin \u00b7 LiDAR Network',
     stage: (a) => { a.setViewMode('main') },
+    dim: 'none',
   },
   {
     id: 'live',
@@ -240,44 +241,189 @@ const BEATS: Beat[] = [
 const AUTO_ADVANCE_MS = 14000
 const REPLAY_SPEED = 3 // recording playback speed (recorded-time / wall-time)
 
+// Total runtime of the Store Awakening opening sequence (ms). The MQTT replay
+// is started by the parent only after this elapses (or when skipped).
+const AWAKENING_MS = 15000
+
+// Ceiling sensor nodes — wake left→right as the beam sweeps (staggered delays).
+const AWK_SENSORS = [
+  { x: 16, y: 18, d: 4.9 },
+  { x: 32, y: 18, d: 5.4 },
+  { x: 48, y: 18, d: 5.9 },
+  { x: 64, y: 18, d: 6.4 },
+  { x: 80, y: 18, d: 6.9 },
+  { x: 80, y: 78, d: 7.3 },
+  { x: 16, y: 78, d: 7.6 },
+]
+
+// Vertical shelf blocks (percent of the staged scene box).
+const AWK_SHELVES = [
+  { x: 19, w: 4.4 },
+  { x: 32, w: 4.4 },
+  { x: 45, w: 4.4 },
+  { x: 58, w: 4.4 },
+]
+
+// A few floating dust motes that live inside the beam.
+const AWK_DUST = Array.from({ length: 12 }, (_, i) => ({
+  left: 8 + (i * 7.3) % 70,
+  top: 18 + (i * 13.7) % 60,
+  delay: 3 + (i % 6) * 0.6,
+  dur: 6 + (i % 4) * 1.5,
+}))
+
 /**
- * Theatrical opening: the real store map sits in darkness while a blue stage
- * light sweeps across it and the sensors blink online. Purely decorative,
- * pointer-events none, sits above the map but below the Story Mode controls.
+ * StoreAwakening — a fully self-contained, pure-CSS cinematic that plays once at
+ * the start of Story Mode (the 07:30 beat) before the MQTT replay begins. It
+ * draws its own theatre: darkness → blueprint → a sweeping stage light that
+ * reveals the floor → sensors waking → an entrance spotlight → the first few
+ * customers. It calls onComplete when finished (or when skipped), after which the
+ * parent starts the recording and shows the normal narrative card.
+ *
+ * No WebGL/Three, pointer-events: none, removable cleanly. Decorative only.
  */
-function IntroCurtain() {
-  const corners = [
-    { top: '12%', left: '8%' },
-    { top: '12%', right: '8%' },
-    { bottom: '18%', left: '8%' },
-    { bottom: '18%', right: '8%' },
-  ]
+function StoreAwakening({ onComplete }: { onComplete: () => void }) {
+  const doneRef = useRef(false)
+  const finish = useCallback(() => {
+    if (doneRef.current) return
+    doneRef.current = true
+    onComplete()
+  }, [onComplete])
+
+  useEffect(() => {
+    const id = window.setTimeout(finish, AWAKENING_MS)
+    return () => window.clearTimeout(id)
+  }, [finish])
+
+  const blue = 'rgba(150,190,255,'
+  const white = 'rgba(225,238,255,'
+
   return (
-    <div className="fixed inset-0 z-[60] pointer-events-none overflow-hidden" style={{ animation: 'storyFade 700ms ease-out' }}>
+    <div
+      className="fixed inset-0 z-[80] pointer-events-none overflow-hidden"
+      style={{ background: '#01030a', animation: `awkRootIn .5s ease-out, awkRootOut 1.6s ease-in ${(AWAKENING_MS - 1600) / 1000}s forwards` }}
+    >
       <style>{`
-        @keyframes storySweep { 0% { transform: translateX(-70%) skewX(-12deg) } 100% { transform: translateX(170%) skewX(-12deg) } }
-        @keyframes storyFade { from { opacity: 0 } to { opacity: 1 } }
-        @keyframes storyGlow { 0%,100% { opacity: .25; transform: scale(1) } 50% { opacity: 1; transform: scale(1.25) } }
+        @keyframes awkRootIn { from { opacity: 0 } to { opacity: 1 } }
+        @keyframes awkRootOut { from { opacity: 1 } to { opacity: 0 } }
+        @keyframes awkBaseIn { from { opacity: 0 } to { opacity: .09 } }
+        @keyframes awkReveal { from { clip-path: inset(0 100% 0 0) } to { clip-path: inset(0 0 0 0) } }
+        @keyframes awkBeam {
+          0% { transform: translateX(-12%) rotate(-7deg); opacity: 0 }
+          14% { opacity: .95 }
+          82% { opacity: .9 }
+          100% { transform: translateX(186%) rotate(9deg); opacity: 0 }
+        }
+        @keyframes awkCore { from { opacity: 0; transform: scale(.3) } to { opacity: 1; transform: scale(1) } }
+        @keyframes awkRing { 0% { opacity: .9; transform: scale(.3) } 100% { opacity: 0; transform: scale(2.6) } }
+        @keyframes awkEntrance { 0% { opacity: 0; transform: scale(.7) } 30% { opacity: 1; transform: scale(1) } 70% { opacity: .9; transform: scale(1.06) } 100% { opacity: 0; transform: scale(1.1) } }
+        @keyframes awkCustomer { 0% { opacity: 0 } 22% { opacity: 1 } 100% { opacity: 1 } }
+        @keyframes awkDust { 0% { opacity: 0; transform: translate(0,0) } 25% { opacity: .55 } 75% { opacity: .35 } 100% { opacity: 0; transform: translate(-14px,-22px) } }
+        @keyframes awkFog { 0% { transform: translate(-6%,0) } 50% { transform: translate(6%,-3%) } 100% { transform: translate(-6%,0) } }
+        @keyframes awkPulseLine { 0% { stroke-dashoffset: 240; opacity: 0 } 30% { opacity: .5 } 100% { stroke-dashoffset: 0; opacity: 0 } }
       `}</style>
-      <div className="absolute inset-0" style={{ background: 'radial-gradient(120% 120% at 50% 38%, rgba(4,9,20,0.55) 0%, rgba(2,5,12,0.92) 72%)' }} />
-      <div
-        className="absolute inset-y-0"
-        style={{
-          left: 0,
-          width: '34%',
-          filter: 'blur(10px)',
-          mixBlendMode: 'screen',
-          background: 'linear-gradient(90deg, transparent 0%, rgba(96,150,255,0.14) 38%, rgba(190,215,255,0.36) 50%, rgba(96,150,255,0.14) 62%, transparent 100%)',
-          animation: 'storySweep 5.5s ease-in-out infinite alternate',
-        }}
-      />
-      {corners.map((pos, i) => (
-        <div key={i} className="absolute flex items-center gap-1.5" style={pos as React.CSSProperties}>
-          <span className="w-2 h-2 rounded-full bg-sky-400" style={{ animation: `storyGlow 2.4s ease-in-out ${i * 0.4}s infinite`, boxShadow: '0 0 10px rgba(56,189,248,0.8)' }} />
-          <span className="text-[9px] tracking-widest text-sky-300/70 font-medium">LiDAR ONLINE</span>
+
+      {/* Drifting fog layers */}
+      <div className="absolute inset-0" style={{ opacity: .5, background: 'radial-gradient(40% 50% at 30% 70%, rgba(20,40,80,0.25), transparent 70%)', filter: 'blur(40px)', animation: 'awkFog 16s ease-in-out infinite' }} />
+      <div className="absolute inset-0" style={{ opacity: .4, background: 'radial-gradient(45% 55% at 75% 35%, rgba(30,50,90,0.22), transparent 70%)', filter: 'blur(48px)', animation: 'awkFog 20s ease-in-out infinite reverse' }} />
+
+      {/* Centered staged scene box (keeps floorplan + customers aligned) */}
+      <div className="absolute" style={{ left: '50%', top: '50%', transform: 'translate(-50%,-50%)', width: 'min(92vw, 1080px)', height: 'min(66vh, 600px)' }}>
+
+        {/* Base dim blueprint — barely visible, fades in during Phase 2 */}
+        <svg viewBox="0 0 1000 600" width="100%" height="100%" style={{ position: 'absolute', inset: 0, opacity: 0, animation: 'awkBaseIn 2s ease-out 2s forwards' }}>
+          <AwkFloorplan blue={blue} white={white} dim />
+        </svg>
+
+        {/* Bright blueprint — revealed left→right by the sweeping beam (Phase 3) */}
+        <svg viewBox="0 0 1000 600" width="100%" height="100%" style={{ position: 'absolute', inset: 0, clipPath: 'inset(0 100% 0 0)', animation: 'awkReveal 4s cubic-bezier(.45,.05,.3,1) 4s forwards' }}>
+          <AwkFloorplan blue={blue} white={white} />
+        </svg>
+
+        {/* Sensor nodes wake one by one as the beam passes */}
+        {AWK_SENSORS.map((s, i) => (
+          <div key={i} className="absolute" style={{ left: `${s.x}%`, top: `${s.y}%`, width: 0, height: 0 }}>
+            <span className="absolute rounded-full" style={{ left: -4, top: -4, width: 8, height: 8, background: `${white}.95)`, boxShadow: `0 0 10px ${blue}.9)`, opacity: 0, animation: `awkCore .6s ease-out ${s.d}s forwards` }} />
+            <span className="absolute rounded-full" style={{ left: -10, top: -10, width: 20, height: 20, border: `1px solid ${blue}.8)`, opacity: 0, animation: `awkRing 2.4s ease-out ${s.d}s 2` }} />
+          </div>
+        ))}
+
+        {/* Volumetric stage-light beam — a cone sweeping across the floor */}
+        <div
+          className="absolute"
+          style={{
+            left: '-8%', top: '-14%', width: '40%', height: '132%',
+            background: `linear-gradient(180deg, ${white}.30) 0%, ${blue}.12) 42%, transparent 78%)`,
+            clipPath: 'polygon(42% 0%, 58% 0%, 100% 100%, 0% 100%)',
+            filter: 'blur(7px)', mixBlendMode: 'screen', transformOrigin: '50% 0%',
+            animation: 'awkBeam 4s cubic-bezier(.45,.05,.3,1) 4s forwards',
+          }}
+        >
+          {/* dust motes inside the beam */}
+          {AWK_DUST.map((d, i) => (
+            <span key={i} className="absolute rounded-full" style={{ left: `${d.left}%`, top: `${d.top}%`, width: 3, height: 3, background: `${white}.8)`, opacity: 0, animation: `awkDust ${d.dur}s ease-in-out ${d.delay}s infinite` }} />
+          ))}
         </div>
-      ))}
+
+        {/* Entrance spotlight (right side) — the stage waits for the first actor */}
+        <div
+          className="absolute rounded-full"
+          style={{
+            left: '78%', top: '40%', width: '34%', height: '46%', transform: 'translate(-50%,-50%)',
+            background: `radial-gradient(circle, ${white}.34) 0%, ${blue}.16) 38%, transparent 70%)`,
+            filter: 'blur(6px)', mixBlendMode: 'screen', opacity: 0,
+            animation: 'awkEntrance 4.5s ease-in-out 8s forwards',
+          }}
+        />
+
+        {/* First customers entering from the right (Phase 6) */}
+        {[
+          { top: '52%', delay: 11, tx: -190, ty: 8 },
+          { top: '58%', delay: 11.6, tx: -150, ty: -22 },
+          { top: '48%', delay: 12.2, tx: -120, ty: 30 },
+        ].map((c, i) => (
+          <div key={i} className="absolute" style={{ left: '90%', top: c.top, opacity: 0, animation: `awkCustomer 3s ease-out ${c.delay}s forwards` }}>
+            <span
+              className="block rounded-full"
+              style={{ width: 9, height: 9, background: `${white}.95)`, boxShadow: `0 0 12px ${blue}1), 0 0 22px ${blue}.6)`, animation: `awkSlide-${i} 3s ease-out ${c.delay}s forwards` }}
+            />
+            <style>{`@keyframes awkSlide-${i} { from { transform: translate(0,0) } to { transform: translate(${c.tx}px, ${c.ty}px) } }`}</style>
+          </div>
+        ))}
+      </div>
     </div>
+  )
+}
+
+/** Pure-SVG store blueprint used by both the dim and bright awakening layers. */
+function AwkFloorplan({ blue, white, dim }: { blue: string; white: string; dim?: boolean }) {
+  const stroke = dim ? `${white}.9)` : `${white}.85)`
+  const glow = dim ? 'none' : `drop-shadow(0 0 3px ${blue}.55))`
+  const sw = dim ? 1 : 1.4
+  return (
+    <g fill="none" stroke={stroke} strokeWidth={sw} style={{ filter: glow }}>
+      {/* outer walls with an entrance gap on the right wall */}
+      <path d="M70 70 H930 V300 M930 380 V530 H70 V70" />
+      {/* entrance threshold marker (right) */}
+      <path d="M930 300 h26 M930 380 h26" stroke={`${blue}.9)`} />
+      {/* vertical shelf aisles */}
+      {AWK_SHELVES.map((s, i) => {
+        const x = (s.x / 100) * 1000
+        const w = (s.w / 100) * 1000
+        return <rect key={i} x={x} y={140} width={w} height={220} rx={3} stroke={`${blue}.7)`} />
+      })}
+      {/* checkout counters near the bottom */}
+      {[240, 360, 480].map((x, i) => (
+        <rect key={i} x={x} y={430} width={80} height={24} rx={3} stroke={`${blue}.7)`} />
+      ))}
+      {/* faint neural pulse lines threading the floor (premium touch) */}
+      {!dim && (
+        <g stroke={`${blue}.8)`} strokeWidth={1} strokeDasharray="6 8">
+          <path d="M120 500 C 300 420, 520 470, 900 340" style={{ strokeDasharray: 240, animation: 'awkPulseLine 3.5s ease-in-out 6s infinite' }} />
+          <path d="M120 120 C 360 200, 620 160, 900 340" style={{ strokeDasharray: 240, animation: 'awkPulseLine 3.5s ease-in-out 7s infinite' }} />
+        </g>
+      )}
+    </g>
   )
 }
 
@@ -314,6 +460,9 @@ export default function StoryMode({ viewMode, setViewMode, neuralEnabled, setNeu
   const [index, setIndex] = useState(0)
   const [playing, setPlaying] = useState(false)
   const [replayLive, setReplayLive] = useState(false)
+  // Store Awakening intro overlay — plays once per session before the replay.
+  const [introPlaying, setIntroPlaying] = useState(false)
+  const introDoneRef = useRef(false)
 
   // Snapshot of the app state when entering, restored verbatim on exit.
   const snapshotRef = useRef<{ viewMode: StoryViewMode; neuralEnabled: boolean } | null>(null)
@@ -439,14 +588,32 @@ export default function StoryMode({ viewMode, setViewMode, neuralEnabled, setNeu
     setActive(true)
     setIndex(0)
     setPlaying(false)
+    // Stage the floorplan (view=main) but hold the recording until the
+    // Store Awakening intro finishes. If it already played this session, skip
+    // straight to the replay.
+    applyBeatRef.current(0)
+    if (!introDoneRef.current) {
+      setIntroPlaying(true)
+    } else {
+      tokenRef.current += 1
+      void startRecording(tokenRef.current)
+    }
+  }, [viewMode, neuralEnabled, startRecording])
+
+  // Fired when the awakening sequence ends (or is skipped) — start the replay.
+  const completeIntro = useCallback(() => {
+    if (introDoneRef.current) return
+    introDoneRef.current = true
+    setIntroPlaying(false)
     tokenRef.current += 1
     void startRecording(tokenRef.current)
-    applyBeatRef.current(0)
-  }, [viewMode, neuralEnabled, startRecording])
+  }, [startRecording])
 
   const exit = useCallback(() => {
     setActive(false)
     setPlaying(false)
+    setIntroPlaying(false)
+    introDoneRef.current = false
     tokenRef.current += 1
     void stopRecording()
     closeHeatmapModal()
@@ -487,13 +654,18 @@ export default function StoryMode({ viewMode, setViewMode, neuralEnabled, setNeu
   useEffect(() => {
     if (!active) return
     const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') { e.preventDefault(); exit(); return }
+      // During the intro, advance/space skips the cinematic instead of navigating.
+      if (introPlaying) {
+        if (e.key === 'ArrowRight' || e.key === ' ' || e.key === 'Enter' || e.key === 'PageDown') { e.preventDefault(); completeIntro() }
+        return
+      }
       if (e.key === 'ArrowRight' || e.key === ' ' || e.key === 'PageDown') { e.preventDefault(); next() }
       else if (e.key === 'ArrowLeft' || e.key === 'PageUp') { e.preventDefault(); prev() }
-      else if (e.key === 'Escape') { e.preventDefault(); exit() }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [active, next, prev, exit])
+  }, [active, introPlaying, next, prev, exit, completeIntro])
 
   // Auto-advance when playing.
   useEffect(() => {
@@ -534,10 +706,13 @@ export default function StoryMode({ viewMode, setViewMode, neuralEnabled, setNeu
   const color = RUNG_COLOR[beat.rung]
   const dim = beat.dim ?? 'soft'
 
+  if (introPlaying) {
+    return <StoreAwakening onComplete={completeIntro} />
+  }
+
   return (
     <>
-    {beat.id === 'ready' && <IntroCurtain />}
-    {beat.id !== 'ready' && dim !== 'none' && <Spotlight mode={dim} />}
+    {dim !== 'none' && <Spotlight mode={dim} />}
     <div className="fixed inset-0 z-[70] pointer-events-none">
       {/* Narrative card */}
       <div className="absolute bottom-24 left-6 max-w-sm pointer-events-auto">
