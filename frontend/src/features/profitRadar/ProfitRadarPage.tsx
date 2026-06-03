@@ -351,53 +351,61 @@ export default function ProfitRadarPage({ onClose }: ProfitRadarPageProps) {
     return () => window.removeEventListener('hyperspace:profit-radar-select-zone', handler)
   }, [selectedInsight, setSelectedInsight])
 
-  // Resolve the selected zone insight to a real ROI id (insights only carry the
-  // zone name) so the detail can look up the shelf's category + products.
-  const selectedRoiId = useMemo(() => {
-    if (!selectedInsight) return null
-    const zoneName = (selectedInsight.dataBasis?.zone as string)
-      || selectedInsight.title.replace(/\s+underperforming$/i, '').trim()
-    const zf = zoneField.find(z => z.roiName === zoneName)
-    if (zf) return zf.roiId
-    const dz = deadZones.find(d => d.name === zoneName)
-    return dz?.id ?? null
-  }, [selectedInsight, zoneField, deadZones])
+  // zoneField is rewritten on every live socket tick and only contains zones
+  // that currently have tracks, so a zone's id appears/disappears as shoppers
+  // move. Accumulate a stable name -> roiId map that only ever grows, so the
+  // resolved zone never flickers back to "unknown" while an insight is selected.
+  const [zoneIdByName, setZoneIdByName] = useState<Record<string, string>>({})
+  useEffect(() => {
+    setZoneIdByName(prev => {
+      let changed = false
+      const next = { ...prev }
+      const add = (name?: string | null, id?: string | null) => {
+        if (name && id && next[name] !== id) { next[name] = id; changed = true }
+      }
+      for (const z of zoneField) add(z.roiName, z.roiId)
+      for (const z of deadZones) add(z.name, z.id)
+      for (const z of topZones) add(z.name, z.id)
+      return changed ? next : prev
+    })
+  }, [zoneField, deadZones, topZones])
 
-  // Index every known zone by name. Reporting dead/top zones carry utilization +
-  // category; zoneField fills in ids for any other zone, so we can resolve the
-  // selected insight's zone(s) for the focused floor-plan map.
-  const zoneIndexByName = useMemo(() => {
+  // Stable metadata (utilization + category) for zones we have reporting data on.
+  const zoneMetaByName = useMemo(() => {
     const map = new Map<string, ZonePerformanceItem>()
     for (const z of [...topZones, ...deadZones]) {
       if (z?.name) map.set(z.name, z)
     }
-    for (const z of zoneField) {
-      if (z.roiName && !map.has(z.roiName)) {
-        map.set(z.roiName, { id: z.roiId, name: z.roiName, utilization: 0 })
-      }
-    }
     return map
-  }, [topZones, deadZones, zoneField])
+  }, [topZones, deadZones])
 
-  // The zone(s) tied to the selected insight — a single zone for most types, or
-  // the cluster's visited zones for layout friction.
-  const focusZones = useMemo(() => {
-    if (!selectedInsight) return [] as ZonePerformanceItem[]
+  // The zone name(s) tied to the selected insight — a single zone for most
+  // types, or the cluster's visited zones for layout friction.
+  const selectedZoneNames = useMemo(() => {
+    if (!selectedInsight) return [] as string[]
     const db = selectedInsight.dataBasis || {}
     const names: string[] = []
     if (typeof db.zone === 'string') names.push(db.zone)
     if (Array.isArray(db.zones)) for (const n of db.zones) if (typeof n === 'string') names.push(n)
     if (names.length === 0) names.push(selectedInsight.title.replace(/\s+underperforming$/i, '').trim())
-    const seen = new Set<string>()
+    return Array.from(new Set(names.filter(Boolean)))
+  }, [selectedInsight])
+
+  // Stable roiId for the primary zone (drives the shelf-contents lookup).
+  const selectedRoiId = selectedZoneNames.length > 0
+    ? (zoneIdByName[selectedZoneNames[0]] ?? null)
+    : null
+
+  // Stable focus list for the floor-plan map (pulses the insight's own zones).
+  const focusZones = useMemo(() => {
     const out: ZonePerformanceItem[] = []
-    for (const n of names) {
-      if (!n || seen.has(n)) continue
-      seen.add(n)
-      const item = zoneIndexByName.get(n)
-      if (item) out.push(item)
+    for (const n of selectedZoneNames) {
+      const id = zoneIdByName[n]
+      if (!id) continue
+      out.push(zoneMetaByName.get(n) ?? { id, name: n, utilization: 0 })
     }
     return out
-  }, [selectedInsight, zoneIndexByName])
+  }, [selectedZoneNames, zoneIdByName, zoneMetaByName])
 
   return (
     <div className="fixed inset-0 z-50 bg-gray-900 flex flex-col">
