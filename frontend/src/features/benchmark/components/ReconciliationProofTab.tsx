@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { MouseEvent as ReactMouseEvent } from 'react'
-import { Play, Pause, SkipBack, Loader2, Film, Users, Eraser, Palette } from 'lucide-react'
+import { Play, Pause, SkipBack, Loader2, Film, Users, Eraser, Palette, LayoutGrid } from 'lucide-react'
 import { API_BASE } from '../../../config/api'
 import type { BenchmarkRunDetail } from '../types'
 
@@ -19,6 +19,7 @@ interface Graph {
   tracklets?: GraphTracklet[]
 }
 
+interface WireObj { x: number; z: number; w: number; d: number; rot: number }
 interface Seg { t: number; x1: number; z1: number; x2: number; z2: number; id: string; stable: string }
 interface Beat { stable: string; t0: number; t1: number; gapS: number; frags: number; caption: string }
 type ViewMode = 'window' | 'trails' | 'cohort'
@@ -57,6 +58,8 @@ export default function ReconciliationProofTab({ detail }: { detail: BenchmarkRu
   const [selected, setSelected] = useState<string | null>(null)
   const [storyOn, setStoryOn] = useState(false)
   const [storyIdx, setStoryIdx] = useState(0)
+  const [wire, setWire] = useState<WireObj[]>([])
+  const [showWire, setShowWire] = useState(true)
 
   const rawCanvas = useRef<HTMLCanvasElement>(null)
   const recCanvas = useRef<HTMLCanvasElement>(null)
@@ -77,6 +80,19 @@ export default function ReconciliationProofTab({ detail }: { detail: BenchmarkRu
       .catch((e) => setError(e instanceof Error ? e.message : String(e)))
       .finally(() => setLoading(false))
   }, [sourceFile])
+
+  // ---- load store fixtures (venue frame — same frame as v2 graph paths) for the ghost wireframe ----
+  useEffect(() => {
+    if (!detail.id) return
+    setWire([])
+    fetch(`${API_BASE}/api/benchmark/runs/${encodeURIComponent(detail.id)}/coverage/floorplan`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((fp) => {
+        const objs = (fp?.objects as { x: number; z: number; w: number; d: number; rotation_y?: number }[] | undefined) || []
+        setWire(objs.filter((o) => o.w > 0 && o.d > 0).map((o) => ({ x: o.x, z: o.z, w: o.w, d: o.d, rot: o.rotation_y || 0 })))
+      })
+      .catch(() => setWire([]))
+  }, [detail.id])
 
   // ---- precompute segments, per-track lists, buckets, lifetimes, churn, story beats ----
   const model = useMemo(() => {
@@ -163,16 +179,32 @@ export default function ReconciliationProofTab({ detail }: { detail: BenchmarkRu
     return { s0: tNow - winLenS * 1000, s1: tNow }
   }, [viewMode, tNow, winLenS, cohortLenS])
 
+  // ---- fixtures near the tracked area (drop far-away DWG outliers) + fitted extent ----
+  const wireObjects = useMemo(() => {
+    const e = graph?.extent
+    if (!e || !wire.length) return [] as WireObj[]
+    const m = 6
+    return wire.filter((o) => o.x + o.w / 2 >= e.minX - m && o.x - o.w / 2 <= e.maxX + m && o.z + o.d / 2 >= e.minZ - m && o.z - o.d / 2 <= e.maxZ + m)
+  }, [graph, wire])
+
+  const fitExtent = useMemo(() => {
+    const e = graph?.extent
+    if (!e) return null
+    let { minX, maxX, minZ, maxZ } = e
+    for (const o of wireObjects) { minX = Math.min(minX, o.x - o.w / 2); maxX = Math.max(maxX, o.x + o.w / 2); minZ = Math.min(minZ, o.z - o.d / 2); maxZ = Math.max(maxZ, o.z + o.d / 2) }
+    return { minX, maxX, minZ, maxZ }
+  }, [graph, wireObjects])
+
   // ---- transform (shared by both panes) ----
   const tf = useMemo(() => {
-    const e = graph?.extent
+    const e = fitExtent
     if (!e) return null
     const spanX = Math.max(0.1, e.maxX - e.minX), spanZ = Math.max(0.1, e.maxZ - e.minZ)
     const scale = Math.min((CW - 2 * PAD) / spanX, (CH - 2 * PAD) / spanZ)
     const ox = PAD + (CW - 2 * PAD - spanX * scale) / 2 - e.minX * scale
     const oz = PAD + (CH - 2 * PAD - spanZ * scale) / 2 - e.minZ * scale
     return { scale, ox, oz }
-  }, [graph])
+  }, [fitExtent])
 
   // ---- draw one pane ----
   const drawPane = useCallback((canvas: HTMLCanvasElement | null, pane: 'raw' | 'rec') => {
@@ -184,6 +216,18 @@ export default function ReconciliationProofTab({ detail }: { detail: BenchmarkRu
     const lifeMap = pane === 'raw' ? model.rawLife : model.recLife
     const toPx = (x: number, z: number): [number, number] => [x * tf.scale + tf.ox, CH - (z * tf.scale + tf.oz)]
     ctx.fillStyle = '#0b0e14'; ctx.fillRect(0, 0, CW, CH)
+    // ghost wireframe of store fixtures (shelves) — faint, behind everything
+    if (showWire && wireObjects.length) {
+      ctx.lineWidth = 1
+      ctx.strokeStyle = 'rgba(125,145,175,0.22)'
+      ctx.fillStyle = 'rgba(125,145,175,0.05)'
+      for (const o of wireObjects) {
+        const [cx, cy] = toPx(o.x, o.z)
+        const hw = (o.w * tf.scale) / 2, hd = (o.d * tf.scale) / 2
+        ctx.save(); ctx.translate(cx, cy); if (o.rot) ctx.rotate(-o.rot)
+        ctx.beginPath(); ctx.rect(-hw, -hd, hw * 2, hd * 2); ctx.fill(); ctx.stroke(); ctx.restore()
+      }
+    }
     if (graph?.entrance?.vertices?.length) {
       ctx.beginPath(); graph.entrance.vertices.forEach((v, i) => { const [px, py] = toPx(v.x, v.z); if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py) })
       ctx.closePath(); ctx.strokeStyle = 'rgba(34,211,238,0.5)'; ctx.lineWidth = 1.2; ctx.stroke()
@@ -219,7 +263,7 @@ export default function ReconciliationProofTab({ detail }: { detail: BenchmarkRu
         for (const seg of tsegs) drawSeg(seg, 0.92)
       }
     }
-  }, [tf, model, graph, tNow, winLenS, colorMode, selected, viewMode, span])
+  }, [tf, model, graph, tNow, winLenS, colorMode, selected, viewMode, span, showWire, wireObjects])
 
   // ---- counts + KPIs over the active span ----
   const spanStats = useMemo(() => {
@@ -358,6 +402,11 @@ export default function ReconciliationProofTab({ detail }: { detail: BenchmarkRu
         <button type="button" onClick={() => setColorMode((m) => (m === 'id' ? 'time' : 'id'))} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm border border-gray-600 text-gray-300 hover:text-white">
           <Palette className="w-4 h-4" /> {colorMode === 'id' ? 'by identity' : 'by time'}
         </button>
+        {wire.length > 0 && (
+          <button type="button" onClick={() => setShowWire((v) => !v)} title="Faint store-fixture wireframe behind the tracks (venue floorplan)" className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm border ${showWire ? 'border-slate-500 text-slate-200 bg-slate-800/40' : 'border-gray-600 text-gray-400'} hover:text-white`}>
+            <LayoutGrid className="w-4 h-4" /> Floorplan
+          </button>
+        )}
         {(selected || storyOn) && (
           <button type="button" onClick={() => { setSelected(null); setStoryOn(false) }} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm border border-gray-600 text-gray-400 hover:text-white">
             <Eraser className="w-4 h-4" /> Clear focus
