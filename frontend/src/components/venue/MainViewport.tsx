@@ -3063,11 +3063,16 @@ export default function MainViewport({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [venue?.id])
 
+  // True while the Store Awakening cinematic is running — used to keep the floor
+  // empty (closed store) by suppressing live track meshes in the sync loop.
+  const cinematicActiveRef = useRef(false)
+
   // ── Story Mode "Store Awakening" cinematic on the REAL scene ──
   // Fully additive: driven by window events from StoryMode. It snapshots the
-  // live camera/lights, plays a dark→reveal sequence (a real sweeping light +
-  // light pool over the actual DWG floorplan, a camera fly-in, and pulses on the
-  // REAL LiDAR placements), then restores everything. No fake geometry, no fake
+  // live camera/lights, plays a "closed store" dark→reveal sequence (a roaming
+  // search-light over the actual DWG floorplan dimmed to a grey wireframe, a
+  // camera fly-in, pulses on the REAL LiDAR placements, and the floor kept empty
+  // by hiding live tracks), then restores everything. No fake geometry, no fake
   // tracks. Removable cleanly; if the scene isn't ready it reports done at once.
   useEffect(() => {
     let rafId: number | null = null
@@ -3077,6 +3082,46 @@ export default function MainViewport({
       camPos: THREE.Vector3; target: THREE.Vector3; controlsEnabled: boolean
       ambient: number; directional: number; dirPos: THREE.Vector3; bg: THREE.Color | null
     } | null = null
+    // Original colors of the DWG fixtures/wireframes so we can restore them after
+    // the "closed store" grey-out.
+    let dimmed: { mat: THREE.Material; color?: number; emissive?: number; ei?: number }[] = []
+
+    // Dim every DWG fixture + wireframe line to a dark grey ("powered off"), and
+    // remember the originals. Shared materials are only touched once.
+    const dimObjects = () => {
+      const GREY = 0x23262e
+      const seen = new Set<THREE.Material>()
+      const touch = (mat: THREE.Material | THREE.Material[] | undefined) => {
+        if (!mat) return
+        const list = Array.isArray(mat) ? mat : [mat]
+        list.forEach((m) => {
+          if (seen.has(m)) return
+          seen.add(m)
+          const am = m as THREE.Material & { color?: THREE.Color; emissive?: THREE.Color; emissiveIntensity?: number }
+          dimmed.push({ mat: m, color: am.color?.getHex(), emissive: am.emissive?.getHex(), ei: am.emissiveIntensity })
+          am.color?.setHex(GREY)
+          if (am.emissive) { am.emissive.setHex(0x000000); am.emissiveIntensity = 0 }
+        })
+      }
+      objectMeshesRef.current.forEach((obj3d) => {
+        obj3d.traverse((c) => {
+          const anyC = c as THREE.Mesh & { isLine?: boolean; isLineSegments?: boolean; material?: THREE.Material | THREE.Material[] }
+          if (anyC.isMesh || anyC.isLine || anyC.isLineSegments) touch(anyC.material)
+        })
+        const wl = obj3d.userData.wireLineRef as THREE.Line | undefined
+        if (wl) touch(wl.material as THREE.Material)
+      })
+    }
+
+    const restoreObjects = () => {
+      dimmed.forEach(({ mat, color, emissive, ei }) => {
+        const am = mat as THREE.Material & { color?: THREE.Color; emissive?: THREE.Color; emissiveIntensity?: number }
+        if (color !== undefined) am.color?.setHex(color)
+        if (emissive !== undefined) am.emissive?.setHex(emissive)
+        if (ei !== undefined && am.emissiveIntensity !== undefined) am.emissiveIntensity = ei
+      })
+      dimmed = []
+    }
 
     const disposeAdded = () => {
       const scene = sceneRef.current
@@ -3101,8 +3146,13 @@ export default function MainViewport({
 
     const end = (jumpToOverview: boolean, overview?: { pos: THREE.Vector3; target: THREE.Vector3 }) => {
       if (rafId !== null) { cancelAnimationFrame(rafId); rafId = null }
+      cinematicActiveRef.current = false
+      // Let the track sync resume governing visibility (closed → open store).
+      trackMeshesRef.current.forEach((group) => { group.visible = true })
+      trailLinesRef.current.forEach((trail) => { trail.visible = true })
       disposeAdded()
       resetLidars()
+      restoreObjects()
       const camera = cameraRef.current, controls = controlsRef.current, scene = sceneRef.current
       const amb = ambientLightRef.current, dir = directionalLightRef.current
       if (snapshot) {
@@ -3139,6 +3189,11 @@ export default function MainViewport({
         bg: scene.background instanceof THREE.Color ? scene.background.clone() : null,
       }
       controls.enabled = false
+      // Closed store: keep the floor empty and grey-out the fixtures.
+      cinematicActiveRef.current = true
+      trackMeshesRef.current.forEach((g) => { g.visible = false })
+      trailLinesRef.current.forEach((t) => { t.visible = false })
+      dimObjects()
 
       const b = dwgSceneBounds
       const venueW = venue?.width ?? 20, venueD = venue?.depth ?? 20
@@ -3151,23 +3206,22 @@ export default function MainViewport({
       const startPos = new THREE.Vector3(centerX - viewSize * 0.3, viewSize * 0.07, centerZ + viewSize * 0.6)
       const overview = { pos: overviewPos, target: overviewTarget }
 
-      // Real LiDAR placements (world positions), sorted left→right for the wake.
+      // Real LiDAR placements (world positions). They wake as the roaming light
+      // passes near them (proximity), with a sweep-end safety net for any missed.
       const lidars: { x: number; z: number; group: THREE.Group }[] = []
       lidarMeshesRef.current.forEach((group) => lidars.push({ x: group.position.x, z: group.position.z, group }))
-      let minX = Infinity, maxX = -Infinity
-      lidars.forEach((l) => { if (l.x < minX) minX = l.x; if (l.x > maxX) maxX = l.x })
-      const spanX = (maxX - minX) || 1
       const pulsed = new Set<number>()
 
-      // A real sweeping spotlight (shades the solid fixtures/floor)...
+      // A real spotlight that roams to random spots on the floor (a search light
+      // inspecting the closed store), not a linear run-off.
       const spot = new THREE.SpotLight(0xbcd6ff, 0)
-      spot.angle = Math.PI / 6
-      spot.penumbra = 0.7
+      spot.angle = Math.PI / 7
+      spot.penumbra = 0.8
       spot.decay = 0
       spot.distance = viewSize * 5
-      spot.position.set(centerX - viewSize, viewSize * 1.1, centerZ)
+      spot.position.set(centerX, viewSize * 1.1, centerZ)
       const spotTarget = new THREE.Object3D()
-      spotTarget.position.set(centerX - viewSize, 0, centerZ)
+      spotTarget.position.set(centerX, 0, centerZ)
       scene.add(spotTarget)
       spot.target = spotTarget
       scene.add(spot)
@@ -3176,13 +3230,35 @@ export default function MainViewport({
       // ...and an additive "light pool" disc that is guaranteed to read on the
       // floor regardless of materials.
       const pool = new THREE.Mesh(
-        new THREE.CircleGeometry(viewSize * 0.16, 48),
+        new THREE.CircleGeometry(viewSize * 0.14, 48),
         new THREE.MeshBasicMaterial({ color: 0x9fc0ff, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide }),
       )
       pool.rotation.x = -Math.PI / 2
-      pool.position.set(centerX - viewSize, 0.04, centerZ)
+      pool.position.set(centerX, 0.04, centerZ)
       scene.add(pool)
       added.push(pool)
+
+      // Random roam waypoints across the floor (biased toward LiDAR positions so
+      // the light "discovers" sensors). Eased hops with a brief dwell at each.
+      const rx = floorW * 0.34, rz = floorD * 0.34
+      const rnd = (r: number) => (Math.random() * 2 - 1) * r
+      const waypoints: { x: number; z: number }[] = [{ x: centerX + rnd(rx), z: centerZ + rnd(rz) }]
+      const lidarPts = lidars.map((l) => ({ x: l.x, z: l.z })).sort(() => Math.random() - 0.5)
+      for (let i = 0; i < 5; i++) {
+        const lp = lidarPts[i % Math.max(1, lidarPts.length)]
+        if (lp && Math.random() > 0.35) waypoints.push({ x: lp.x + rnd(viewSize * 0.06), z: lp.z + rnd(viewSize * 0.06) })
+        else waypoints.push({ x: centerX + rnd(rx), z: centerZ + rnd(rz) })
+      }
+      const lightAt = (p: number) => {
+        // p in [0,1] across the roam; piecewise eased hops between waypoints.
+        const n = waypoints.length - 1
+        const fseg = Math.min(n - 0.0001, p * n)
+        const k = Math.floor(fseg)
+        const lt = fseg - k
+        const e = lt < 0.5 ? 4 * lt * lt * lt : 1 - Math.pow(-2 * lt + 2, 3) / 2 // easeInOutCubic → dwell at ends
+        const a = waypoints[k], bpt = waypoints[Math.min(n, k + 1)]
+        return { x: a.x + (bpt.x - a.x) * e, z: a.z + (bpt.z - a.z) * e }
+      }
 
       // Dark theatre to begin.
       scene.background = new THREE.Color(0x01030a)
@@ -3191,11 +3267,11 @@ export default function MainViewport({
       camera.position.copy(startPos)
       controls.target.copy(overviewTarget)
 
-      const SWEEP_START = 1100, SWEEP_END = 5400
+      const SWEEP_START = 1100, SWEEP_END = 6200
       const FLY_START = 1300, FLY_END = 8200
-      const SENSOR_START = 2400, SENSOR_SPAN = 3800
       const SETTLE_START = 8200, SETTLE_END = 10500
       const TOTAL = 10800
+      const WAKE_RADIUS = viewSize * 0.16
 
       const t0 = performance.now()
       const ease = (x: number) => 1 - Math.pow(1 - x, 3)
@@ -3203,23 +3279,23 @@ export default function MainViewport({
 
       const tick = () => {
         const t = performance.now() - t0
-        const sweepX = centerX - viewSize + 2 * viewSize * c01((t - SWEEP_START) / (SWEEP_END - SWEEP_START))
+        const roam = lightAt(c01((t - SWEEP_START) / (SWEEP_END - SWEEP_START)))
 
-        // Lights + sweeping spot/pool
+        // Lights + roaming search-light spot/pool
         if (t < SWEEP_START) {
           amb.intensity = 0.05; dir.intensity = 0.04
           ;(pool.material as THREE.MeshBasicMaterial).opacity = 0
           spot.intensity = 0
         } else if (t < SWEEP_END) {
           const s = c01((t - SWEEP_START) / (SWEEP_END - SWEEP_START))
-          amb.intensity = 0.06 + 0.18 * s
-          dir.intensity = 0.1 + 0.7 * s
-          dir.position.set(sweepX, viewSize * 0.7, centerZ)
-          spot.intensity = 3.2
-          spot.position.set(sweepX, viewSize * 1.1, centerZ)
-          spotTarget.position.set(sweepX, 0, centerZ)
-          pool.position.x = sweepX
-          ;(pool.material as THREE.MeshBasicMaterial).opacity = 0.22 * Math.sin(Math.PI * s) + 0.06
+          amb.intensity = 0.06 + 0.16 * s
+          dir.intensity = 0.1 + 0.6 * s
+          dir.position.set(roam.x, viewSize * 0.7, roam.z)
+          spot.intensity = 3.4
+          spot.position.set(roam.x, viewSize * 1.1, roam.z)
+          spotTarget.position.set(roam.x, 0, roam.z)
+          pool.position.set(roam.x, 0.04, roam.z)
+          ;(pool.material as THREE.MeshBasicMaterial).opacity = 0.24 * Math.sin(Math.PI * c01(s * 1.1)) + 0.08
         } else if (t < SETTLE_START) {
           amb.intensity = 0.26; dir.intensity = 0.82
           spot.intensity = Math.max(0, spot.intensity - 0.12)
@@ -3242,24 +3318,26 @@ export default function MainViewport({
           camera.position.lerpVectors(startPos, overviewPos, f)
         }
 
-        // Real LiDARs wake one by one as the sweep passes their X.
+        // Real LiDARs wake as the roaming light passes near them (proximity);
+        // anything missed is force-woken at the end of the sweep.
+        const forceWake = t >= SWEEP_END
         lidars.forEach((l, i) => {
-          const wake = SENSOR_START + ((l.x - minX) / spanX) * SENSOR_SPAN
-          if (t >= wake && !pulsed.has(i)) {
-            pulsed.add(i)
-            const dome = l.group.children[2] as THREE.Mesh | undefined
-            const dm = dome?.material as THREE.MeshStandardMaterial | undefined
-            if (dm) { dm.emissive.setHex(0x5aa0ff); dm.emissiveIntensity = 1.1 }
-            const ring = new THREE.Mesh(
-              new THREE.RingGeometry(0.22, 0.34, 44),
-              new THREE.MeshBasicMaterial({ color: 0x8fb6ff, transparent: true, opacity: 0.9, side: THREE.DoubleSide, depthWrite: false }),
-            )
-            ring.rotation.x = -Math.PI / 2
-            ring.position.set(l.x, 0.05, l.z)
-            ring.userData.bornAt = performance.now()
-            scene.add(ring)
-            rings.push(ring)
-          }
+          if (pulsed.has(i)) return
+          const near = t >= SWEEP_START && Math.hypot(l.x - roam.x, l.z - roam.z) < WAKE_RADIUS
+          if (!near && !forceWake) return
+          pulsed.add(i)
+          const dome = l.group.children[2] as THREE.Mesh | undefined
+          const dm = dome?.material as THREE.MeshStandardMaterial | undefined
+          if (dm) { dm.emissive.setHex(0x5aa0ff); dm.emissiveIntensity = 1.1 }
+          const ring = new THREE.Mesh(
+            new THREE.RingGeometry(0.22, 0.34, 44),
+            new THREE.MeshBasicMaterial({ color: 0x8fb6ff, transparent: true, opacity: 0.9, side: THREE.DoubleSide, depthWrite: false }),
+          )
+          ring.rotation.x = -Math.PI / 2
+          ring.position.set(l.x, 0.05, l.z)
+          ring.userData.bornAt = performance.now()
+          scene.add(ring)
+          rings.push(ring)
         })
 
         // Animate + reap LiDAR rings; ease dome glow back down.
@@ -4291,6 +4369,13 @@ export default function MainViewport({
       if (!sceneRef.current) return
       const scene = sceneRef.current
       const vtlActive = vtlModeRef.current
+
+      // Store Awakening cinematic = closed store: keep the floor empty.
+      if (cinematicActiveRef.current) {
+        trackMeshesRef.current.forEach((group) => { group.visible = false })
+        trailLinesRef.current.forEach((trail) => { trail.visible = false })
+        return
+      }
 
       if (forcePurgeMeshesRef.current) {
         forcePurgeMeshesRef.current = false
