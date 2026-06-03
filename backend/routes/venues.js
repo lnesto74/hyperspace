@@ -1,6 +1,14 @@
 import { Router } from 'express';
+import multer from 'multer';
+import XLSX from 'xlsx';
 import { v4 as uuidv4 } from 'uuid';
 import { venueQueries, objectQueries, placementQueries } from '../database/schema.js';
+import {
+  getVenueEconomics,
+  saveVenueEconomics,
+  computeImpactBand,
+  deriveEconomicsFromRows,
+} from '../services/profit-radar/VenueEconomicsConfig.js';
 import { normalizePerceptionTransform } from '../services/PerceptionTransform.js';
 import { normalizeReconcilerConfig, DEFAULT_CONFIG as RECONCILER_DEFAULT } from '../services/TrajectoryReconciler.js';
 import {
@@ -927,6 +935,79 @@ export default function venuesRoutes(db, { mqttService, io, visualTrackService }
     } catch (error) {
       console.error('Delete KPI threshold error:', error);
       res.status(500).json({ error: 'Failed to delete KPI threshold' });
+    }
+  });
+
+  // ============================================
+  // Venue Economics (grounds Profit Radar € impact)
+  // ============================================
+
+  const economicsUpload = multer({
+    storage: multer.memoryStorage(),
+    limits: { fileSize: 20 * 1024 * 1024 },
+  });
+
+  function economicsResponse(econ) {
+    return {
+      economics: econ,
+      preview: {
+        high: computeImpactBand('high', econ),
+        medium: computeImpactBand('medium', econ),
+        low: computeImpactBand('low', econ),
+      },
+    };
+  }
+
+  // Get current economics config (+ a preview of resulting € bands)
+  router.get('/:venueId/economics', (req, res) => {
+    try {
+      const econ = getVenueEconomics(db, req.params.venueId);
+      res.json(economicsResponse(econ));
+    } catch (err) {
+      console.error('[Venues] GET economics error:', err.message);
+      res.status(500).json({ error: 'Failed to read economics config' });
+    }
+  });
+
+  // Save economics config
+  router.put('/:venueId/economics', (req, res) => {
+    try {
+      const { venueId } = req.params;
+      const exists = db.prepare('SELECT id FROM venues WHERE id = ?').get(venueId);
+      if (!exists) return res.status(404).json({ error: 'Venue not found' });
+      const saved = saveVenueEconomics(db, venueId, req.body || {});
+      res.json(economicsResponse(saved));
+    } catch (err) {
+      console.error('[Venues] PUT economics error:', err.message);
+      res.status(500).json({ error: 'Failed to save economics config' });
+    }
+  });
+
+  // Parse an uploaded sales file (XLS/XLSX/CSV) and derive economics inputs.
+  // Does NOT persist — returns suggested values for the user to review + save.
+  router.post('/:venueId/economics/import', economicsUpload.single('file'), (req, res) => {
+    try {
+      if (!req.file || !req.file.buffer) {
+        return res.status(400).json({ error: 'No file uploaded' });
+      }
+      const workbook = XLSX.read(req.file.buffer, { type: 'buffer', cellDates: true });
+      const firstSheet = workbook.SheetNames[0];
+      if (!firstSheet) return res.status(400).json({ error: 'Spreadsheet has no sheets' });
+      const rows = XLSX.utils.sheet_to_json(workbook.Sheets[firstSheet], { defval: null });
+      const result = deriveEconomicsFromRows(rows);
+      if (!result.ok) return res.status(422).json({ error: result.error });
+      res.json({
+        fileName: req.file.originalname,
+        sheet: firstSheet,
+        derived: result.derived,
+        meta: result.meta,
+        preview: {
+          high: computeImpactBand('high', getVenueEconomics(db, req.params.venueId)),
+        },
+      });
+    } catch (err) {
+      console.error('[Venues] economics import error:', err.message);
+      res.status(500).json({ error: 'Failed to parse sales file' });
     }
   });
 

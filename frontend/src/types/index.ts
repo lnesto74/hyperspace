@@ -237,7 +237,7 @@ export interface ProfitRadarInsight {
   summary: string;
   why: string;
   suggestedFix: string;
-  impact: { min: number; max: number; currency: string };
+  impact: { min: number; max: number; currency: string; basis?: 'economics' | 'default' };
   dataBasis: Record<string, any>;
   timestamp: number;
 }

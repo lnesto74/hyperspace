@@ -5,6 +5,7 @@
  */
 
 import { AXIS_NAMES } from './intentScorer.js';
+import { computeImpactBand } from './VenueEconomicsConfig.js';
 
 const INSIGHT_TYPES = {
   LOST_SALES: 'lost_sales',
@@ -34,12 +35,6 @@ let insightCounter = 0;
 
 function makeId() { return `insight-${Date.now()}-${++insightCounter}`; }
 
-function euroImpact(severity) {
-  if (severity === SEVERITY.HIGH) return { min: 500, max: 2000, currency: '€' };
-  if (severity === SEVERITY.MEDIUM) return { min: 100, max: 500, currency: '€' };
-  return { min: 20, max: 100, currency: '€' };
-}
-
 export class ProfitRadarEngine {
   constructor(zoneAggregator, behaviorClusterer) {
     this.zoneAggregator = zoneAggregator;
@@ -47,6 +42,16 @@ export class ProfitRadarEngine {
     this.insights = [];
     this.interval = null;
     this.history = []; // Rolling window of last 10 insight batches for dedup
+    // Provider returns the active venue's economics config (or null).
+    this.economicsProvider = null;
+  }
+
+  /** Inject a function that returns the current venue's economics config. */
+  setEconomicsProvider(fn) { this.economicsProvider = fn; }
+
+  _economics() {
+    try { return this.economicsProvider ? this.economicsProvider() : null; }
+    catch { return null; }
   }
 
   start() {
@@ -65,6 +70,7 @@ export class ProfitRadarEngine {
   tick() {
     const zones = this.zoneAggregator.getZoneFieldArray();
     const clusters = this.behaviorClusterer.getClusters();
+    const economics = this._economics();
     const newInsights = [];
 
     // --- 1. Lost Sales: zones with high hesitation + low commitment ---
@@ -81,7 +87,7 @@ export class ProfitRadarEngine {
           summary: `${z.trackCount} shoppers show hesitation (${(z.means.hesitation*100).toFixed(0)}%) with low commitment (${(z.means.commitment*100).toFixed(0)}%). They may leave without buying.`,
           why: `Shoppers in this zone exhibit stop-start movement, repeated backtracking, and low directional consistency — classic hesitation signals. Combined with weak commitment scores, this suggests product confusion or price resistance.`,
           suggestedFix: `Add clearer shelf labeling or promotional signage. Consider a staff greeter for this zone during peak hours.`,
-          impact: euroImpact(sev),
+          impact: computeImpactBand(sev, economics),
           dataBasis: { zone: z.roiName, trackCount: z.trackCount, hesitation: +z.means.hesitation.toFixed(2), commitment: +z.means.commitment.toFixed(2) },
           timestamp: Date.now(),
         });
@@ -102,7 +108,7 @@ export class ProfitRadarEngine {
           summary: `Low product engagement (${(z.means.engagement_with_POI*100).toFixed(0)}%) and high avoidance (${(z.means.avoidance*100).toFixed(0)}%). Shoppers pass through without stopping.`,
           why: `Track movement shows high speed and straight paths through this zone with minimal stops — shoppers are treating it as a corridor rather than a shopping destination.`,
           suggestedFix: `Reposition high-demand products to create a "speed bump" effect. Consider cross-merchandising with adjacent popular zones.`,
-          impact: euroImpact(sev),
+          impact: computeImpactBand(sev, economics),
           dataBasis: { zone: z.roiName, trackCount: z.trackCount, engagement: +z.means.engagement_with_POI.toFixed(2), avoidance: +z.means.avoidance.toFixed(2) },
           timestamp: Date.now(),
         });
@@ -123,7 +129,7 @@ export class ProfitRadarEngine {
           summary: `${z.trackCount} people waiting (queue score ${(z.means.waiting_queueing*100).toFixed(0)}%). Consider reallocating staff.`,
           why: `Multiple tracks show near-zero movement and micro-stepping patterns consistent with queue waiting behavior. This zone's wait score significantly exceeds the store average.`,
           suggestedFix: `Open an additional checkout lane or deploy a roaming cashier. For non-checkout zones, add self-service kiosk.`,
-          impact: euroImpact(sev),
+          impact: computeImpactBand(sev, economics),
           dataBasis: { zone: z.roiName, trackCount: z.trackCount, queueScore: +z.means.waiting_queueing.toFixed(2) },
           timestamp: Date.now(),
         });
@@ -146,7 +152,7 @@ export class ProfitRadarEngine {
           summary: `A cluster of ${c.memberCount} shoppers${c.anchorZoneName ? ` in ${c.anchorZoneName}` : ''} shows ${c.dominant} behavior. Journey type: ${traj.journeyType || 'unknown'}.`,
           why: `${c.memberCount} shoppers on similar journeys all exhibit ${AXIS_LABELS[c.dominant] || c.dominant} patterns — backtracking, revisiting areas, and erratic speed changes. This suggests a layout or signage problem${c.anchorZoneName ? ` around ${c.anchorZoneName}` : ''}.`,
           suggestedFix: `Review signage and aisle layout in this area. Consider adding directional floor markers or repositioning endcap displays.`,
-          impact: euroImpact(sev),
+          impact: computeImpactBand(sev, economics),
           dataBasis: { clusterSize: c.memberCount, dominant: c.dominant, score: +score.toFixed(2), journeyType: traj.journeyType, zones: traj.zonesVisited },
           timestamp: Date.now(),
         });

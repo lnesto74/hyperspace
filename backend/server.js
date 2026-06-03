@@ -52,6 +52,7 @@ import { EpisodeDetectorOrchestrator } from './services/replay-insight/index.js'
 import authRoutes from './routes/auth.js';
 import companiesRoutes from './routes/companies.js';
 import { IntentScorer, ZoneAggregator, BehaviorClusterer, ProfitRadarEngine } from './services/profit-radar/index.js';
+import { getVenueEconomics } from './services/profit-radar/VenueEconomicsConfig.js';
 import launchpadRoutes from './routes/launchpad.js';
 import createAiClassifyRoutes from './routes/aiClassify.js';
 import createAiSmartFilterRoutes from './routes/aiSmartFilter.js';
@@ -162,6 +163,8 @@ const intentScorer = new IntentScorer(trackAggregator);
 const zoneAggregator = new ZoneAggregator(intentScorer);
 const behaviorClusterer = new BehaviorClusterer(intentScorer);
 const profitRadarEngine = new ProfitRadarEngine(zoneAggregator, behaviorClusterer);
+// Ground € impact estimates in the active venue's economics (avg basket, margin, volume).
+profitRadarEngine.setEconomicsProvider(() => getVenueEconomics(db, trackAggregator.venueId));
 console.log(`⏱️ STARTUP: profit radar init +${Date.now() - _startupT0}ms`);
 
 // Pre-load zone links and open lanes for all venues at startup

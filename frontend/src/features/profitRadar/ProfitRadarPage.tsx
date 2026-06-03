@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo, type ReactNode } from 'react'
-import { AlertTriangle, TrendingDown, Users, LayoutDashboard, ChevronDown, ChevronUp, Eye, Lightbulb, Wrench, BarChart3, Package, Activity } from 'lucide-react'
+import { AlertTriangle, TrendingDown, Users, LayoutDashboard, ChevronDown, ChevronUp, Eye, Lightbulb, Wrench, BarChart3, Package, Activity, Euro } from 'lucide-react'
 import { getCategoryVisual } from '../businessReporting/operationsConsole/categoryVisuals'
 import { useProfitRadar } from '../../context/ProfitRadarContext'
 import { useVenue } from '../../context/VenueContext'
@@ -9,6 +9,7 @@ import IntentRadar from './components/IntentRadar'
 import BenchmarkBars, { type BenchmarkBarItem } from './components/BenchmarkBars'
 import ZoneEventReplay from './components/ZoneEventReplay'
 import ImpactSimulator from './components/ImpactSimulator'
+import VenueEconomicsModal from './components/VenueEconomicsModal'
 import { INTENT_AXIS_NAMES, type IntentAxes, type IntentAxisName } from '../../types'
 import type { ProfitRadarInsight, InsightType } from '../../types'
 
@@ -279,6 +280,7 @@ interface ProfitRadarPageProps {
 export default function ProfitRadarPage({ onClose }: ProfitRadarPageProps) {
   const { insights, zoneField, clusters, selectedInsight, setSelectedInsight } = useProfitRadar()
   const { venue } = useVenue()
+  const [showEconomics, setShowEconomics] = useState(false)
 
   // Zone performance (dead/top zones) — same source as the Business Reporting
   // "Zone Performance Map", so the underperforming-zone detail can reuse it.
@@ -415,8 +417,19 @@ export default function ProfitRadarPage({ onClose }: ProfitRadarPageProps) {
           <span>{zoneField.length} zones</span>
           <span>•</span>
           <span>{clusters.length} clusters</span>
+          <div className="w-px h-5 bg-gray-700" />
+          <button
+            onClick={() => setShowEconomics(true)}
+            className="flex items-center gap-1.5 px-2 py-1 rounded-md text-gray-300 hover:text-white hover:bg-gray-700/60"
+            title="Venue economics — ground € impact in your real numbers"
+          >
+            <Euro className="w-3.5 h-3.5" /> Economics
+          </button>
         </div>
       </div>
+      {venue?.id && (
+        <VenueEconomicsModal venueId={venue.id} open={showEconomics} onClose={() => setShowEconomics(false)} />
+      )}
 
       {/* Body */}
       <div className="flex-1 flex overflow-hidden">
@@ -480,6 +493,13 @@ export default function ProfitRadarPage({ onClose }: ProfitRadarPageProps) {
                   <div className="mt-1.5 h-1 w-full rounded-full bg-gray-700 overflow-hidden sm:w-40 sm:ml-auto">
                     <div className="h-full rounded-full bg-emerald-500" style={{ width: `${selectedInsight.confidence * 100}%` }} />
                   </div>
+                  <button
+                    onClick={() => setShowEconomics(true)}
+                    className="mt-1.5 text-[10px] text-gray-500 hover:text-emerald-300 sm:ml-auto block"
+                    title="How the € is calculated"
+                  >
+                    {selectedInsight.impact.basis === 'economics' ? 'Based on your store economics ·' : 'Reference estimate ·'} set economics →
+                  </button>
                 </div>
               </div>
 
