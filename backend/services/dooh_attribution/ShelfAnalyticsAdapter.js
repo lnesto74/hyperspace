@@ -94,20 +94,24 @@ export class ShelfAnalyticsAdapter {
     }
     const targetShelfIds = this._shelfTargetCache.get(cacheKey);
 
-    // Engagement ROI ids linked to shelf targets (from campaign target_json or DB lookup)
+    // Engagement ROI ids linked to target shelves (from campaign target_json or DB lookup).
+    // Works for shelf targets (ids ARE shelves) AND category/brand/sku targets
+    // (resolved to shelves via targetShelfIds) so the re-ID and journey-reachability
+    // matchers are armed for every target type, not just type:"shelf".
     this._targetEngagementRoiIds = new Set();
-    if (type === 'shelf' && ids?.length) {
-      if (Array.isArray(targetJson.engagementRoiIds) && targetJson.engagementRoiIds.length) {
-        targetJson.engagementRoiIds.forEach(id => this._targetEngagementRoiIds.add(id));
-      } else {
-        const rows = this.db.prepare(`
-          SELECT id, metadata_json FROM regions_of_interest WHERE venue_id = ?
-        `).all(venueId);
-        for (const row of rows) {
-          const meta = parseJson(row.metadata_json) || {};
-          if (meta.template === 'shelf-engagement' && meta.shelfId && ids.includes(meta.shelfId)) {
-            this._targetEngagementRoiIds.add(row.id);
-          }
+    const targetShelfIdSet = new Set(
+      type === 'shelf' && ids?.length ? ids : (targetShelfIds || []),
+    );
+    if (Array.isArray(targetJson.engagementRoiIds) && targetJson.engagementRoiIds.length) {
+      targetJson.engagementRoiIds.forEach(id => this._targetEngagementRoiIds.add(id));
+    } else if (targetShelfIdSet.size) {
+      const rows = this.db.prepare(`
+        SELECT id, metadata_json FROM regions_of_interest WHERE venue_id = ?
+      `).all(venueId);
+      for (const row of rows) {
+        const meta = parseJson(row.metadata_json) || {};
+        if (meta.template === 'shelf-engagement' && meta.shelfId && targetShelfIdSet.has(meta.shelfId)) {
+          this._targetEngagementRoiIds.add(row.id);
         }
       }
     }
@@ -432,6 +436,16 @@ export class ShelfAnalyticsAdapter {
 
     const anchor = resolveExposureAnchor(this.db, venueId, trackKey, startTs, exposureContext, profile);
     if (!anchor) return null;
+
+    // Guard against the screen-proxy degenerate case: when track_positions is
+    // unavailable (and no stored end position), the only anchor is the screen
+    // itself — shared by every exposure on that screen. Journey reachability
+    // then collapses to "did anyone visit a target shelf within the window",
+    // which over-attributes toward ~100%. Require a real per-track anchor
+    // unless the profile explicitly opts in.
+    if (anchor.source === 'screen_proxy' && !profile.allowScreenProxyAnchor) {
+      return null;
+    }
 
     const roiList = [...this._targetEngagementRoiIds];
     const placeholders = roiList.map(() => '?').join(',');

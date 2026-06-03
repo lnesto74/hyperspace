@@ -32,6 +32,32 @@
 /** @type {MatchingProfile[]} */
 export const MATCHING_PROFILES = [
   {
+    id: 'temporal_alias_15m',
+    label: 'Temporal alias (trajectory-free, recommended)',
+    rationale: 'Timestamp-overlap window + reconciler suffix-alias on zone_visits, no spatial/trajectory dependency. Robust to prefix:suffix track fragmentation; safe when track_positions is unavailable.',
+    actionWindowMinutes: 15,
+    minVisitDurationMs: 1000,
+    windowMode: 'overlap',
+    trackKeyMode: 'suffix_alias',
+    positionFallbackM: 2.5,
+    positionMinDwellMs: 1000,
+    usePositionFallback: false,
+    useZoneVisits: true,
+  },
+  {
+    id: 'temporal_alias_25m',
+    label: 'Temporal alias 25m (trajectory-free, wider)',
+    rationale: 'Same as temporal_alias_15m with a 25m window for cross-aisle journeys; still no trajectory dependency.',
+    actionWindowMinutes: 25,
+    minVisitDurationMs: 1000,
+    windowMode: 'overlap',
+    trackKeyMode: 'suffix_alias',
+    positionFallbackM: 2.5,
+    positionMinDwellMs: 1000,
+    usePositionFallback: false,
+    useZoneVisits: true,
+  },
+  {
     id: 'strict_legacy',
     label: 'Strict legacy (pre-fix baseline)',
     rationale: 'Start-in-window only, exact track_key, 3s dwell, 15m window — fails under fragmentation.',
@@ -211,9 +237,9 @@ export function getMatchingProfile(id) {
   return profile;
 }
 
-/** Production default until simulation picks a winner (env override: PEBLE_MATCHING_PROFILE). */
+/** Production default (env override: PEBLE_MATCHING_PROFILE). Trajectory-free + fragmentation-tolerant. */
 export function getDefaultMatchingProfileId() {
-  return process.env.PEBLE_MATCHING_PROFILE || 'strict_legacy';
+  return process.env.PEBLE_MATCHING_PROFILE || 'temporal_alias_15m';
 }
 
 export function getDefaultMatchingProfile() {
