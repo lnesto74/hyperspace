@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Play, Pause, SkipBack, SkipForward, MapPin, TrendingUp, TrendingDown, Clock, Film } from 'lucide-react'
+import { API_BASE } from '../../config/api'
 import type { NarrationPack } from '../../context/ReplayInsightContext'
 import type { VenueObject } from '../../types'
 import {
@@ -26,10 +27,15 @@ const SEVERITY_DOT: Record<string, string> = {
   low: '#60a5fa',
 }
 
-const STEP_MS = 4800
+const STEP_MS = 6500
 
 function startMs(e: NarrationPack): number {
   return e.replay_window?.start ?? 0
+}
+
+interface ClipTrack {
+  key: string
+  pts: { timestamp: number; x: number; z: number }[]
 }
 
 export default function DayRecapReel({ episodes, objects, venueSize, autoPlay = false, onWatchOnFloor }: DayRecapReelProps) {
@@ -43,9 +49,29 @@ export default function DayRecapReel({ episodes, objects, venueSize, autoPlay = 
   const [progress, setProgress] = useState(0)
   const pulseRef = useRef(0)
   const [, forceTick] = useState(0)
+  // Full replay clips (track_positions) fetched lazily per episode.
+  const [clipById, setClipById] = useState<Record<string, NarrationPack>>({})
 
   useEffect(() => { setIndex(0) }, [ordered.length])
   useEffect(() => { setPlaying(autoPlay) }, [autoPlay])
+
+  // Lazily fetch the full replay clip for the current (and next) episode.
+  const currentId = ordered[index]?.episode_id
+  const nextId = ordered.length > 1 ? ordered[(index + 1) % ordered.length]?.episode_id : undefined
+  useEffect(() => {
+    const ids = [currentId, nextId].filter((id): id is string => !!id && !clipById[id])
+    if (ids.length === 0) return
+    let cancelled = false
+    ids.forEach(id => {
+      fetch(`${API_BASE}/api/replay-insights/${id}`)
+        .then(r => (r.ok ? r.json() : null))
+        .then((d: NarrationPack | null) => {
+          if (!cancelled && d) setClipById(prev => (prev[id] ? prev : { ...prev, [id]: d }))
+        })
+        .catch(() => {})
+    })
+    return () => { cancelled = true }
+  }, [currentId, nextId, clipById])
 
   // Auto-advance with a progress bar.
   useEffect(() => {
@@ -104,6 +130,28 @@ export default function DayRecapReel({ episodes, objects, venueSize, autoPlay = 
   const accent = ep.color || '#60a5fa'
   const focusIds = new Set((ep.highlight_zones || []).map(z => z.id))
 
+  // The recorded clip for this episode — only the tracks involved in the event.
+  const clip = clipById[ep.episode_id]
+  const clipTracks: ClipTrack[] = []
+  let winStart = Infinity
+  let winEnd = -Infinity
+  const tp = clip?.track_positions
+  if (tp) {
+    for (const [key, raw] of Object.entries(tp)) {
+      const pts = (raw || []).filter(p => Number.isFinite(p.x) && Number.isFinite(p.z))
+      if (pts.length < 2) continue
+      clipTracks.push({ key, pts })
+      for (const p of pts) {
+        if (p.timestamp < winStart) winStart = p.timestamp
+        if (p.timestamp > winEnd) winEnd = p.timestamp
+      }
+    }
+  }
+  const hasClip = clipTracks.length > 0 && winEnd > winStart
+  // While playing, the clip scrubs with the step progress; paused shows full paths.
+  const playT = playing ? progress : 1
+  const cutTs = winStart + (winEnd - winStart) * playT
+
   return (
     <div className="rounded-xl border border-gray-700 bg-gray-900/60 overflow-hidden">
       {/* Stage */}
@@ -126,15 +174,44 @@ export default function DayRecapReel({ episodes, objects, venueSize, autoPlay = 
               <path
                 key={`hl-${z.id}`}
                 d={polygonPath(z.vertices.map(normalizeFloorVertex))}
-                fill={`${accent}${Math.round((0.18 + pulseWave * 0.22) * 255).toString(16).padStart(2, '0')}`}
+                fill={`${accent}${Math.round((0.10 + pulseWave * 0.14) * 255).toString(16).padStart(2, '0')}`}
                 stroke={accent}
-                strokeWidth={0.08 + pulseWave * 0.05}
+                strokeWidth={0.07 + pulseWave * 0.05}
                 strokeLinejoin="round"
               />
             ))}
+
+            {/* Recorded replay — only the tracks involved in this event */}
+            {hasClip && clipTracks.map(t => {
+              const shown = t.pts.filter(p => p.timestamp <= cutTs)
+              if (shown.length < 1) return null
+              const head = shown[shown.length - 1]
+              return (
+                <g key={`trk-${t.key}`}>
+                  {shown.length >= 2 && (
+                    <polyline
+                      points={shown.map(p => `${p.x},${p.z}`).join(' ')}
+                      fill="none"
+                      stroke={accent}
+                      strokeOpacity={0.55}
+                      strokeWidth={0.14}
+                      strokeLinejoin="round"
+                      strokeLinecap="round"
+                    />
+                  )}
+                  <circle cx={head.x} cy={head.z} r={0.45 + pulseWave * 0.1} fill={accent} />
+                  <circle cx={head.x} cy={head.z} r={0.45 + pulseWave * 0.1} fill="none" stroke="#ffffff" strokeWidth={0.06} strokeOpacity={0.8} />
+                </g>
+              )
+            })}
           </svg>
           <div className="absolute top-3 left-3 flex items-center gap-1.5 text-[11px] text-gray-300 bg-black/40 backdrop-blur px-2 py-1 rounded-full">
             <Clock className="w-3 h-3" /> {ep.time_label}
+          </div>
+          <div className="absolute top-3 right-3 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide bg-black/40 backdrop-blur px-2 py-1 rounded-full"
+            style={{ color: hasClip ? accent : '#6b7280' }}>
+            <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: hasClip ? accent : '#6b7280' }} />
+            {hasClip ? `Replay · ${clipTracks.length} ${clipTracks.length === 1 ? 'track' : 'tracks'}` : (clip ? 'No clip' : 'Loading…')}
           </div>
         </div>
 
