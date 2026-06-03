@@ -30,6 +30,12 @@ interface ZonePerformanceViewportProps {
   zoneUtilThresholdPct?: number
   kpiNote?: string
   initialTab?: ZoneTab
+  /**
+   * When provided, the map ignores the dead/top toggle and pulses exactly these
+   * zones in red — used by Profit Radar to focus on a single insight's zone(s).
+   */
+  focusZones?: ZonePerformanceItem[]
+  focusLabel?: string
 }
 
 export default function ZonePerformanceViewport({
@@ -39,7 +45,10 @@ export default function ZonePerformanceViewport({
   zoneUtilThresholdPct = 5,
   kpiNote,
   initialTab,
+  focusZones,
+  focusLabel,
 }: ZonePerformanceViewportProps) {
+  const focusMode = Array.isArray(focusZones) && focusZones.length > 0
   const { objects: contextObjects, venue: contextVenue } = useVenue()
   const pulseRef = useRef(0)
   const rafRef = useRef<number | null>(null)
@@ -109,7 +118,7 @@ export default function ZonePerformanceViewport({
     [allRois],
   )
 
-  const activeZones = tab === 'underperforming' ? deadZones : topZones
+  const activeZones = focusMode ? focusZones! : tab === 'underperforming' ? deadZones : topZones
   const highlightIds = useMemo(() => new Set(activeZones.map(z => z.id)), [activeZones])
   const hasMapData = mapObjects.length > 0 || mapRegions.length > 0
   const mapHeight = typeof window !== 'undefined' && window.innerWidth >= 1280 ? 440 : 360
@@ -143,7 +152,7 @@ export default function ZonePerformanceViewport({
     )
   }
 
-  const isUnder = tab === 'underperforming'
+  const isUnder = focusMode ? true : tab === 'underperforming'
 
   return (
     <div className="bg-gray-900/80 rounded-lg border border-gray-700/80 overflow-hidden">
@@ -153,37 +162,45 @@ export default function ZonePerformanceViewport({
           <div>
             <span className="text-xs font-medium text-gray-300">Zone Performance Map</span>
             <p className="text-[10px] text-gray-500">
-              Shelf engagement ROIs · &lt;{zoneUtilThresholdPct}% util = underperforming
-              {kpiNote ? ` · ${kpiNote}` : ''}
+              {focusMode ? (
+                `${focusLabel || 'Focused zone'} · highlighted in red on the floor plan`
+              ) : (
+                <>
+                  Shelf engagement ROIs · &lt;{zoneUtilThresholdPct}% util = underperforming
+                  {kpiNote ? ` · ${kpiNote}` : ''}
+                </>
+              )}
             </p>
           </div>
         </div>
-        <div className="flex bg-gray-800 rounded-md p-0.5 border border-gray-700">
-          <button
-            type="button"
-            onClick={() => setTab('underperforming')}
-            disabled={deadZones.length === 0}
-            className={`px-2.5 py-1 text-[11px] rounded transition-colors ${
-              isUnder
-                ? 'bg-red-500/20 text-red-300 border border-red-500/40'
-                : 'text-gray-500 hover:text-gray-300 disabled:opacity-40'
-            }`}
-          >
-            Underperforming ({deadZones.length})
-          </button>
-          <button
-            type="button"
-            onClick={() => setTab('topPerformers')}
-            disabled={topZones.length === 0}
-            className={`px-2.5 py-1 text-[11px] rounded transition-colors ${
-              !isUnder
-                ? 'bg-green-500/20 text-green-300 border border-green-500/40'
-                : 'text-gray-500 hover:text-gray-300 disabled:opacity-40'
-            }`}
-          >
-            Top performers ({topZones.length})
-          </button>
-        </div>
+        {!focusMode && (
+          <div className="flex bg-gray-800 rounded-md p-0.5 border border-gray-700">
+            <button
+              type="button"
+              onClick={() => setTab('underperforming')}
+              disabled={deadZones.length === 0}
+              className={`px-2.5 py-1 text-[11px] rounded transition-colors ${
+                isUnder
+                  ? 'bg-red-500/20 text-red-300 border border-red-500/40'
+                  : 'text-gray-500 hover:text-gray-300 disabled:opacity-40'
+              }`}
+            >
+              Underperforming ({deadZones.length})
+            </button>
+            <button
+              type="button"
+              onClick={() => setTab('topPerformers')}
+              disabled={topZones.length === 0}
+              className={`px-2.5 py-1 text-[11px] rounded transition-colors ${
+                !isUnder
+                  ? 'bg-green-500/20 text-green-300 border border-green-500/40'
+                  : 'text-gray-500 hover:text-gray-300 disabled:opacity-40'
+              }`}
+            >
+              Top performers ({topZones.length})
+            </button>
+          </div>
+        )}
         <span className="text-[10px] text-gray-500 w-full sm:w-auto text-right">
           {mapObjects.length} fixtures · {mapRegions.length} zones
         </span>
@@ -220,7 +237,7 @@ export default function ZonePerformanceViewport({
                     : 'border-green-500 bg-green-500/30 animate-pulse'
                 }`}
               />
-              {isUnder ? 'Dead zone' : 'Top zone'} (pulsing)
+              {focusMode ? 'Selected zone' : isUnder ? 'Dead zone' : 'Top zone'} (pulsing)
             </span>
             <span className="flex items-center gap-1">
               <span className="w-2.5 h-2.5 border border-gray-600 bg-gray-700/30 rounded-sm" />
@@ -231,7 +248,9 @@ export default function ZonePerformanceViewport({
 
         <div className="xl:w-72 shrink-0 border-t xl:border-t-0 xl:border-l border-gray-700/60 p-2">
           <h4 className="text-[11px] font-medium text-gray-400 mb-2 px-1">
-            {isUnder ? `Dead Zones (${deadZones.length})` : `Best Zones (${topZones.length})`}
+            {focusMode
+              ? `${focusLabel || 'Zone'} (${focusZones!.length})`
+              : isUnder ? `Dead Zones (${deadZones.length})` : `Best Zones (${topZones.length})`}
           </h4>
           <div className="space-y-1 max-h-[280px] xl:max-h-[460px] overflow-y-auto">
             {activeZones.map(zone => {
@@ -266,7 +285,9 @@ export default function ZonePerformanceViewport({
                         </span>
                       )}
                     </div>
-                    <span className="text-[10px] text-gray-500 shrink-0 tabular-nums">{zone.utilization}%</span>
+                    {(!focusMode || zone.utilization > 0) && (
+                      <span className="text-[10px] text-gray-500 shrink-0 tabular-nums">{zone.utilization}%</span>
+                    )}
                   </div>
                 </div>
               )

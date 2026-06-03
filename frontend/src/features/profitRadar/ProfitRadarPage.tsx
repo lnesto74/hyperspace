@@ -363,6 +363,42 @@ export default function ProfitRadarPage({ onClose }: ProfitRadarPageProps) {
     return dz?.id ?? null
   }, [selectedInsight, zoneField, deadZones])
 
+  // Index every known zone by name. Reporting dead/top zones carry utilization +
+  // category; zoneField fills in ids for any other zone, so we can resolve the
+  // selected insight's zone(s) for the focused floor-plan map.
+  const zoneIndexByName = useMemo(() => {
+    const map = new Map<string, ZonePerformanceItem>()
+    for (const z of [...topZones, ...deadZones]) {
+      if (z?.name) map.set(z.name, z)
+    }
+    for (const z of zoneField) {
+      if (z.roiName && !map.has(z.roiName)) {
+        map.set(z.roiName, { id: z.roiId, name: z.roiName, utilization: 0 })
+      }
+    }
+    return map
+  }, [topZones, deadZones, zoneField])
+
+  // The zone(s) tied to the selected insight — a single zone for most types, or
+  // the cluster's visited zones for layout friction.
+  const focusZones = useMemo(() => {
+    if (!selectedInsight) return [] as ZonePerformanceItem[]
+    const db = selectedInsight.dataBasis || {}
+    const names: string[] = []
+    if (typeof db.zone === 'string') names.push(db.zone)
+    if (Array.isArray(db.zones)) for (const n of db.zones) if (typeof n === 'string') names.push(n)
+    if (names.length === 0) names.push(selectedInsight.title.replace(/\s+underperforming$/i, '').trim())
+    const seen = new Set<string>()
+    const out: ZonePerformanceItem[] = []
+    for (const n of names) {
+      if (!n || seen.has(n)) continue
+      seen.add(n)
+      const item = zoneIndexByName.get(n)
+      if (item) out.push(item)
+    }
+    return out
+  }, [selectedInsight, zoneIndexByName])
+
   return (
     <div className="fixed inset-0 z-50 bg-gray-900 flex flex-col">
       {/* Header */}
@@ -428,9 +464,10 @@ export default function ProfitRadarPage({ onClose }: ProfitRadarPageProps) {
                 </div>
               )}
 
-              {/* Zone Performance Map — reused from Business Reporting; shows the
-                  underperforming zones pulsing red on the real floor plan. */}
-              {selectedInsight.type === 'underperforming_zone' && venue?.id && (
+              {/* Zone Performance Map — reused from Business Reporting. Pulses the
+                  selected insight's own zone(s) in red on the real floor plan,
+                  for every insight type (lost sales, queue, friction, etc.). */}
+              {venue?.id && (
                 <div className="mt-6">
                   <ZonePerformanceViewport
                     venueId={venue.id}
@@ -438,6 +475,8 @@ export default function ProfitRadarPage({ onClose }: ProfitRadarPageProps) {
                     topZones={topZones}
                     zoneUtilThresholdPct={zoneThresholdPct}
                     initialTab="underperforming"
+                    focusZones={focusZones.length > 0 ? focusZones : undefined}
+                    focusLabel={TYPE_CONFIG[selectedInsight.type]?.label}
                   />
                 </div>
               )}
