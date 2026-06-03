@@ -9,7 +9,7 @@ import { getOfflinePreset, listOfflinePresets } from '../config/offlineReconcile
 import { runBatchReconciliationToFile } from './offline/BatchTrajectoryReconciler.js';
 import { runReconcileV2ToFile } from './offline/reconcileV2/reconcileV2.js';
 import { normalizePerceptionTransform, IDENTITY_TRANSFORM } from './PerceptionTransform.js';
-import { venueQueries, roiQueries } from '../database/schema.js';
+import { venueQueries } from '../database/schema.js';
 import { readStoriesFile, storiesPathForArtifact } from './offline/storyBuilder.js';
 
 function parseDwgTransform(json) {
@@ -585,7 +585,11 @@ export class OfflineReconcileService {
     if (g.entrance === undefined) {
       let entrance = null;
       try {
-        const rois = this.db && g.venueId ? roiQueries.getByVenueId(this.db, g.venueId) : [];
+        // Query all ROIs for the venue (incl. DWG-attached ones, which getByVenueId skips).
+        const rows = this.db && g.venueId
+          ? this.db.prepare('SELECT name, vertices FROM regions_of_interest WHERE venue_id = ?').all(g.venueId)
+          : [];
+        const rois = rows.map(r => { try { return { name: r.name, vertices: JSON.parse(r.vertices) }; } catch { return { name: r.name, vertices: [] }; } });
         const roi = rois.find(r => /1121|traffic/i.test(r.name || '') && !/suggested/i.test(r.name || '') && Array.isArray(r.vertices) && r.vertices.length >= 3)
           || rois.find(r => /entrance|gate|door/i.test(r.name || '') && Array.isArray(r.vertices) && r.vertices.length >= 3);
         if (roi) {
