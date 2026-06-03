@@ -294,6 +294,13 @@ export default function CheckoutManagerModal({ isOpen, onClose }: CheckoutManage
     return () => clearInterval(interval)
   }, [isOpen, fetchStatus])
 
+  // Story Mode (queue beat) can request the Command Map tab up front.
+  useEffect(() => {
+    const handler = () => setActiveTab('commandMap')
+    window.addEventListener('hyperspace:checkout-select-command-map', handler)
+    return () => window.removeEventListener('hyperspace:checkout-select-command-map', handler)
+  }, [])
+
   // Fetch KPI snapshot (auto-refresh every 15 sec)
   const fetchKpiSnapshot = useCallback(async () => {
     if (!venue?.id) return

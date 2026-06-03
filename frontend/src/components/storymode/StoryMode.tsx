@@ -374,6 +374,15 @@ export default function StoryMode({ viewMode, setViewMode, neuralEnabled, setNeu
     ;[500, 1100, 2000].forEach((ms) => window.setTimeout(fire, ms))
   }, [])
 
+  // Open the Checkout command center on its Command Map tab (not Lane Overview).
+  // Retried because the modal opens async after the intent fires.
+  const openCheckout = useCallback(() => {
+    emitIntent('open_checkout')
+    const fire = () => window.dispatchEvent(new CustomEvent('hyperspace:checkout-select-command-map'))
+    fire()
+    ;[300, 800, 1500].forEach((ms) => window.setTimeout(fire, ms))
+  }, [])
+
   const actions: StageActions = {
     setViewMode,
     setNeuralEnabled,
@@ -381,7 +390,7 @@ export default function StoryMode({ viewMode, setViewMode, neuralEnabled, setNeu
     closeHeatmap: closeHeatmapModal,
     openNarrator: () => { void openNarrator() },
     closeNarrator,
-    openCheckout: () => emitIntent('open_checkout'),
+    openCheckout,
     openStoryGrid,
     selectFirstCampaign,
   }
