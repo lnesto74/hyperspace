@@ -254,8 +254,17 @@ export default function DoohEffectivenessPage({ onClose }: DoohEffectivenessPage
   const campaignsRef = useRef<Campaign[]>([])
   useEffect(() => { campaignsRef.current = campaigns }, [campaigns])
   useEffect(() => {
-    const handler = () => {
-      setSelectedCampaign((prev) => prev ?? (campaignsRef.current[0] ?? null))
+    const handler = (e: Event) => {
+      const wanted = (e as CustomEvent<{ name?: string }>).detail?.name?.toLowerCase().trim()
+      setSelectedCampaign((prev) => {
+        if (prev) return prev
+        const list = campaignsRef.current
+        if (wanted) {
+          const match = list.find((c) => c.name.toLowerCase().includes(wanted))
+          if (match) return match
+        }
+        return list[0] ?? null
+      })
     }
     window.addEventListener('hyperspace:select-first-campaign', handler)
     return () => window.removeEventListener('hyperspace:select-first-campaign', handler)

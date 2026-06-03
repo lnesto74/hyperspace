@@ -77,7 +77,7 @@ interface StageActions {
   closeNarrator: () => void
   openCheckout: () => void
   openStoryGrid: () => void
-  selectFirstCampaign: () => void
+  selectFirstCampaign: (name?: string) => void
 }
 
 interface Beat {
@@ -181,7 +181,7 @@ const BEATS: Beat[] = [
     hyperspace: 'PEBLE\u2122 proves exposure is high but shelf lift is flat \u2014 the creative, not the traffic, is the problem.',
     outcome: '+38% seen \u00b7 +4% shelf lift',
     component: 'PEBLE\u2122 Attribution',
-    stage: (a) => { a.setViewMode('doohEffectiveness'); a.selectFirstCampaign() },
+    stage: (a) => { a.setViewMode('doohEffectiveness'); a.selectFirstCampaign('Frutta E V') },
     dim: 'none',
   },
   {
@@ -368,8 +368,8 @@ export default function StoryMode({ viewMode, setViewMode, neuralEnabled, setNeu
 
   // Tell the running app to preselect the first PEBLE campaign (no empty state
   // mid-demo). Fired with retries because the campaign list loads async.
-  const selectFirstCampaign = useCallback(() => {
-    const fire = () => window.dispatchEvent(new CustomEvent('hyperspace:select-first-campaign'))
+  const selectFirstCampaign = useCallback((name?: string) => {
+    const fire = () => window.dispatchEvent(new CustomEvent('hyperspace:select-first-campaign', { detail: { name } }))
     fire()
     ;[500, 1100, 2000].forEach((ms) => window.setTimeout(fire, ms))
   }, [])
