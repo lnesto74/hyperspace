@@ -8,12 +8,14 @@
  * overlays a narrative card + timeline rail. On exit it restores the exact
  * view/Neural/replay state it found, so nothing is left changed.
  *
- * Spatial beats (queue, journey leak, live) animate a curated Replay Insight
- * episode straight onto the 3D map using the same public track actions Insight
- * Mode uses (setReplayMode / setReplayTracks) — so the queue actually builds on
- * screen at the queue beat, deterministically. It never opens the Replay panel
- * or mutates the ReplayInsight context. If the episode/data isn't available it
- * silently falls back to the live view, so it can never break the demo.
+ * Spatial beats are driven by the REAL MQTT replay pipeline: on enter Story Mode
+ * starts playback of the most recent capture recording through the same
+ * /api/replay endpoints the Replay panel uses, so the floor, Neural Dashboard,
+ * queues and Checkout command center all show genuine recorded data (not a
+ * client-side stand-in). Per beat it can /api/replay/seek to a position in the
+ * recording (seekPct) so the relevant moment lands when its beat does. On exit it
+ * stops the replay and restores the view/Neural state it found. If no recording
+ * exists it silently runs the views without playback, so it can never break.
  *
  * It talks to the app only through already-public context actions
  * (useHeatmap, useNarrator2, useTrackingActions) and two callbacks passed in as
@@ -23,10 +25,16 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { Film, X, ChevronLeft, ChevronRight, Play, Pause } from 'lucide-react'
 import { useHeatmap } from '../../context/HeatmapContext'
 import { useNarrator2 } from '../../context/Narrator2Context'
+import { useReplayInsight } from '../../context/ReplayInsightContext'
 import { useTrackingActions } from '../../context/TrackingContext'
 import { useVenue } from '../../context/VenueContext'
 import { API_BASE } from '../../config/api'
-import type { TrackWithTrail } from '../../types'
+
+// Fire an existing app intent on the global narrator2 event bus (opens
+// Checkout command center, etc.) without coupling to those components.
+function emitIntent(intent: string) {
+  window.dispatchEvent(new CustomEvent('narrator2-intent', { detail: { intent } }))
+}
 
 // Mirrors App.tsx ViewMode union (kept local to avoid a circular import).
 type StoryViewMode =
@@ -67,6 +75,9 @@ interface StageActions {
   closeHeatmap: () => void
   openNarrator: () => void
   closeNarrator: () => void
+  openCheckout: () => void
+  openStoryGrid: () => void
+  selectFirstCampaign: () => void
 }
 
 interface Beat {
@@ -80,58 +91,19 @@ interface Beat {
   outcome: string
   component: string
   stage: (a: StageActions) => void
-  /** Preferred Replay Insight episode types to animate on the map for this beat. */
-  episodeTypes?: string[]
-}
-
-// ─── Replay playback helpers (pure, module scope) ───
-
-type EpisodePos = { timestamp: number; x: number; z: number; vx?: number; vz?: number }
-
-function interpPos(positions: EpisodePos[], time: number): EpisodePos | null {
-  if (positions.length === 0) return null
-  if (time <= positions[0].timestamp) return positions[0]
-  const last = positions[positions.length - 1]
-  if (time >= last.timestamp) return last
-  let lo = 0
-  let hi = positions.length - 1
-  while (lo < hi - 1) {
-    const mid = (lo + hi) >> 1
-    if (positions[mid].timestamp <= time) lo = mid
-    else hi = mid
-  }
-  const p1 = positions[lo]
-  const p2 = positions[hi]
-  const span = p2.timestamp - p1.timestamp || 1
-  const t = (time - p1.timestamp) / span
-  return { timestamp: time, x: p1.x + (p2.x - p1.x) * t, z: p1.z + (p2.z - p1.z) * t, vx: p1.vx, vz: p1.vz }
-}
-
-function buildReplayTracks(
-  data: Map<string, EpisodePos[]>,
-  minTime: number,
-  duration: number,
-  prog: number,
-): Map<string, TrackWithTrail> {
-  const currentTime = minTime + prog * duration
-  const map = new Map<string, TrackWithTrail>()
-  for (const [key, positions] of data) {
-    const pos = interpPos(positions, currentTime)
-    if (!pos) continue
-    const trail = positions.filter((p) => p.timestamp <= currentTime).map((p) => ({ x: p.x, y: 0, z: p.z }))
-    map.set(key, {
-      id: key,
-      trackKey: key,
-      deviceId: 'story-replay',
-      timestamp: pos.timestamp,
-      position: { x: pos.x, y: 0, z: pos.z },
-      venuePosition: { x: pos.x, y: 0, z: pos.z },
-      velocity: { x: pos.vx || 0, y: 0, z: pos.vz || 0 },
-      objectType: 'person',
-      trail,
-    })
-  }
-  return map
+  /**
+   * Optional position (0–1) to seek the recording to when this beat opens, so the
+   * relevant moment (e.g. the queue building) lands on its beat. Omit to let the
+   * recording keep playing continuously from wherever it is.
+   */
+  seekPct?: number
+  /**
+   * Spotlight focus for this beat — dims the rest of the UI so attention lands on
+   * the component this beat is about. 'tight' for centered modals/dashboards,
+   * 'soft' for the live floor, 'none' for full-page views that need to stay
+   * fully readable. Defaults to 'soft'. The intro beat uses its own curtain.
+   */
+  dim?: 'soft' | 'tight' | 'none'
 }
 
 const RUNG_COLOR: Record<Rung, string> = {
@@ -169,7 +141,7 @@ const BEATS: Beat[] = [
     outcome: '100% anonymous \u00b7 live at 20 FPS',
     component: 'Real-Time Tracking \u00b7 Neural Dashboard',
     stage: (a) => { a.setViewMode('main'); a.setNeuralEnabled(true) },
-    episodeTypes: ['STORE_VISIT_TIME_SHIFT', 'HIGH_PASSBY_LOW_BROWSE', 'BOTTLENECK_CORRIDOR'],
+    seekPct: 0.08,
   },
   {
     id: 'heatmap',
@@ -182,6 +154,7 @@ const BEATS: Beat[] = [
     outcome: '12% of avg traffic \u00b7 Aisle 7',
     component: 'Heatmap Viewer',
     stage: (a) => { a.setViewMode('main'); a.openHeatmap() },
+    dim: 'tight',
   },
   {
     id: 'queue',
@@ -190,11 +163,12 @@ const BEATS: Beat[] = [
     rung: 'ALERT',
     title: 'A queue forms \u2014 before a single complaint',
     floor: 'A line builds at checkout. By the time staff react, customers are already frustrated.',
-    hyperspace: 'Hyperspace alerts as wait time crosses the threshold and says: open Lane 4 \u2014 proactively.',
+    hyperspace: 'Queue buildup trips an alert; the Checkout command center opens with live lanes, waits and the fix: open Lane 4 \u2014 proactively.',
     outcome: 'wait 6m20s \u2192 1m50s',
-    component: 'Checkout \u00b7 Neural Dashboard',
-    stage: (a) => { a.setViewMode('main'); a.setNeuralEnabled(true) },
-    episodeTypes: ['QUEUE_BUILDUP_SPIKE', 'LANE_UNDERSUPPLY', 'ABANDONMENT_WAVE'],
+    component: 'Checkout Command Center',
+    stage: (a) => { a.setViewMode('main'); a.setNeuralEnabled(true); a.openCheckout() },
+    seekPct: 0.45,
+    dim: 'tight',
   },
   {
     id: 'peble',
@@ -206,7 +180,8 @@ const BEATS: Beat[] = [
     hyperspace: 'PEBLE\u2122 proves exposure is high but shelf lift is flat \u2014 the creative, not the traffic, is the problem.',
     outcome: '+38% seen \u00b7 +4% shelf lift',
     component: 'PEBLE\u2122 Attribution',
-    stage: (a) => { a.setViewMode('doohEffectiveness') },
+    stage: (a) => { a.setViewMode('doohEffectiveness'); a.selectFirstCampaign() },
+    dim: 'none',
   },
   {
     id: 'radar',
@@ -219,6 +194,7 @@ const BEATS: Beat[] = [
     outcome: '\u20ac2,400 / wk recoverable',
     component: 'Profit Radar',
     stage: (a) => { a.setViewMode('profitRadar') },
+    dim: 'none',
   },
   {
     id: 'funnel',
@@ -231,7 +207,7 @@ const BEATS: Beat[] = [
     outcome: '-11% at ENGAGE \u2192 BASKET',
     component: 'Conversion Funnel \u00b7 Intent Field',
     stage: (a) => { a.setViewMode('main'); a.setNeuralEnabled(true) },
-    episodeTypes: ['BROWSE_NO_CONVERT_PROXY', 'BOTTLENECK_CORRIDOR', 'HIGH_PASSBY_LOW_BROWSE'],
+    seekPct: 0.72,
   },
   {
     id: 'narrator',
@@ -244,6 +220,7 @@ const BEATS: Beat[] = [
     outcome: '5 actions, ranked by \u20ac',
     component: 'AI Narrator',
     stage: (a) => { a.setViewMode('main'); a.openNarrator() },
+    dim: 'tight',
   },
   {
     id: 'review',
@@ -251,21 +228,86 @@ const BEATS: Beat[] = [
     period: 'Evening',
     rung: 'REMEMBER',
     title: 'The store replays its own day',
-    floor: 'The team goes home. The day\u2019s lessons usually leave with them.',
-    hyperspace: 'Replay Insights and the Executive Summary roll the day into tomorrow\u2019s plan \u2014 automatically.',
-    outcome: '1 day \u2192 1 plan',
-    component: 'Replay Insights \u00b7 Business Reporting',
-    stage: (a) => { a.setViewMode('businessReporting') },
+    floor: 'The team goes home. Today\u2019s wins and misses usually walk out the door with them.',
+    hyperspace: 'Every key moment was saved as a replayable episode \u2014 queue spikes, promo wins, friction points. The store hands back a ready-to-watch day, and tomorrow\u2019s plan writes itself.',
+    outcome: 'a full day \u2192 a ranked plan',
+    component: 'Replay Insights \u00b7 Story Grid',
+    stage: (a) => { a.setViewMode('main'); a.openStoryGrid() },
+    dim: 'tight',
   },
 ]
 
 const AUTO_ADVANCE_MS = 14000
-const REPLAY_SPEED = 6 // episode-time / wall-time
+const REPLAY_SPEED = 3 // recording playback speed (recorded-time / wall-time)
+
+/**
+ * Theatrical opening: the real store map sits in darkness while a blue stage
+ * light sweeps across it and the sensors blink online. Purely decorative,
+ * pointer-events none, sits above the map but below the Story Mode controls.
+ */
+function IntroCurtain() {
+  const corners = [
+    { top: '12%', left: '8%' },
+    { top: '12%', right: '8%' },
+    { bottom: '18%', left: '8%' },
+    { bottom: '18%', right: '8%' },
+  ]
+  return (
+    <div className="fixed inset-0 z-[60] pointer-events-none overflow-hidden" style={{ animation: 'storyFade 700ms ease-out' }}>
+      <style>{`
+        @keyframes storySweep { 0% { transform: translateX(-70%) skewX(-12deg) } 100% { transform: translateX(170%) skewX(-12deg) } }
+        @keyframes storyFade { from { opacity: 0 } to { opacity: 1 } }
+        @keyframes storyGlow { 0%,100% { opacity: .25; transform: scale(1) } 50% { opacity: 1; transform: scale(1.25) } }
+      `}</style>
+      <div className="absolute inset-0" style={{ background: 'radial-gradient(120% 120% at 50% 38%, rgba(4,9,20,0.55) 0%, rgba(2,5,12,0.92) 72%)' }} />
+      <div
+        className="absolute inset-y-0"
+        style={{
+          left: 0,
+          width: '34%',
+          filter: 'blur(10px)',
+          mixBlendMode: 'screen',
+          background: 'linear-gradient(90deg, transparent 0%, rgba(96,150,255,0.14) 38%, rgba(190,215,255,0.36) 50%, rgba(96,150,255,0.14) 62%, transparent 100%)',
+          animation: 'storySweep 5.5s ease-in-out infinite alternate',
+        }}
+      />
+      {corners.map((pos, i) => (
+        <div key={i} className="absolute flex items-center gap-1.5" style={pos as React.CSSProperties}>
+          <span className="w-2 h-2 rounded-full bg-sky-400" style={{ animation: `storyGlow 2.4s ease-in-out ${i * 0.4}s infinite`, boxShadow: '0 0 10px rgba(56,189,248,0.8)' }} />
+          <span className="text-[9px] tracking-widest text-sky-300/70 font-medium">LiDAR ONLINE</span>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+/**
+ * Spotlight — a soft cinematic vignette that dims the edges of the screen so the
+ * active component reads as the focus of the beat. Purely decorative,
+ * pointer-events none, and sits below the Story Mode controls/card. 'tight'
+ * concentrates the bright area on centered modals/dashboards; 'soft' is a gentle
+ * dim for the live floor. Never rendered for 'none' beats (full-page views).
+ */
+function Spotlight({ mode }: { mode: 'soft' | 'tight' }) {
+  const bg =
+    mode === 'tight'
+      ? 'radial-gradient(70% 70% at 50% 46%, rgba(0,0,0,0) 0%, rgba(0,0,0,0) 42%, rgba(2,5,12,0.62) 100%)'
+      : 'radial-gradient(120% 110% at 50% 42%, rgba(0,0,0,0) 0%, rgba(0,0,0,0) 60%, rgba(2,5,12,0.34) 100%)'
+  return (
+    <div
+      className="fixed inset-0 z-[64] pointer-events-none"
+      style={{ background: bg, animation: 'storyDim 600ms ease-out', transition: 'background 400ms ease-out' }}
+    >
+      <style>{`@keyframes storyDim { from { opacity: 0 } to { opacity: 1 } }`}</style>
+    </div>
+  )
+}
 
 export default function StoryMode({ viewMode, setViewMode, neuralEnabled, setNeuralEnabled }: StoryModeProps) {
   const { openHeatmapModal, closeHeatmapModal } = useHeatmap()
   const { openNarrator, closeNarrator } = useNarrator2()
-  const { setReplayMode, setReplayTracks } = useTrackingActions()
+  const { openStoryGrid, closeStoryGrid } = useReplayInsight()
+  const { setReplayMode, setMqttReplayActive, setStoryReplayActive, startDemoSession } = useTrackingActions()
   const { venue } = useVenue()
 
   const [active, setActive] = useState(false)
@@ -276,83 +318,90 @@ export default function StoryMode({ viewMode, setViewMode, neuralEnabled, setNeu
   // Snapshot of the app state when entering, restored verbatim on exit.
   const snapshotRef = useRef<{ viewMode: StoryViewMode; neuralEnabled: boolean } | null>(null)
 
-  // Replay player refs.
-  const rafRef = useRef<number | null>(null)
-  const progressRef = useRef(0)
-  const lastTsRef = useRef(0)
-  const playerRef = useRef<{ data: Map<string, EpisodePos[]>; minTime: number; duration: number } | null>(null)
+  // MQTT recording playback state.
+  const recordingFileRef = useRef<string | null>(null)
+  const recordingActiveRef = useRef(false)
   const tokenRef = useRef(0)
-  const episodeListRef = useRef<Array<{ episode_id: string; episode_type: string }> | null>(null)
   const venueRef = useRef<string | undefined>(undefined)
   const applyBeatRef = useRef<(i: number) => void>(() => {})
 
   useEffect(() => { venueRef.current = venue?.id }, [venue?.id])
 
-  const animate = useCallback((ts: number) => {
-    const player = playerRef.current
-    if (!player) return
-    if (lastTsRef.current === 0) lastTsRef.current = ts
-    const delta = ts - lastTsRef.current
-    lastTsRef.current = ts
-    progressRef.current += (delta * REPLAY_SPEED) / player.duration
-    if (progressRef.current >= 1) progressRef.current = 0 // loop so it reads as continuous live motion
-    setReplayTracks(buildReplayTracks(player.data, player.minTime, player.duration, progressRef.current))
-    rafRef.current = requestAnimationFrame(animate)
-  }, [setReplayTracks])
-
-  const stopReplay = useCallback(() => {
-    if (rafRef.current) { cancelAnimationFrame(rafRef.current); rafRef.current = null }
-    playerRef.current = null
-    lastTsRef.current = 0
-    progressRef.current = 0
-    setReplayMode(false)
+  // Stop the MQTT replay and return the venue to live.
+  const stopRecording = useCallback(async () => {
+    recordingActiveRef.current = false
+    recordingFileRef.current = null
     setReplayLive(false)
-  }, [setReplayMode])
-
-  const startPlayback = useCallback((positions: Record<string, EpisodePos[]>) => {
-    const data = new Map<string, EpisodePos[]>()
-    let min = Infinity
-    let max = -Infinity
-    for (const [k, arr] of Object.entries(positions)) {
-      if (!arr || arr.length === 0) continue
-      data.set(k, arr)
-      for (const p of arr) { if (p.timestamp < min) min = p.timestamp; if (p.timestamp > max) max = p.timestamp }
-    }
-    if (data.size === 0 || max <= min) { stopReplay(); return }
-    playerRef.current = { data, minTime: min, duration: max - min }
-    progressRef.current = 0
-    lastTsRef.current = 0
-    setReplayMode(true)
-    setReplayLive(true)
-    if (rafRef.current) cancelAnimationFrame(rafRef.current)
-    rafRef.current = requestAnimationFrame(animate)
-  }, [animate, setReplayMode, stopReplay])
-
-  const playPreferredEpisode = useCallback(async (types: string[], token: number) => {
-    const vid = venueRef.current
-    if (!vid) { stopReplay(); return }
     try {
-      if (!episodeListRef.current) {
-        const res = await fetch(`${API_BASE}/api/replay-insights?venueId=${encodeURIComponent(vid)}`)
-        const j = res.ok ? await res.json() : null
-        episodeListRef.current = (j?.episodes || []).map((e: { episode_id: string; episode_type: string }) => ({
-          episode_id: e.episode_id,
-          episode_type: e.episode_type,
-        }))
-      }
-      if (token !== tokenRef.current) return // beat changed while loading
-      const match = (episodeListRef.current || []).find((e) => types.includes(e.episode_type))
-      if (!match) { stopReplay(); return }
-      const dRes = await fetch(`${API_BASE}/api/replay-insights/${match.episode_id}`)
-      const detail = dRes.ok ? await dRes.json() : null
+      await fetch(`${API_BASE}/api/replay/stop`, { method: 'POST' })
+    } catch { /* best effort */ }
+    setMqttReplayActive(false)
+    setReplayMode(false)
+  }, [setMqttReplayActive, setReplayMode])
+
+  // Start playback of the most recent capture recording through the real
+  // pipeline so the floor, Neural Dashboard and checkout all show genuine data.
+  const startRecording = useCallback(async (token: number) => {
+    const vid = venueRef.current
+    try {
+      const res = await fetch(`${API_BASE}/api/replay/files`)
+      const data = res.ok ? await res.json() : null
+      const list: Array<{ name: string }> = (data?.files || []).filter(
+        (f: { name: string }) => !String(f.name).endsWith('.reconciled.jsonl'),
+      )
+      const file = list[0]?.name
+      if (!file || token !== tokenRef.current) { setReplayLive(false); return }
+
+      recordingFileRef.current = file
+      setReplayMode(false)
+      setStoryReplayActive(false)
+      setMqttReplayActive(true)
+
+      await fetch(`${API_BASE}/api/replay/stories/stop`, { method: 'POST' }).catch(() => {})
+      await fetch(`${API_BASE}/api/replay/stop`, { method: 'POST' }).catch(() => {})
+      if (vid) await startDemoSession(vid)
       if (token !== tokenRef.current) return
-      const positions = detail?.track_positions as Record<string, EpisodePos[]> | undefined
-      if (!positions || Object.keys(positions).length === 0) { stopReplay(); return }
-      startPlayback(positions)
+
+      const startRes = await fetch(`${API_BASE}/api/replay/start`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ file, speed: REPLAY_SPEED, rewriteTimestamps: true, startProgress: 0 }),
+      })
+      if (token !== tokenRef.current) return
+      if (startRes.ok) {
+        recordingActiveRef.current = true
+        setReplayLive(true)
+      } else {
+        setMqttReplayActive(false)
+        setReplayLive(false)
+      }
     } catch {
-      stopReplay()
+      setMqttReplayActive(false)
+      setReplayLive(false)
     }
-  }, [startPlayback, stopReplay])
+  }, [setMqttReplayActive, setStoryReplayActive, setReplayMode, startDemoSession])
+
+  // Jump the running recording to a position so a beat's moment lands on cue.
+  const seekRecording = useCallback(async (pct: number) => {
+    const file = recordingFileRef.current
+    if (!file || !recordingActiveRef.current) return
+    const progress = Math.max(0, Math.min(1, pct))
+    try {
+      await fetch(`${API_BASE}/api/replay/seek`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ file, progress, speed: REPLAY_SPEED }),
+      })
+    } catch { /* non-fatal: recording keeps playing from wherever it is */ }
+  }, [])
+
+  // Tell the running app to preselect the first PEBLE campaign (no empty state
+  // mid-demo). Fired with retries because the campaign list loads async.
+  const selectFirstCampaign = useCallback(() => {
+    const fire = () => window.dispatchEvent(new CustomEvent('hyperspace:select-first-campaign'))
+    fire()
+    ;[500, 1100, 2000].forEach((ms) => window.setTimeout(fire, ms))
+  }, [])
 
   const actions: StageActions = {
     setViewMode,
@@ -361,6 +410,17 @@ export default function StoryMode({ viewMode, setViewMode, neuralEnabled, setNeu
     closeHeatmap: closeHeatmapModal,
     openNarrator: () => { void openNarrator() },
     closeNarrator,
+    openCheckout: () => emitIntent('open_checkout'),
+    openStoryGrid,
+    selectFirstCampaign,
+  }
+
+  // Close every transient surface this layer can open, so each beat starts clean.
+  const resetStage = () => {
+    closeHeatmapModal()
+    closeNarrator()
+    closeStoryGrid()
+    emitIntent('close_checkout')
   }
 
   // Reassigned every render so it always closes over fresh callbacks.
@@ -368,15 +428,10 @@ export default function StoryMode({ viewMode, setViewMode, neuralEnabled, setNeu
     const beat = BEATS[i]
     if (!beat) return
     tokenRef.current += 1
-    const token = tokenRef.current
-    closeHeatmapModal()
-    closeNarrator()
+    resetStage()
     beat.stage(actions)
-    if (beat.episodeTypes && beat.episodeTypes.length > 0) {
-      void playPreferredEpisode(beat.episodeTypes, token)
-    } else {
-      stopReplay()
-    }
+    // Recording plays continuously; only jump when a beat pins a specific moment.
+    if (typeof beat.seekPct === 'number') void seekRecording(beat.seekPct)
   }
 
   const enter = useCallback(() => {
@@ -384,23 +439,27 @@ export default function StoryMode({ viewMode, setViewMode, neuralEnabled, setNeu
     setActive(true)
     setIndex(0)
     setPlaying(false)
+    tokenRef.current += 1
+    void startRecording(tokenRef.current)
     applyBeatRef.current(0)
-  }, [viewMode, neuralEnabled])
+  }, [viewMode, neuralEnabled, startRecording])
 
   const exit = useCallback(() => {
     setActive(false)
     setPlaying(false)
     tokenRef.current += 1
-    stopReplay()
+    void stopRecording()
     closeHeatmapModal()
     closeNarrator()
+    closeStoryGrid()
+    emitIntent('close_checkout')
     const snap = snapshotRef.current
     if (snap) {
       setNeuralEnabled(snap.neuralEnabled)
       setViewMode(snap.viewMode)
     }
     snapshotRef.current = null
-  }, [stopReplay, closeHeatmapModal, closeNarrator, setNeuralEnabled, setViewMode])
+  }, [stopRecording, closeHeatmapModal, closeNarrator, closeStoryGrid, setNeuralEnabled, setViewMode])
 
   const goto = useCallback((i: number) => {
     const next = Math.max(0, Math.min(BEATS.length - 1, i))
@@ -450,8 +509,12 @@ export default function StoryMode({ viewMode, setViewMode, neuralEnabled, setNeu
     return () => window.clearTimeout(id)
   }, [active, playing, index])
 
-  // Cancel any in-flight animation if the component unmounts.
-  useEffect(() => () => { if (rafRef.current) cancelAnimationFrame(rafRef.current) }, [])
+  // Stop the recording if the component unmounts mid-demo (best effort).
+  useEffect(() => () => {
+    if (recordingActiveRef.current) {
+      fetch(`${API_BASE}/api/replay/stop`, { method: 'POST' }).catch(() => {})
+    }
+  }, [])
 
   // ── Launch button (only DOM added when inactive) ──
   if (!active) {
@@ -469,8 +532,12 @@ export default function StoryMode({ viewMode, setViewMode, neuralEnabled, setNeu
 
   const beat = BEATS[index]
   const color = RUNG_COLOR[beat.rung]
+  const dim = beat.dim ?? 'soft'
 
   return (
+    <>
+    {beat.id === 'ready' && <IntroCurtain />}
+    {beat.id !== 'ready' && dim !== 'none' && <Spotlight mode={dim} />}
     <div className="fixed inset-0 z-[70] pointer-events-none">
       {/* Narrative card */}
       <div className="absolute bottom-24 left-6 max-w-sm pointer-events-auto">
@@ -565,5 +632,6 @@ export default function StoryMode({ viewMode, setViewMode, neuralEnabled, setNeu
         </div>
       </div>
     </div>
+    </>
   )
 }

@@ -7,7 +7,7 @@
  * Feature flag: FEATURE_DOOH_ATTRIBUTION
  */
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { useVenue } from '../../context/VenueContext'
 import { API_BASE } from '../../config/api'
 import {
@@ -246,6 +246,20 @@ export default function DoohEffectivenessPage({ onClose }: DoohEffectivenessPage
       setError(err instanceof Error ? err.message : 'Failed to fetch campaigns')
     }
   }, [venue?.id])
+
+  // Story Mode hook: an external trigger can preselect the first campaign so a
+  // guided demo never opens on an empty selection. Additive — no effect unless
+  // the 'hyperspace:select-first-campaign' event is dispatched, and it never
+  // overrides a campaign the user already picked.
+  const campaignsRef = useRef<Campaign[]>([])
+  useEffect(() => { campaignsRef.current = campaigns }, [campaigns])
+  useEffect(() => {
+    const handler = () => {
+      setSelectedCampaign((prev) => prev ?? (campaignsRef.current[0] ?? null))
+    }
+    window.addEventListener('hyperspace:select-first-campaign', handler)
+    return () => window.removeEventListener('hyperspace:select-first-campaign', handler)
+  }, [])
 
   // Fetch screens
   const fetchScreens = useCallback(async () => {

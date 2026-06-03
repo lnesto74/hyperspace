@@ -166,6 +166,10 @@ function KPIOverlayToggle() {
         case 'open_checkout_manager':
           setShowCheckoutManager(true)
           break
+        case 'close_checkout':
+        case 'close_checkout_manager':
+          setShowCheckoutManager(false)
+          break
         case 'open_planogram':
         case 'open_planogram_builder':
           setMode('planogram')
