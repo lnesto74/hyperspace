@@ -1,17 +1,63 @@
-import { useState, useEffect, useRef, useMemo } from 'react'
-import { AlertTriangle, TrendingDown, Users, LayoutDashboard, ChevronDown, ChevronUp, Eye, Lightbulb, Wrench, BarChart3, Package } from 'lucide-react'
+import { useState, useEffect, useRef, useMemo, type ReactNode } from 'react'
+import { AlertTriangle, TrendingDown, Users, LayoutDashboard, ChevronDown, ChevronUp, Eye, Lightbulb, Wrench, BarChart3, Package, Activity } from 'lucide-react'
 import { getCategoryVisual } from '../businessReporting/operationsConsole/categoryVisuals'
 import { useProfitRadar } from '../../context/ProfitRadarContext'
 import { useVenue } from '../../context/VenueContext'
 import { API_BASE } from '../../config/api'
 import ZonePerformanceViewport, { type ZonePerformanceItem } from '../businessReporting/components/ZonePerformanceViewport'
+import IntentRadar from './components/IntentRadar'
+import BenchmarkBars, { type BenchmarkBarItem } from './components/BenchmarkBars'
+import ZoneEventReplay from './components/ZoneEventReplay'
+import ImpactSimulator from './components/ImpactSimulator'
+import { INTENT_AXIS_NAMES, type IntentAxes, type IntentAxisName } from '../../types'
 import type { ProfitRadarInsight, InsightType } from '../../types'
 
-const TYPE_CONFIG: Record<InsightType, { icon: typeof AlertTriangle; color: string; bgColor: string; label: string }> = {
-  lost_sales: { icon: AlertTriangle, color: 'text-red-400', bgColor: 'bg-red-500/10 border-red-500/30', label: 'Lost Sales' },
-  underperforming_zone: { icon: TrendingDown, color: 'text-amber-400', bgColor: 'bg-amber-500/10 border-amber-500/30', label: 'Underperforming Zone' },
-  staff_misallocation: { icon: Users, color: 'text-blue-400', bgColor: 'bg-blue-500/10 border-blue-500/30', label: 'Staff Misallocation' },
-  layout_friction: { icon: LayoutDashboard, color: 'text-purple-400', bgColor: 'bg-purple-500/10 border-purple-500/30', label: 'Layout Friction' },
+const TYPE_CONFIG: Record<InsightType, { icon: typeof AlertTriangle; color: string; bgColor: string; label: string; hex: string }> = {
+  lost_sales: { icon: AlertTriangle, color: 'text-red-400', bgColor: 'bg-red-500/10 border-red-500/30', label: 'Lost Sales', hex: '#f87171' },
+  underperforming_zone: { icon: TrendingDown, color: 'text-amber-400', bgColor: 'bg-amber-500/10 border-amber-500/30', label: 'Underperforming Zone', hex: '#f59e0b' },
+  staff_misallocation: { icon: Users, color: 'text-blue-400', bgColor: 'bg-blue-500/10 border-blue-500/30', label: 'Staff Misallocation', hex: '#60a5fa' },
+  layout_friction: { icon: LayoutDashboard, color: 'text-purple-400', bgColor: 'bg-purple-500/10 border-purple-500/30', label: 'Layout Friction', hex: '#a78bfa' },
+}
+
+function CollapsibleCard({
+  icon: Icon,
+  iconColor,
+  title,
+  defaultOpen = true,
+  children,
+}: {
+  icon: typeof Eye
+  iconColor: string
+  title: string
+  defaultOpen?: boolean
+  children: ReactNode
+}) {
+  const [open, setOpen] = useState(defaultOpen)
+  return (
+    <div className="rounded-lg border border-gray-700 bg-gray-800/60 overflow-hidden">
+      <button onClick={() => setOpen(!open)} className="w-full flex items-center gap-2 px-4 py-3 text-left hover:bg-gray-700/30">
+        <Icon className={`w-4 h-4 ${iconColor}`} />
+        <span className="text-sm font-medium text-white flex-1">{title}</span>
+        {open ? <ChevronUp className="w-4 h-4 text-gray-400" /> : <ChevronDown className="w-4 h-4 text-gray-400" />}
+      </button>
+      {open && <div className="px-4 pb-4 border-t border-gray-700/50 pt-3">{children}</div>}
+    </div>
+  )
+}
+
+function buildBenchmarkBars(insight: ProfitRadarInsight, avg: IntentAxes | null): BenchmarkBarItem[] {
+  const db = insight.dataBasis || {}
+  const items: BenchmarkBarItem[] = []
+  const push = (key: string, label: string, tone: BenchmarkBarItem['tone'], benchAxis: IntentAxisName) => {
+    if (typeof db[key] === 'number') items.push({ label, value: db[key], tone, benchmark: avg?.[benchAxis] })
+  }
+  push('engagement', 'Engagement', 'neutral', 'engagement_with_POI')
+  push('avoidance', 'Avoidance', 'bad', 'avoidance')
+  push('hesitation', 'Hesitation', 'bad', 'hesitation')
+  push('commitment', 'Commitment', 'neutral', 'commitment')
+  push('queueScore', 'Queue / wait', 'bad', 'waiting_queueing')
+  push('score', 'Friction', 'bad', 'friction')
+  return items
 }
 
 const SEVERITY_BADGE: Record<string, string> = {
@@ -55,77 +101,6 @@ function InsightCard({ insight, isSelected, onSelect }: { insight: ProfitRadarIn
         </div>
       </div>
     </button>
-  )
-}
-
-function DetailPanel({ insight }: { insight: ProfitRadarInsight }) {
-  const [showWhy, setShowWhy] = useState(true)
-  const [showFix, setShowFix] = useState(true)
-  const [showData, setShowData] = useState(false)
-
-  return (
-    <div className="space-y-3">
-      {/* Why Panel */}
-      <div className="rounded-lg border border-gray-700 bg-gray-800/60 overflow-hidden">
-        <button onClick={() => setShowWhy(!showWhy)} className="w-full flex items-center gap-2 px-4 py-3 text-left hover:bg-gray-700/30">
-          <Eye className="w-4 h-4 text-cyan-400" />
-          <span className="text-sm font-medium text-white flex-1">Why is this happening?</span>
-          {showWhy ? <ChevronUp className="w-4 h-4 text-gray-400" /> : <ChevronDown className="w-4 h-4 text-gray-400" />}
-        </button>
-        {showWhy && (
-          <div className="px-4 pb-3 text-xs text-gray-300 leading-relaxed border-t border-gray-700/50 pt-3">
-            {insight.why}
-          </div>
-        )}
-      </div>
-
-      {/* Suggested Fix Panel */}
-      <div className="rounded-lg border border-gray-700 bg-gray-800/60 overflow-hidden">
-        <button onClick={() => setShowFix(!showFix)} className="w-full flex items-center gap-2 px-4 py-3 text-left hover:bg-gray-700/30">
-          <Wrench className="w-4 h-4 text-green-400" />
-          <span className="text-sm font-medium text-white flex-1">Suggested Fix</span>
-          {showFix ? <ChevronUp className="w-4 h-4 text-gray-400" /> : <ChevronDown className="w-4 h-4 text-gray-400" />}
-        </button>
-        {showFix && (
-          <div className="px-4 pb-3 text-xs text-gray-300 leading-relaxed border-t border-gray-700/50 pt-3">
-            {insight.suggestedFix}
-          </div>
-        )}
-      </div>
-
-      {/* Data Basis Panel */}
-      <div className="rounded-lg border border-gray-700 bg-gray-800/60 overflow-hidden">
-        <button onClick={() => setShowData(!showData)} className="w-full flex items-center gap-2 px-4 py-3 text-left hover:bg-gray-700/30">
-          <BarChart3 className="w-4 h-4 text-amber-400" />
-          <span className="text-sm font-medium text-white flex-1">Data Basis</span>
-          {showData ? <ChevronUp className="w-4 h-4 text-gray-400" /> : <ChevronDown className="w-4 h-4 text-gray-400" />}
-        </button>
-        {showData && (
-          <div className="px-4 pb-3 border-t border-gray-700/50 pt-3">
-            <div className="grid grid-cols-2 gap-2">
-              {Object.entries(insight.dataBasis).map(([key, value]) => (
-                <div key={key} className="text-xs">
-                  <span className="text-gray-500">{key}: </span>
-                  <span className="text-gray-300">{typeof value === 'number' ? value.toFixed(2) : Array.isArray(value) ? value.join(', ') : String(value)}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-      </div>
-
-      {/* Impact */}
-      <div className="rounded-lg border border-green-800/50 bg-green-900/20 p-4">
-        <div className="flex items-center gap-2 mb-1">
-          <Lightbulb className="w-4 h-4 text-green-400" />
-          <span className="text-sm font-medium text-green-300">Estimated Impact</span>
-        </div>
-        <p className="text-lg font-bold text-green-400">
-          {insight.impact.currency}{insight.impact.min} – {insight.impact.currency}{insight.impact.max}
-          <span className="text-xs text-green-500 font-normal ml-1">per day</span>
-        </p>
-      </div>
-    </div>
   )
 }
 
@@ -407,6 +382,21 @@ export default function ProfitRadarPage({ onClose }: ProfitRadarPageProps) {
     return out
   }, [selectedZoneNames, zoneIdByName, zoneMetaByName])
 
+  // Snapshot the selected zone's behavioral fingerprint + store average once.
+  // means stream live, so we freeze them to keep the radar from churning.
+  const [fingerprint, setFingerprint] = useState<{ means: IntentAxes; avg: IntentAxes; dominant: IntentAxisName } | null>(null)
+  useEffect(() => { setFingerprint(null) }, [selectedRoiId, selectedInsight?.id])
+  useEffect(() => {
+    if (!selectedRoiId || fingerprint || zoneField.length === 0) return
+    const zf = zoneField.find(z => z.roiId === selectedRoiId)
+    if (!zf) return
+    const avg = {} as IntentAxes
+    for (const axis of INTENT_AXIS_NAMES) {
+      avg[axis] = zoneField.reduce((s, z) => s + (z.means[axis] ?? 0), 0) / zoneField.length
+    }
+    setFingerprint({ means: zf.means, avg, dominant: zf.dominant })
+  }, [selectedRoiId, fingerprint, zoneField])
+
   return (
     <div className="fixed inset-0 z-50 bg-gray-900 flex flex-col">
       {/* Header */}
@@ -458,25 +448,44 @@ export default function ProfitRadarPage({ onClose }: ProfitRadarPageProps) {
         {/* Right: Detail Panel */}
         <div className="flex-1 overflow-y-auto">
           {selectedInsight ? (
-            <div className="max-w-2xl mx-auto p-6">
-              <div className="mb-6">
-                <h2 className="text-xl font-semibold text-white mb-2">{selectedInsight.title}</h2>
-                <p className="text-sm text-gray-400">{selectedInsight.summary}</p>
-              </div>
-              <DetailPanel insight={selectedInsight} />
-
-              {/* What's on this shelf — category chips + planogram products with images */}
-              {selectedInsight.type === 'underperforming_zone' && (
-                <div className="mt-4">
-                  <ShelfContentsCard roiId={selectedRoiId} />
+            (() => {
+              const cfg = TYPE_CONFIG[selectedInsight.type] || TYPE_CONFIG.lost_sales
+              const cur = selectedInsight.impact.currency === 'EUR' ? '€' : selectedInsight.impact.currency
+              const weeklyMin = selectedInsight.impact.min * 7
+              const weeklyMax = selectedInsight.impact.max * 7
+              const barItems = buildBenchmarkBars(selectedInsight, fingerprint?.avg ?? null)
+              return (
+            <div className="max-w-5xl mx-auto p-6">
+              {/* HERO — title + estimated impact KPI */}
+              <div className="flex flex-col sm:flex-row sm:items-start gap-4 mb-5">
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 mb-1.5">
+                    <span className={`text-[10px] font-bold uppercase px-1.5 py-0.5 rounded ${SEVERITY_BADGE[selectedInsight.severity]}`}>
+                      {selectedInsight.severity}
+                    </span>
+                    <span className={`text-[10px] uppercase tracking-wider ${cfg.color}`}>{cfg.label}</span>
+                  </div>
+                  <h2 className="text-xl font-semibold text-white mb-1.5">{selectedInsight.title}</h2>
+                  <p className="text-sm text-gray-400">{selectedInsight.summary}</p>
                 </div>
-              )}
+                <div className="shrink-0 rounded-lg border border-emerald-700/50 bg-emerald-900/20 px-4 py-3 sm:text-right">
+                  <div className="text-[10px] uppercase tracking-wide text-emerald-300/80">Estimated impact</div>
+                  <div className="text-2xl font-bold text-emerald-400 tabular-nums leading-tight">
+                    {cur}{selectedInsight.impact.min.toLocaleString()}–{selectedInsight.impact.max.toLocaleString()}
+                    <span className="text-xs font-normal text-emerald-500/80 ml-1">/ day</span>
+                  </div>
+                  <div className="text-[11px] text-gray-400 mt-0.5">
+                    ≈ {cur}{Math.round(weeklyMin).toLocaleString()}–{Math.round(weeklyMax).toLocaleString()} / wk · {(selectedInsight.confidence * 100).toFixed(0)}% confidence
+                  </div>
+                  <div className="mt-1.5 h-1 w-full rounded-full bg-gray-700 overflow-hidden sm:w-40 sm:ml-auto">
+                    <div className="h-full rounded-full bg-emerald-500" style={{ width: `${selectedInsight.confidence * 100}%` }} />
+                  </div>
+                </div>
+              </div>
 
-              {/* Zone Performance Map — reused from Business Reporting. Pulses the
-                  selected insight's own zone(s) in red on the real floor plan,
-                  for every insight type (lost sales, queue, friction, etc.). */}
+              {/* ZONE PERFORMANCE MAP — full width at top */}
               {venue?.id && (
-                <div className="mt-6">
+                <div className="mb-5">
                   <ZonePerformanceViewport
                     venueId={venue.id}
                     deadZones={deadZones}
@@ -484,11 +493,54 @@ export default function ProfitRadarPage({ onClose }: ProfitRadarPageProps) {
                     zoneUtilThresholdPct={zoneThresholdPct}
                     initialTab="underperforming"
                     focusZones={focusZones.length > 0 ? focusZones : undefined}
-                    focusLabel={TYPE_CONFIG[selectedInsight.type]?.label}
+                    focusLabel={cfg.label}
                   />
                 </div>
               )}
+
+              {/* TWO COLUMNS */}
+              <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 items-start">
+                {/* LEFT — diagnosis */}
+                <div className="space-y-4">
+                  <CollapsibleCard icon={Eye} iconColor="text-cyan-400" title="Why is this happening?">
+                    <p className="text-xs text-gray-300 leading-relaxed">{selectedInsight.why}</p>
+                  </CollapsibleCard>
+
+                  <CollapsibleCard icon={Activity} iconColor="text-amber-400" title="Behavioral fingerprint">
+                    {fingerprint ? (
+                      <IntentRadar means={fingerprint.means} avg={fingerprint.avg} dominant={fingerprint.dominant} color={cfg.hex} />
+                    ) : (
+                      <p className="text-xs text-gray-500 text-center py-4">Live behavioral data for this zone isn't streaming right now.</p>
+                    )}
+                    {barItems.length > 0 && (
+                      <div className="mt-4 pt-3 border-t border-gray-700/50">
+                        <BenchmarkBars items={barItems} />
+                        <p className="text-[10px] text-gray-500 mt-2">Bars show this zone; the tick marks the store average.</p>
+                      </div>
+                    )}
+                  </CollapsibleCard>
+
+                  {selectedInsight.type === 'underperforming_zone' && (
+                    <ShelfContentsCard roiId={selectedRoiId} />
+                  )}
+                </div>
+
+                {/* RIGHT — evidence + action */}
+                <div className="space-y-4">
+                  {venue?.id && (
+                    <ZoneEventReplay venueId={venue.id} roiId={selectedRoiId} zoneName={selectedZoneNames[0] || selectedInsight.title} />
+                  )}
+
+                  <CollapsibleCard icon={Wrench} iconColor="text-green-400" title="Suggested Fix">
+                    <p className="text-xs text-gray-300 leading-relaxed">{selectedInsight.suggestedFix}</p>
+                  </CollapsibleCard>
+
+                  <ImpactSimulator insight={selectedInsight} />
+                </div>
+              </div>
             </div>
+              )
+            })()
           ) : (
             <div className="flex flex-col items-center justify-center h-full text-gray-500">
               <Lightbulb className="w-12 h-12 mb-4 opacity-20" />
