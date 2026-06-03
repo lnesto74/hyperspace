@@ -12,12 +12,19 @@ import {
   disposeObject3D,
   type DwgWireframePlane,
 } from '../../utils/dwgWireframe3d'
+import { getCategoryVisual } from '../../features/businessReporting/operationsConsole/categoryVisuals'
+import type { CategoryRankingRow } from '../../features/businessReporting/components/CategoryRankingPanel'
 import type { RegionOfInterest } from '../../types'
 
 const KPI_OPTIONS = [
   { value: 'visits', label: 'Visits' },
   { value: 'dwellSec', label: 'Dwell Time' },
 ]
+
+function formatDwell(min: number): string {
+  if (min >= 60) return `${(min / 60).toFixed(1)}h`
+  return `${Math.round(min)}m`
+}
 
 const TIMEFRAME_OPTIONS = [
   { value: 'day', label: 'Today' },
@@ -63,7 +70,10 @@ export default function HeatmapViewerModal({ isOpen, onClose }: HeatmapViewerMod
   const [showDwgWireframe, setShowDwgWireframe] = useState(true)
   const [dwgWireframePlane, setDwgWireframePlane] = useState<DwgWireframePlane>('pedestal')
   const [tileTooltip, setTileTooltip] = useState<TileTooltip | null>(null)
-  
+  const [topCategories, setTopCategories] = useState<CategoryRankingRow[]>([])
+  const [catLoading, setCatLoading] = useState(false)
+  const [catMetric, setCatMetric] = useState<'visits' | 'dwell'>('visits')
+
   const canvasRef = useRef<HTMLDivElement>(null)
   const tileMeshesRef = useRef<THREE.Mesh[]>([])
   const raycasterRef = useRef(new THREE.Raycaster())
@@ -472,6 +482,56 @@ export default function HeatmapViewerModal({ isOpen, onClose }: HeatmapViewerMod
     }
   }, [selectedZoneIds, isOpen, focusOnSelectedZones, modalRegions.length])
 
+  // Category traffic — most visited & dwelled zones grouped by product category.
+  // Same source as the Business Reporting "Category Traffic" panel, so the numbers
+  // reflect the active recording (last MQTT playback) the heatmap is showing.
+  useEffect(() => {
+    if (!isOpen || !activeVenueId) { setTopCategories([]); return }
+    let cancelled = false
+    setCatLoading(true)
+    const endTs = Date.now()
+    const startTs = endTs - 24 * 60 * 60 * 1000
+    const params = new URLSearchParams({
+      personaId: 'merchandising',
+      venueId: activeVenueId,
+      startTs: String(startTs),
+      endTs: String(endTs),
+    })
+    fetch(`${API_BASE}/api/reporting/summary?${params}`)
+      .then(res => (res.ok ? res.json() : null))
+      .then(data => {
+        if (cancelled) return
+        setTopCategories((data?.supporting?.topCategories as CategoryRankingRow[]) || [])
+      })
+      .catch(() => { if (!cancelled) setTopCategories([]) })
+      .finally(() => { if (!cancelled) setCatLoading(false) })
+    return () => { cancelled = true }
+  }, [isOpen, activeVenueId])
+
+  const sortedCats = useMemo(() => {
+    const rows = topCategories.filter(c => c.totalVisits > 0 || (c.totalDwellMin ?? 0) > 0)
+    return rows.sort((a, b) =>
+      catMetric === 'dwell'
+        ? (b.totalDwellMin ?? 0) - (a.totalDwellMin ?? 0) || b.totalVisits - a.totalVisits
+        : b.totalVisits - a.totalVisits || (b.totalDwellMin ?? 0) - (a.totalDwellMin ?? 0),
+    )
+  }, [topCategories, catMetric])
+
+  const maxCatVal = useMemo(
+    () => Math.max(1, ...sortedCats.map(c => (catMetric === 'dwell' ? (c.totalDwellMin ?? 0) : c.totalVisits))),
+    [sortedCats, catMetric],
+  )
+
+  // Real "cold zone" backing for the story beat: lowest-traffic named category vs the average.
+  const coldest = useMemo(() => {
+    const named = sortedCats.filter(c => c.category !== 'Uncategorized' && c.totalVisits > 0)
+    if (named.length < 2) return null
+    const avg = named.reduce((s, c) => s + c.totalVisits, 0) / named.length
+    if (avg <= 0) return null
+    const min = named.reduce((m, c) => (c.totalVisits < m.totalVisits ? c : m), named[0])
+    return { name: min.category, pct: Math.round((min.totalVisits / avg) * 100) }
+  }, [sortedCats])
+
   const toggleZone = (zoneId: string) => {
     setSelectedZoneIds(prev => {
       const next = new Set(prev)
@@ -497,7 +557,7 @@ export default function HeatmapViewerModal({ isOpen, onClose }: HeatmapViewerMod
   return (
     <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-[70]" onClick={onClose}>
       <div 
-        className="bg-gray-900 border border-gray-700 rounded-xl shadow-2xl w-[1000px] h-[700px] max-w-[95vw] max-h-[90vh] overflow-hidden flex flex-col"
+        className="bg-gray-900 border border-gray-700 rounded-xl shadow-2xl w-[1320px] h-[700px] max-w-[95vw] max-h-[90vh] overflow-hidden flex flex-col"
         onClick={e => e.stopPropagation()}
       >
         {/* Header */}
@@ -600,6 +660,90 @@ export default function HeatmapViewerModal({ isOpen, onClose }: HeatmapViewerMod
           </div>
         </div>
 
+        {/* Body: category sidebar + 3D canvas */}
+        <div className="flex flex-1 min-h-0">
+          {/* Category Traffic sidebar — most visited & dwelled by category */}
+          <aside className="w-[300px] shrink-0 border-r border-gray-700 bg-gray-900/60 flex flex-col">
+            <div className="px-4 py-3 border-b border-gray-700/60 flex items-center justify-between gap-2">
+              <div className="min-w-0">
+                <h3 className="text-sm font-semibold text-white">Category Traffic</h3>
+                <p className="text-[10px] text-gray-500 truncate">Most visited &amp; dwelled zones</p>
+              </div>
+              <div className="flex bg-gray-800 rounded-md p-0.5 border border-gray-700/60 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => setCatMetric('visits')}
+                  className={`px-2 py-0.5 text-[10px] rounded ${catMetric === 'visits' ? 'bg-white/10 text-white' : 'text-gray-500'}`}
+                >
+                  Visits
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setCatMetric('dwell')}
+                  className={`px-2 py-0.5 text-[10px] rounded ${catMetric === 'dwell' ? 'bg-white/10 text-white' : 'text-gray-500'}`}
+                >
+                  Dwell
+                </button>
+              </div>
+            </div>
+
+            <div className="flex-1 overflow-y-auto px-3 py-2 space-y-1">
+              {catLoading ? (
+                <div className="flex items-center justify-center py-10">
+                  <div className="w-5 h-5 border-2 border-orange-500 border-t-transparent rounded-full animate-spin" />
+                </div>
+              ) : sortedCats.length === 0 ? (
+                <div className="text-[11px] text-gray-500 py-8 px-1 text-center leading-relaxed">
+                  No category traffic in the active recording yet. Map shelves to categories in DWG import or Smart KPI.
+                </div>
+              ) : (
+                sortedCats.map(row => {
+                  const { Icon, color } = getCategoryVisual(row.category)
+                  const val = catMetric === 'dwell' ? (row.totalDwellMin ?? 0) : row.totalVisits
+                  const w = Math.max(Math.round((val / maxCatVal) * 100), val > 0 ? 4 : 0)
+                  const label = catMetric === 'dwell'
+                    ? formatDwell(row.totalDwellMin ?? 0)
+                    : row.totalVisits.toLocaleString()
+                  return (
+                    <div key={row.category} className="rounded-md px-2 py-2 hover:bg-gray-800/40 transition-colors">
+                      <div className="flex items-center justify-between gap-2 mb-1">
+                        <span className="text-xs text-white truncate inline-flex items-center gap-1.5">
+                          <Icon className="w-3.5 h-3.5 shrink-0" style={{ color }} strokeWidth={2.25} />
+                          {row.category}
+                        </span>
+                        <span className="text-[10px] tabular-nums text-white shrink-0">
+                          {label}
+                          <span className="text-gray-500 ml-1">{catMetric === 'dwell' ? 'dwell' : 'visits'}</span>
+                        </span>
+                      </div>
+                      <div className="relative h-1.5 rounded-sm bg-gray-900/80 overflow-hidden">
+                        <div
+                          className="absolute inset-y-0 left-0 rounded-sm"
+                          style={{ width: `${w}%`, backgroundColor: color, opacity: 0.72 }}
+                        />
+                      </div>
+                      <div className="flex justify-between mt-0.5 text-[9px] text-gray-600">
+                        <span>{row.zoneCount} zone{row.zoneCount !== 1 ? 's' : ''}</span>
+                        <span>{(row.avgBrowseTimeMin ?? 0).toFixed(1)}m avg browse</span>
+                      </div>
+                    </div>
+                  )
+                })
+              )}
+            </div>
+
+            {coldest && (
+              <div className="px-4 py-2.5 border-t border-gray-700/60 bg-amber-500/5">
+                <div className="text-[9px] uppercase tracking-wide text-amber-300/80 mb-0.5">Coldest category</div>
+                <div className="text-xs text-white">
+                  <b>{coldest.name}</b> · <span className="text-amber-300">{coldest.pct}% of avg traffic</span>
+                </div>
+              </div>
+            )}
+          </aside>
+
+          {/* Right column: canvas + controls */}
+          <div className="flex-1 flex flex-col min-w-0">
         {/* 3D Canvas */}
         <div className="flex-1 relative">
           <div ref={canvasRef} className="w-full h-full" />
@@ -732,6 +876,8 @@ export default function HeatmapViewerModal({ isOpen, onClose }: HeatmapViewerMod
           >
             Reset View
           </button>
+        </div>
+          </div>
         </div>
       </div>
     </div>
