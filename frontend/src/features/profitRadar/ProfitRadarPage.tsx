@@ -1,5 +1,6 @@
-import { useState, useEffect, useRef } from 'react'
-import { AlertTriangle, TrendingDown, Users, LayoutDashboard, ChevronDown, ChevronUp, Eye, Lightbulb, Wrench, BarChart3 } from 'lucide-react'
+import { useState, useEffect, useRef, useMemo } from 'react'
+import { AlertTriangle, TrendingDown, Users, LayoutDashboard, ChevronDown, ChevronUp, Eye, Lightbulb, Wrench, BarChart3, Package } from 'lucide-react'
+import { getCategoryVisual } from '../businessReporting/operationsConsole/categoryVisuals'
 import { useProfitRadar } from '../../context/ProfitRadarContext'
 import { useVenue } from '../../context/VenueContext'
 import { API_BASE } from '../../config/api'
@@ -128,6 +129,174 @@ function DetailPanel({ insight }: { insight: ProfitRadarInsight }) {
   )
 }
 
+interface ShelfProduct {
+  id: string
+  name: string
+  brand?: string
+  price?: number
+  category?: string
+  skuCode?: string
+  imageUrl?: string
+}
+
+// Mirror of the backend resolveSkuDisplayImage fallback: prefer a real image
+// URL, else infer the Esselunga product CDN from a numeric SKU code.
+function resolveProductImage(p: ShelfProduct): string | null {
+  if (p.imageUrl && /^https?:\/\//i.test(p.imageUrl) && !/\/displayable\/.*\.webp/i.test(p.imageUrl)) {
+    return p.imageUrl
+  }
+  if (p.skuCode && /^\d{5,7}$/.test(p.skuCode)) {
+    return `https://images.services.esselunga.it/html/img_prodotti/esselunga/big/${p.skuCode}.jpg`
+  }
+  return null
+}
+
+function ShelfProductImage({ p }: { p: ShelfProduct }) {
+  const [failed, setFailed] = useState(false)
+  const src = failed ? null : resolveProductImage(p)
+  if (!src) {
+    return (
+      <div className="w-full aspect-square rounded-md bg-gray-800 border border-gray-700 flex items-center justify-center">
+        <Package className="w-6 h-6 text-gray-600" />
+      </div>
+    )
+  }
+  return (
+    <img
+      src={src}
+      alt={p.name}
+      loading="lazy"
+      onError={() => setFailed(true)}
+      className="w-full aspect-square rounded-md object-contain bg-white/95 border border-gray-700"
+    />
+  )
+}
+
+// "What's on this shelf" — resolves the underperforming zone to a real shelf,
+// shows its product category chips, and an expandable grid of planogram
+// products with images. All via existing APIs; renders nothing if unresolved.
+function ShelfContentsCard({ roiId }: { roiId: string | null }) {
+  const [loading, setLoading] = useState(false)
+  const [categories, setCategories] = useState<string[]>([])
+  const [products, setProducts] = useState<ShelfProduct[]>([])
+  const [open, setOpen] = useState(false)
+
+  useEffect(() => {
+    if (!roiId) { setCategories([]); setProducts([]); return }
+    let cancelled = false
+    setLoading(true)
+    setOpen(false)
+    ;(async () => {
+      try {
+        const infoRes = await fetch(`${API_BASE}/api/roi/${roiId}/shelf-info`)
+        const info = infoRes.ok ? await infoRes.json() : null
+        if (cancelled) return
+        const cats: string[] = Array.isArray(info?.categories) && info.categories.length
+          ? info.categories
+          : info?.businessCategory ? [info.businessCategory] : []
+        setCategories(cats)
+        if (info?.shelfId && info?.planogramId) {
+          const expRes = await fetch(`${API_BASE}/api/planogram/planograms/${info.planogramId}/export`)
+          const exp = expRes.ok ? await expRes.json() : null
+          if (cancelled) return
+          const shelf = (exp?.shelves || []).find((s: { shelfId?: string }) => s.shelfId === info.shelfId)
+          const skuDetails = exp?.skuDetails || {}
+          const seen = new Set<string>()
+          const list: ShelfProduct[] = []
+          shelf?.slots?.levels?.forEach((lvl: { slots?: { skuItemId?: string }[] }) => {
+            lvl?.slots?.forEach((slot) => {
+              const id = slot?.skuItemId
+              if (!id || seen.has(id)) return
+              seen.add(id)
+              const sku = skuDetails[id]
+              if (!sku) return
+              list.push({
+                id,
+                name: sku.name,
+                brand: sku.brand,
+                price: sku.price,
+                category: sku.category,
+                skuCode: sku.skuCode || sku.sku_code,
+                imageUrl: sku.imageUrl || sku.image_url,
+              })
+            })
+          })
+          setProducts(list)
+        } else {
+          setProducts([])
+        }
+      } catch {
+        if (!cancelled) setProducts([])
+      } finally {
+        if (!cancelled) setLoading(false)
+      }
+    })()
+    return () => { cancelled = true }
+  }, [roiId])
+
+  if (!roiId) return null
+  if (!loading && categories.length === 0 && products.length === 0) return null
+
+  return (
+    <div className="rounded-lg border border-gray-700 bg-gray-800/60 overflow-hidden">
+      <div className="px-4 py-3 flex items-center gap-2 flex-wrap">
+        <Package className="w-4 h-4 text-purple-400" />
+        <span className="text-sm font-medium text-white">What&apos;s on this shelf</span>
+        <div className="flex items-center gap-1.5 flex-wrap ml-1">
+          {categories.map(cat => {
+            const { Icon, color } = getCategoryVisual(cat)
+            return (
+              <span
+                key={cat}
+                className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium"
+                style={{ color, backgroundColor: `${color}1f`, border: `1px solid ${color}55` }}
+              >
+                <Icon className="w-3 h-3" strokeWidth={2.25} />
+                {cat}
+              </span>
+            )
+          })}
+        </div>
+      </div>
+
+      {loading ? (
+        <div className="px-4 pb-4 flex items-center gap-2 text-xs text-gray-500">
+          <span className="w-3.5 h-3.5 border-2 border-purple-500 border-t-transparent rounded-full animate-spin" />
+          Loading shelf contents…
+        </div>
+      ) : products.length > 0 ? (
+        <div className="border-t border-gray-700/50">
+          <button
+            onClick={() => setOpen(o => !o)}
+            className="w-full flex items-center gap-2 px-4 py-2.5 text-left hover:bg-gray-700/30"
+          >
+            <span className="text-xs font-medium text-gray-300 flex-1">Products on this shelf ({products.length})</span>
+            {open ? <ChevronUp className="w-4 h-4 text-gray-400" /> : <ChevronDown className="w-4 h-4 text-gray-400" />}
+          </button>
+          {open && (
+            <div className="px-4 pb-4 grid grid-cols-3 sm:grid-cols-4 gap-3">
+              {products.map(p => (
+                <div key={p.id} className="rounded-md border border-gray-700 bg-gray-900/50 p-2">
+                  <ShelfProductImage p={p} />
+                  <div className="mt-1.5 text-[11px] text-white leading-tight line-clamp-2" title={p.name}>{p.name}</div>
+                  {p.brand && <div className="text-[10px] text-gray-500 truncate">{p.brand}</div>}
+                  {typeof p.price === 'number' && (
+                    <div className="text-[10px] text-green-400 font-medium mt-0.5">€{p.price.toFixed(2)}</div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      ) : (
+        <div className="px-4 pb-3 pt-2 text-[11px] text-gray-500 border-t border-gray-700/50">
+          No planogram products assigned to this shelf yet.
+        </div>
+      )}
+    </div>
+  )
+}
+
 interface ProfitRadarPageProps {
   onClose: () => void
 }
@@ -181,6 +350,18 @@ export default function ProfitRadarPage({ onClose }: ProfitRadarPageProps) {
     window.addEventListener('hyperspace:profit-radar-select-zone', handler)
     return () => window.removeEventListener('hyperspace:profit-radar-select-zone', handler)
   }, [selectedInsight, setSelectedInsight])
+
+  // Resolve the selected zone insight to a real ROI id (insights only carry the
+  // zone name) so the detail can look up the shelf's category + products.
+  const selectedRoiId = useMemo(() => {
+    if (!selectedInsight) return null
+    const zoneName = (selectedInsight.dataBasis?.zone as string)
+      || selectedInsight.title.replace(/\s+underperforming$/i, '').trim()
+    const zf = zoneField.find(z => z.roiName === zoneName)
+    if (zf) return zf.roiId
+    const dz = deadZones.find(d => d.name === zoneName)
+    return dz?.id ?? null
+  }, [selectedInsight, zoneField, deadZones])
 
   return (
     <div className="fixed inset-0 z-50 bg-gray-900 flex flex-col">
@@ -239,6 +420,13 @@ export default function ProfitRadarPage({ onClose }: ProfitRadarPageProps) {
                 <p className="text-sm text-gray-400">{selectedInsight.summary}</p>
               </div>
               <DetailPanel insight={selectedInsight} />
+
+              {/* What's on this shelf — category chips + planogram products with images */}
+              {selectedInsight.type === 'underperforming_zone' && (
+                <div className="mt-4">
+                  <ShelfContentsCard roiId={selectedRoiId} />
+                </div>
+              )}
 
               {/* Zone Performance Map — reused from Business Reporting; shows the
                   underperforming zones pulsing red on the real floor plan. */}
