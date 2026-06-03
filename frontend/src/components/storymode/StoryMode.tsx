@@ -22,7 +22,7 @@
  * props — it never reaches into or mutates other components.
  */
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { Film, X, ChevronLeft, ChevronRight, Play, Pause } from 'lucide-react'
+import { Film, X, ChevronLeft, ChevronRight, Play, Pause, GripHorizontal } from 'lucide-react'
 import { useHeatmap } from '../../context/HeatmapContext'
 import { useNarrator2 } from '../../context/Narrator2Context'
 import { useReplayInsight } from '../../context/ReplayInsightContext'
@@ -282,6 +282,9 @@ export default function StoryMode({ viewMode, setViewMode, neuralEnabled, setNeu
   const [index, setIndex] = useState(0)
   const [playing, setPlaying] = useState(false)
   const [replayLive, setReplayLive] = useState(false)
+  // Draggable narrative card offset (reset each session).
+  const [cardDrag, setCardDrag] = useState({ x: 0, y: 0 })
+  const cardDragRef = useRef<{ sx: number; sy: number; bx: number; by: number } | null>(null)
   // Store Awakening intro overlay — plays once per session before the replay.
   const [introPlaying, setIntroPlaying] = useState(false)
   const introDoneRef = useRef(false)
@@ -298,6 +301,30 @@ export default function StoryMode({ viewMode, setViewMode, neuralEnabled, setNeu
   const applyBeatRef = useRef<(i: number) => void>(() => {})
 
   useEffect(() => { venueRef.current = venue?.id }, [venue?.id])
+
+  // Drag-to-reposition for the narrative card (listeners mounted once).
+  useEffect(() => {
+    const move = (e: PointerEvent) => {
+      const s = cardDragRef.current
+      if (!s) return
+      setCardDrag({ x: s.bx + (e.clientX - s.sx), y: s.by + (e.clientY - s.sy) })
+    }
+    const up = () => { cardDragRef.current = null }
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', up)
+    return () => {
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', up)
+    }
+  }, [])
+  const startCardDrag = useCallback((e: React.PointerEvent) => {
+    cardDragRef.current = { sx: e.clientX, sy: e.clientY, bx: cardDrag.x, by: cardDrag.y }
+  }, [cardDrag.x, cardDrag.y])
+
+  // Broadcast active state so the footer toggle + sidebar can react.
+  useEffect(() => {
+    window.dispatchEvent(new CustomEvent('hyperspace:story-mode-state', { detail: { active } }))
+  }, [active])
 
   // Stop the MQTT replay and return the venue to live.
   const stopRecording = useCallback(async () => {
@@ -429,6 +456,7 @@ export default function StoryMode({ viewMode, setViewMode, neuralEnabled, setNeu
     setActive(true)
     setIndex(0)
     setPlaying(false)
+    setCardDrag({ x: 0, y: 0 })
     // Stage the floorplan (view=main) but hold the recording until the
     // Store Awakening intro finishes. If it already played this session, skip
     // straight to the replay.
@@ -470,6 +498,13 @@ export default function StoryMode({ viewMode, setViewMode, neuralEnabled, setNeu
     }
     snapshotRef.current = null
   }, [stopRecording, closeHeatmapModal, closeNarrator, closeStoryGrid, setNeuralEnabled, setViewMode])
+
+  // Footer toggle (in the status bar) drives enter/exit via the event bus.
+  useEffect(() => {
+    const onToggle = () => { if (active) exit(); else enter() }
+    window.addEventListener('hyperspace:story-mode-toggle', onToggle)
+    return () => window.removeEventListener('hyperspace:story-mode-toggle', onToggle)
+  }, [active, enter, exit])
 
   // While the intro is playing, drive the REAL-scene cinematic in MainViewport
   // via window events and wait for it to finish (or a fallback) before the
@@ -555,19 +590,9 @@ export default function StoryMode({ viewMode, setViewMode, neuralEnabled, setNeu
     }
   }, [])
 
-  // ── Launch button (only DOM added when inactive) ──
-  if (!active) {
-    return (
-      <button
-        onClick={enter}
-        title="Start demo storytelling"
-        className="fixed bottom-4 left-4 z-[55] flex items-center gap-2 px-3 py-2 rounded-full bg-gray-900/90 hover:bg-gray-800 text-gray-200 text-xs font-medium border border-gray-700 backdrop-blur-md transition-colors"
-      >
-        <Film className="w-4 h-4 text-blue-400" />
-        Story Mode
-      </button>
-    )
-  }
+  // Inactive: render nothing. The toggle lives in the footer status bar
+  // (AppShell) for consistency with the other view toggles.
+  if (!active) return null
 
   const beat = BEATS[index]
   const color = RUNG_COLOR[beat.rung]
@@ -587,11 +612,21 @@ export default function StoryMode({ viewMode, setViewMode, neuralEnabled, setNeu
     <>
     {dim !== 'none' && <Spotlight mode={dim} />}
     <div className="fixed inset-0 z-[70] pointer-events-none">
-      {/* Narrative card */}
-      <div className="absolute bottom-24 left-6 max-w-sm pointer-events-auto">
+      {/* Narrative card (draggable) */}
+      <div
+        className="absolute bottom-24 left-6 max-w-sm pointer-events-auto"
+        style={{ transform: `translate(${cardDrag.x}px, ${cardDrag.y}px)` }}
+      >
         <div className="rounded-2xl bg-gray-900/95 backdrop-blur-md border border-gray-700 shadow-2xl overflow-hidden">
           <div className="h-1" style={{ backgroundColor: color }} />
-          <div className="p-4">
+          <div
+            onPointerDown={startCardDrag}
+            className="flex items-center justify-center py-1 cursor-move text-gray-600 hover:text-gray-400 select-none touch-none"
+            title="Drag to reposition"
+          >
+            <GripHorizontal className="w-4 h-4" />
+          </div>
+          <div className="px-4 pb-4">
             <div className="flex items-center gap-2 mb-2">
               <span className="text-xs font-semibold tracking-wide text-white">{beat.time}</span>
               <span className="text-[10px] text-gray-500">{beat.period}</span>

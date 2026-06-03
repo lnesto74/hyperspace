@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react'
-import { Eye, Grid3X3, Box, ArrowUp, Sun, X, Radio, History, Crosshair, LayoutGrid, ChevronLeft, ChevronRight, Compass, Sparkles, FileVideo, Tag } from 'lucide-react'
+import { useState, useEffect, useRef } from 'react'
+import { Eye, Grid3X3, Box, ArrowUp, Sun, X, Radio, History, Crosshair, LayoutGrid, ChevronLeft, ChevronRight, Compass, Sparkles, FileVideo, Tag, Film } from 'lucide-react'
 import Sidebar from './Sidebar'
 import RightPanel from './RightPanel'
 import ModeBar from './ModeBar'
@@ -130,6 +130,32 @@ export default function AppShell({ onOpenDwgImporter, onOpenEdgeCommissioning, s
   
   // Sidebar collapsed state
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+
+  // Story Mode toggle (lives in the footer for consistency). Listen for the
+  // overlay's active state to highlight the toggle and auto-collapse the
+  // sidebar while the guided demo runs (restored on exit).
+  const [storyModeActive, setStoryModeActive] = useState(false)
+  const prevSidebarRef = useRef<boolean | null>(null)
+  useEffect(() => {
+    const onState = (e: Event) => {
+      const active = !!(e as CustomEvent<{ active: boolean }>).detail?.active
+      setStoryModeActive(active)
+      if (active) {
+        setSidebarCollapsed(prev => {
+          if (prevSidebarRef.current === null) prevSidebarRef.current = prev
+          return true
+        })
+      } else {
+        setSidebarCollapsed(prev => {
+          const restore = prevSidebarRef.current
+          prevSidebarRef.current = null
+          return restore === null ? prev : restore
+        })
+      }
+    }
+    window.addEventListener('hyperspace:story-mode-state', onState)
+    return () => window.removeEventListener('hyperspace:story-mode-state', onState)
+  }, [])
   
   // When timeline is shown, we're in replay mode
   const isReplayMode = showTimeline && replayTimestamp !== null
@@ -580,6 +606,17 @@ export default function AppShell({ onOpenDwgImporter, onOpenEdgeCommissioning, s
               title="Neural Dashboard (4-Quadrant View)"
             >
               <LayoutGrid className="w-3.5 h-3.5" />
+            </button>
+            <button
+              onClick={() => window.dispatchEvent(new CustomEvent('hyperspace:story-mode-toggle'))}
+              className={`p-1.5 rounded transition-colors ${
+                storyModeActive
+                  ? 'bg-blue-600 text-white'
+                  : 'text-gray-400 hover:text-white hover:bg-gray-700'
+              }`}
+              title="Story Mode (guided demo)"
+            >
+              <Film className="w-3.5 h-3.5" />
             </button>
           </div>
           
