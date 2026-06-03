@@ -21,16 +21,19 @@ interface Graph {
 
 interface Seg { t: number; x1: number; z1: number; x2: number; z2: number; id: string; stable: string }
 interface Beat { stable: string; t0: number; t1: number; gapS: number; frags: number; caption: string }
+type ViewMode = 'window' | 'trails' | 'cohort'
 
 const CW = 470, CH = 430, PAD = 12
 const WIN_LENGTHS = [10, 30, 60, 120]
+const COHORT_LENGTHS = [300, 600, 900] // seconds (5/10/15 min)
 const SPEEDS = [1, 4, 8, 16]
 const CHURN_BUCKET_S = 30
+const TRAIL_FADE_MS = 6000
 const fmtClock = (ms: number) => { const s = Math.max(0, Math.round(ms / 1000)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}` }
+const fmtSpan = (s: number) => (s >= 60 ? `${Math.round(s / 60)} min` : `${s}s`)
 
 function hue(str: string) { let h = 0; for (let i = 0; i < str.length; i++) h = (h * 31 + str.charCodeAt(i)) % 360; return h }
 const colorId = (str: string, a = 1) => `hsla(${hue(str)}, 72%, 60%, ${a})`
-
 function fmt(n: number | undefined | null, d = 1) { if (n == null || Number.isNaN(n)) return '—'; return n.toFixed(d) }
 
 export default function ReconciliationProofTab({ detail }: { detail: BenchmarkRunDetail }) {
@@ -43,11 +46,13 @@ export default function ReconciliationProofTab({ detail }: { detail: BenchmarkRu
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  // transport
+  // transport + view
+  const [viewMode, setViewMode] = useState<ViewMode>('trails')
   const [playing, setPlaying] = useState(false)
   const [tNow, setTNow] = useState(0)              // ms since firstTs
   const [speed, setSpeed] = useState(4)
   const [winLenS, setWinLenS] = useState(30)
+  const [cohortLenS, setCohortLenS] = useState(600)
   const [colorMode, setColorMode] = useState<'id' | 'time'>('id')
   const [selected, setSelected] = useState<string | null>(null)
   const [storyOn, setStoryOn] = useState(false)
@@ -73,7 +78,7 @@ export default function ReconciliationProofTab({ detail }: { detail: BenchmarkRu
       .finally(() => setLoading(false))
   }, [sourceFile])
 
-  // ---- precompute segments, buckets, lifetimes, churn, story beats ----
+  // ---- precompute segments, per-track lists, buckets, lifetimes, churn, story beats ----
   const model = useMemo(() => {
     if (!graph?.extent || !graph.chains?.length) return null
     const t0Global = graph.firstTs ?? 0
@@ -81,21 +86,25 @@ export default function ReconciliationProofTab({ detail }: { detail: BenchmarkRu
 
     const rawSegs: Seg[] = []
     const recSegs: Seg[] = []
-    const rawLife = new Map<string, { t0: number; t1: number }>()   // perceptionId -> span
-    const recLife = new Map<string, { t0: number; t1: number }>()   // stableId -> span
-    const fragCount = new Map<string, number>()                      // stableId -> distinct raw ids
+    const rawByTrack = new Map<string, Seg[]>()
+    const recByTrack = new Map<string, Seg[]>()
+    const rawLife = new Map<string, { t0: number; t1: number }>()
+    const recLife = new Map<string, { t0: number; t1: number }>()
+    const fragCount = new Map<string, number>()
     let dur = 1
+
+    const pushTrack = (m: Map<string, Seg[]>, k: string, s: Seg) => { let a = m.get(k); if (!a) { a = []; m.set(k, a) } a.push(s) }
 
     for (const c of graph.chains) {
       const p = c.path
       if (!p || p.length < 2) continue
       const stable = c.stableId
-      // reconciled span
       const rt0 = (c.t0 ?? p[0][2]) - t0Global, rt1 = (c.t1 ?? p[p.length - 1][2]) - t0Global
       recLife.set(stable, { t0: rt0, t1: rt1 }); dur = Math.max(dur, rt1)
-      // reconciled segments
-      for (let i = 0; i < p.length - 1; i++) recSegs.push({ t: p[i][2] - t0Global, x1: p[i][0], z1: p[i][1], x2: p[i + 1][0], z2: p[i + 1][1], id: stable, stable })
-      // raw fragments: assign each path point to its tracklet window (by time); break at pid changes / bridge gaps
+      for (let i = 0; i < p.length - 1; i++) {
+        const s: Seg = { t: p[i][2] - t0Global, x1: p[i][0], z1: p[i][1], x2: p[i + 1][0], z2: p[i + 1][1], id: stable, stable }
+        recSegs.push(s); pushTrack(recByTrack, stable, s)
+      }
       const tks = (c.tracklets || []).map((id) => trackletMap.get(id)).filter(Boolean) as GraphTracklet[]
       tks.sort((a, b) => a.t0 - b.t0)
       const pidAt = (t: number): string | null => { for (const k of tks) if (t >= k.t0 - 200 && t <= k.t1 + 200) return k.src; return null }
@@ -105,28 +114,31 @@ export default function ReconciliationProofTab({ detail }: { detail: BenchmarkRu
         const pid = pidAt(pt[2])
         if (pid) {
           pidsSeen.add(pid)
-          if (!rawLife.has(pid)) rawLife.set(pid, { t0: pt[2] - t0Global, t1: pt[2] - t0Global })
-          else { const L = rawLife.get(pid)!; L.t0 = Math.min(L.t0, pt[2] - t0Global); L.t1 = Math.max(L.t1, pt[2] - t0Global) }
+          const tt = pt[2] - t0Global
+          if (!rawLife.has(pid)) rawLife.set(pid, { t0: tt, t1: tt })
+          else { const L = rawLife.get(pid)!; L.t0 = Math.min(L.t0, tt); L.t1 = Math.max(L.t1, tt) }
         }
-        if (prev && prevPid && pid === prevPid) rawSegs.push({ t: prev[2] - t0Global, x1: prev[0], z1: prev[1], x2: pt[0], z2: pt[1], id: prevPid, stable })
+        if (prev && prevPid && pid === prevPid) {
+          const s: Seg = { t: prev[2] - t0Global, x1: prev[0], z1: prev[1], x2: pt[0], z2: pt[1], id: prevPid, stable }
+          rawSegs.push(s); pushTrack(rawByTrack, prevPid, s)
+        }
         prev = pt; prevPid = pid
       }
       fragCount.set(stable, pidsSeen.size || (c.tracklets?.length ?? 1))
     }
+    for (const a of rawByTrack.values()) a.sort((x, y) => x.t - y.t)
+    for (const a of recByTrack.values()) a.sort((x, y) => x.t - y.t)
 
-    // bucket segments by second for fast windowed draw
     const bucket = (segs: Seg[]) => { const m = new Map<number, number[]>(); segs.forEach((s, i) => { const k = Math.floor(s.t / 1000); let a = m.get(k); if (!a) { a = []; m.set(k, a) } a.push(i) }); return m }
     const rawBuckets = bucket(rawSegs)
     const recBuckets = bucket(recSegs)
 
-    // churn (births/deaths per 30s)
     const nB = Math.ceil(dur / 1000 / CHURN_BUCKET_S) + 1
     const churn = { rawBirth: new Array(nB).fill(0), rawDeath: new Array(nB).fill(0), recBirth: new Array(nB).fill(0), recDeath: new Array(nB).fill(0) }
     const bi = (ms: number) => Math.min(nB - 1, Math.max(0, Math.floor(ms / 1000 / CHURN_BUCKET_S)))
     for (const L of rawLife.values()) { churn.rawBirth[bi(L.t0)]++; churn.rawDeath[bi(L.t1)]++ }
     for (const L of recLife.values()) { churn.recBirth[bi(L.t0)]++; churn.recDeath[bi(L.t1)]++ }
 
-    // story beats: chains with the largest bridged internal gap
     const beats: Beat[] = []
     for (const c of graph.chains) {
       if (!c.path || (c.tracklets?.length ?? 0) < 2) continue
@@ -139,10 +151,17 @@ export default function ReconciliationProofTab({ detail }: { detail: BenchmarkRu
     }
     beats.sort((a, b) => b.gapS - a.gapS)
 
-    return { rawSegs, recSegs, rawBuckets, recBuckets, rawLife, recLife, fragCount, churn, nB, dur, beats: beats.slice(0, 6) }
+    return { rawSegs, recSegs, rawBuckets, recBuckets, rawByTrack, recByTrack, rawLife, recLife, fragCount, churn, nB, dur, beats: beats.slice(0, 6) }
   }, [graph])
 
   const totalDur = model?.dur ?? 1
+
+  // ---- span for the active view (drives counts + KPI overlay) ----
+  const span = useMemo(() => {
+    if (viewMode === 'cohort') return { s0: tNow, s1: tNow + cohortLenS * 1000 }
+    if (viewMode === 'trails') return { s0: tNow - 1000, s1: tNow }
+    return { s0: tNow - winLenS * 1000, s1: tNow }
+  }, [viewMode, tNow, winLenS, cohortLenS])
 
   // ---- transform (shared by both panes) ----
   const tf = useMemo(() => {
@@ -156,53 +175,67 @@ export default function ReconciliationProofTab({ detail }: { detail: BenchmarkRu
   }, [graph])
 
   // ---- draw one pane ----
-  const drawPane = useCallback((canvas: HTMLCanvasElement | null, segs: Seg[], buckets: Map<number, number[]>, mode: 'raw' | 'rec') => {
+  const drawPane = useCallback((canvas: HTMLCanvasElement | null, pane: 'raw' | 'rec') => {
     if (!canvas || !tf || !model) return
     const ctx = canvas.getContext('2d'); if (!ctx) return
-    const win = winLenS * 1000
-    const t1 = tNow, t0 = tNow - win
+    const segs = pane === 'raw' ? model.rawSegs : model.recSegs
+    const buckets = pane === 'raw' ? model.rawBuckets : model.recBuckets
+    const byTrack = pane === 'raw' ? model.rawByTrack : model.recByTrack
+    const lifeMap = pane === 'raw' ? model.rawLife : model.recLife
     const toPx = (x: number, z: number): [number, number] => [x * tf.scale + tf.ox, CH - (z * tf.scale + tf.oz)]
     ctx.fillStyle = '#0b0e14'; ctx.fillRect(0, 0, CW, CH)
-    // entrance ROI
     if (graph?.entrance?.vertices?.length) {
       ctx.beginPath(); graph.entrance.vertices.forEach((v, i) => { const [px, py] = toPx(v.x, v.z); if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py) })
       ctx.closePath(); ctx.strokeStyle = 'rgba(34,211,238,0.5)'; ctx.lineWidth = 1.2; ctx.stroke()
     }
-    const sec0 = Math.floor(t0 / 1000), sec1 = Math.floor(t1 / 1000)
-    ctx.lineWidth = mode === 'rec' ? 1.8 : 1.4
-    for (let s = sec0; s <= sec1; s++) {
-      const arr = buckets.get(s); if (!arr) continue
-      for (const idx of arr) {
-        const seg = segs[idx]
-        if (seg.t < t0 || seg.t > t1) continue
-        const dim = selected && seg.stable !== selected
-        let color: string
-        if (mode === 'rec' && colorMode === 'time') {
-          const u = Math.max(0, Math.min(1, (seg.t - t0) / win)); color = `hsla(${Math.round(220 - 220 * u)}, 80%, 62%, ${dim ? 0.08 : 1})`
-        } else {
-          color = colorId(mode === 'rec' ? seg.stable : seg.id, dim ? 0.08 : 1)
-        }
-        const [x1, y1] = toPx(seg.x1, seg.z1), [x2, y2] = toPx(seg.x2, seg.z2)
-        ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.strokeStyle = color; ctx.stroke()
+    ctx.lineWidth = pane === 'rec' ? 1.8 : 1.4
+    const drawSeg = (seg: Seg, alpha: number) => {
+      const dim = selected && seg.stable !== selected ? 0.06 : alpha
+      let color: string
+      if (pane === 'rec' && colorMode === 'time') { const u = Math.max(0, Math.min(1, (seg.t - span.s0) / Math.max(1, span.s1 - span.s0))); color = `hsla(${Math.round(220 - 220 * u)}, 80%, 62%, ${dim})` }
+      else color = colorId(pane === 'rec' ? seg.stable : seg.id, dim)
+      const [x1, y1] = toPx(seg.x1, seg.z1), [x2, y2] = toPx(seg.x2, seg.z2)
+      ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.strokeStyle = color; ctx.stroke()
+    }
+
+    if (viewMode === 'window') {
+      const t0 = tNow - winLenS * 1000
+      for (let s = Math.floor(t0 / 1000); s <= Math.floor(tNow / 1000); s++) {
+        const arr = buckets.get(s); if (!arr) continue
+        for (const idx of arr) { const seg = segs[idx]; if (seg.t < t0 || seg.t > tNow) continue; drawSeg(seg, 1) }
+      }
+    } else if (viewMode === 'trails') {
+      // each track's full path birth→playhead; fade out after death
+      for (const [id, tsegs] of byTrack) {
+        const L = lifeMap.get(id); if (!L) continue
+        if (L.t0 > tNow || L.t1 < tNow - TRAIL_FADE_MS) continue
+        const aliveAlpha = L.t1 >= tNow ? 1 : Math.max(0, 1 - (tNow - L.t1) / TRAIL_FADE_MS)
+        for (const seg of tsegs) { if (seg.t > tNow) break; drawSeg(seg, aliveAlpha) }
+      }
+    } else { // cohort — full path of every track overlapping the window
+      const { s0, s1 } = span
+      for (const [id, tsegs] of byTrack) {
+        const L = lifeMap.get(id); if (!L || L.t1 < s0 || L.t0 > s1) continue
+        for (const seg of tsegs) drawSeg(seg, 0.92)
       }
     }
-  }, [tf, model, graph, tNow, winLenS, colorMode, selected])
+  }, [tf, model, graph, tNow, winLenS, colorMode, selected, viewMode, span])
 
-  // ---- active-id counts at playhead ----
-  const liveCounts = useMemo(() => {
-    if (!model) return { raw: 0, rec: 0 }
-    const lo = tNow - 1000, hi = tNow
-    let raw = 0, rec = 0
-    for (const L of model.rawLife.values()) if (L.t1 >= lo && L.t0 <= hi) raw++
-    for (const L of model.recLife.values()) if (L.t1 >= lo && L.t0 <= hi) rec++
-    return { raw, rec }
-  }, [model, tNow])
+  // ---- counts + KPIs over the active span ----
+  const spanStats = useMemo(() => {
+    if (!model) return null
+    const { s0, s1 } = span
+    let raw = 0, rec = 0, rawDur = 0, recDur = 0
+    for (const L of model.rawLife.values()) if (L.t1 >= s0 && L.t0 <= s1) { raw++; rawDur += L.t1 - L.t0 }
+    for (const L of model.recLife.values()) if (L.t1 >= s0 && L.t0 <= s1) { rec++; recDur += L.t1 - L.t0 }
+    return { raw, rec, rawDurS: raw ? rawDur / raw / 1000 : 0, recDurS: rec ? recDur / rec / 1000 : 0, over: rec ? raw / rec : 0 }
+  }, [model, span])
 
   // ---- render frame whenever inputs change ----
   useEffect(() => {
     if (!model) return
-    drawPane(rawCanvas.current, model.rawSegs, model.rawBuckets, 'raw')
-    drawPane(recCanvas.current, model.recSegs, model.recBuckets, 'rec')
+    drawPane(rawCanvas.current, 'raw')
+    drawPane(recCanvas.current, 'rec')
   }, [model, drawPane])
 
   // ---- playback loop ----
@@ -240,7 +273,6 @@ export default function ReconciliationProofTab({ detail }: { detail: BenchmarkRu
     const line = (vals: number[], color: string) => { ctx.beginPath(); vals.forEach((v, i) => { const x = xAt(i), y = H - (v / maxV) * (H - 4) - 2; if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y) }); ctx.strokeStyle = color; ctx.lineWidth = 1.5; ctx.stroke() }
     line(rawTot, 'rgba(248,113,113,0.9)')
     line(recTot, 'rgba(52,211,153,0.95)')
-    // playhead
     const px = (tNow / 1000 / CHURN_BUCKET_S / Math.max(1, n - 1)) * W
     ctx.beginPath(); ctx.moveTo(px, 0); ctx.lineTo(px, H); ctx.strokeStyle = 'rgba(255,255,255,0.5)'; ctx.lineWidth = 1; ctx.stroke()
   }, [model, tNow])
@@ -250,16 +282,14 @@ export default function ReconciliationProofTab({ detail }: { detail: BenchmarkRu
     if (!tf || !model) return
     const rect = ev.currentTarget.getBoundingClientRect()
     const mx = (ev.clientX - rect.left) * (CW / rect.width), my = (ev.clientY - rect.top) * (CH / rect.height)
-    const win = winLenS * 1000, t0 = tNow - win
     const toPx = (x: number, z: number): [number, number] => [x * tf.scale + tf.ox, CH - (z * tf.scale + tf.oz)]
     let best: string | null = null, bestD = 14 * 14
-    for (const seg of model.recSegs) {
-      if (seg.t < t0 || seg.t > tNow) continue
-      const [px, py] = toPx(seg.x1, seg.z1); const d = (px - mx) ** 2 + (py - my) ** 2
-      if (d < bestD) { bestD = d; best = seg.stable }
-    }
+    const consider = (seg: Seg) => { const [px, py] = toPx(seg.x1, seg.z1); const d = (px - mx) ** 2 + (py - my) ** 2; if (d < bestD) { bestD = d; best = seg.stable } }
+    if (viewMode === 'window') { const t0 = tNow - winLenS * 1000; for (const seg of model.recSegs) { if (seg.t < t0 || seg.t > tNow) continue; consider(seg) } }
+    else if (viewMode === 'trails') { for (const [id, tsegs] of model.recByTrack) { const L = model.recLife.get(id); if (!L || L.t0 > tNow || L.t1 < tNow - TRAIL_FADE_MS) continue; for (const seg of tsegs) { if (seg.t > tNow) break; consider(seg) } } }
+    else { const { s0, s1 } = span; for (const [id, tsegs] of model.recByTrack) { const L = model.recLife.get(id); if (!L || L.t1 < s0 || L.t0 > s1) continue; for (const seg of tsegs) consider(seg) } }
     setSelected(best)
-  }, [tf, model, tNow, winLenS])
+  }, [tf, model, tNow, winLenS, viewMode, span])
 
   const selInfo = useMemo(() => {
     if (!selected || !model) return null
@@ -270,12 +300,11 @@ export default function ReconciliationProofTab({ detail }: { detail: BenchmarkRu
 
   const startStory = () => {
     if (!model?.beats.length) return
-    setStoryOn(true); setSelected(model.beats[0].stable); setStoryIdx(0)
-    setTNow(Math.max(0, model.beats[0].t0 - 1000)); setWinLenS(30); setSpeed(4); setPlaying(true)
+    setViewMode('trails'); setStoryOn(true); setSelected(model.beats[0].stable); setStoryIdx(0)
+    setTNow(Math.max(0, model.beats[0].t0 - 1000)); setSpeed(4); setPlaying(true)
   }
   useEffect(() => { if (storyOn && model?.beats.length) setSelected(model.beats[storyIdx % model.beats.length].stable) }, [storyIdx, storyOn, model])
 
-  // ---- KPI helpers ----
   const churnCut = perception?.unique_perception_ids && recon?.stable_tracks
     ? (1 - recon.stable_tracks / perception.unique_perception_ids) * 100 : null
 
@@ -299,6 +328,12 @@ export default function ReconciliationProofTab({ detail }: { detail: BenchmarkRu
     </div>
   )
 
+  const ViewBtn = ({ id, label }: { id: ViewMode; label: string }) => (
+    <button type="button" onClick={() => setViewMode(id)} className={`px-2.5 py-1 rounded text-xs ${viewMode === id ? 'bg-emerald-700 text-white' : 'text-gray-400 hover:text-white'}`}>{label}</button>
+  )
+
+  const paneCount = (pane: 'raw' | 'rec') => (viewMode === 'cohort' ? `${pane === 'raw' ? spanStats?.raw : spanStats?.rec} in ${fmtSpan(cohortLenS)}` : `${pane === 'raw' ? spanStats?.raw : spanStats?.rec} active`)
+
   return (
     <div className="space-y-4">
       {/* headline cards */}
@@ -311,35 +346,51 @@ export default function ReconciliationProofTab({ detail }: { detail: BenchmarkRu
 
       {/* toolbar */}
       <div className="flex flex-wrap items-center gap-2">
+        <div className="flex items-center gap-1 bg-gray-800 rounded-lg p-1">
+          <span className="text-[10px] uppercase text-gray-500 px-1.5">View</span>
+          <ViewBtn id="trails" label="Trails" />
+          <ViewBtn id="cohort" label="Cohort" />
+          <ViewBtn id="window" label="Window" />
+        </div>
         <button type="button" onClick={startStory} disabled={!model?.beats.length} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm border border-purple-600/60 bg-purple-950/40 text-purple-200 hover:bg-purple-900/40 disabled:opacity-40">
           <Film className="w-4 h-4" /> Story mode
         </button>
         <button type="button" onClick={() => setColorMode((m) => (m === 'id' ? 'time' : 'id'))} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm border border-gray-600 text-gray-300 hover:text-white">
-          <Palette className="w-4 h-4" /> Colour: {colorMode === 'id' ? 'by identity' : 'by time'}
+          <Palette className="w-4 h-4" /> {colorMode === 'id' ? 'by identity' : 'by time'}
         </button>
         {(selected || storyOn) && (
           <button type="button" onClick={() => { setSelected(null); setStoryOn(false) }} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm border border-gray-600 text-gray-400 hover:text-white">
             <Eraser className="w-4 h-4" /> Clear focus
           </button>
         )}
-        {footfall?.entrance_footfall != null && (
-          <span className="text-xs text-gray-500 ml-1">Denominator: {footfall.entrance_footfall} entrants @ gate</span>
-        )}
       </div>
+
+      {/* window-KPI overlay (extract real KPIs in this time slice) */}
+      {spanStats && (
+        <div className="flex flex-wrap items-center gap-x-6 gap-y-1 rounded-lg border border-emerald-800/40 bg-emerald-950/15 px-4 py-2.5 text-sm">
+          <span className="text-[10px] uppercase tracking-wide text-emerald-400/80">
+            {viewMode === 'cohort' ? `In this ${fmtSpan(cohortLenS)} window` : viewMode === 'window' ? `In this ${winLenS}s window` : 'At this moment'}
+          </span>
+          <span className="text-gray-300">Raw counts <span className="text-blue-300 font-semibold font-mono">{spanStats.raw}</span> "shoppers"</span>
+          <span className="text-gray-300">Reconciled <span className="text-emerald-300 font-semibold font-mono">{spanStats.rec}</span> real people</span>
+          {spanStats.over > 0 && <span className="text-amber-300">→ raw over-counts {spanStats.over.toFixed(1)}×</span>}
+          <span className="text-gray-500">avg duration {spanStats.rawDurS.toFixed(0)}s → <span className="text-emerald-300">{spanStats.recDurS.toFixed(0)}s</span></span>
+        </div>
+      )}
 
       {/* dual maps */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
         <div className="rounded-xl border border-blue-900/40 bg-[#0b0e14] overflow-hidden">
           <div className="flex items-center justify-between px-3 py-2 border-b border-gray-800">
             <span className="text-xs font-medium text-blue-300">RAW perception <span className="text-gray-600">· colour = LiDAR ID</span></span>
-            <span className="text-xs text-gray-400 flex items-center gap-1"><Users className="w-3 h-3" /> {liveCounts.raw} active</span>
+            <span className="text-xs text-gray-400 flex items-center gap-1"><Users className="w-3 h-3" /> {paneCount('raw')}</span>
           </div>
           <canvas ref={rawCanvas} width={CW} height={CH} className="w-full block" style={{ aspectRatio: `${CW}/${CH}` }} />
         </div>
         <div className="rounded-xl border border-emerald-900/40 bg-[#0b0e14] overflow-hidden">
           <div className="flex items-center justify-between px-3 py-2 border-b border-gray-800">
             <span className="text-xs font-medium text-emerald-300">RECONCILED v2 <span className="text-gray-600">· click a track to follow</span></span>
-            <span className="text-xs text-gray-400 flex items-center gap-1"><Users className="w-3 h-3" /> {liveCounts.rec} active</span>
+            <span className="text-xs text-gray-400 flex items-center gap-1"><Users className="w-3 h-3" /> {paneCount('rec')}</span>
           </div>
           <canvas ref={recCanvas} width={CW} height={CH} onClick={onRecClick} className="w-full block cursor-pointer" style={{ aspectRatio: `${CW}/${CH}` }} />
         </div>
@@ -361,21 +412,30 @@ export default function ReconciliationProofTab({ detail }: { detail: BenchmarkRu
             {playing ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}{playing ? 'Pause' : 'Play'}
           </button>
           <input type="range" min={0} max={totalDur} value={Math.min(tNow, totalDur)} onChange={(e) => { setTNow(Number(e.target.value)); setStoryOn(false) }} className="flex-1 accent-emerald-500" />
-          <span className="text-xs text-gray-400 font-mono w-24 text-right">{fmtClock(tNow)} / {fmtClock(totalDur)}</span>
+          <span className="text-xs text-gray-400 font-mono w-24 text-right">{viewMode === 'cohort' ? `${fmtClock(tNow)}–${fmtClock(tNow + cohortLenS * 1000)}` : `${fmtClock(tNow)} / ${fmtClock(totalDur)}`}</span>
         </div>
-        <div className="flex items-center gap-4 text-xs">
+        <div className="flex flex-wrap items-center gap-4 text-xs">
           <div className="flex items-center gap-1">
             <span className="text-gray-500">Speed</span>
-            {SPEEDS.map((s) => (
-              <button key={s} type="button" onClick={() => setSpeed(s)} className={`px-2 py-0.5 rounded ${speed === s ? 'bg-emerald-700 text-white' : 'text-gray-400 hover:text-white'}`}>{s}×</button>
-            ))}
+            {SPEEDS.map((s) => (<button key={s} type="button" onClick={() => setSpeed(s)} className={`px-2 py-0.5 rounded ${speed === s ? 'bg-emerald-700 text-white' : 'text-gray-400 hover:text-white'}`}>{s}×</button>))}
           </div>
-          <div className="flex items-center gap-1">
-            <span className="text-gray-500">Window</span>
-            {WIN_LENGTHS.map((w) => (
-              <button key={w} type="button" onClick={() => setWinLenS(w)} className={`px-2 py-0.5 rounded ${winLenS === w ? 'bg-gray-600 text-white' : 'text-gray-400 hover:text-white'}`}>{w}s</button>
-            ))}
-          </div>
+          {viewMode === 'window' && (
+            <div className="flex items-center gap-1">
+              <span className="text-gray-500">Window</span>
+              {WIN_LENGTHS.map((w) => (<button key={w} type="button" onClick={() => setWinLenS(w)} className={`px-2 py-0.5 rounded ${winLenS === w ? 'bg-gray-600 text-white' : 'text-gray-400 hover:text-white'}`}>{w}s</button>))}
+            </div>
+          )}
+          {viewMode === 'cohort' && (
+            <div className="flex items-center gap-1">
+              <span className="text-gray-500">Cohort length</span>
+              {COHORT_LENGTHS.map((w) => (<button key={w} type="button" onClick={() => setCohortLenS(w)} className={`px-2 py-0.5 rounded ${cohortLenS === w ? 'bg-gray-600 text-white' : 'text-gray-400 hover:text-white'}`}>{fmtSpan(w)}</button>))}
+            </div>
+          )}
+          <span className="text-gray-600">
+            {viewMode === 'trails' ? 'Trails grow as people move; raw fragments die, reconciled journeys persist.'
+              : viewMode === 'cohort' ? 'Every shopper present in the window, full path — the store filling up.'
+                : 'Sliding window — the moving snapshot.'}
+          </span>
         </div>
       </div>
 
@@ -383,10 +443,7 @@ export default function ReconciliationProofTab({ detail }: { detail: BenchmarkRu
       <div className="rounded-xl border border-gray-700 bg-gray-800/40 p-3">
         <div className="flex items-center justify-between mb-1.5">
           <p className="text-[10px] uppercase tracking-wide text-gray-500">ID churn over time (births + deaths / {CHURN_BUCKET_S}s)</p>
-          <div className="flex items-center gap-3 text-[10px]">
-            <span className="text-red-400">▬ raw</span>
-            <span className="text-emerald-400">▬ reconciled</span>
-          </div>
+          <div className="flex items-center gap-3 text-[10px]"><span className="text-red-400">▬ raw</span><span className="text-emerald-400">▬ reconciled</span></div>
         </div>
         <canvas ref={churnCanvas} width={920} height={70} className="w-full block" style={{ aspectRatio: '920/70' }} />
       </div>
@@ -395,7 +452,7 @@ export default function ReconciliationProofTab({ detail }: { detail: BenchmarkRu
       <div className="overflow-x-auto rounded-xl border border-gray-700">
         <table className="w-full text-sm">
           <thead><tr className="bg-gray-800 text-gray-400 text-left">
-            <th className="px-4 py-2 font-medium">Continuity & duration KPIs</th>
+            <th className="px-4 py-2 font-medium">Continuity & duration KPIs (whole capture)</th>
             <th className="px-4 py-2 font-medium text-right text-blue-300">Raw</th>
             <th className="px-4 py-2 font-medium text-right text-emerald-300">Reconciled</th>
           </tr></thead>
