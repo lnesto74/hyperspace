@@ -3063,6 +3063,253 @@ export default function MainViewport({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [venue?.id])
 
+  // ── Story Mode "Store Awakening" cinematic on the REAL scene ──
+  // Fully additive: driven by window events from StoryMode. It snapshots the
+  // live camera/lights, plays a dark→reveal sequence (a real sweeping light +
+  // light pool over the actual DWG floorplan, a camera fly-in, and pulses on the
+  // REAL LiDAR placements), then restores everything. No fake geometry, no fake
+  // tracks. Removable cleanly; if the scene isn't ready it reports done at once.
+  useEffect(() => {
+    let rafId: number | null = null
+    let rings: THREE.Mesh[] = []
+    const added: THREE.Object3D[] = []
+    let snapshot: {
+      camPos: THREE.Vector3; target: THREE.Vector3; controlsEnabled: boolean
+      ambient: number; directional: number; dirPos: THREE.Vector3; bg: THREE.Color | null
+    } | null = null
+
+    const disposeAdded = () => {
+      const scene = sceneRef.current
+      rings.forEach((r) => { scene?.remove(r); r.geometry.dispose(); (r.material as THREE.Material).dispose() })
+      rings = []
+      added.forEach((o) => {
+        scene?.remove(o)
+        const m = o as THREE.Mesh
+        if (m.geometry) m.geometry.dispose()
+        if (m.material) (m.material as THREE.Material).dispose?.()
+      })
+      added.length = 0
+    }
+
+    const resetLidars = () => {
+      lidarMeshesRef.current.forEach((group) => {
+        const dome = group.children[2] as THREE.Mesh | undefined
+        const dm = dome?.material as THREE.MeshStandardMaterial | undefined
+        if (dm) { dm.emissive.setHex(0x000000); dm.emissiveIntensity = 0 }
+      })
+    }
+
+    const end = (jumpToOverview: boolean, overview?: { pos: THREE.Vector3; target: THREE.Vector3 }) => {
+      if (rafId !== null) { cancelAnimationFrame(rafId); rafId = null }
+      disposeAdded()
+      resetLidars()
+      const camera = cameraRef.current, controls = controlsRef.current, scene = sceneRef.current
+      const amb = ambientLightRef.current, dir = directionalLightRef.current
+      if (snapshot) {
+        if (amb) amb.intensity = snapshot.ambient
+        if (dir) { dir.intensity = snapshot.directional; dir.position.copy(snapshot.dirPos) }
+        if (scene && snapshot.bg) scene.background = snapshot.bg
+        if (controls) controls.enabled = snapshot.controlsEnabled
+        if (jumpToOverview && overview && camera && controls) {
+          camera.position.copy(overview.pos)
+          controls.target.copy(overview.target)
+          controls.update()
+        }
+      }
+      snapshot = null
+    }
+
+    const start = () => {
+      // Abort any in-flight run first.
+      if (rafId !== null) end(false)
+      const camera = cameraRef.current, controls = controlsRef.current, scene = sceneRef.current
+      const amb = ambientLightRef.current, dir = directionalLightRef.current
+      if (!camera || !controls || !scene || !amb || !dir) {
+        window.dispatchEvent(new CustomEvent('hyperspace:cinematic-intro-done'))
+        return
+      }
+
+      snapshot = {
+        camPos: camera.position.clone(),
+        target: controls.target.clone(),
+        controlsEnabled: controls.enabled,
+        ambient: amb.intensity,
+        directional: dir.intensity,
+        dirPos: dir.position.clone(),
+        bg: scene.background instanceof THREE.Color ? scene.background.clone() : null,
+      }
+      controls.enabled = false
+
+      const b = dwgSceneBounds
+      const venueW = venue?.width ?? 20, venueD = venue?.depth ?? 20
+      const floorW = b?.floorW ?? venueW, floorD = b?.floorD ?? venueD
+      const centerX = b?.centerX ?? venueW / 2, centerZ = b?.centerZ ?? venueD / 2
+      const viewSize = Math.max(floorW, floorD, 6)
+
+      const overviewPos = new THREE.Vector3(centerX + viewSize * 0.8, viewSize * 0.7, centerZ + viewSize * 0.8)
+      const overviewTarget = new THREE.Vector3(centerX, 0, centerZ)
+      const startPos = new THREE.Vector3(centerX - viewSize * 0.3, viewSize * 0.07, centerZ + viewSize * 0.6)
+      const overview = { pos: overviewPos, target: overviewTarget }
+
+      // Real LiDAR placements (world positions), sorted left→right for the wake.
+      const lidars: { x: number; z: number; group: THREE.Group }[] = []
+      lidarMeshesRef.current.forEach((group) => lidars.push({ x: group.position.x, z: group.position.z, group }))
+      let minX = Infinity, maxX = -Infinity
+      lidars.forEach((l) => { if (l.x < minX) minX = l.x; if (l.x > maxX) maxX = l.x })
+      const spanX = (maxX - minX) || 1
+      const pulsed = new Set<number>()
+
+      // A real sweeping spotlight (shades the solid fixtures/floor)...
+      const spot = new THREE.SpotLight(0xbcd6ff, 0)
+      spot.angle = Math.PI / 6
+      spot.penumbra = 0.7
+      spot.decay = 0
+      spot.distance = viewSize * 5
+      spot.position.set(centerX - viewSize, viewSize * 1.1, centerZ)
+      const spotTarget = new THREE.Object3D()
+      spotTarget.position.set(centerX - viewSize, 0, centerZ)
+      scene.add(spotTarget)
+      spot.target = spotTarget
+      scene.add(spot)
+      added.push(spot, spotTarget)
+
+      // ...and an additive "light pool" disc that is guaranteed to read on the
+      // floor regardless of materials.
+      const pool = new THREE.Mesh(
+        new THREE.CircleGeometry(viewSize * 0.16, 48),
+        new THREE.MeshBasicMaterial({ color: 0x9fc0ff, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide }),
+      )
+      pool.rotation.x = -Math.PI / 2
+      pool.position.set(centerX - viewSize, 0.04, centerZ)
+      scene.add(pool)
+      added.push(pool)
+
+      // Dark theatre to begin.
+      scene.background = new THREE.Color(0x01030a)
+      amb.intensity = 0.05
+      dir.intensity = 0.04
+      camera.position.copy(startPos)
+      controls.target.copy(overviewTarget)
+
+      const SWEEP_START = 1100, SWEEP_END = 5400
+      const FLY_START = 1300, FLY_END = 8200
+      const SENSOR_START = 2400, SENSOR_SPAN = 3800
+      const SETTLE_START = 8200, SETTLE_END = 10500
+      const TOTAL = 10800
+
+      const t0 = performance.now()
+      const ease = (x: number) => 1 - Math.pow(1 - x, 3)
+      const c01 = (x: number) => Math.max(0, Math.min(1, x))
+
+      const tick = () => {
+        const t = performance.now() - t0
+        const sweepX = centerX - viewSize + 2 * viewSize * c01((t - SWEEP_START) / (SWEEP_END - SWEEP_START))
+
+        // Lights + sweeping spot/pool
+        if (t < SWEEP_START) {
+          amb.intensity = 0.05; dir.intensity = 0.04
+          ;(pool.material as THREE.MeshBasicMaterial).opacity = 0
+          spot.intensity = 0
+        } else if (t < SWEEP_END) {
+          const s = c01((t - SWEEP_START) / (SWEEP_END - SWEEP_START))
+          amb.intensity = 0.06 + 0.18 * s
+          dir.intensity = 0.1 + 0.7 * s
+          dir.position.set(sweepX, viewSize * 0.7, centerZ)
+          spot.intensity = 3.2
+          spot.position.set(sweepX, viewSize * 1.1, centerZ)
+          spotTarget.position.set(sweepX, 0, centerZ)
+          pool.position.x = sweepX
+          ;(pool.material as THREE.MeshBasicMaterial).opacity = 0.22 * Math.sin(Math.PI * s) + 0.06
+        } else if (t < SETTLE_START) {
+          amb.intensity = 0.26; dir.intensity = 0.82
+          spot.intensity = Math.max(0, spot.intensity - 0.12)
+          ;(pool.material as THREE.MeshBasicMaterial).opacity = Math.max(0, (pool.material as THREE.MeshBasicMaterial).opacity - 0.02)
+        } else {
+          const s = c01((t - SETTLE_START) / (SETTLE_END - SETTLE_START))
+          amb.intensity = 0.26 + (snapshot!.ambient - 0.26) * s
+          dir.intensity = 0.82 + (snapshot!.directional - 0.82) * s
+          dir.position.lerpVectors(new THREE.Vector3(centerX + viewSize, viewSize * 0.7, centerZ), snapshot!.dirPos, s)
+          spot.intensity = 0
+          ;(pool.material as THREE.MeshBasicMaterial).opacity = 0
+          if (scene.background instanceof THREE.Color && snapshot!.bg) {
+            scene.background.lerp(snapshot!.bg, c01(s * 1.4))
+          }
+        }
+
+        // Camera fly-in (dramatic low angle → fitted overview)
+        if (t >= FLY_START) {
+          const f = ease(c01((t - FLY_START) / (FLY_END - FLY_START)))
+          camera.position.lerpVectors(startPos, overviewPos, f)
+        }
+
+        // Real LiDARs wake one by one as the sweep passes their X.
+        lidars.forEach((l, i) => {
+          const wake = SENSOR_START + ((l.x - minX) / spanX) * SENSOR_SPAN
+          if (t >= wake && !pulsed.has(i)) {
+            pulsed.add(i)
+            const dome = l.group.children[2] as THREE.Mesh | undefined
+            const dm = dome?.material as THREE.MeshStandardMaterial | undefined
+            if (dm) { dm.emissive.setHex(0x5aa0ff); dm.emissiveIntensity = 1.1 }
+            const ring = new THREE.Mesh(
+              new THREE.RingGeometry(0.22, 0.34, 44),
+              new THREE.MeshBasicMaterial({ color: 0x8fb6ff, transparent: true, opacity: 0.9, side: THREE.DoubleSide, depthWrite: false }),
+            )
+            ring.rotation.x = -Math.PI / 2
+            ring.position.set(l.x, 0.05, l.z)
+            ring.userData.bornAt = performance.now()
+            scene.add(ring)
+            rings.push(ring)
+          }
+        })
+
+        // Animate + reap LiDAR rings; ease dome glow back down.
+        const nowp = performance.now()
+        rings = rings.filter((r) => {
+          const age = (nowp - (r.userData.bornAt as number)) / 1600
+          if (age >= 1) { scene.remove(r); r.geometry.dispose(); (r.material as THREE.Material).dispose(); return false }
+          const sc = 0.4 + age * 9
+          r.scale.set(sc, sc, sc)
+          ;(r.material as THREE.MeshBasicMaterial).opacity = 0.9 * (1 - age)
+          return true
+        })
+        lidars.forEach((l) => {
+          const dome = l.group.children[2] as THREE.Mesh | undefined
+          const dm = dome?.material as THREE.MeshStandardMaterial | undefined
+          if (dm && dm.emissiveIntensity > 0) dm.emissiveIntensity = Math.max(0, dm.emissiveIntensity - 0.012)
+        })
+
+        if (t >= TOTAL) {
+          end(false, overview)
+          window.dispatchEvent(new CustomEvent('hyperspace:cinematic-intro-done'))
+          return
+        }
+        rafId = requestAnimationFrame(tick)
+      }
+      rafId = requestAnimationFrame(tick)
+    }
+
+    const onStart = () => start()
+    const onStop = () => {
+      const b = dwgSceneBounds
+      const venueW = venue?.width ?? 20, venueD = venue?.depth ?? 20
+      const floorW = b?.floorW ?? venueW, floorD = b?.floorD ?? venueD
+      const centerX = b?.centerX ?? venueW / 2, centerZ = b?.centerZ ?? venueD / 2
+      const viewSize = Math.max(floorW, floorD, 6)
+      end(true, {
+        pos: new THREE.Vector3(centerX + viewSize * 0.8, viewSize * 0.7, centerZ + viewSize * 0.8),
+        target: new THREE.Vector3(centerX, 0, centerZ),
+      })
+    }
+    window.addEventListener('hyperspace:cinematic-intro-start', onStart)
+    window.addEventListener('hyperspace:cinematic-intro-stop', onStop)
+    return () => {
+      window.removeEventListener('hyperspace:cinematic-intro-start', onStart)
+      window.removeEventListener('hyperspace:cinematic-intro-stop', onStop)
+      end(false)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dwgSceneBounds, venue?.id, venue?.width, venue?.depth])
+
   // 3D Logo Billboard on back wall
   useEffect(() => {
     if (!sceneRef.current || !venue) return

@@ -241,191 +241,12 @@ const BEATS: Beat[] = [
 const AUTO_ADVANCE_MS = 14000
 const REPLAY_SPEED = 3 // recording playback speed (recorded-time / wall-time)
 
-// Total runtime of the Store Awakening opening sequence (ms). The MQTT replay
-// is started by the parent only after this elapses (or when skipped).
-const AWAKENING_MS = 15000
-
-// Ceiling sensor nodes — wake left→right as the beam sweeps (staggered delays).
-const AWK_SENSORS = [
-  { x: 16, y: 18, d: 4.9 },
-  { x: 32, y: 18, d: 5.4 },
-  { x: 48, y: 18, d: 5.9 },
-  { x: 64, y: 18, d: 6.4 },
-  { x: 80, y: 18, d: 6.9 },
-  { x: 80, y: 78, d: 7.3 },
-  { x: 16, y: 78, d: 7.6 },
-]
-
-// Vertical shelf blocks (percent of the staged scene box).
-const AWK_SHELVES = [
-  { x: 19, w: 4.4 },
-  { x: 32, w: 4.4 },
-  { x: 45, w: 4.4 },
-  { x: 58, w: 4.4 },
-]
-
-// A few floating dust motes that live inside the beam.
-const AWK_DUST = Array.from({ length: 12 }, (_, i) => ({
-  left: 8 + (i * 7.3) % 70,
-  top: 18 + (i * 13.7) % 60,
-  delay: 3 + (i % 6) * 0.6,
-  dur: 6 + (i % 4) * 1.5,
-}))
-
-/**
- * StoreAwakening — a fully self-contained, pure-CSS cinematic that plays once at
- * the start of Story Mode (the 07:30 beat) before the MQTT replay begins. It
- * draws its own theatre: darkness → blueprint → a sweeping stage light that
- * reveals the floor → sensors waking → an entrance spotlight → the first few
- * customers. It calls onComplete when finished (or when skipped), after which the
- * parent starts the recording and shows the normal narrative card.
- *
- * No WebGL/Three, pointer-events: none, removable cleanly. Decorative only.
- */
-function StoreAwakening({ onComplete }: { onComplete: () => void }) {
-  const doneRef = useRef(false)
-  const finish = useCallback(() => {
-    if (doneRef.current) return
-    doneRef.current = true
-    onComplete()
-  }, [onComplete])
-
-  useEffect(() => {
-    const id = window.setTimeout(finish, AWAKENING_MS)
-    return () => window.clearTimeout(id)
-  }, [finish])
-
-  const blue = 'rgba(150,190,255,'
-  const white = 'rgba(225,238,255,'
-
-  return (
-    <div
-      className="fixed inset-0 z-[80] pointer-events-none overflow-hidden"
-      style={{ background: '#01030a', animation: `awkRootIn .5s ease-out, awkRootOut 1.6s ease-in ${(AWAKENING_MS - 1600) / 1000}s forwards` }}
-    >
-      <style>{`
-        @keyframes awkRootIn { from { opacity: 0 } to { opacity: 1 } }
-        @keyframes awkRootOut { from { opacity: 1 } to { opacity: 0 } }
-        @keyframes awkBaseIn { from { opacity: 0 } to { opacity: .09 } }
-        @keyframes awkReveal { from { clip-path: inset(0 100% 0 0) } to { clip-path: inset(0 0 0 0) } }
-        @keyframes awkBeam {
-          0% { transform: translateX(-12%) rotate(-7deg); opacity: 0 }
-          14% { opacity: .95 }
-          82% { opacity: .9 }
-          100% { transform: translateX(186%) rotate(9deg); opacity: 0 }
-        }
-        @keyframes awkCore { from { opacity: 0; transform: scale(.3) } to { opacity: 1; transform: scale(1) } }
-        @keyframes awkRing { 0% { opacity: .9; transform: scale(.3) } 100% { opacity: 0; transform: scale(2.6) } }
-        @keyframes awkEntrance { 0% { opacity: 0; transform: scale(.7) } 30% { opacity: 1; transform: scale(1) } 70% { opacity: .9; transform: scale(1.06) } 100% { opacity: 0; transform: scale(1.1) } }
-        @keyframes awkCustomer { 0% { opacity: 0 } 22% { opacity: 1 } 100% { opacity: 1 } }
-        @keyframes awkDust { 0% { opacity: 0; transform: translate(0,0) } 25% { opacity: .55 } 75% { opacity: .35 } 100% { opacity: 0; transform: translate(-14px,-22px) } }
-        @keyframes awkFog { 0% { transform: translate(-6%,0) } 50% { transform: translate(6%,-3%) } 100% { transform: translate(-6%,0) } }
-        @keyframes awkPulseLine { 0% { stroke-dashoffset: 240; opacity: 0 } 30% { opacity: .5 } 100% { stroke-dashoffset: 0; opacity: 0 } }
-      `}</style>
-
-      {/* Drifting fog layers */}
-      <div className="absolute inset-0" style={{ opacity: .5, background: 'radial-gradient(40% 50% at 30% 70%, rgba(20,40,80,0.25), transparent 70%)', filter: 'blur(40px)', animation: 'awkFog 16s ease-in-out infinite' }} />
-      <div className="absolute inset-0" style={{ opacity: .4, background: 'radial-gradient(45% 55% at 75% 35%, rgba(30,50,90,0.22), transparent 70%)', filter: 'blur(48px)', animation: 'awkFog 20s ease-in-out infinite reverse' }} />
-
-      {/* Centered staged scene box (keeps floorplan + customers aligned) */}
-      <div className="absolute" style={{ left: '50%', top: '50%', transform: 'translate(-50%,-50%)', width: 'min(92vw, 1080px)', height: 'min(66vh, 600px)' }}>
-
-        {/* Base dim blueprint — barely visible, fades in during Phase 2 */}
-        <svg viewBox="0 0 1000 600" width="100%" height="100%" style={{ position: 'absolute', inset: 0, opacity: 0, animation: 'awkBaseIn 2s ease-out 2s forwards' }}>
-          <AwkFloorplan blue={blue} white={white} dim />
-        </svg>
-
-        {/* Bright blueprint — revealed left→right by the sweeping beam (Phase 3) */}
-        <svg viewBox="0 0 1000 600" width="100%" height="100%" style={{ position: 'absolute', inset: 0, clipPath: 'inset(0 100% 0 0)', animation: 'awkReveal 4s cubic-bezier(.45,.05,.3,1) 4s forwards' }}>
-          <AwkFloorplan blue={blue} white={white} />
-        </svg>
-
-        {/* Sensor nodes wake one by one as the beam passes */}
-        {AWK_SENSORS.map((s, i) => (
-          <div key={i} className="absolute" style={{ left: `${s.x}%`, top: `${s.y}%`, width: 0, height: 0 }}>
-            <span className="absolute rounded-full" style={{ left: -4, top: -4, width: 8, height: 8, background: `${white}.95)`, boxShadow: `0 0 10px ${blue}.9)`, opacity: 0, animation: `awkCore .6s ease-out ${s.d}s forwards` }} />
-            <span className="absolute rounded-full" style={{ left: -10, top: -10, width: 20, height: 20, border: `1px solid ${blue}.8)`, opacity: 0, animation: `awkRing 2.4s ease-out ${s.d}s 2` }} />
-          </div>
-        ))}
-
-        {/* Volumetric stage-light beam — a cone sweeping across the floor */}
-        <div
-          className="absolute"
-          style={{
-            left: '-8%', top: '-14%', width: '40%', height: '132%',
-            background: `linear-gradient(180deg, ${white}.30) 0%, ${blue}.12) 42%, transparent 78%)`,
-            clipPath: 'polygon(42% 0%, 58% 0%, 100% 100%, 0% 100%)',
-            filter: 'blur(7px)', mixBlendMode: 'screen', transformOrigin: '50% 0%',
-            animation: 'awkBeam 4s cubic-bezier(.45,.05,.3,1) 4s forwards',
-          }}
-        >
-          {/* dust motes inside the beam */}
-          {AWK_DUST.map((d, i) => (
-            <span key={i} className="absolute rounded-full" style={{ left: `${d.left}%`, top: `${d.top}%`, width: 3, height: 3, background: `${white}.8)`, opacity: 0, animation: `awkDust ${d.dur}s ease-in-out ${d.delay}s infinite` }} />
-          ))}
-        </div>
-
-        {/* Entrance spotlight (right side) — the stage waits for the first actor */}
-        <div
-          className="absolute rounded-full"
-          style={{
-            left: '78%', top: '40%', width: '34%', height: '46%', transform: 'translate(-50%,-50%)',
-            background: `radial-gradient(circle, ${white}.34) 0%, ${blue}.16) 38%, transparent 70%)`,
-            filter: 'blur(6px)', mixBlendMode: 'screen', opacity: 0,
-            animation: 'awkEntrance 4.5s ease-in-out 8s forwards',
-          }}
-        />
-
-        {/* First customers entering from the right (Phase 6) */}
-        {[
-          { top: '52%', delay: 11, tx: -190, ty: 8 },
-          { top: '58%', delay: 11.6, tx: -150, ty: -22 },
-          { top: '48%', delay: 12.2, tx: -120, ty: 30 },
-        ].map((c, i) => (
-          <div key={i} className="absolute" style={{ left: '90%', top: c.top, opacity: 0, animation: `awkCustomer 3s ease-out ${c.delay}s forwards` }}>
-            <span
-              className="block rounded-full"
-              style={{ width: 9, height: 9, background: `${white}.95)`, boxShadow: `0 0 12px ${blue}1), 0 0 22px ${blue}.6)`, animation: `awkSlide-${i} 3s ease-out ${c.delay}s forwards` }}
-            />
-            <style>{`@keyframes awkSlide-${i} { from { transform: translate(0,0) } to { transform: translate(${c.tx}px, ${c.ty}px) } }`}</style>
-          </div>
-        ))}
-      </div>
-    </div>
-  )
-}
-
-/** Pure-SVG store blueprint used by both the dim and bright awakening layers. */
-function AwkFloorplan({ blue, white, dim }: { blue: string; white: string; dim?: boolean }) {
-  const stroke = dim ? `${white}.9)` : `${white}.85)`
-  const glow = dim ? 'none' : `drop-shadow(0 0 3px ${blue}.55))`
-  const sw = dim ? 1 : 1.4
-  return (
-    <g fill="none" stroke={stroke} strokeWidth={sw} style={{ filter: glow }}>
-      {/* outer walls with an entrance gap on the right wall */}
-      <path d="M70 70 H930 V300 M930 380 V530 H70 V70" />
-      {/* entrance threshold marker (right) */}
-      <path d="M930 300 h26 M930 380 h26" stroke={`${blue}.9)`} />
-      {/* vertical shelf aisles */}
-      {AWK_SHELVES.map((s, i) => {
-        const x = (s.x / 100) * 1000
-        const w = (s.w / 100) * 1000
-        return <rect key={i} x={x} y={140} width={w} height={220} rx={3} stroke={`${blue}.7)`} />
-      })}
-      {/* checkout counters near the bottom */}
-      {[240, 360, 480].map((x, i) => (
-        <rect key={i} x={x} y={430} width={80} height={24} rx={3} stroke={`${blue}.7)`} />
-      ))}
-      {/* faint neural pulse lines threading the floor (premium touch) */}
-      {!dim && (
-        <g stroke={`${blue}.8)`} strokeWidth={1} strokeDasharray="6 8">
-          <path d="M120 500 C 300 420, 520 470, 900 340" style={{ strokeDasharray: 240, animation: 'awkPulseLine 3.5s ease-in-out 6s infinite' }} />
-          <path d="M120 120 C 360 200, 620 160, 900 340" style={{ strokeDasharray: 240, animation: 'awkPulseLine 3.5s ease-in-out 7s infinite' }} />
-        </g>
-      )}
-    </g>
-  )
-}
+// The "Store Awakening" cinematic now runs on the REAL 3D scene inside
+// MainViewport (real DWG floorplan, real camera/lights, real LiDAR placements).
+// StoryMode just drives it via window events and waits for it to finish; this
+// fallback bounds how long we wait before starting the replay anyway (e.g. if
+// the 3D scene isn't mounted/ready).
+const AWAKENING_FALLBACK_MS = 13000
 
 /**
  * Spotlight — a soft cinematic vignette that dims the edges of the screen so the
@@ -463,6 +284,7 @@ export default function StoryMode({ viewMode, setViewMode, neuralEnabled, setNeu
   // Store Awakening intro overlay — plays once per session before the replay.
   const [introPlaying, setIntroPlaying] = useState(false)
   const introDoneRef = useRef(false)
+  const introFallbackRef = useRef<number | null>(null)
 
   // Snapshot of the app state when entering, restored verbatim on exit.
   const snapshotRef = useRef<{ viewMode: StoryViewMode; neuralEnabled: boolean } | null>(null)
@@ -615,6 +437,8 @@ export default function StoryMode({ viewMode, setViewMode, neuralEnabled, setNeu
     setIntroPlaying(false)
     introDoneRef.current = false
     tokenRef.current += 1
+    // Make sure the real-scene cinematic restores the scene if we leave mid-intro.
+    window.dispatchEvent(new CustomEvent('hyperspace:cinematic-intro-stop'))
     void stopRecording()
     closeHeatmapModal()
     closeNarrator()
@@ -627,6 +451,26 @@ export default function StoryMode({ viewMode, setViewMode, neuralEnabled, setNeu
     }
     snapshotRef.current = null
   }, [stopRecording, closeHeatmapModal, closeNarrator, closeStoryGrid, setNeuralEnabled, setViewMode])
+
+  // While the intro is playing, drive the REAL-scene cinematic in MainViewport
+  // via window events and wait for it to finish (or a fallback) before the
+  // recording starts. Scoped entirely to introPlaying so it adds no listeners
+  // otherwise.
+  useEffect(() => {
+    if (!introPlaying) return
+    // Let the 'main' view settle a frame, then start the cinematic.
+    const startId = window.setTimeout(() => {
+      window.dispatchEvent(new CustomEvent('hyperspace:cinematic-intro-start'))
+    }, 90)
+    const onDone = () => completeIntro()
+    window.addEventListener('hyperspace:cinematic-intro-done', onDone)
+    introFallbackRef.current = window.setTimeout(() => completeIntro(), AWAKENING_FALLBACK_MS)
+    return () => {
+      window.clearTimeout(startId)
+      window.removeEventListener('hyperspace:cinematic-intro-done', onDone)
+      if (introFallbackRef.current) { window.clearTimeout(introFallbackRef.current); introFallbackRef.current = null }
+    }
+  }, [introPlaying, completeIntro])
 
   const goto = useCallback((i: number) => {
     const next = Math.max(0, Math.min(BEATS.length - 1, i))
@@ -657,7 +501,11 @@ export default function StoryMode({ viewMode, setViewMode, neuralEnabled, setNeu
       if (e.key === 'Escape') { e.preventDefault(); exit(); return }
       // During the intro, advance/space skips the cinematic instead of navigating.
       if (introPlaying) {
-        if (e.key === 'ArrowRight' || e.key === ' ' || e.key === 'Enter' || e.key === 'PageDown') { e.preventDefault(); completeIntro() }
+        if (e.key === 'ArrowRight' || e.key === ' ' || e.key === 'Enter' || e.key === 'PageDown') {
+          e.preventDefault()
+          window.dispatchEvent(new CustomEvent('hyperspace:cinematic-intro-stop'))
+          completeIntro()
+        }
         return
       }
       if (e.key === 'ArrowRight' || e.key === ' ' || e.key === 'PageDown') { e.preventDefault(); next() }
@@ -707,7 +555,13 @@ export default function StoryMode({ viewMode, setViewMode, neuralEnabled, setNeu
   const dim = beat.dim ?? 'soft'
 
   if (introPlaying) {
-    return <StoreAwakening onComplete={completeIntro} />
+    // The cinematic plays on the real 3D scene (MainViewport). Keep only an
+    // unobtrusive skip hint here; pointer-events stay disabled.
+    return (
+      <div className="fixed inset-0 z-[80] pointer-events-none flex items-end justify-center pb-10">
+        <span className="text-[11px] tracking-[0.3em] text-white/35 font-medium">PRESS &rarr; TO SKIP</span>
+      </div>
+    )
   }
 
   return (
