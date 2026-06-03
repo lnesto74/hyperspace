@@ -1,6 +1,9 @@
-import { useState } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { AlertTriangle, TrendingDown, Users, LayoutDashboard, ChevronDown, ChevronUp, Eye, Lightbulb, Wrench, BarChart3 } from 'lucide-react'
 import { useProfitRadar } from '../../context/ProfitRadarContext'
+import { useVenue } from '../../context/VenueContext'
+import { API_BASE } from '../../config/api'
+import ZonePerformanceViewport, { type ZonePerformanceItem } from '../businessReporting/components/ZonePerformanceViewport'
 import type { ProfitRadarInsight, InsightType } from '../../types'
 
 const TYPE_CONFIG: Record<InsightType, { icon: typeof AlertTriangle; color: string; bgColor: string; label: string }> = {
@@ -131,6 +134,53 @@ interface ProfitRadarPageProps {
 
 export default function ProfitRadarPage({ onClose }: ProfitRadarPageProps) {
   const { insights, zoneField, clusters, selectedInsight, setSelectedInsight } = useProfitRadar()
+  const { venue } = useVenue()
+
+  // Zone performance (dead/top zones) — same source as the Business Reporting
+  // "Zone Performance Map", so the underperforming-zone detail can reuse it.
+  const [deadZones, setDeadZones] = useState<ZonePerformanceItem[]>([])
+  const [topZones, setTopZones] = useState<ZonePerformanceItem[]>([])
+  const [zoneThresholdPct, setZoneThresholdPct] = useState<number>(5)
+
+  useEffect(() => {
+    if (!venue?.id) return
+    let cancelled = false
+    const endTs = Date.now()
+    const startTs = endTs - 24 * 60 * 60 * 1000
+    const params = new URLSearchParams({
+      personaId: 'merchandising',
+      venueId: venue.id,
+      startTs: String(startTs),
+      endTs: String(endTs),
+    })
+    fetch(`${API_BASE}/api/reporting/summary?${params}`)
+      .then(res => (res.ok ? res.json() : null))
+      .then(data => {
+        if (cancelled || !data) return
+        const s = data.supporting || {}
+        setDeadZones((s.deadZones as ZonePerformanceItem[]) || [])
+        setTopZones((s.topZones as ZonePerformanceItem[]) || [])
+        if (typeof s.zoneUtilThresholdPct === 'number') setZoneThresholdPct(s.zoneUtilThresholdPct)
+      })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [venue?.id])
+
+  // Story Mode hook (Profit Radar beat): preselect an underperforming-zone
+  // insight so the detail — including the zone map — is populated on cue.
+  const insightsRef = useRef<ProfitRadarInsight[]>([])
+  useEffect(() => { insightsRef.current = insights }, [insights])
+  useEffect(() => {
+    const handler = () => {
+      if (selectedInsight) return
+      const list = insightsRef.current
+      const zone = list.find(i => i.type === 'underperforming_zone')
+      const pick = zone ?? list[0]
+      if (pick) setSelectedInsight(pick)
+    }
+    window.addEventListener('hyperspace:profit-radar-select-zone', handler)
+    return () => window.removeEventListener('hyperspace:profit-radar-select-zone', handler)
+  }, [selectedInsight, setSelectedInsight])
 
   return (
     <div className="fixed inset-0 z-50 bg-gray-900 flex flex-col">
@@ -189,6 +239,20 @@ export default function ProfitRadarPage({ onClose }: ProfitRadarPageProps) {
                 <p className="text-sm text-gray-400">{selectedInsight.summary}</p>
               </div>
               <DetailPanel insight={selectedInsight} />
+
+              {/* Zone Performance Map — reused from Business Reporting; shows the
+                  underperforming zones pulsing red on the real floor plan. */}
+              {selectedInsight.type === 'underperforming_zone' && venue?.id && (
+                <div className="mt-6">
+                  <ZonePerformanceViewport
+                    venueId={venue.id}
+                    deadZones={deadZones}
+                    topZones={topZones}
+                    zoneUtilThresholdPct={zoneThresholdPct}
+                    initialTab="underperforming"
+                  />
+                </div>
+              )}
             </div>
           ) : (
             <div className="flex flex-col items-center justify-center h-full text-gray-500">

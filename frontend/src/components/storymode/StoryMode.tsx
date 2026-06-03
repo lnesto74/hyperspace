@@ -78,6 +78,7 @@ interface StageActions {
   openCheckout: () => void
   openStoryGrid: () => void
   selectFirstCampaign: (name?: string) => void
+  selectRadarZone: () => void
 }
 
 interface Beat {
@@ -194,7 +195,7 @@ const BEATS: Beat[] = [
     hyperspace: 'Profit Radar ranks opportunities by \u20ac impact and proposes the exact merchandising fix.',
     outcome: '\u20ac2,400 / wk recoverable',
     component: 'Profit Radar',
-    stage: (a) => { a.setViewMode('profitRadar') },
+    stage: (a) => { a.setViewMode('profitRadar'); a.selectRadarZone() },
     dim: 'none',
   },
   {
@@ -374,6 +375,14 @@ export default function StoryMode({ viewMode, setViewMode, neuralEnabled, setNeu
     ;[500, 1100, 2000].forEach((ms) => window.setTimeout(fire, ms))
   }, [])
 
+  // Preselect an underperforming-zone insight on the Profit Radar beat. Retried
+  // because Profit Radar insights stream in async.
+  const selectRadarZone = useCallback(() => {
+    const fire = () => window.dispatchEvent(new CustomEvent('hyperspace:profit-radar-select-zone'))
+    fire()
+    ;[500, 1100, 2000, 3200].forEach((ms) => window.setTimeout(fire, ms))
+  }, [])
+
   // Open the Checkout command center on its Command Map tab (not Lane Overview).
   // Retried because the modal opens async after the intent fires.
   const openCheckout = useCallback(() => {
@@ -393,6 +402,7 @@ export default function StoryMode({ viewMode, setViewMode, neuralEnabled, setNeu
     openCheckout,
     openStoryGrid,
     selectFirstCampaign,
+    selectRadarZone,
   }
 
   // Close every transient surface this layer can open, so each beat starts clean.
