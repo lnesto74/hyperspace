@@ -48,6 +48,7 @@ type StoryViewMode =
   | 'businessReporting'
   | 'profitRadar'
   | 'benchmark'
+  | 'dailyDebrief'
 
 export interface StoryModeProps {
   /** Current app view mode (captured on enter, restored on exit). */
@@ -233,8 +234,8 @@ const BEATS: Beat[] = [
     floor: 'The team goes home. Today\u2019s wins and misses usually walk out the door with them.',
     hyperspace: 'Every key moment was saved as a replayable episode \u2014 queue spikes, promo wins, friction points. The store hands back a ready-to-watch day, and tomorrow\u2019s plan writes itself.',
     outcome: 'a full day \u2192 a ranked plan',
-    component: 'Replay Insights \u00b7 Story Grid',
-    stage: (a) => { a.setViewMode('main'); a.openStoryGrid() },
+    component: 'End-of-Day Debrief',
+    stage: (a) => { a.setViewMode('dailyDebrief') },
     dim: 'tight',
   },
 ]

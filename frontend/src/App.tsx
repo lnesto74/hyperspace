@@ -32,10 +32,11 @@ import DoohEffectivenessPage from './components/dooh/DoohEffectivenessPage'
 import { BusinessReportingPage } from './features/businessReporting'
 import { BenchmarkPage } from './features/benchmark'
 import { ProfitRadarPage } from './features/profitRadar'
+import { DailyDebriefPage } from './features/dailyDebrief'
 import { ProfitRadarProvider } from './context/ProfitRadarContext'
 import { LaunchPadPanel, isLaunchPadEnabled, loadSession } from './launchpad'
 
-import { BarChart3, Bell, Thermometer, Zap, ShoppingCart, Monitor, Activity, PieChart, Clapperboard, Crosshair, Building2, LogOut, User, Rocket, FlaskConical, Settings } from 'lucide-react'
+import { BarChart3, Bell, Thermometer, Zap, ShoppingCart, Monitor, Activity, PieChart, Clapperboard, Crosshair, Building2, LogOut, User, Rocket, FlaskConical, Settings, CalendarCheck } from 'lucide-react'
 import { CanvasToolbarButton, CanvasToolbarDivider, CanvasToolbarFlyout } from './components/layout/CanvasToolbar'
 import { useState, useEffect, useRef, createContext, useContext } from 'react'
 import { Routes, Route, useNavigate } from 'react-router-dom'
@@ -47,7 +48,7 @@ import CompaniesPage from './components/admin/CompaniesPage'
 import StoryMode from './components/storymode/StoryMode'
 
 // App view mode context
-type ViewMode = 'main' | 'planogram' | 'dwgImporter' | 'lidarPlanner' | 'edgeCommissioning' | 'doohAnalytics' | 'doohEffectiveness' | 'businessReporting' | 'profitRadar' | 'benchmark'
+type ViewMode = 'main' | 'planogram' | 'dwgImporter' | 'lidarPlanner' | 'edgeCommissioning' | 'doohAnalytics' | 'doohEffectiveness' | 'businessReporting' | 'profitRadar' | 'benchmark' | 'dailyDebrief'
 const ViewModeContext = createContext<{
   mode: ViewMode
   setMode: (m: ViewMode) => void
@@ -317,6 +318,14 @@ function KPIOverlayToggle() {
               active: heatmapModalOpen,
               accent: 'orange',
               onClick: () => openHeatmapModal(),
+            },
+            {
+              id: 'daily-debrief',
+              icon: CalendarCheck,
+              title: 'End-of-Day Debrief — the day as a ranked plan',
+              active: mode === 'dailyDebrief',
+              accent: 'indigo',
+              onClick: () => setMode('dailyDebrief'),
             },
           ]}
         />
@@ -612,6 +621,10 @@ function MainApp() {
         )}
         {viewMode === 'benchmark' && (
           <BenchmarkPage onClose={() => setViewMode('main')} />
+        )}
+        {/* End-of-Day Daily Debrief View */}
+        {viewMode === 'dailyDebrief' && (
+          <DailyDebriefPage onClose={() => setViewMode('main')} onOpenProfitRadar={() => setViewMode('profitRadar')} />
         )}
         {/* Planogram View */}
         <div style={{ display: viewMode === 'planogram' ? 'block' : 'none' }}>
