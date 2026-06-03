@@ -9,7 +9,7 @@ import { getOfflinePreset, listOfflinePresets } from '../config/offlineReconcile
 import { runBatchReconciliationToFile } from './offline/BatchTrajectoryReconciler.js';
 import { runReconcileV2ToFile } from './offline/reconcileV2/reconcileV2.js';
 import { normalizePerceptionTransform, IDENTITY_TRANSFORM } from './PerceptionTransform.js';
-import { venueQueries } from '../database/schema.js';
+import { venueQueries, roiQueries } from '../database/schema.js';
 import { readStoriesFile, storiesPathForArtifact } from './offline/storyBuilder.js';
 
 function parseDwgTransform(json) {
@@ -563,9 +563,48 @@ export class OfflineReconcileService {
     return this._readGraph(p, full);
   }
 
+  /**
+   * Graphs written inline by the v2 run lack `extent`/`entrance` (only the
+   * GRAPHONLY generator adds them). The annotation panel needs `extent` to build
+   * its coordinate transform — without it the canvas is blank. Compute both here
+   * on read so every sidecar renders, regardless of how it was produced.
+   */
+  _enrichGraphForRender(g) {
+    if (!Array.isArray(g.chains)) return g;
+    if (!g.extent) {
+      let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+      for (const c of g.chains) {
+        if (!c.path) continue;
+        for (const [x, z] of c.path) {
+          if (x < minX) minX = x; if (x > maxX) maxX = x;
+          if (z < minZ) minZ = z; if (z > maxZ) maxZ = z;
+        }
+      }
+      g.extent = Number.isFinite(minX) ? { minX, maxX, minZ, maxZ } : null;
+    }
+    if (g.entrance === undefined) {
+      let entrance = null;
+      try {
+        const rois = this.db && g.venueId ? roiQueries.getByVenueId(this.db, g.venueId) : [];
+        const roi = rois.find(r => /1121|traffic/i.test(r.name || '') && !/suggested/i.test(r.name || '') && Array.isArray(r.vertices) && r.vertices.length >= 3)
+          || rois.find(r => /entrance|gate|door/i.test(r.name || '') && Array.isArray(r.vertices) && r.vertices.length >= 3);
+        if (roi) {
+          const vs = roi.vertices.map(v => ({ x: Number(v.x), z: Number(v.z ?? v.y) }));
+          const inPoly = (x, z) => { let c = false; for (let i = 0, j = vs.length - 1; i < vs.length; j = i++) { const xi = vs[i].x, zi = vs[i].z, xj = vs[j].x, zj = vs[j].z; if (((zi > z) !== (zj > z)) && (x < (xj - xi) * (z - zi) / (zj - zi) + xi)) c = !c; } return c; };
+          for (const c of g.chains) {
+            if (c.entr === undefined && c.path) c.entr = c.path.some(([x, z]) => inPoly(x, z)) ? 1 : 0;
+          }
+          entrance = { name: roi.name, vertices: vs };
+        }
+      } catch { /* entrance is optional for rendering */ }
+      g.entrance = entrance;
+    }
+    return g;
+  }
+
   _readGraph(p, full) {
     const g = JSON.parse(fs.readFileSync(p, 'utf8'));
-    if (full) return g;
+    if (full) return this._enrichGraphForRender(g);
     const decCounts = {};
     for (const e of g.edges || []) decCounts[e.dec] = (decCounts[e.dec] || 0) + 1;
     return {
