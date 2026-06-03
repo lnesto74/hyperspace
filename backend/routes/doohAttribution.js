@@ -18,7 +18,7 @@ import { Worker } from 'worker_threads';
 import { fileURLToPath } from 'url';
 import path from 'path';
 import { PebleParamSimulator } from '../services/dooh_attribution/PebleParamSimulator.js';
-import { MATCHING_PROFILES } from '../services/dooh_attribution/MatchingProfiles.js';
+import { MATCHING_PROFILES, getMatchingProfile } from '../services/dooh_attribution/MatchingProfiles.js';
 import { DoohAttributionEngine } from '../services/dooh_attribution/DoohAttributionEngine.js';
 import { resolveCampaignTarget } from '../services/dooh_attribution/CampaignTargetResolver.js';
 
@@ -286,7 +286,7 @@ router.delete('/campaigns/:id', (req, res) => {
  */
 router.post('/run', (req, res) => {
   try {
-    const { venueId, campaignId, startTs, endTs, bucketMinutes = 15, forceRecompute = false } = req.body;
+    const { venueId, campaignId, startTs, endTs, bucketMinutes = 15, forceRecompute = false, profile = null } = req.body;
 
     if (!venueId || !campaignId || !startTs || !endTs) {
       return res.status(400).json({ 
@@ -294,10 +294,19 @@ router.post('/run', (req, res) => {
       });
     }
 
+    // Validate optional per-run matching profile (heavy profiles run in the worker thread).
+    if (profile) {
+      try {
+        getMatchingProfile(profile);
+      } catch (e) {
+        return res.status(400).json({ error: e.message });
+      }
+    }
+
     const runId = uuidv4();
     const workerPath = path.join(__dirname, '..', 'services', 'dooh_attribution', 'attributionWorker.js');
 
-    console.log(`🎯 Starting PEBLE™ attribution worker for campaign ${campaignId} (runId: ${runId})`);
+    console.log(`🎯 Starting PEBLE™ attribution worker for campaign ${campaignId} (runId: ${runId})${profile ? ` [profile: ${profile}]` : ''}`);
 
     const job = {
       status: 'running',
@@ -309,7 +318,7 @@ router.post('/run', (req, res) => {
     runJobs.set(runId, job);
 
     const worker = new Worker(workerPath, {
-      workerData: { dbPath: DB_PATH, venueId, campaignId, startTs, endTs, bucketMinutes, forceRecompute },
+      workerData: { dbPath: DB_PATH, venueId, campaignId, startTs, endTs, bucketMinutes, forceRecompute, profileId: profile },
     });
 
     worker.on('message', (msg) => {
@@ -582,17 +591,37 @@ router.post('/simulate', (req, res) => {
       });
     }
 
+    // SAFETY: /simulate runs synchronously on the main event loop (shared DB
+    // connection). A large range makes the simulator preload the entire window
+    // of zone_visits (hundreds of thousands of rows) and run journey-reachability
+    // per event, which pins the event loop and stalls health/login. Clamp the
+    // range and cap maxEvents so this endpoint can never block the server. For a
+    // full-range heavy recompute, use the worker-backed POST /run with a profile.
+    const MAX_SIMULATE_RANGE_MS = 6 * 60 * 60 * 1000; // 6h
+    const MAX_SIMULATE_EVENTS = 5000;
+    const reqStart = parseInt(startTs, 10);
+    const reqEnd = parseInt(endTs, 10);
+    const cappedEvents = Math.min(parseInt(maxEvents, 10) || MAX_SIMULATE_EVENTS, MAX_SIMULATE_EVENTS);
+    let effEnd = reqEnd;
+    let clamped = false;
+    if (reqEnd - reqStart > MAX_SIMULATE_RANGE_MS) {
+      effEnd = reqStart + MAX_SIMULATE_RANGE_MS;
+      clamped = true;
+    }
+
     const simulator = new PebleParamSimulator(db);
     const report = simulator.simulate(
       venueId,
       campaignId,
-      parseInt(startTs, 10),
-      parseInt(endTs, 10),
-      { profileIds, maxEvents },
+      reqStart,
+      effEnd,
+      { profileIds, maxEvents: cappedEvents },
     );
 
     res.json({
       profileCount: MATCHING_PROFILES.length,
+      rangeClamped: clamped,
+      ...(clamped ? { clampNote: `Range clamped to first ${MAX_SIMULATE_RANGE_MS / 3600000}h to protect the main event loop; use POST /run for a full-range recompute.` } : {}),
       ...report,
     });
   } catch (err) {

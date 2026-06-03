@@ -10,8 +10,9 @@
 import { parentPort, workerData } from 'worker_threads';
 import Database from 'better-sqlite3';
 import { DoohAttributionEngine } from './DoohAttributionEngine.js';
+import { getMatchingProfile } from './MatchingProfiles.js';
 
-const { dbPath, venueId, campaignId, startTs, endTs, bucketMinutes, forceRecompute = false } = workerData;
+const { dbPath, venueId, campaignId, startTs, endTs, bucketMinutes, forceRecompute = false, profileId = null } = workerData;
 
 try {
   // Open our own DB connection (worker threads can't share better-sqlite3 instances)
@@ -19,7 +20,10 @@ try {
   db.pragma('journal_mode = WAL');
   db.pragma('foreign_keys = OFF');
 
-  const engine = new DoohAttributionEngine(db);
+  // Optional per-run matching profile (heavy profiles like journey-reachability run
+  // here in the worker thread, never on the main event loop). Falls back to default.
+  const matchingProfile = profileId ? getMatchingProfile(profileId) : undefined;
+  const engine = new DoohAttributionEngine(db, matchingProfile ? { matchingProfile } : {});
 
   // Run with progress callback
   const result = engine.run(venueId, campaignId, startTs, endTs, (progress) => {
