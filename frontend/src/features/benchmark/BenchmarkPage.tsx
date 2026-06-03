@@ -16,13 +16,14 @@ import BenchmarkCoverageMap from './components/BenchmarkCoverageMap'
 import BenchmarkExecutiveTab from './components/BenchmarkExecutiveTab'
 import RunBenchmarkPanel from './components/RunBenchmarkPanel'
 import RawVsReconciledTab from './components/RawVsReconciledTab'
+import ReconciliationProofTab from './components/ReconciliationProofTab'
 import type { TrackViewMode } from './types'
 
 interface BenchmarkPageProps {
   onClose: () => void
 }
 
-type Tab = 'executive' | 'raw_vs' | 'overview' | 'reconciler' | 'coverage' | 'spatial' | 'artifacts'
+type Tab = 'executive' | 'raw_vs' | 'proof' | 'overview' | 'reconciler' | 'coverage' | 'spatial' | 'artifacts'
 
 function fmt(n: number | undefined | null, d = 1) {
   if (n == null || Number.isNaN(n)) return '—'
@@ -125,6 +126,7 @@ export default function BenchmarkPage({ onClose }: BenchmarkPageProps) {
 
   const tabs: { id: Tab; label: string }[] = [
     { id: 'raw_vs', label: 'Raw vs reconciled' },
+    { id: 'proof', label: 'Proof (before/after)' },
     { id: 'executive', label: 'Executive' },
     { id: 'overview', label: 'Overview' },
     { id: 'coverage', label: 'Venue map' },
@@ -315,6 +317,10 @@ export default function BenchmarkPage({ onClose }: BenchmarkPageProps) {
                   }}
                   onOpenTrackStories={onClose}
                 />
+              )}
+
+              {tab === 'proof' && detail && (
+                <ReconciliationProofTab detail={detail} />
               )}
 
               {tab === 'executive' && detail && (
