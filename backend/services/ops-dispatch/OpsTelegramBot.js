@@ -54,6 +54,21 @@ export class OpsTelegramBot {
     return this.api('sendPhoto', body);
   }
 
+  /** Upload an in-memory GIF/MP4 buffer as an animation (plays inline in Telegram). */
+  async sendAnimation(chatId, buffer, caption, replyMarkup) {
+    try {
+      const fd = new FormData();
+      fd.append('chat_id', String(chatId));
+      if (caption) { fd.append('caption', caption.slice(0, 1024)); fd.append('parse_mode', 'HTML'); }
+      if (replyMarkup) fd.append('reply_markup', JSON.stringify(replyMarkup));
+      fd.append('animation', new Blob([buffer], { type: 'image/gif' }), 'zone.gif');
+      const res = await fetch(`${TG_API}/bot${this.botToken}/sendAnimation`, { method: 'POST', body: fd });
+      return await res.json();
+    } catch (err) {
+      return { ok: false, description: err.message };
+    }
+  }
+
   kb(rows) {
     return { inline_keyboard: rows };
   }

@@ -11,6 +11,7 @@
  */
 
 import { objectQueries } from '../../database/schema.js';
+import { renderZoneGif } from './zoneMapGif.js';
 import {
   getOpsConfig,
   saveOpsConfig,
@@ -253,7 +254,36 @@ export class OpsDispatchService {
     const rows = [];
     if (mapUrl) rows.push([bot.urlBtn('🗺 Open map', mapUrl)]);
     rows.push([bot.btn('✅ On it', `ack:${task.token}`), bot.btn('✔️ Done', `done:${task.token}`)]);
-    return bot.sendMessage(chatId, text, bot.kb(rows));
+    const kb = bot.kb(rows);
+
+    // Try an animated map of the pulsing zone first; fall back to plain text.
+    if (p.roiId) {
+      try {
+        const geo = this._venueGeometry(task.venueId);
+        const gif = await renderZoneGif({ objects: geo.objects, regions: geo.regions, targetRoiId: p.roiId });
+        if (gif && gif.length) {
+          const r = await bot.sendAnimation(chatId, gif, text, kb);
+          if (r && r.ok) return r;
+        }
+      } catch (e) {
+        console.warn('[OpsDispatch] zone gif render failed:', e.message);
+      }
+    }
+    return bot.sendMessage(chatId, text, kb);
+  }
+
+  /** Venue geometry (DWG objects + ROI polygons) for map rendering. */
+  _venueGeometry(venueId) {
+    let objects = [];
+    let regions = [];
+    try { objects = objectQueries.getByVenueId(this.db, venueId) || []; } catch { /* ignore */ }
+    try {
+      regions = this.db.prepare('SELECT id, name, vertices FROM regions_of_interest WHERE venue_id = ?')
+        .all(venueId)
+        .map((r) => ({ id: r.id, name: r.name, vertices: safeJson(r.vertices, []) }))
+        .filter((r) => Array.isArray(r.vertices) && r.vertices.length >= 3);
+    } catch { /* ignore */ }
+    return { objects, regions };
   }
 
   // ─── Ack / Resolve (from Telegram or the mobile web page) ───
