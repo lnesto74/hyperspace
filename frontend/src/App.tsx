@@ -46,6 +46,8 @@ import { API_BASE } from './config/api'
 import LoginPage from './components/auth/LoginPage'
 import CompaniesPage from './components/admin/CompaniesPage'
 import StoryMode from './components/storymode/StoryMode'
+import { StoryModeLayoutProvider } from './components/storymode/StoryModeLayoutContext'
+import { StoryLayoutRail, StoryTransportRail } from './components/storymode/StoryLayoutChrome'
 import MobileTaskPage from './features/opsDispatch/MobileTaskPage'
 import { isDemo, getDemoVenueId, isDemoActivated, getPendingDemoToken, activateDemoFromToken } from './config/demo'
 import DemoLinksModal from './components/admin/DemoLinksModal'
@@ -624,6 +626,9 @@ function MainApp() {
   return (
     <ViewModeContext.Provider value={{ mode: viewMode, setMode: setViewMode, launchPadOpen, setLaunchPadOpen, neuralDashboardEnabled, setNeuralDashboardEnabled }}>
       <GlobalHeatmapModal />
+      <StoryModeLayoutProvider>
+      <div className="h-screen w-screen flex overflow-hidden bg-app-bg">
+        <div className="flex-1 min-w-0 h-full overflow-hidden relative">
       <PlanogramProvider>
         {/* DWG Importer View */}
         {viewMode === 'dwgImporter' && (
@@ -716,14 +721,19 @@ function MainApp() {
           </button>
         )}
 
-        {/* Demo storytelling overlay — opt-in, additive; restores state on exit */}
+        {/* Demo storytelling — spotlight/intro overlay; rail resizes layout like KPI panel */}
         <StoryMode
           viewMode={viewMode}
           setViewMode={setViewMode}
           neuralEnabled={neuralDashboardEnabled}
           setNeuralEnabled={setNeuralDashboardEnabled}
         />
+        <StoryTransportRail />
       </PlanogramProvider>
+        </div>
+        <StoryLayoutRail />
+      </div>
+      </StoryModeLayoutProvider>
     </ViewModeContext.Provider>
   )
 }

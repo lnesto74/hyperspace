@@ -87,7 +87,7 @@ export default function AppShell({ onOpenDwgImporter, onOpenEdgeCommissioning, s
   const { intentFieldEnabled, setIntentFieldEnabled } = useProfitRadar()
   const { launchPadOpen: lpOpen, setLaunchPadOpen: setLpOpen, neuralDashboardEnabled, setNeuralDashboardEnabled } = useViewMode()
   const { showKPIOverlays, regions } = useRoi()
-  const showKpiRail = showKPIOverlays && regions.length > 0 && !selectedObjectId && !neuralDashboardEnabled
+  const showKpiRail = showKPIOverlays && regions.length > 0 && !selectedObjectId && !neuralDashboardEnabled && !storyModeActive
 
   useEffect(() => {
     const t = window.setTimeout(() => window.dispatchEvent(new Event('resize')), 50)
@@ -175,7 +175,7 @@ export default function AppShell({ onOpenDwgImporter, onOpenEdgeCommissioning, s
   }
 
   return (
-    <div className="h-screen w-screen flex bg-app-bg overflow-hidden">
+    <div className="h-full w-full flex bg-app-bg overflow-hidden">
       {/* Left Sidebar with collapse toggle */}
       <div className="relative flex">
         {!sidebarCollapsed && (
