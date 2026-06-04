@@ -22,7 +22,7 @@
  * props — it never reaches into or mutates other components.
  */
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { Film, X, ChevronLeft, ChevronRight, Play, Pause, GripHorizontal } from 'lucide-react'
+import { Film, X, ChevronLeft, ChevronRight, Play, Pause, PanelRightClose } from 'lucide-react'
 import { STORY_INTRO_REPLAY_START } from './storyIntroConfig'
 import { useHeatmap } from '../../context/HeatmapContext'
 import { useNarrator2 } from '../../context/Narrator2Context'
@@ -243,6 +243,154 @@ const BEATS: Beat[] = [
 
 const AUTO_ADVANCE_MS = 14000
 const REPLAY_SPEED = 3 // recording playback speed (recorded-time / wall-time)
+const NARRATIVE_COLLAPSED_KEY = 'hyperspace-story-narrative-collapsed'
+
+function getNarrativeCollapsedPref(): boolean {
+  try { return localStorage.getItem(NARRATIVE_COLLAPSED_KEY) === 'true' } catch { return false }
+}
+
+function setNarrativeCollapsedPref(collapsed: boolean) {
+  try { localStorage.setItem(NARRATIVE_COLLAPSED_KEY, collapsed ? 'true' : 'false') } catch { /* ignore */ }
+}
+
+type NarrativeBeat = (typeof BEATS)[number]
+
+/** Right-side story column — keeps the floor / modals free of overlapping copy. */
+function StoryNarrativeRail({
+  beat,
+  index,
+  total,
+  color,
+  replayLive,
+  collapsed,
+  onToggleCollapsed,
+  onGoto,
+}: {
+  beat: NarrativeBeat
+  index: number
+  total: number
+  color: string
+  replayLive: boolean
+  collapsed: boolean
+  onToggleCollapsed: () => void
+  onGoto: (i: number) => void
+}) {
+  if (collapsed) {
+    return (
+      <aside
+        className="pointer-events-auto flex flex-col items-center shrink-0 w-11 border-l border-white/10 bg-[rgba(9,11,17,0.92)] backdrop-blur-xl"
+        aria-label="Story narrative (collapsed)"
+      >
+        <button
+          type="button"
+          onClick={onToggleCollapsed}
+          className="mt-3 p-2 rounded-lg text-white/50 hover:text-white hover:bg-white/10 transition-colors"
+          title="Show story panel"
+        >
+          <ChevronLeft className="w-4 h-4" />
+        </button>
+        <div className="flex-1 flex flex-col items-center gap-2 py-4">
+          {BEATS.map((b, i) => (
+            <button
+              key={b.id}
+              type="button"
+              onClick={() => onGoto(i)}
+              title={`${b.time} · ${b.title}`}
+              className="rounded-full transition-all"
+              style={{
+                width: i === index ? 8 : 6,
+                height: i === index ? 8 : 6,
+                backgroundColor: i === index ? RUNG_COLOR[b.rung] : 'rgba(255,255,255,0.2)',
+              }}
+            />
+          ))}
+        </div>
+        <span
+          className="pb-4 text-[9px] font-medium tabular-nums text-white/35"
+          style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)' }}
+        >
+          {index + 1}/{total}
+        </span>
+      </aside>
+    )
+  }
+
+  return (
+    <aside
+      className="pointer-events-auto flex flex-col shrink-0 w-[min(20rem,34vw)] max-w-[320px] border-l border-white/10 bg-[rgba(9,11,17,0.92)] backdrop-blur-xl shadow-[-16px_0_48px_-12px_rgba(0,0,0,0.55)]"
+      aria-label="Story narrative"
+    >
+      <div className="flex items-center justify-between gap-2 px-4 pt-3 pb-2 border-b border-white/10 shrink-0">
+        <div className="flex items-center gap-2 min-w-0">
+          <span className="font-mono text-[11px] tracking-wider text-white/75 shrink-0">{beat.time}</span>
+          <span className="text-[9px] uppercase tracking-[0.18em] text-white/40 truncate">{beat.period}</span>
+          {replayLive && (
+            <span className="flex items-center gap-1 text-[9px] tracking-wide text-emerald-400/90 shrink-0">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+              REPLAY
+            </span>
+          )}
+        </div>
+        <div className="flex items-center gap-2 shrink-0">
+          <span className="text-[9px] font-medium uppercase tracking-[0.18em]" style={{ color }}>{beat.rung}</span>
+          <button
+            type="button"
+            onClick={onToggleCollapsed}
+            className="p-1.5 rounded-lg text-white/40 hover:text-white hover:bg-white/10 transition-colors"
+            title="Hide story panel"
+          >
+            <PanelRightClose className="w-4 h-4" />
+          </button>
+        </div>
+      </div>
+
+      <div className="flex-1 overflow-y-auto overscroll-contain px-4 py-3 min-h-0">
+        <h3
+          className="text-white mb-3"
+          style={{ fontFamily: "'Noto Serif Display', Georgia, serif", fontSize: '1.25rem', lineHeight: 1.25, fontWeight: 500, letterSpacing: '-0.01em' }}
+        >
+          {beat.title}
+        </h3>
+
+        <div className="space-y-3">
+          <div>
+            <div className="text-[9px] font-semibold uppercase tracking-[0.16em] text-white/35 mb-1">On the floor</div>
+            <p className="text-[12px] leading-relaxed text-white/55">{beat.floor}</p>
+          </div>
+          <div>
+            <div className="text-[9px] font-semibold uppercase tracking-[0.16em] text-white/35 mb-1">What Hyperspace does</div>
+            <p className="text-[12px] leading-relaxed text-white/88">{beat.hyperspace}</p>
+          </div>
+        </div>
+
+        <div className="mt-4 pt-3 flex items-end justify-between gap-3 border-t border-white/10">
+          <span style={{ fontFamily: "'Noto Serif Display', Georgia, serif", color, fontSize: '1rem', fontWeight: 500, lineHeight: 1.15 }}>
+            {beat.outcome}
+          </span>
+          <span className="text-[9px] uppercase tracking-[0.12em] text-white/40 text-right leading-snug max-w-[46%]">
+            {beat.component}
+          </span>
+        </div>
+      </div>
+
+      <div className="shrink-0 px-4 py-2.5 border-t border-white/10 flex items-center gap-1.5">
+        {BEATS.map((b, i) => (
+          <button
+            key={b.id}
+            type="button"
+            onClick={() => onGoto(i)}
+            title={`${b.time} · ${b.title}`}
+            className="flex-1 min-w-0 h-1 rounded-full transition-all"
+            style={{
+              backgroundColor: i === index ? RUNG_COLOR[b.rung] : 'rgba(255,255,255,0.12)',
+              opacity: i === index ? 1 : 0.7,
+            }}
+          />
+        ))}
+      </div>
+    </aside>
+  )
+}
 
 // The "Store Awakening" cinematic now runs on the REAL 3D scene inside
 // MainViewport (real DWG floorplan, real camera/lights, real LiDAR placements).
@@ -308,9 +456,7 @@ export default function StoryMode({ viewMode, setViewMode, neuralEnabled, setNeu
   const [index, setIndex] = useState(0)
   const [playing, setPlaying] = useState(false)
   const [replayLive, setReplayLive] = useState(false)
-  // Draggable narrative card offset (reset each session).
-  const [cardDrag, setCardDrag] = useState({ x: 0, y: 0 })
-  const cardDragRef = useRef<{ sx: number; sy: number; bx: number; by: number } | null>(null)
+  const [narrativeCollapsed, setNarrativeCollapsed] = useState(getNarrativeCollapsedPref)
   // Store Awakening intro overlay — plays once per session before the replay.
   const [introPlaying, setIntroPlaying] = useState(false)
   const introDoneRef = useRef(false)
@@ -328,24 +474,13 @@ export default function StoryMode({ viewMode, setViewMode, neuralEnabled, setNeu
 
   useEffect(() => { venueRef.current = venue?.id }, [venue?.id])
 
-  // Drag-to-reposition for the narrative card (listeners mounted once).
-  useEffect(() => {
-    const move = (e: PointerEvent) => {
-      const s = cardDragRef.current
-      if (!s) return
-      setCardDrag({ x: s.bx + (e.clientX - s.sx), y: s.by + (e.clientY - s.sy) })
-    }
-    const up = () => { cardDragRef.current = null }
-    window.addEventListener('pointermove', move)
-    window.addEventListener('pointerup', up)
-    return () => {
-      window.removeEventListener('pointermove', move)
-      window.removeEventListener('pointerup', up)
-    }
+  const toggleNarrativeCollapsed = useCallback(() => {
+    setNarrativeCollapsed((prev) => {
+      const next = !prev
+      setNarrativeCollapsedPref(next)
+      return next
+    })
   }, [])
-  const startCardDrag = useCallback((e: React.PointerEvent) => {
-    cardDragRef.current = { sx: e.clientX, sy: e.clientY, bx: cardDrag.x, by: cardDrag.y }
-  }, [cardDrag.x, cardDrag.y])
 
   // Broadcast active state so the footer toggle + sidebar can react.
   useEffect(() => {
@@ -482,7 +617,6 @@ export default function StoryMode({ viewMode, setViewMode, neuralEnabled, setNeu
     setActive(true)
     setIndex(0)
     setPlaying(false)
-    setCardDrag({ x: 0, y: 0 })
     // Stage the floorplan (view=main) but hold the recording until the
     // Store Awakening intro finishes. If it already played this session, skip
     // straight to the replay.
@@ -658,74 +792,10 @@ export default function StoryMode({ viewMode, setViewMode, neuralEnabled, setNeu
   return (
     <>
     {dim !== 'none' && <Spotlight mode={dim} />}
-    <div className="fixed inset-0 z-[70] pointer-events-none">
-      {/* Narrative card (draggable) — glass panel, serif headline, no accent bar */}
-      <div
-        className="absolute bottom-24 left-6 w-[24rem] max-w-[88vw] pointer-events-auto"
-        style={{ transform: `translate(${cardDrag.x}px, ${cardDrag.y}px)` }}
-      >
-        <div
-          className="relative rounded-2xl overflow-hidden border border-white/10 shadow-2xl"
-          style={{
-            background: 'linear-gradient(155deg, rgba(20,23,32,0.74), rgba(9,11,17,0.62))',
-            backdropFilter: 'blur(22px) saturate(135%)',
-            WebkitBackdropFilter: 'blur(22px) saturate(135%)',
-            boxShadow: '0 24px 60px -20px rgba(0,0,0,0.7), inset 0 1px 0 rgba(255,255,255,0.06)',
-          }}
-        >
-          {/* Header doubles as the drag handle */}
-          <div
-            onPointerDown={startCardDrag}
-            className="flex items-center justify-between px-5 pt-3.5 pb-1 cursor-move select-none touch-none"
-            title="Drag to reposition"
-          >
-            <div className="flex items-center gap-2.5">
-              <span className="font-mono text-[11px] tracking-wider text-white/75">{beat.time}</span>
-              <span className="text-[9px] uppercase tracking-[0.22em] text-white/40">{beat.period}</span>
-              {replayLive && (
-                <span className="flex items-center gap-1 text-[9px] tracking-wide text-emerald-400/90">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                  REPLAY
-                </span>
-              )}
-            </div>
-            <div className="flex items-center gap-2.5">
-              <span className="text-[9px] font-medium uppercase tracking-[0.2em]" style={{ color }}>{beat.rung}</span>
-              <GripHorizontal className="w-3.5 h-3.5 text-white/25" />
-            </div>
-          </div>
-
-          <div className="px-5 pb-5 pt-1.5">
-            <h3
-              className="text-white mb-4"
-              style={{ fontFamily: "'Noto Serif Display', Georgia, serif", fontSize: '1.4rem', lineHeight: 1.22, fontWeight: 500, letterSpacing: '-0.01em' }}
-            >
-              {beat.title}
-            </h3>
-
-            <div className="space-y-3">
-              <div>
-                <div className="text-[9px] font-semibold uppercase tracking-[0.18em] text-white/35 mb-1">On the floor</div>
-                <p className="text-[13px] leading-relaxed text-white/55">{beat.floor}</p>
-              </div>
-              <div>
-                <div className="text-[9px] font-semibold uppercase tracking-[0.18em] text-white/35 mb-1">What Hyperspace does</div>
-                <p className="text-[13px] leading-relaxed text-white/85">{beat.hyperspace}</p>
-              </div>
-            </div>
-
-            <div className="mt-4 pt-3 flex items-end justify-between border-t border-white/10">
-              <span style={{ fontFamily: "'Noto Serif Display', Georgia, serif", color, fontSize: '1.05rem', fontWeight: 500, lineHeight: 1.1 }}>
-                {beat.outcome}
-              </span>
-              <span className="text-[9px] uppercase tracking-[0.14em] text-white/40 text-right max-w-[42%]">{beat.component}</span>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Bottom control rail */}
-      <div className="absolute bottom-4 left-1/2 -translate-x-1/2 pointer-events-auto">
+    <div className="fixed inset-0 z-[70] pointer-events-none flex flex-row">
+      {/* Stage — floor, neural, modals; bottom rail centered in this band only */}
+      <div className="flex-1 min-w-0 relative h-full">
+        <div className="absolute bottom-4 left-1/2 -translate-x-1/2 pointer-events-auto max-w-[min(640px,calc(100%-2rem))]">
         <div className="flex items-center gap-3 px-3 py-2 rounded-full bg-gray-900/95 backdrop-blur-md border border-gray-700 shadow-2xl">
           <div className="flex items-center gap-1.5 pr-1">
             <Film className="w-3.5 h-3.5 text-blue-400" />
@@ -773,7 +843,19 @@ export default function StoryMode({ viewMode, setViewMode, neuralEnabled, setNeu
             <X className="w-4 h-4" />
           </button>
         </div>
+        </div>
       </div>
+
+      <StoryNarrativeRail
+        beat={beat}
+        index={index}
+        total={BEATS.length}
+        color={color}
+        replayLive={replayLive}
+        collapsed={narrativeCollapsed}
+        onToggleCollapsed={toggleNarrativeCollapsed}
+        onGoto={goto}
+      />
     </div>
     </>
   )
