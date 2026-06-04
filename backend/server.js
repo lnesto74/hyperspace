@@ -51,6 +51,7 @@ import createReplayInsightRoutes from './routes/replayInsight.js';
 import { EpisodeDetectorOrchestrator } from './services/replay-insight/index.js';
 import authRoutes from './routes/auth.js';
 import companiesRoutes from './routes/companies.js';
+import demoAccessRoutes from './routes/demoAccess.js';
 import { IntentScorer, ZoneAggregator, BehaviorClusterer, ProfitRadarEngine } from './services/profit-radar/index.js';
 import { getVenueEconomics } from './services/profit-radar/VenueEconomicsConfig.js';
 import { getProductZones } from './services/profit-radar/ProductZoneProvider.js';
@@ -501,6 +502,7 @@ app.use('/api/models-static', (req, res, next) => {
 // Mount routes
 app.use('/api/auth', authRoutes(db));
 app.use('/api/companies', companiesRoutes(db));
+app.use('/api/demo-access', demoAccessRoutes(db));
 app.use('/api/discovery', discoveryRoutes(tailscaleService, mockGenerator));
 app.use('/api/venues', venuesRoutes(db, { mqttService, io, visualTrackService }));
 const replayDir = process.env.REPLAY_DIR || '/data/replay';

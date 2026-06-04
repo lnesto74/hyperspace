@@ -959,6 +959,22 @@ export function initDatabase() {
 
     CREATE INDEX IF NOT EXISTS idx_merge_annot_job ON reconcile_merge_annotations(job_id);
     CREATE INDEX IF NOT EXISTS idx_merge_annot_source ON reconcile_merge_annotations(source_file);
+
+    -- Demo access tokens — shareable links that skip the Google login and
+    -- auto-start the guided Story Mode tour. Minted from the superadmin UI.
+    CREATE TABLE IF NOT EXISTS demo_tokens (
+      token TEXT PRIMARY KEY,
+      label TEXT,
+      venue_id TEXT,
+      created_by TEXT,
+      expires_at TEXT,
+      revoked INTEGER NOT NULL DEFAULT 0,
+      use_count INTEGER NOT NULL DEFAULT 0,
+      last_used_at TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_demo_tokens_revoked ON demo_tokens(revoked);
   `);
 
   // Migration: Add DWG-related columns to venues table if they don't exist

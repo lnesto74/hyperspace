@@ -36,7 +36,7 @@ import { DailyDebriefPage } from './features/dailyDebrief'
 import { ProfitRadarProvider } from './context/ProfitRadarContext'
 import { LaunchPadPanel, isLaunchPadEnabled, loadSession } from './launchpad'
 
-import { BarChart3, Bell, Thermometer, Zap, ShoppingCart, Monitor, Activity, PieChart, Clapperboard, Crosshair, Building2, LogOut, User, Rocket, FlaskConical, Settings, CalendarCheck } from 'lucide-react'
+import { BarChart3, Bell, Thermometer, Zap, ShoppingCart, Monitor, Activity, PieChart, Clapperboard, Crosshair, Building2, LogOut, User, Rocket, FlaskConical, Settings, CalendarCheck, Film } from 'lucide-react'
 import { CanvasToolbarButton, CanvasToolbarDivider, CanvasToolbarFlyout } from './components/layout/CanvasToolbar'
 import { useState, useEffect, useRef, createContext, useContext } from 'react'
 import { Routes, Route, useNavigate } from 'react-router-dom'
@@ -47,6 +47,8 @@ import LoginPage from './components/auth/LoginPage'
 import CompaniesPage from './components/admin/CompaniesPage'
 import StoryMode from './components/storymode/StoryMode'
 import MobileTaskPage from './features/opsDispatch/MobileTaskPage'
+import { isDemo, getDemoVenueId, isDemoActivated, getPendingDemoToken, activateDemoFromToken } from './config/demo'
+import DemoLinksModal from './components/admin/DemoLinksModal'
 
 // App view mode context
 type ViewMode = 'main' | 'planogram' | 'dwgImporter' | 'lidarPlanner' | 'edgeCommissioning' | 'doohAnalytics' | 'doohEffectiveness' | 'businessReporting' | 'profitRadar' | 'benchmark' | 'dailyDebrief'
@@ -445,6 +447,54 @@ function MainApp() {
       applyLiveTrackDelivery()
     }
   }, [showLanding, setInterpolation, applyLiveTrackDelivery])
+
+  // ── DEMO LINK BOOTSTRAP ──
+  // When the app is opened via a shared demo link (?demo=<token>), skip the
+  // cinematic landing and load the demo venue. A second effect then auto-starts
+  // Story Mode once the venue (and its 3D scene) is ready. Story Mode itself
+  // pulls the existing recording from /api/replay, exactly like the manual
+  // footer-button flow — so the demo shows the same guided tour on the same
+  // production venue + capture, with no login.
+  const demoBootstrappedRef = useRef(false)
+  const demoStoryStartedRef = useRef(false)
+  useEffect(() => {
+    if (!isDemo() || demoBootstrappedRef.current) return
+    demoBootstrappedRef.current = true
+    setShowLanding(false)
+    ;(async () => {
+      let venueId = getDemoVenueId()
+      if (!venueId) {
+        try {
+          const res = await fetch(`${API_BASE}/api/venues`)
+          const data = res.ok ? await res.json() : []
+          const list = Array.isArray(data) ? data : (data.venues || [])
+          venueId = list[0]?.id || null
+        } catch {
+          /* no venue available — Story Mode still runs without spatial replay */
+        }
+      }
+      if (venueId) {
+        await loadVenue(venueId).catch(() => {})
+      }
+    })()
+  }, [loadVenue])
+
+  // Auto-start Story Mode for the demo once the venue is loaded into the scene.
+  useEffect(() => {
+    if (!isDemo() || demoStoryStartedRef.current || !venue?.id) return
+    demoStoryStartedRef.current = true
+    // Keep the DWG wireframe in sync (same as a FloorplanPanel selection) so the
+    // Store Awakening intro renders on the real floorplan.
+    if (venue.dwg_layout_version_id) {
+      try { localStorage.setItem('venueDwg-selectedLayout', venue.dwg_layout_version_id) } catch { /* ignore */ }
+      window.dispatchEvent(new CustomEvent('dwgLayoutSelected', { detail: { layoutId: venue.dwg_layout_version_id } }))
+    }
+    // Give the 3D scene a beat to mount before triggering the guided tour.
+    const id = window.setTimeout(() => {
+      window.dispatchEvent(new CustomEvent('hyperspace:story-mode-toggle'))
+    }, 1400)
+    return () => window.clearTimeout(id)
+  }, [venue?.id, venue?.dwg_layout_version_id])
   
   // FLOW-DEBUG: Wrap setViewMode to log navigation
   const setViewMode = (newMode: ViewMode) => {
@@ -682,11 +732,13 @@ function UserMenu() {
   const { user, logout, isSuperadmin } = useAuth()
   const navigate = useNavigate()
   const [open, setOpen] = useState(false)
+  const [showDemoLinks, setShowDemoLinks] = useState(false)
   
   if (!user) return null
   
   return (
     <div className="relative">
+      {showDemoLinks && <DemoLinksModal onClose={() => setShowDemoLinks(false)} />}
       <button
         onClick={() => setOpen(!open)}
         className="flex items-center justify-center w-10 h-10 rounded-lg shadow-lg transition-all bg-gray-800 hover:bg-gray-700 text-gray-300 border border-gray-600"
@@ -714,6 +766,15 @@ function UserMenu() {
               >
                 <Building2 className="w-4 h-4" />
                 Companies & Venues
+              </button>
+            )}
+            {isSuperadmin && (
+              <button
+                onClick={() => { setOpen(false); setShowDemoLinks(true); }}
+                className="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-300 hover:bg-gray-800 hover:text-white transition-colors"
+              >
+                <Film className="w-4 h-4" />
+                Demo Links
               </button>
             )}
             <button
@@ -772,23 +833,58 @@ function App() {
   return <AppGated />
 }
 
+// Demo gate — resolves whether this tab is a shared demo session. If a ?demo
+// token is present it is validated against the backend (async); an
+// already-validated tab resolves synchronously.
+type DemoStatus = 'checking' | 'demo' | 'none'
+function useDemoGate(): DemoStatus {
+  const [status, setStatus] = useState<DemoStatus>(() => {
+    if (isDemoActivated()) return 'demo'
+    if (getPendingDemoToken()) return 'checking'
+    return 'none'
+  })
+  useEffect(() => {
+    if (status !== 'checking') return
+    let cancelled = false
+    activateDemoFromToken().then((ok) => {
+      if (!cancelled) setStatus(ok ? 'demo' : 'none')
+    })
+    return () => { cancelled = true }
+  }, [status])
+  return status
+}
+
+function LoadingScreen() {
+  return (
+    <div className="fixed inset-0 bg-gray-950 flex items-center justify-center">
+      <div className="flex flex-col items-center gap-4">
+        <img src="/hyperspace-logo.png" alt="" className="w-16 h-16 object-contain animate-pulse" onError={(e) => { (e.target as HTMLImageElement).src = '/hyperspace.svg' }} />
+        <p className="text-sm text-gray-500">Loading...</p>
+      </div>
+    </div>
+  )
+}
+
 function AppGated() {
   const { isAuthenticated, isLoading } = useAuth()
-  
+  const demoStatus = useDemoGate()
+
   // Skip auth gate when Google OAuth is not configured
   if (!AUTH_ENABLED) {
     return <AuthenticatedApp />
   }
-  
+
+  // Shared demo link — a valid ?demo=<token> skips the Google login gate and
+  // auto-starts the guided Story Mode tour (see config/demo.ts + MainApp).
+  if (demoStatus === 'demo') {
+    return <AuthenticatedApp />
+  }
+  if (demoStatus === 'checking') {
+    return <LoadingScreen />
+  }
+
   if (isLoading) {
-    return (
-      <div className="fixed inset-0 bg-gray-950 flex items-center justify-center">
-        <div className="flex flex-col items-center gap-4">
-          <img src="/hyperspace-logo.png" alt="" className="w-16 h-16 object-contain animate-pulse" onError={(e) => { (e.target as HTMLImageElement).src = '/hyperspace.svg' }} />
-          <p className="text-sm text-gray-500">Loading...</p>
-        </div>
-      </div>
-    )
+    return <LoadingScreen />
   }
   
   if (!isAuthenticated) {
