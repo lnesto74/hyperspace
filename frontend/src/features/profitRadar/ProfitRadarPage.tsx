@@ -369,20 +369,23 @@ export default function ProfitRadarPage({ onClose }: ProfitRadarPageProps) {
   }, [selectedInsight])
 
   // Stable roiId for the primary zone (drives the shelf-contents lookup).
-  const selectedRoiId = selectedZoneNames.length > 0
-    ? (zoneIdByName[selectedZoneNames[0]] ?? null)
-    : null
+  // Prefer the roiId carried on the insight (always present, even for zones not
+  // currently streaming), falling back to the accumulated name → id map.
+  const selectedRoiId = (selectedInsight?.dataBasis?.roiId as string | undefined)
+    ?? (selectedZoneNames.length > 0 ? (zoneIdByName[selectedZoneNames[0]] ?? null) : null)
 
   // Stable focus list for the floor-plan map (pulses the insight's own zones).
   const focusZones = useMemo(() => {
     const out: ZonePerformanceItem[] = []
-    for (const n of selectedZoneNames) {
-      const id = zoneIdByName[n]
-      if (!id) continue
+    const insightRoiId = selectedInsight?.dataBasis?.roiId as string | undefined
+    selectedZoneNames.forEach((n, i) => {
+      // The primary zone always resolves via the insight's own roiId.
+      const id = (i === 0 ? insightRoiId : undefined) ?? zoneIdByName[n]
+      if (!id) return
       out.push(zoneMetaByName.get(n) ?? { id, name: n, utilization: 0 })
-    }
+    })
     return out
-  }, [selectedZoneNames, zoneIdByName, zoneMetaByName])
+  }, [selectedZoneNames, zoneIdByName, zoneMetaByName, selectedInsight])
 
   // Snapshot the selected zone's behavioral fingerprint + store average once.
   // means stream live, so we freeze them to keep the radar from churning.
