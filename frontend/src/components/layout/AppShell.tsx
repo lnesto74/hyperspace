@@ -23,6 +23,14 @@ import IntentFieldOverlay from '../../features/profitRadar/IntentFieldOverlay'
 import { useViewMode } from '../../App'
 import { useRoi } from '../../context/RoiContext'
 import ZoneKPIOverlayPanel from '../kpi/ZoneKPIOverlayPanel'
+import StoryNarrativeRail from '../storymode/StoryNarrativeRail'
+import {
+  STORY_NARRATIVE_GOTO,
+  STORY_NARRATIVE_SYNC,
+  STORY_NARRATIVE_TOGGLE_COLLAPSED,
+  type StoryNarrativeSyncPayload,
+} from '../storymode/storyNarrativeBridge'
+import { STORY_BEAT_META } from '../storymode/storyBeatMeta'
 export type SidebarTab = 'floorplan' | 'venueDwg' | 'venue' | 'objects' | 'lidars' | 'regions' | 'planogram'
 export type CameraView = 'perspective' | 'top' | 'isometric' | 'front'
 
@@ -87,12 +95,24 @@ export default function AppShell({ onOpenDwgImporter, onOpenEdgeCommissioning, s
   const { intentFieldEnabled, setIntentFieldEnabled } = useProfitRadar()
   const { launchPadOpen: lpOpen, setLaunchPadOpen: setLpOpen, neuralDashboardEnabled, setNeuralDashboardEnabled } = useViewMode()
   const { showKPIOverlays, regions } = useRoi()
-  const showKpiRail = showKPIOverlays && regions.length > 0 && !selectedObjectId && !neuralDashboardEnabled
+
+  const [storyModeActive, setStoryModeActive] = useState(false)
+  const [storyNarrative, setStoryNarrative] = useState<StoryNarrativeSyncPayload | null>(null)
+  const showStoryRail = storyModeActive && storyNarrative?.active && !storyNarrative.introPlaying
+  const showKpiRail = showKPIOverlays && regions.length > 0 && !selectedObjectId && !neuralDashboardEnabled && !storyModeActive
+
+  useEffect(() => {
+    const onSync = (e: Event) => {
+      setStoryNarrative((e as CustomEvent<StoryNarrativeSyncPayload>).detail ?? null)
+    }
+    window.addEventListener(STORY_NARRATIVE_SYNC, onSync)
+    return () => window.removeEventListener(STORY_NARRATIVE_SYNC, onSync)
+  }, [])
 
   useEffect(() => {
     const t = window.setTimeout(() => window.dispatchEvent(new Event('resize')), 50)
     return () => window.clearTimeout(t)
-  }, [showKpiRail])
+  }, [showKpiRail, showStoryRail, storyNarrative?.collapsed])
   
   // Determine if we're in DWG venue mode
   const isDwgMode = activeTab === 'venueDwg' && selectedDwgLayoutId !== null
@@ -134,7 +154,6 @@ export default function AppShell({ onOpenDwgImporter, onOpenEdgeCommissioning, s
   // Story Mode toggle (lives in the footer for consistency). Listen for the
   // overlay's active state to highlight the toggle and auto-collapse the
   // sidebar while the guided demo runs (restored on exit).
-  const [storyModeActive, setStoryModeActive] = useState(false)
   const [showTeamTelegram, setShowTeamTelegram] = useState(false)
   const prevSidebarRef = useRef<boolean | null>(null)
   useEffect(() => {
@@ -682,6 +701,20 @@ export default function AppShell({ onOpenDwgImporter, onOpenEdgeCommissioning, s
           <TeamTelegramModal venueId={venue.id} isOpen={showTeamTelegram} onClose={() => setShowTeamTelegram(false)} />
         )}
         </div>
+
+        {showStoryRail && storyNarrative && (
+          <StoryNarrativeRail
+            beat={storyNarrative.beat}
+            index={storyNarrative.index}
+            total={storyNarrative.total}
+            color={storyNarrative.rungColor}
+            replayLive={storyNarrative.replayLive}
+            collapsed={storyNarrative.collapsed}
+            beatMeta={STORY_BEAT_META}
+            onToggleCollapsed={() => window.dispatchEvent(new CustomEvent(STORY_NARRATIVE_TOGGLE_COLLAPSED))}
+            onGoto={(i) => window.dispatchEvent(new CustomEvent(STORY_NARRATIVE_GOTO, { detail: { index: i } }))}
+          />
+        )}
         </div>
       </div>
       
