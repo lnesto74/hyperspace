@@ -23,8 +23,6 @@ import IntentFieldOverlay from '../../features/profitRadar/IntentFieldOverlay'
 import { useViewMode } from '../../App'
 import { useRoi } from '../../context/RoiContext'
 import ZoneKPIOverlayPanel from '../kpi/ZoneKPIOverlayPanel'
-import { getKineticIntroEnabled, setKineticIntroEnabled } from '../storymode/storyIntroConfig'
-
 export type SidebarTab = 'floorplan' | 'venueDwg' | 'venue' | 'objects' | 'lidars' | 'regions' | 'planogram'
 export type CameraView = 'perspective' | 'top' | 'isometric' | 'front'
 
@@ -137,7 +135,6 @@ export default function AppShell({ onOpenDwgImporter, onOpenEdgeCommissioning, s
   // overlay's active state to highlight the toggle and auto-collapse the
   // sidebar while the guided demo runs (restored on exit).
   const [storyModeActive, setStoryModeActive] = useState(false)
-  const [kineticIntroPref, setKineticIntroPref] = useState(getKineticIntroEnabled)
   const [showTeamTelegram, setShowTeamTelegram] = useState(false)
   const prevSidebarRef = useRef<boolean | null>(null)
   useEffect(() => {
@@ -610,22 +607,6 @@ export default function AppShell({ onOpenDwgImporter, onOpenEdgeCommissioning, s
               title="Neural Dashboard (4-Quadrant View)"
             >
               <LayoutGrid className="w-3.5 h-3.5" />
-            </button>
-            <button
-              onClick={() => {
-                const next = !kineticIntroPref
-                setKineticIntroEnabled(next)
-                setKineticIntroPref(next)
-                window.dispatchEvent(new CustomEvent('hyperspace:story-kinetic-intro-changed', { detail: { enabled: next } }))
-              }}
-              className={`p-1.5 rounded transition-colors ${
-                kineticIntroPref
-                  ? 'bg-cyan-600/90 text-white'
-                  : 'text-gray-500 hover:text-gray-300 hover:bg-gray-700'
-              }`}
-              title={kineticIntroPref ? 'Story intro: kinetic reel (click for classic)' : 'Story intro: classic awakening (click for kinetic reel)'}
-            >
-              <Sparkles className="w-3.5 h-3.5" />
             </button>
             <button
               onClick={() => window.dispatchEvent(new CustomEvent('hyperspace:story-mode-toggle'))}

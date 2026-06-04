@@ -201,7 +201,6 @@ interface CustomModel {
 
 import type { CameraView, LightingSettings, TrackingSettings } from '../layout/AppShell'
 import { API_BASE } from '../../config/api'
-import { buildKineticCameraPresets, easeByKind, KINETIC_TIMELINE } from '../storymode/kineticStoryIntro'
 import { STORY_INTRO_REPLAY_START } from '../storymode/storyIntroConfig'
 
 export type CaptureZone = {
@@ -3069,9 +3068,9 @@ export default function MainViewport({
 
   // True while any Story intro cinematic is running.
   const cinematicActiveRef = useRef(false)
-  /** Kinetic reel: show cyan fiber trajectories while intro runs (classic keeps floor empty). */
-  const cinematicKineticTracksRef = useRef(false)
-  const cinematicVariantRef = useRef<'classic' | 'kinetic' | null>(null)
+  /** Classic intro: floor empty until settle; then cyan point-cloud tracks + trails. */
+  const cinematicShowTracksRef = useRef(false)
+  const cinematicStoryTrackStyleRef = useRef(false)
   // Track-ID layer state around the cinematic: turned off during the closed-store
   // intro, switched on a beat after shoppers appear, restored on exit.
   const trackIdsPrevRef = useRef(false)
@@ -3214,8 +3213,8 @@ export default function MainViewport({
     const end = (jumpToOverview: boolean, overview?: { pos: THREE.Vector3; target: THREE.Vector3 }) => {
       if (rafId !== null) { cancelAnimationFrame(rafId); rafId = null }
       cinematicActiveRef.current = false
-      cinematicKineticTracksRef.current = false
-      cinematicVariantRef.current = null
+      cinematicShowTracksRef.current = false
+      cinematicStoryTrackStyleRef.current = false
       // Let the track sync resume governing visibility (closed → open store).
       trackMeshesRef.current.forEach((group) => { group.visible = true })
       trailLinesRef.current.forEach((trail) => { trail.visible = true })
@@ -3243,8 +3242,8 @@ export default function MainViewport({
     const startClassic = () => {
       // Abort any in-flight run first.
       if (rafId !== null) end(false)
-      cinematicVariantRef.current = 'classic'
-      cinematicKineticTracksRef.current = false
+      cinematicShowTracksRef.current = false
+      cinematicStoryTrackStyleRef.current = false
       const camera = cameraRef.current, controls = controlsRef.current, scene = sceneRef.current
       const amb = ambientLightRef.current, dir = directionalLightRef.current
       if (!camera || !controls || !scene || !amb || !dir) {
@@ -3362,6 +3361,7 @@ export default function MainViewport({
       const t0 = performance.now()
       const ease = (x: number) => 1 - Math.pow(1 - x, 3)
       const c01 = (x: number) => Math.max(0, Math.min(1, x))
+      let introReplayFired = false
 
       const tick = () => {
         const t = performance.now() - t0
@@ -3410,6 +3410,17 @@ export default function MainViewport({
           reveal(rvRaw < 0.5 ? 4 * rvRaw * rvRaw * rvRaw : 1 - Math.pow(-2 * rvRaw + 2, 3) / 2)
         }
 
+        // Settle phase: start replay, show cyan point-cloud shoppers + track IDs on the floor.
+        if (t >= SETTLE_START && !introReplayFired) {
+          introReplayFired = true
+          cinematicStoryTrackStyleRef.current = true
+          cinematicShowTracksRef.current = true
+          trackMeshesRef.current.forEach((g) => { g.visible = true })
+          trailLinesRef.current.forEach((tr) => { tr.visible = true })
+          setShowTrackIdsLayer(true)
+          window.dispatchEvent(new CustomEvent(STORY_INTRO_REPLAY_START))
+        }
+
         // Real LiDARs wake as the roaming light passes near them (proximity);
         // anything missed is force-woken at the end of the sweep.
         const forceWake = t >= SWEEP_END
@@ -3451,12 +3462,6 @@ export default function MainViewport({
         if (t >= TOTAL) {
           reveal(1)
           end(false, overview)
-          // Shoppers are now on the floor; bring the track IDs on a beat later.
-          if (idRevealTimerRef.current) window.clearTimeout(idRevealTimerRef.current)
-          idRevealTimerRef.current = window.setTimeout(() => {
-            setShowTrackIdsLayer(true)
-            idRevealTimerRef.current = null
-          }, 3200)
           window.dispatchEvent(new CustomEvent('hyperspace:cinematic-intro-done'))
           return
         }
@@ -3465,193 +3470,8 @@ export default function MainViewport({
       rafId = requestAnimationFrame(tick)
     }
 
-    /** Experimental kinetic reel — classic awakening + rapid camera cuts + 10× replay trajectories. */
-    const startKinetic = () => {
-      if (rafId !== null) end(false)
-      const camera = cameraRef.current, controls = controlsRef.current, scene = sceneRef.current
-      const amb = ambientLightRef.current, dir = directionalLightRef.current
-      if (!camera || !controls || !scene || !amb || !dir) {
-        window.dispatchEvent(new CustomEvent('hyperspace:cinematic-intro-done'))
-        return
-      }
-
-      cinematicVariantRef.current = 'kinetic'
-      cinematicKineticTracksRef.current = false
-
-      snapshot = {
-        camPos: camera.position.clone(),
-        target: controls.target.clone(),
-        controlsEnabled: controls.enabled,
-        ambient: amb.intensity,
-        directional: dir.intensity,
-        dirPos: dir.position.clone(),
-        bg: scene.background instanceof THREE.Color ? scene.background.clone() : null,
-        doohLayer: showDoohLayerRef.current,
-      }
-      setShowDoohLayer(false)
-      controls.enabled = false
-      cinematicActiveRef.current = true
-      trackMeshesRef.current.forEach((g) => { g.visible = false })
-      trailLinesRef.current.forEach((t) => { t.visible = false })
-      dimObjects()
-      hideRois()
-      trackIdsPrevRef.current = showTrackIdsRef.current
-      if (idRevealTimerRef.current) { window.clearTimeout(idRevealTimerRef.current); idRevealTimerRef.current = null }
-      setShowTrackIdsLayer(false)
-
-      const b = dwgSceneBounds
-      const venueW = venue?.width ?? 20, venueD = venue?.depth ?? 20
-      const floorW = b?.floorW ?? venueW, floorD = b?.floorD ?? venueD
-      const centerX = b?.centerX ?? venueW / 2, centerZ = b?.centerZ ?? venueD / 2
-      const viewSize = Math.max(floorW, floorD, 6)
-      const entranceObj = objects.find((o) => o.type === 'entrance')
-      const entrance = entranceObj
-        ? { x: entranceObj.position.x, z: entranceObj.position.z }
-        : null
-
-      const overviewPos = new THREE.Vector3(centerX + viewSize * 0.82, viewSize * 0.68, centerZ + viewSize * 0.82)
-      const overviewTarget = new THREE.Vector3(centerX, 0, centerZ)
-      const startPos = new THREE.Vector3(centerX + viewSize * 0.1, viewSize * 1.5, centerZ + viewSize * 1.12)
-      const overview = { pos: overviewPos, target: overviewTarget }
-
-      const presets = buildKineticCameraPresets({ centerX, centerZ, viewSize, floorW, floorD, entrance })
-      let cutT0 = KINETIC_TIMELINE.CUTS_START
-      const cutSchedule = presets.map((p) => {
-        const startMs = cutT0
-        cutT0 += p.durationMs
-        return { ...p, startMs, endMs: cutT0 }
-      })
-
-      const spot = new THREE.SpotLight(0xbcd6ff, 0)
-      spot.angle = Math.PI / 7
-      spot.penumbra = 0.85
-      spot.decay = 0
-      spot.distance = viewSize * 5
-      spot.position.set(centerX, viewSize * 1.1, centerZ)
-      const spotTarget = new THREE.Object3D()
-      spotTarget.position.set(centerX, 0, centerZ)
-      scene.add(spotTarget)
-      spot.target = spotTarget
-      scene.add(spot)
-      added.push(spot, spotTarget)
-
-      const pool = new THREE.Mesh(
-        new THREE.CircleGeometry(viewSize * 0.14, 48),
-        new THREE.MeshBasicMaterial({ color: 0x9fc0ff, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide }),
-      )
-      pool.rotation.x = -Math.PI / 2
-      pool.position.set(centerX, 0.04, centerZ)
-      scene.add(pool)
-      added.push(pool)
-
-      const rx = floorW * 0.34, rz = floorD * 0.34
-      const rnd = (r: number) => (Math.random() * 2 - 1) * r
-      const roamWps: { x: number; z: number }[] = [{ x: centerX + rnd(rx), z: centerZ + rnd(rz) }]
-      for (let i = 0; i < 4; i++) roamWps.push({ x: centerX + rnd(rx), z: centerZ + rnd(rz) })
-
-      const lightAt = (p: number) => {
-        const n = roamWps.length - 1
-        const fseg = Math.min(n - 0.0001, p * n)
-        const k = Math.floor(fseg)
-        const lt = fseg - k
-        const e = lt < 0.5 ? 4 * lt * lt * lt : 1 - Math.pow(-2 * lt + 2, 3) / 2
-        const a = roamWps[k], bpt = roamWps[Math.min(n, k + 1)]
-        return { x: a.x + (bpt.x - a.x) * e, z: a.z + (bpt.z - a.z) * e }
-      }
-
-      scene.background = new THREE.Color(0x01030a)
-      amb.intensity = 0.04
-      dir.intensity = 0.03
-      camera.position.copy(startPos)
-      controls.target.copy(overviewTarget)
-      const savedFov = camera.fov
-      let replayFired = false
-      let lastCutIdx = -1
-      const segFromPos = new THREE.Vector3()
-      const segFromTarget = new THREE.Vector3()
-      let segFromFov = camera.fov
-      const TL = KINETIC_TIMELINE
-      const t0 = performance.now()
-      const c01 = (x: number) => Math.max(0, Math.min(1, x))
-
-      const tickKinetic = () => {
-        const t = performance.now() - t0
-
-        if (t < TL.BLACK_END) {
-          amb.intensity = 0.02
-          dir.intensity = 0.02
-          spot.intensity = 0
-          ;(pool.material as THREE.MeshBasicMaterial).opacity = 0
-        } else if (t < TL.SWEEP_END) {
-          const roam = lightAt(c01((t - TL.SWEEP_START) / (TL.SWEEP_END - TL.SWEEP_START)))
-          const s = c01((t - TL.SWEEP_START) / Math.max(1, TL.SWEEP_END - TL.SWEEP_START))
-          amb.intensity = 0.05 + 0.14 * s
-          dir.intensity = 0.08 + 0.45 * s
-          dir.position.set(roam.x, viewSize * 0.65, roam.z)
-          spot.intensity = 2.8
-          spot.position.set(roam.x, viewSize * 1.05, roam.z)
-          spotTarget.position.set(roam.x, 0, roam.z)
-          pool.position.set(roam.x, 0.04, roam.z)
-          ;(pool.material as THREE.MeshBasicMaterial).opacity = 0.18 * Math.sin(Math.PI * c01(s * 1.2)) + 0.05
-        } else {
-          amb.intensity = 0.2
-          dir.intensity = 0.55
-          spot.intensity = Math.max(0, spot.intensity - 0.08)
-          ;(pool.material as THREE.MeshBasicMaterial).opacity = Math.max(0, (pool.material as THREE.MeshBasicMaterial).opacity - 0.015)
-        }
-
-        if (!replayFired && t >= TL.REPLAY_AT) {
-          replayFired = true
-          cinematicKineticTracksRef.current = true
-          trackMeshesRef.current.forEach((g) => { g.visible = true })
-          trailLinesRef.current.forEach((tr) => { tr.visible = true })
-          window.dispatchEvent(new CustomEvent(STORY_INTRO_REPLAY_START))
-        }
-
-        if (t >= TL.CUTS_START && t < TL.HOLD_END) {
-          const active = cutSchedule.find((c) => t >= c.startMs && t < c.endMs)
-          if (active) {
-            const idx = cutSchedule.indexOf(active)
-            if (idx !== lastCutIdx) {
-              lastCutIdx = idx
-              segFromPos.copy(camera.position)
-              segFromTarget.copy(controls.target)
-              segFromFov = camera.fov
-            }
-            const local = c01((t - active.startMs) / active.durationMs)
-            const e = easeByKind(local, active.ease)
-            camera.position.lerpVectors(segFromPos, active.position, e)
-            controls.target.lerpVectors(segFromTarget, active.target, e)
-            if (active.fov) camera.fov = THREE.MathUtils.lerp(segFromFov, active.fov, e)
-            camera.updateProjectionMatrix()
-          }
-        } else if (t >= TL.HOLD_END - 1200) {
-          const h = easeByKind(c01((t - (TL.HOLD_END - 1200)) / 1200))
-          camera.position.lerpVectors(camera.position, overviewPos, h * 0.18)
-          controls.target.lerpVectors(controls.target, overviewTarget, h * 0.18)
-        }
-
-        if (t >= TL.TOTAL) {
-          camera.fov = savedFov
-          camera.updateProjectionMatrix()
-          end(false, overview)
-          if (idRevealTimerRef.current) window.clearTimeout(idRevealTimerRef.current)
-          idRevealTimerRef.current = window.setTimeout(() => {
-            setShowTrackIdsLayer(true)
-            idRevealTimerRef.current = null
-          }, 2800)
-          window.dispatchEvent(new CustomEvent('hyperspace:cinematic-intro-done'))
-          return
-        }
-        rafId = requestAnimationFrame(tickKinetic)
-      }
-      rafId = requestAnimationFrame(tickKinetic)
-    }
-
-    const onStart = (ev: Event) => {
-      const variant = (ev as CustomEvent<{ variant?: string }>).detail?.variant
-      if (variant === 'kinetic') startKinetic()
-      else startClassic()
+    const onStart = () => {
+      startClassic()
     }
     const onStop = () => {
       if (idRevealTimerRef.current) { window.clearTimeout(idRevealTimerRef.current); idRevealTimerRef.current = null }
@@ -4659,8 +4479,8 @@ export default function MainViewport({
       const scene = sceneRef.current
       const vtlActive = vtlModeRef.current
 
-      // Story intro: classic = empty floor; kinetic = cyan trajectories only.
-      if (cinematicActiveRef.current && !cinematicKineticTracksRef.current) {
+      // Story intro: empty floor until settle, then cyan point-cloud shoppers.
+      if (cinematicActiveRef.current && !cinematicShowTracksRef.current) {
         trackMeshesRef.current.forEach((group) => { group.visible = false })
         trailLinesRef.current.forEach((trail) => { trail.visible = false })
         return
@@ -4887,8 +4707,9 @@ export default function MainViewport({
 
         const isStoryRaw = key.startsWith('story-raw-')
         const isStoryRecon = key.startsWith('story-recon-')
-        const isKineticIntro = cinematicKineticTracksRef.current
-        if (isKineticIntro) color = 0x00e5ff
+        const isStoryCinematicTracks =
+          cinematicStoryTrackStyleRef.current || storyReplayActiveRef.current
+        if (isStoryCinematicTracks) color = 0x00e5ff
         else if (isStoryRaw) color = 0x60a5fa
         else if (isStoryRecon) color = 0x34d399
 
@@ -4966,7 +4787,7 @@ export default function MainViewport({
           labelSprite.userData.isSezLabel = true
           group.add(labelSprite)
 
-          const usePointCloud = cinematicKineticTracksRef.current || currentTracking.trackDisplayMode === 'pointcloud'
+          const usePointCloud = isStoryCinematicTracks || currentTracking.trackDisplayMode === 'pointcloud'
           if (usePointCloud) {
             const pcPositions = generateCapsulePoints(cylinderRadius, cylinderHeight, 150)
             const pcGeometry = new THREE.BufferGeometry()
@@ -5082,7 +4903,7 @@ export default function MainViewport({
             geom.setAttribute('position', new THREE.BufferAttribute(posArray, 3))
             geom.setDrawRange(0, 0)
 
-            const mat = isKineticIntro
+            const mat = isStoryCinematicTracks
               ? new THREE.LineBasicMaterial({ color: 0x00e5ff, transparent: true, opacity: 0.82 })
               : isStoryRaw
                 ? new THREE.LineDashedMaterial({ color: 0x60a5fa, transparent: true, opacity: 0.7, dashSize: 0.35, gapSize: 0.22 })
@@ -5116,7 +4937,7 @@ export default function MainViewport({
           posAttr.needsUpdate = true
           trailLine.geometry.setDrawRange(0, count)
           const trailMat = trailLine.material as THREE.LineBasicMaterial | THREE.LineDashedMaterial
-          if (isKineticIntro) {
+          if (isStoryCinematicTracks) {
             trailMat.color.setHex(0x00e5ff)
             trailMat.opacity = 0.82
           } else if (isStoryRaw) {
@@ -5140,7 +4961,7 @@ export default function MainViewport({
           }
         }
 
-        const isCylinderMode = isKineticIntro ? false : currentTracking.trackDisplayMode === 'cylinder'
+        const isCylinderMode = isStoryCinematicTracks ? false : currentTracking.trackDisplayMode === 'cylinder'
         cylinder.visible = isCylinderMode
         topCap.visible = isCylinderMode
         bottomCap.visible = isCylinderMode
@@ -5149,7 +4970,7 @@ export default function MainViewport({
         const wireframe = group.children.find(c => c.userData?.isWireframe) as THREE.LineSegments | undefined
         if (pointCloud) {
           pointCloud.visible = !isCylinderMode
-          if (isKineticIntro) {
+          if (isStoryCinematicTracks) {
             const pm = pointCloud.material as THREE.PointsMaterial
             pm.color.setHex(0x00e5ff)
             pm.size = 0.055
@@ -5162,7 +4983,7 @@ export default function MainViewport({
         const topCapMat = topCap.material as THREE.MeshStandardMaterial
         const bottomCapMat = bottomCap.material as THREE.MeshStandardMaterial
 
-        const effectiveOpacity = isKineticIntro
+        const effectiveOpacity = isStoryCinematicTracks
           ? 0
           : isStoryRaw
           ? Math.min(currentTracking.cylinderOpacity, 0.45)

@@ -22,15 +22,8 @@
  * props — it never reaches into or mutates other components.
  */
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { Film, X, ChevronLeft, ChevronRight, Play, Pause, GripHorizontal, Sparkles } from 'lucide-react'
-import {
-  getKineticIntroEnabled,
-  setKineticIntroEnabled,
-  resolveIntroVariant,
-  KINETIC_INTRO_REPLAY_SPEED,
-  KINETIC_INTRO_FALLBACK_MS,
-  STORY_INTRO_REPLAY_START,
-} from './storyIntroConfig'
+import { Film, X, ChevronLeft, ChevronRight, Play, Pause, GripHorizontal } from 'lucide-react'
+import { STORY_INTRO_REPLAY_START } from './storyIntroConfig'
 import { useHeatmap } from '../../context/HeatmapContext'
 import { useNarrator2 } from '../../context/Narrator2Context'
 import { useReplayInsight } from '../../context/ReplayInsightContext'
@@ -258,12 +251,12 @@ const REPLAY_SPEED = 3 // recording playback speed (recorded-time / wall-time)
 // the 3D scene isn't mounted/ready).
 const AWAKENING_FALLBACK_MS = 13000
 
-function KineticIntroOverlay() {
+function StoryIntroLogoOverlay() {
   return (
     <div className="fixed inset-0 z-[85] pointer-events-none flex items-center justify-center">
       <div
         className="flex flex-col items-center gap-3"
-        style={{ animation: 'kineticLogoIn 900ms cubic-bezier(0.16, 1, 0.3, 1) forwards', opacity: 0 }}
+        style={{ animation: 'storyIntroLogoIn 900ms cubic-bezier(0.16, 1, 0.3, 1) forwards', opacity: 0 }}
       >
         <img
           src="/hyperspace-logo-mark.png"
@@ -273,7 +266,7 @@ function KineticIntroOverlay() {
         />
       </div>
       <style>{`
-        @keyframes kineticLogoIn {
+        @keyframes storyIntroLogoIn {
           from { opacity: 0; transform: scale(0.96); }
           to { opacity: 1; transform: scale(1); }
         }
@@ -323,8 +316,6 @@ export default function StoryMode({ viewMode, setViewMode, neuralEnabled, setNeu
   const introDoneRef = useRef(false)
   const introFallbackRef = useRef<number | null>(null)
   const introReplayStartedRef = useRef(false)
-  const [kineticIntroEnabled, setKineticIntroEnabledState] = useState(getKineticIntroEnabled)
-
   // Snapshot of the app state when entering, restored verbatim on exit.
   const snapshotRef = useRef<{ viewMode: StoryViewMode; neuralEnabled: boolean } | null>(null)
 
@@ -336,15 +327,6 @@ export default function StoryMode({ viewMode, setViewMode, neuralEnabled, setNeu
   const applyBeatRef = useRef<(i: number) => void>(() => {})
 
   useEffect(() => { venueRef.current = venue?.id }, [venue?.id])
-
-  useEffect(() => {
-    const onPref = (e: Event) => {
-      const en = (e as CustomEvent<{ enabled?: boolean }>).detail?.enabled
-      if (typeof en === 'boolean') setKineticIntroEnabledState(en)
-    }
-    window.addEventListener('hyperspace:story-kinetic-intro-changed', onPref)
-    return () => window.removeEventListener('hyperspace:story-kinetic-intro-changed', onPref)
-  }, [])
 
   // Drag-to-reposition for the narrative card (listeners mounted once).
   useEffect(() => {
@@ -508,7 +490,6 @@ export default function StoryMode({ viewMode, setViewMode, neuralEnabled, setNeu
     introReplayStartedRef.current = false
     if (!introDoneRef.current) {
       setIntroPlaying(true)
-      setKineticIntroEnabledState(getKineticIntroEnabled())
     } else {
       tokenRef.current += 1
       void startRecording(tokenRef.current)
@@ -571,20 +552,18 @@ export default function StoryMode({ viewMode, setViewMode, neuralEnabled, setNeu
   // otherwise.
   useEffect(() => {
     if (!introPlaying) return
-    const variant = resolveIntroVariant()
     const startId = window.setTimeout(() => {
-      window.dispatchEvent(new CustomEvent('hyperspace:cinematic-intro-start', { detail: { variant } }))
+      window.dispatchEvent(new CustomEvent('hyperspace:cinematic-intro-start'))
     }, 90)
     const onDone = () => completeIntro()
     const onEarlyReplay = () => {
       introReplayStartedRef.current = true
       tokenRef.current += 1
-      void startRecording(tokenRef.current, KINETIC_INTRO_REPLAY_SPEED)
+      void startRecording(tokenRef.current, REPLAY_SPEED)
     }
     window.addEventListener('hyperspace:cinematic-intro-done', onDone)
     window.addEventListener(STORY_INTRO_REPLAY_START, onEarlyReplay)
-    const fallbackMs = variant === 'kinetic' ? KINETIC_INTRO_FALLBACK_MS : AWAKENING_FALLBACK_MS
-    introFallbackRef.current = window.setTimeout(() => completeIntro(), fallbackMs)
+    introFallbackRef.current = window.setTimeout(() => completeIntro(), AWAKENING_FALLBACK_MS)
     return () => {
       window.clearTimeout(startId)
       window.removeEventListener('hyperspace:cinematic-intro-done', onDone)
@@ -666,14 +645,10 @@ export default function StoryMode({ viewMode, setViewMode, neuralEnabled, setNeu
   const dim = beat.dim ?? 'soft'
 
   if (introPlaying) {
-    const showKineticLogo = resolveIntroVariant() === 'kinetic'
     return (
       <>
-        {showKineticLogo && <KineticIntroOverlay />}
+        <StoryIntroLogoOverlay />
         <div className="fixed inset-0 z-[80] pointer-events-none flex flex-col items-center justify-end pb-10 gap-2">
-          {showKineticLogo && (
-            <span className="text-[9px] tracking-[0.22em] text-cyan-400/50 font-medium uppercase">Kinetic intro</span>
-          )}
           <span className="text-[11px] tracking-[0.3em] text-white/35 font-medium">PRESS &rarr; TO SKIP</span>
         </div>
       </>
@@ -793,23 +768,6 @@ export default function StoryMode({ viewMode, setViewMode, neuralEnabled, setNeu
           </button>
 
           <span className="text-[10px] text-gray-500 w-9 text-center tabular-nums">{index + 1} / {BEATS.length}</span>
-
-          <div className="w-px h-5 bg-gray-700" />
-
-          <button
-            type="button"
-            onClick={() => {
-              const next = !kineticIntroEnabled
-              setKineticIntroEnabled(next)
-              setKineticIntroEnabledState(next)
-            }}
-            className={`p-1.5 rounded transition-colors ${
-              kineticIntroEnabled ? 'bg-cyan-600/80 text-white' : 'text-gray-500 hover:text-gray-300 hover:bg-gray-700'
-            }`}
-            title={kineticIntroEnabled ? 'Kinetic intro ON (next run) — click for classic Store Awakening' : 'Classic intro ON — click for kinetic reel'}
-          >
-            <Sparkles className="w-3.5 h-3.5" />
-          </button>
 
           <button onClick={exit} className="p-1.5 text-gray-400 hover:text-white hover:bg-gray-700 rounded-lg transition-colors" title="Exit Story Mode (Esc)">
             <X className="w-4 h-4" />
