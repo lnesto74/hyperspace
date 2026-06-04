@@ -340,6 +340,8 @@ export default function MainViewport({
   const [areaSelectRect, setAreaSelectRect] = useState<{ x: number; y: number; w: number; h: number } | null>(null)
   const areaSelectStartRef = useRef<{ x: number; y: number } | null>(null)
   const [showDoohLayer, setShowDoohLayer] = useState(true)
+  const showDoohLayerRef = useRef(showDoohLayer)
+  useEffect(() => { showDoohLayerRef.current = showDoohLayer }, [showDoohLayer])
   const [showPlanogramLayer, setShowPlanogramLayer] = useState(false)
   const [show3DModels, setShow3DModels] = useState(false) // OFF by default for performance
   const [planogramSelectedShelfId, setPlanogramSelectedShelfId] = useState<string | null>(null)
@@ -3089,6 +3091,7 @@ export default function MainViewport({
     let snapshot: {
       camPos: THREE.Vector3; target: THREE.Vector3; controlsEnabled: boolean
       ambient: number; directional: number; dirPos: THREE.Vector3; bg: THREE.Color | null
+      doohLayer: boolean
     } | null = null
     // "Powered off" grey for a closed-store wireframe look.
     const GREY = 0x23262e
@@ -3220,6 +3223,7 @@ export default function MainViewport({
       resetLidars()
       restoreObjects()
       restoreRois()
+      if (snapshot) setShowDoohLayer(snapshot.doohLayer)
       const camera = cameraRef.current, controls = controlsRef.current, scene = sceneRef.current
       const amb = ambientLightRef.current, dir = directionalLightRef.current
       if (snapshot) {
@@ -3256,7 +3260,9 @@ export default function MainViewport({
         directional: dir.intensity,
         dirPos: dir.position.clone(),
         bg: scene.background instanceof THREE.Color ? scene.background.clone() : null,
+        doohLayer: showDoohLayerRef.current,
       }
+      setShowDoohLayer(false)
       controls.enabled = false
       // Closed store: keep the floor empty, grey-out the fixtures, and hide the
       // ROI overlays until the "power on" reveal fades them in.
@@ -3480,7 +3486,9 @@ export default function MainViewport({
         directional: dir.intensity,
         dirPos: dir.position.clone(),
         bg: scene.background instanceof THREE.Color ? scene.background.clone() : null,
+        doohLayer: showDoohLayerRef.current,
       }
+      setShowDoohLayer(false)
       controls.enabled = false
       cinematicActiveRef.current = true
       trackMeshesRef.current.forEach((g) => { g.visible = false })
@@ -3559,6 +3567,9 @@ export default function MainViewport({
       const savedFov = camera.fov
       let replayFired = false
       let lastCutIdx = -1
+      const segFromPos = new THREE.Vector3()
+      const segFromTarget = new THREE.Vector3()
+      let segFromFov = camera.fov
       const TL = KINETIC_TIMELINE
       const t0 = performance.now()
       const c01 = (x: number) => Math.max(0, Math.min(1, x))
@@ -3589,11 +3600,6 @@ export default function MainViewport({
           ;(pool.material as THREE.MeshBasicMaterial).opacity = Math.max(0, (pool.material as THREE.MeshBasicMaterial).opacity - 0.015)
         }
 
-        if (t >= TL.REVEAL_START) {
-          const rvRaw = c01((t - TL.REVEAL_START) / (TL.REVEAL_END - TL.REVEAL_START))
-          reveal(rvRaw < 0.5 ? 4 * rvRaw * rvRaw * rvRaw : 1 - Math.pow(-2 * rvRaw + 2, 3) / 2)
-        }
-
         if (!replayFired && t >= TL.REPLAY_AT) {
           replayFired = true
           cinematicKineticTracksRef.current = true
@@ -3608,36 +3614,24 @@ export default function MainViewport({
             const idx = cutSchedule.indexOf(active)
             if (idx !== lastCutIdx) {
               lastCutIdx = idx
-              if (active.lightPulseMs) {
-                spot.intensity = 4.2
-                dir.intensity = 0.95
-                pool.position.set(active.target.x, 0.04, active.target.z)
-                ;(pool.material as THREE.MeshBasicMaterial).opacity = 0.28
-              }
+              segFromPos.copy(camera.position)
+              segFromTarget.copy(controls.target)
+              segFromFov = camera.fov
             }
             const local = c01((t - active.startMs) / active.durationMs)
             const e = easeByKind(local, active.ease)
-            camera.position.lerpVectors(
-              idx > 0 ? cutSchedule[idx - 1].position : startPos,
-              active.position,
-              e,
-            )
-            controls.target.lerpVectors(
-              idx > 0 ? cutSchedule[idx - 1].target : overviewTarget,
-              active.target,
-              e,
-            )
-            if (active.fov) camera.fov = THREE.MathUtils.lerp(camera.fov, active.fov, 0.35)
+            camera.position.lerpVectors(segFromPos, active.position, e)
+            controls.target.lerpVectors(segFromTarget, active.target, e)
+            if (active.fov) camera.fov = THREE.MathUtils.lerp(segFromFov, active.fov, e)
             camera.updateProjectionMatrix()
           }
-        } else if (t >= TL.HOLD_END - 1000) {
-          const h = c01((t - (TL.HOLD_END - 1000)) / 1000)
-          camera.position.lerpVectors(camera.position, overviewPos, h * 0.12)
-          controls.target.lerpVectors(controls.target, overviewTarget, h * 0.12)
+        } else if (t >= TL.HOLD_END - 1200) {
+          const h = easeByKind(c01((t - (TL.HOLD_END - 1200)) / 1200))
+          camera.position.lerpVectors(camera.position, overviewPos, h * 0.18)
+          controls.target.lerpVectors(controls.target, overviewTarget, h * 0.18)
         }
 
         if (t >= TL.TOTAL) {
-          reveal(1)
           camera.fov = savedFov
           camera.updateProjectionMatrix()
           end(false, overview)

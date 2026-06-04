@@ -266,11 +266,10 @@ function KineticIntroOverlay() {
         style={{ animation: 'kineticLogoIn 900ms cubic-bezier(0.16, 1, 0.3, 1) forwards', opacity: 0 }}
       >
         <img
-          src="/hyperspace.svg"
+          src="/hyperspace-logo-mark.png"
           alt="Hyperspace"
-          className="w-[min(42vw,220px)] h-auto drop-shadow-[0_0_40px_rgba(255,255,255,0.12)]"
+          className="w-[96px] h-[96px] object-contain drop-shadow-[0_0_28px_rgba(255,255,255,0.14)]"
           style={{ filter: 'brightness(0) invert(1)' }}
-          onError={(e) => { (e.target as HTMLImageElement).src = '/hyperspace-logo.png' }}
         />
       </div>
       <style>{`
