@@ -22,9 +22,8 @@
  * props — it never reaches into or mutates other components.
  */
 import { useState, useEffect, useCallback, useRef } from 'react'
+import { Film, X, ChevronLeft, ChevronRight, Play, Pause, PanelRightClose } from 'lucide-react'
 import { STORY_INTRO_REPLAY_START } from './storyIntroConfig'
-import { useStoryModeLayout } from './StoryModeLayoutContext'
-import { STORY_BEATS, type StoryStageActions, type StoryViewMode } from './storyBeats'
 import { useHeatmap } from '../../context/HeatmapContext'
 import { useNarrator2 } from '../../context/Narrator2Context'
 import { useReplayInsight } from '../../context/ReplayInsightContext'
@@ -38,6 +37,20 @@ function emitIntent(intent: string) {
   window.dispatchEvent(new CustomEvent('narrator2-intent', { detail: { intent } }))
 }
 
+// Mirrors App.tsx ViewMode union (kept local to avoid a circular import).
+type StoryViewMode =
+  | 'main'
+  | 'planogram'
+  | 'dwgImporter'
+  | 'lidarPlanner'
+  | 'edgeCommissioning'
+  | 'doohAnalytics'
+  | 'doohEffectiveness'
+  | 'businessReporting'
+  | 'profitRadar'
+  | 'benchmark'
+  | 'dailyDebrief'
+
 export interface StoryModeProps {
   /** Current app view mode (captured on enter, restored on exit). */
   viewMode: StoryViewMode
@@ -47,8 +60,337 @@ export interface StoryModeProps {
   setNeuralEnabled: (enabled: boolean) => void
 }
 
+type Rung =
+  | 'OBSERVE'
+  | 'SENSE'
+  | 'ALERT'
+  | 'EXPLAIN'
+  | 'QUANTIFY'
+  | 'DECIDE'
+  | 'RECOMMEND'
+  | 'REMEMBER'
+
+interface StageActions {
+  setViewMode: (m: StoryViewMode) => void
+  setNeuralEnabled: (enabled: boolean) => void
+  openHeatmap: () => void
+  closeHeatmap: () => void
+  openNarrator: () => void
+  closeNarrator: () => void
+  openCheckout: () => void
+  openStoryGrid: () => void
+  selectFirstCampaign: (name?: string) => void
+  selectRadarZone: () => void
+}
+
+interface Beat {
+  id: string
+  time: string
+  period: 'Morning' | 'Afternoon' | 'Evening'
+  rung: Rung
+  title: string
+  floor: string
+  hyperspace: string
+  outcome: string
+  component: string
+  stage: (a: StageActions) => void
+  /**
+   * Optional position (0–1) to seek the recording to when this beat opens, so the
+   * relevant moment (e.g. the queue building) lands on its beat. Omit to let the
+   * recording keep playing continuously from wherever it is.
+   */
+  seekPct?: number
+  /**
+   * Spotlight focus for this beat — dims the rest of the UI so attention lands on
+   * the component this beat is about. 'tight' for centered modals/dashboards,
+   * 'soft' for the live floor, 'none' for full-page views that need to stay
+   * fully readable. Defaults to 'soft'. The intro beat uses its own curtain.
+   */
+  dim?: 'soft' | 'tight' | 'none'
+}
+
+const RUNG_COLOR: Record<Rung, string> = {
+  OBSERVE: '#3b82f6',
+  SENSE: '#3b82f6',
+  ALERT: '#e0a83e',
+  EXPLAIN: '#e0a83e',
+  QUANTIFY: '#3ea06b',
+  DECIDE: '#3b82f6',
+  RECOMMEND: '#3ea06b',
+  REMEMBER: '#9ca3af',
+}
+
+const BEATS: Beat[] = [
+  {
+    id: 'ready',
+    time: '07:30',
+    period: 'Morning',
+    rung: 'OBSERVE',
+    title: 'Before the doors open, the store wakes up',
+    floor: 'Aisles are dark. Nobody knows yet if today\u2019s data will be trustworthy.',
+    hyperspace: 'The digital twin comes online and every sensor self-checks before the first customer arrives.',
+    outcome: '0 blind spots \u00b7 sensors green',
+    component: 'Digital Twin \u00b7 LiDAR Network',
+    stage: (a) => { a.setViewMode('main') },
+    dim: 'none',
+  },
+  {
+    id: 'live',
+    time: '08:00',
+    period: 'Morning',
+    rung: 'OBSERVE',
+    title: 'Doors open \u2014 the store starts seeing',
+    floor: 'First shoppers enter. A manager sees a busy floor and a gut feeling.',
+    hyperspace: 'Every journey is tracked anonymously \u2014 no cameras \u2014 turning movement into live, measurable flow.',
+    outcome: '100% anonymous \u00b7 live at 20 FPS',
+    component: 'Real-Time Tracking \u00b7 Neural Dashboard',
+    stage: (a) => { a.setViewMode('main'); a.setNeuralEnabled(true) },
+    seekPct: 0.08,
+  },
+  {
+    id: 'heatmap',
+    time: '09:30',
+    period: 'Morning',
+    rung: 'SENSE',
+    title: 'Patterns no one would notice by eye',
+    floor: 'The store looks full. A whole aisle is quietly being skipped.',
+    hyperspace: 'The heatmap reveals a cold aisle pulling a fraction of average traffic \u2014 hiding in plain sight.',
+    outcome: '12% of avg traffic \u00b7 Aisle 7',
+    component: 'Heatmap Viewer',
+    stage: (a) => { a.setViewMode('main'); a.openHeatmap() },
+    dim: 'tight',
+  },
+  {
+    id: 'queue',
+    time: '11:00',
+    period: 'Morning',
+    rung: 'ALERT',
+    title: 'A queue forms \u2014 before a single complaint',
+    floor: 'A line builds at checkout. By the time staff react, customers are already frustrated.',
+    hyperspace: 'Queue buildup trips an alert; the Checkout command center opens with live lanes, waits and the fix: open Lane 4 \u2014 proactively.',
+    outcome: 'wait 6m20s \u2192 1m50s',
+    component: 'Checkout Command Center',
+    stage: (a) => { a.setViewMode('main'); a.setNeuralEnabled(true); a.openCheckout() },
+    seekPct: 0.45,
+    dim: 'tight',
+  },
+  {
+    id: 'peble',
+    time: '13:00',
+    period: 'Afternoon',
+    rung: 'EXPLAIN',
+    title: 'The promo gets seen \u2014 but doesn\u2019t convert',
+    floor: 'The screen is clearly grabbing attention. Marketing assumes the campaign is working.',
+    hyperspace: 'PEBLE\u2122 proves exposure is high but shelf lift is flat \u2014 the creative, not the traffic, is the problem.',
+    outcome: '+38% seen \u00b7 +4% shelf lift',
+    component: 'PEBLE\u2122 Attribution',
+    stage: (a) => { a.setViewMode('doohEffectiveness'); a.selectFirstCampaign('Frutta E V') },
+    dim: 'none',
+  },
+  {
+    id: 'radar',
+    time: '15:00',
+    period: 'Afternoon',
+    rung: 'QUANTIFY',
+    title: 'Opportunity, priced in euros',
+    floor: 'A high-traffic aisle feels fine. Its real upside is invisible on a spreadsheet.',
+    hyperspace: 'Profit Radar ranks opportunities by \u20ac impact and proposes the exact merchandising fix.',
+    outcome: '\u20ac2,400 / wk recoverable',
+    component: 'Profit Radar',
+    stage: (a) => { a.setViewMode('profitRadar'); a.selectRadarZone() },
+    dim: 'none',
+  },
+  {
+    id: 'funnel',
+    time: '16:30',
+    period: 'Afternoon',
+    rung: 'DECIDE',
+    title: 'Where the journey leaks',
+    floor: 'Sales are \u201ca bit soft\u201d today. No one can point to where shoppers drop off.',
+    hyperspace: 'The conversion funnel pinpoints the ENGAGE \u2192 BASKET leak and the friction zone causing it.',
+    outcome: '-11% at ENGAGE \u2192 BASKET',
+    component: 'Conversion Funnel \u00b7 Intent Field',
+    stage: (a) => { a.setViewMode('main'); a.setNeuralEnabled(true) },
+    seekPct: 0.72,
+  },
+  {
+    id: 'narrator',
+    time: '18:00',
+    period: 'Evening',
+    rung: 'RECOMMEND',
+    title: '\u201cWhat should I improve tomorrow?\u201d',
+    floor: 'A manager wants answers, not dashboards \u2014 in plain language, ranked by what matters.',
+    hyperspace: 'Narrator answers in plain English with a ranked action plan, each step linked to the proof.',
+    outcome: '5 actions, ranked by \u20ac',
+    component: 'AI Narrator',
+    stage: (a) => { a.setViewMode('main'); a.openNarrator() },
+    dim: 'tight',
+  },
+  {
+    id: 'review',
+    time: '20:00',
+    period: 'Evening',
+    rung: 'REMEMBER',
+    title: 'The store replays its own day',
+    floor: 'The team goes home. Today\u2019s wins and misses usually walk out the door with them.',
+    hyperspace: 'Every key moment was saved as a replayable episode \u2014 queue spikes, promo wins, friction points. The store hands back a ready-to-watch day, and tomorrow\u2019s plan writes itself.',
+    outcome: 'a full day \u2192 a ranked plan',
+    component: 'End-of-Day Debrief',
+    stage: (a) => { a.setViewMode('dailyDebrief') },
+    dim: 'tight',
+  },
+]
+
 const AUTO_ADVANCE_MS = 14000
 const REPLAY_SPEED = 3 // recording playback speed (recorded-time / wall-time)
+const NARRATIVE_COLLAPSED_KEY = 'hyperspace-story-narrative-collapsed'
+
+function getNarrativeCollapsedPref(): boolean {
+  try { return localStorage.getItem(NARRATIVE_COLLAPSED_KEY) === 'true' } catch { return false }
+}
+
+function setNarrativeCollapsedPref(collapsed: boolean) {
+  try { localStorage.setItem(NARRATIVE_COLLAPSED_KEY, collapsed ? 'true' : 'false') } catch { /* ignore */ }
+}
+
+type NarrativeBeat = (typeof BEATS)[number]
+
+/** Right-side story column — keeps the floor / modals free of overlapping copy. */
+function StoryNarrativeRail({
+  beat,
+  index,
+  total,
+  color,
+  replayLive,
+  collapsed,
+  onToggleCollapsed,
+  onGoto,
+}: {
+  beat: NarrativeBeat
+  index: number
+  total: number
+  color: string
+  replayLive: boolean
+  collapsed: boolean
+  onToggleCollapsed: () => void
+  onGoto: (i: number) => void
+}) {
+  if (collapsed) {
+    return (
+      <aside
+        className="pointer-events-auto flex flex-col items-center shrink-0 w-11 border-l border-white/10 bg-[rgba(9,11,17,0.92)] backdrop-blur-xl"
+        aria-label="Story narrative (collapsed)"
+      >
+        <button
+          type="button"
+          onClick={onToggleCollapsed}
+          className="mt-3 p-2 rounded-lg text-white/50 hover:text-white hover:bg-white/10 transition-colors"
+          title="Show story panel"
+        >
+          <ChevronLeft className="w-4 h-4" />
+        </button>
+        <div className="flex-1 flex flex-col items-center gap-2 py-4">
+          {BEATS.map((b, i) => (
+            <button
+              key={b.id}
+              type="button"
+              onClick={() => onGoto(i)}
+              title={`${b.time} · ${b.title}`}
+              className="rounded-full transition-all"
+              style={{
+                width: i === index ? 8 : 6,
+                height: i === index ? 8 : 6,
+                backgroundColor: i === index ? RUNG_COLOR[b.rung] : 'rgba(255,255,255,0.2)',
+              }}
+            />
+          ))}
+        </div>
+        <span
+          className="pb-4 text-[9px] font-medium tabular-nums text-white/35"
+          style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)' }}
+        >
+          {index + 1}/{total}
+        </span>
+      </aside>
+    )
+  }
+
+  return (
+    <aside
+      className="pointer-events-auto flex flex-col shrink-0 w-[min(20rem,34vw)] max-w-[320px] border-l border-white/10 bg-[rgba(9,11,17,0.92)] backdrop-blur-xl shadow-[-16px_0_48px_-12px_rgba(0,0,0,0.55)]"
+      aria-label="Story narrative"
+    >
+      <div className="flex items-center justify-between gap-2 px-4 pt-3 pb-2 border-b border-white/10 shrink-0">
+        <div className="flex items-center gap-2 min-w-0">
+          <span className="font-mono text-[11px] tracking-wider text-white/75 shrink-0">{beat.time}</span>
+          <span className="text-[9px] uppercase tracking-[0.18em] text-white/40 truncate">{beat.period}</span>
+          {replayLive && (
+            <span className="flex items-center gap-1 text-[9px] tracking-wide text-emerald-400/90 shrink-0">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+              REPLAY
+            </span>
+          )}
+        </div>
+        <div className="flex items-center gap-2 shrink-0">
+          <span className="text-[9px] font-medium uppercase tracking-[0.18em]" style={{ color }}>{beat.rung}</span>
+          <button
+            type="button"
+            onClick={onToggleCollapsed}
+            className="p-1.5 rounded-lg text-white/40 hover:text-white hover:bg-white/10 transition-colors"
+            title="Hide story panel"
+          >
+            <PanelRightClose className="w-4 h-4" />
+          </button>
+        </div>
+      </div>
+
+      <div className="flex-1 overflow-y-auto overscroll-contain px-4 py-3 min-h-0">
+        <h3
+          className="text-white mb-3"
+          style={{ fontFamily: "'Noto Serif Display', Georgia, serif", fontSize: '1.25rem', lineHeight: 1.25, fontWeight: 500, letterSpacing: '-0.01em' }}
+        >
+          {beat.title}
+        </h3>
+
+        <div className="space-y-3">
+          <div>
+            <div className="text-[9px] font-semibold uppercase tracking-[0.16em] text-white/35 mb-1">On the floor</div>
+            <p className="text-[12px] leading-relaxed text-white/55">{beat.floor}</p>
+          </div>
+          <div>
+            <div className="text-[9px] font-semibold uppercase tracking-[0.16em] text-white/35 mb-1">What Hyperspace does</div>
+            <p className="text-[12px] leading-relaxed text-white/88">{beat.hyperspace}</p>
+          </div>
+        </div>
+
+        <div className="mt-4 pt-3 flex items-end justify-between gap-3 border-t border-white/10">
+          <span style={{ fontFamily: "'Noto Serif Display', Georgia, serif", color, fontSize: '1rem', fontWeight: 500, lineHeight: 1.15 }}>
+            {beat.outcome}
+          </span>
+          <span className="text-[9px] uppercase tracking-[0.12em] text-white/40 text-right leading-snug max-w-[46%]">
+            {beat.component}
+          </span>
+        </div>
+      </div>
+
+      <div className="shrink-0 px-4 py-2.5 border-t border-white/10 flex items-center gap-1.5">
+        {BEATS.map((b, i) => (
+          <button
+            key={b.id}
+            type="button"
+            onClick={() => onGoto(i)}
+            title={`${b.time} · ${b.title}`}
+            className="flex-1 min-w-0 h-1 rounded-full transition-all"
+            style={{
+              backgroundColor: i === index ? RUNG_COLOR[b.rung] : 'rgba(255,255,255,0.12)',
+              opacity: i === index ? 1 : 0.7,
+            }}
+          />
+        ))}
+      </div>
+    </aside>
+  )
+}
 
 // The "Store Awakening" cinematic now runs on the REAL 3D scene inside
 // MainViewport (real DWG floorplan, real camera/lights, real LiDAR placements).
@@ -95,7 +437,7 @@ function Spotlight({ mode }: { mode: 'soft' | 'tight' }) {
       : 'radial-gradient(120% 110% at 50% 42%, rgba(0,0,0,0) 0%, rgba(0,0,0,0) 60%, rgba(2,5,12,0.34) 100%)'
   return (
     <div
-      className="absolute inset-0 z-[64] pointer-events-none"
+      className="fixed inset-0 z-[64] pointer-events-none"
       style={{ background: bg, animation: 'storyDim 600ms ease-out', transition: 'background 400ms ease-out' }}
     >
       <style>{`@keyframes storyDim { from { opacity: 0 } to { opacity: 1 } }`}</style>
@@ -109,12 +451,12 @@ export default function StoryMode({ viewMode, setViewMode, neuralEnabled, setNeu
   const { openStoryGrid, closeStoryGrid } = useReplayInsight()
   const { setReplayMode, setMqttReplayActive, setStoryReplayActive, startDemoSession } = useTrackingActions()
   const { venue } = useVenue()
-  const { publishSnapshot, registerHandlers } = useStoryModeLayout()
 
   const [active, setActive] = useState(false)
   const [index, setIndex] = useState(0)
   const [playing, setPlaying] = useState(false)
   const [replayLive, setReplayLive] = useState(false)
+  const [narrativeCollapsed, setNarrativeCollapsed] = useState(getNarrativeCollapsedPref)
   // Store Awakening intro overlay — plays once per session before the replay.
   const [introPlaying, setIntroPlaying] = useState(false)
   const introDoneRef = useRef(false)
@@ -132,16 +474,13 @@ export default function StoryMode({ viewMode, setViewMode, neuralEnabled, setNeu
 
   useEffect(() => { venueRef.current = venue?.id }, [venue?.id])
 
-  useEffect(() => {
-    publishSnapshot({
-      active,
-      introPlaying,
-      beatIndex: index,
-      beatTotal: STORY_BEATS.length,
-      replayLive,
-      playing,
+  const toggleNarrativeCollapsed = useCallback(() => {
+    setNarrativeCollapsed((prev) => {
+      const next = !prev
+      setNarrativeCollapsedPref(next)
+      return next
     })
-  }, [active, introPlaying, index, replayLive, playing, publishSnapshot])
+  }, [])
 
   // Broadcast active state so the footer toggle + sidebar can react.
   useEffect(() => {
@@ -241,7 +580,7 @@ export default function StoryMode({ viewMode, setViewMode, neuralEnabled, setNeu
     ;[300, 800, 1500].forEach((ms) => window.setTimeout(fire, ms))
   }, [])
 
-  const actions: StoryStageActions = {
+  const actions: StageActions = {
     setViewMode,
     setNeuralEnabled,
     openHeatmap: openHeatmapModal,
@@ -264,7 +603,7 @@ export default function StoryMode({ viewMode, setViewMode, neuralEnabled, setNeu
 
   // Reassigned every render so it always closes over fresh callbacks.
   applyBeatRef.current = (i: number) => {
-    const beat = STORY_BEATS[i]
+    const beat = BEATS[i]
     if (!beat) return
     tokenRef.current += 1
     resetStage()
@@ -368,14 +707,14 @@ export default function StoryMode({ viewMode, setViewMode, neuralEnabled, setNeu
   }, [introPlaying, completeIntro, startRecording])
 
   const goto = useCallback((i: number) => {
-    const next = Math.max(0, Math.min(STORY_BEATS.length - 1, i))
+    const next = Math.max(0, Math.min(BEATS.length - 1, i))
     setIndex(next)
     applyBeatRef.current(next)
   }, [])
 
   const next = useCallback(() => {
     setIndex((cur) => {
-      const n = Math.min(STORY_BEATS.length - 1, cur + 1)
+      const n = Math.min(BEATS.length - 1, cur + 1)
       applyBeatRef.current(n)
       return n
     })
@@ -415,7 +754,7 @@ export default function StoryMode({ viewMode, setViewMode, neuralEnabled, setNeu
     if (!active || !playing) return
     const id = window.setTimeout(() => {
       setIndex((cur) => {
-        if (cur >= STORY_BEATS.length - 1) { setPlaying(false); return cur }
+        if (cur >= BEATS.length - 1) { setPlaying(false); return cur }
         const n = cur + 1
         applyBeatRef.current(n)
         return n
@@ -423,21 +762,6 @@ export default function StoryMode({ viewMode, setViewMode, neuralEnabled, setNeu
     }, AUTO_ADVANCE_MS)
     return () => window.clearTimeout(id)
   }, [active, playing, index])
-
-  useEffect(() => {
-    if (!active) {
-      registerHandlers(null)
-      return
-    }
-    registerHandlers({
-      goto,
-      next,
-      prev,
-      exit,
-      togglePlaying: () => setPlaying((p) => !p),
-    })
-    return () => registerHandlers(null)
-  }, [active, goto, next, prev, exit, registerHandlers])
 
   // Stop the recording if the component unmounts mid-demo (best effort).
   useEffect(() => () => {
@@ -450,8 +774,9 @@ export default function StoryMode({ viewMode, setViewMode, neuralEnabled, setNeu
   // (AppShell) for consistency with the other view toggles.
   if (!active) return null
 
-  const beat = STORY_BEATS[index]
-  const dim = beat?.dim ?? 'soft'
+  const beat = BEATS[index]
+  const color = RUNG_COLOR[beat.rung]
+  const dim = beat.dim ?? 'soft'
 
   if (introPlaying) {
     return (
@@ -464,11 +789,74 @@ export default function StoryMode({ viewMode, setViewMode, neuralEnabled, setNeu
     )
   }
 
-  if (!beat) return null
-
   return (
-    <div className="absolute inset-0 z-[70] pointer-events-none">
-      {dim !== 'none' && <Spotlight mode={dim} />}
+    <>
+    {dim !== 'none' && <Spotlight mode={dim} />}
+    <div className="fixed inset-0 z-[70] pointer-events-none flex flex-row">
+      {/* Stage — floor, neural, modals; bottom rail centered in this band only */}
+      <div className="flex-1 min-w-0 relative h-full">
+        <div className="absolute bottom-4 left-1/2 -translate-x-1/2 pointer-events-auto max-w-[min(640px,calc(100%-2rem))]">
+        <div className="flex items-center gap-3 px-3 py-2 rounded-full bg-gray-900/95 backdrop-blur-md border border-gray-700 shadow-2xl">
+          <div className="flex items-center gap-1.5 pr-1">
+            <Film className="w-3.5 h-3.5 text-blue-400" />
+            <span className="text-[10px] font-semibold text-gray-300 tracking-wide">STORY MODE</span>
+          </div>
+
+          <div className="w-px h-5 bg-gray-700" />
+
+          <button onClick={prev} disabled={index === 0} className="p-1.5 text-gray-300 hover:text-white disabled:text-gray-600 hover:bg-gray-700 rounded-lg transition-colors" title="Previous (\u2190)">
+            <ChevronLeft className="w-4 h-4" />
+          </button>
+
+          {/* Beat ticks */}
+          <div className="flex items-center gap-1.5 px-1">
+            {BEATS.map((b, i) => (
+              <button
+                key={b.id}
+                onClick={() => goto(i)}
+                title={`${b.time} \u00b7 ${b.title}`}
+                className="group relative"
+              >
+                <span
+                  className="block rounded-full transition-all"
+                  style={{
+                    width: i === index ? 10 : 7,
+                    height: i === index ? 10 : 7,
+                    backgroundColor: i === index ? RUNG_COLOR[b.rung] : '#4b5563',
+                  }}
+                />
+              </button>
+            ))}
+          </div>
+
+          <button onClick={next} disabled={index === BEATS.length - 1} className="p-1.5 text-gray-300 hover:text-white disabled:text-gray-600 hover:bg-gray-700 rounded-lg transition-colors" title="Next (\u2192 / space)">
+            <ChevronRight className="w-4 h-4" />
+          </button>
+
+          <button onClick={() => setPlaying((p) => !p)} className="p-1.5 text-gray-300 hover:text-white hover:bg-gray-700 rounded-lg transition-colors" title={playing ? 'Pause auto-advance' : 'Auto-advance'}>
+            {playing ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
+          </button>
+
+          <span className="text-[10px] text-gray-500 w-9 text-center tabular-nums">{index + 1} / {BEATS.length}</span>
+
+          <button onClick={exit} className="p-1.5 text-gray-400 hover:text-white hover:bg-gray-700 rounded-lg transition-colors" title="Exit Story Mode (Esc)">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+        </div>
+      </div>
+
+      <StoryNarrativeRail
+        beat={beat}
+        index={index}
+        total={BEATS.length}
+        color={color}
+        replayLive={replayLive}
+        collapsed={narrativeCollapsed}
+        onToggleCollapsed={toggleNarrativeCollapsed}
+        onGoto={goto}
+      />
     </div>
+    </>
   )
 }
