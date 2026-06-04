@@ -1,6 +1,11 @@
 import { useState } from 'react'
-import { TrendingUp, UserPlus, ClipboardList, Check } from 'lucide-react'
+import { TrendingUp, ClipboardList, Check, Send, Loader2, AlertCircle } from 'lucide-react'
 import type { ProfitRadarInsight } from '../../../types'
+import { dispatchTask, fetchShelfProducts } from '../../opsDispatch/api'
+
+function roleForType(type: string): 'merchandiser' | 'cashier' {
+  return type === 'staff_misallocation' ? 'cashier' : 'merchandiser'
+}
 
 interface MetricModel {
   label: string
@@ -46,10 +51,62 @@ function MiniBar({ value, color }: { value: number; color: string }) {
  * offers next-step actions. The € figure is anchored to the insight's own
  * estimated impact (scaled by chosen effort).
  */
-export default function ImpactSimulator({ insight }: { insight: ProfitRadarInsight }) {
+interface ImpactSimulatorProps {
+  insight: ProfitRadarInsight
+  venueId?: string
+  roiId?: string | null
+  zoneName?: string
+}
+
+export default function ImpactSimulator({ insight, venueId, roiId, zoneName }: ImpactSimulatorProps) {
   const [effortPct, setEffortPct] = useState(60)
   const [done, setDone] = useState<Set<string>>(new Set())
+  const [dispatchState, setDispatchState] = useState<'idle' | 'sending' | 'sent' | 'queued' | 'error'>('idle')
+  const [dispatchMsg, setDispatchMsg] = useState<string>('')
   const effort = effortPct / 100
+
+  const role = roleForType(insight.type)
+
+  const dispatch = async () => {
+    if (!venueId || dispatchState === 'sending') return
+    setDispatchState('sending')
+    setDispatchMsg('')
+    try {
+      const products = role === 'merchandiser' && roiId ? await fetchShelfProducts(roiId) : []
+      const res = await dispatchTask({
+        venueId,
+        role,
+        kind: role === 'cashier' ? 'checkout' : 'merchandising',
+        title: insight.title,
+        body: insight.suggestedFix,
+        payload: {
+          type: insight.type,
+          zoneName: zoneName || insight.title,
+          roiId: roiId || null,
+          suggestedFix: insight.suggestedFix,
+          impact: insight.impact,
+          products,
+          insightId: insight.id,
+        },
+      })
+      if (res.sent) {
+        setDispatchState('sent')
+        setDispatchMsg(`Sent to ${res.assigned?.displayName || 'team'}`)
+      } else {
+        setDispatchState('queued')
+        setDispatchMsg(
+          res.reason === 'no_subscriber'
+            ? `No ${role === 'cashier' ? 'cashier' : 'merchandiser'} subscribed — share the invite link`
+            : res.reason === 'not_configured'
+              ? 'Telegram not enabled — open Team & Telegram'
+              : 'Queued',
+        )
+      }
+    } catch (e: any) {
+      setDispatchState('error')
+      setDispatchMsg(e.message || 'Dispatch failed')
+    }
+  }
 
   const m = metricFor(insight)
   const projected = m.project(effort)
@@ -117,15 +174,24 @@ export default function ImpactSimulator({ insight }: { insight: ProfitRadarInsig
         {/* actions */}
         <div className="flex flex-wrap gap-2 pt-1">
           <button
-            onClick={() => act('assign')}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
-              done.has('assign')
+            onClick={dispatch}
+            disabled={!venueId || dispatchState === 'sending' || dispatchState === 'sent'}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors disabled:cursor-default ${
+              dispatchState === 'sent'
                 ? 'bg-emerald-600/20 text-emerald-300 border border-emerald-500/40'
-                : 'bg-emerald-600 hover:bg-emerald-500 text-white'
+                : dispatchState === 'queued' || dispatchState === 'error'
+                  ? 'bg-amber-600/20 text-amber-300 border border-amber-500/40'
+                  : 'bg-emerald-600 hover:bg-emerald-500 text-white'
             }`}
+            title={!venueId ? 'Venue required' : 'Send a Telegram task to the responsible team'}
           >
-            {done.has('assign') ? <Check className="w-3.5 h-3.5" /> : <UserPlus className="w-3.5 h-3.5" />}
-            {done.has('assign') ? 'Assigned' : 'Assign to merchandiser'}
+            {dispatchState === 'sending' ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              : dispatchState === 'sent' ? <Check className="w-3.5 h-3.5" />
+              : (dispatchState === 'queued' || dispatchState === 'error') ? <AlertCircle className="w-3.5 h-3.5" />
+              : <Send className="w-3.5 h-3.5" />}
+            {dispatchState === 'sent' ? 'Dispatched'
+              : dispatchState === 'sending' ? 'Dispatching…'
+              : role === 'cashier' ? 'Send to checkout team' : 'Dispatch to merchandiser'}
           </button>
           <button
             onClick={() => act('plan')}
@@ -139,6 +205,11 @@ export default function ImpactSimulator({ insight }: { insight: ProfitRadarInsig
             {done.has('plan') ? 'Added to plan' : 'Add to action plan'}
           </button>
         </div>
+        {dispatchMsg && (
+          <p className={`text-[10px] ${dispatchState === 'sent' ? 'text-emerald-400/80' : dispatchState === 'error' ? 'text-red-400/80' : 'text-amber-300/80'}`}>
+            {dispatchMsg}
+          </p>
+        )}
       </div>
     </div>
   )

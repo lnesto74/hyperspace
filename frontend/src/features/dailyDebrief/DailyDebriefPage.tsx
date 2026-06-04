@@ -87,7 +87,7 @@ export default function DailyDebriefPage({ onClose, onOpenProfitRadar }: DailyDe
               <h2 className="text-lg font-semibold text-white">Tomorrow's plan writes itself</h2>
             </div>
             <p className="text-sm text-gray-400 mb-4">The day's wins and misses, distilled into a ranked, money-weighted action list.</p>
-            <TomorrowsPlan insights={insights} episodes={episodes} onOpenInsight={handleOpenInsight} />
+            <TomorrowsPlan insights={insights} episodes={episodes} onOpenInsight={handleOpenInsight} venueId={venue?.id} />
           </section>
         </div>
       </div>

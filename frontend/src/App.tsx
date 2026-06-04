@@ -46,6 +46,7 @@ import { API_BASE } from './config/api'
 import LoginPage from './components/auth/LoginPage'
 import CompaniesPage from './components/admin/CompaniesPage'
 import StoryMode from './components/storymode/StoryMode'
+import MobileTaskPage from './features/opsDispatch/MobileTaskPage'
 
 // App view mode context
 type ViewMode = 'main' | 'planogram' | 'dwgImporter' | 'lidarPlanner' | 'edgeCommissioning' | 'doohAnalytics' | 'doohEffectiveness' | 'businessReporting' | 'profitRadar' | 'benchmark' | 'dailyDebrief'
@@ -760,7 +761,18 @@ function AuthenticatedApp() {
 
 const AUTH_ENABLED = !!(import.meta.env.VITE_GOOGLE_CLIENT_ID)
 
+// Public, no-login mobile task page (opened from Telegram). Rendered outside the
+// auth gate and all app providers so the team can open it on any phone.
+const IS_MOBILE_TASK = typeof window !== 'undefined' && window.location.pathname.startsWith('/m/task/')
+
 function App() {
+  if (IS_MOBILE_TASK) {
+    return <MobileTaskPage />
+  }
+  return <AppGated />
+}
+
+function AppGated() {
   const { isAuthenticated, isLoading } = useAuth()
   
   // Skip auth gate when Google OAuth is not configured

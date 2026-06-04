@@ -558,7 +558,7 @@ export default function ProfitRadarPage({ onClose }: ProfitRadarPageProps) {
                     <p className="text-xs text-gray-300 leading-relaxed">{selectedInsight.suggestedFix}</p>
                   </CollapsibleCard>
 
-                  <ImpactSimulator insight={selectedInsight} />
+                  <ImpactSimulator insight={selectedInsight} venueId={venue?.id} roiId={selectedRoiId} zoneName={selectedZoneNames[0] || selectedInsight.title} />
                 </div>
               </div>
             </div>

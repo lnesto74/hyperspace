@@ -60,6 +60,8 @@ import createAiSmartFilterRoutes from './routes/aiSmartFilter.js';
 import createNeuralRoutes from './routes/neural.js';
 import DemoSessionService from './services/DemoSessionService.js';
 import createDemoSessionRoutes from './routes/demoSession.js';
+import OpsDispatchService from './services/ops-dispatch/OpsDispatchService.js';
+import createOpsDispatchRoutes from './routes/opsDispatch.js';
 import {
   getCheckoutAlertConfig,
   saveCheckoutAlertConfig,
@@ -170,6 +172,15 @@ profitRadarEngine.setEconomicsProvider(() => getVenueEconomics(db, trackAggregat
 // "What's on this shelf" always has items).
 profitRadarEngine.setProductZonesProvider(() => getProductZones(db, trackAggregator.venueId));
 console.log(`⏱️ STARTUP: profit radar init +${Date.now() - _startupT0}ms`);
+
+// Ops-dispatch (Telegram) — turns suggested fixes / checkout alerts into
+// role-routed tasks sent to onboarded team members. Additive + isolated.
+const opsDispatchService = new OpsDispatchService(db, { trackAggregator });
+// System-verify task outcomes by reading the live per-zone metrics (engagement / queue).
+opsDispatchService.setMetricsProvider((_venueId, roiId) => {
+  try { return zoneAggregator.getZoneField().get(roiId)?.means || null; } catch { return null; }
+});
+opsDispatchService.start();
 
 // Pre-load zone links and open lanes for all venues at startup
 const venues = db.prepare('SELECT DISTINCT id FROM venues').all();
@@ -565,6 +576,9 @@ console.log(`⏱️ STARTUP: pre-routes +${Date.now() - _startupT0}ms`);
 const replayInsightOrchestrator = new EpisodeDetectorOrchestrator();
 replayInsightOrchestrator.start();
 app.use('/api/replay-insights', createReplayInsightRoutes(replayInsightOrchestrator));
+
+// Ops-dispatch (Telegram) routes — config, onboarding teams, dispatch + public mobile task page
+app.use('/api/ops-dispatch', createOpsDispatchRoutes(db, opsDispatchService, { uploadsDir: UPLOADS_DIR }));
 console.log(`⏱️ STARTUP: post-replay-insight +${Date.now() - _startupT0}ms`);
 
 // Serve uploaded logos
@@ -1485,6 +1499,7 @@ process.on('SIGINT', () => {
   zoneAggregator.stop();
   behaviorClusterer.stop();
   profitRadarEngine.stop();
+  opsDispatchService.stop();
   trajectoryStorage.stop();
   db.close();
   process.exit(0);
