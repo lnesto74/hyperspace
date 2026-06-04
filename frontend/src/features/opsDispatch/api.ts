@@ -62,6 +62,7 @@ export interface OpsTaskPayload {
   products?: { name?: string; brand?: string; imageUrl?: string | null; skuCode?: string; category?: string }[]
   instruction?: string
   insightId?: string | null
+  coordinates?: { x: number; z: number } | null
 }
 
 export interface OpsTaskProof { note: string | null; photoUrl: string | null; at?: string }

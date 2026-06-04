@@ -108,15 +108,17 @@ export default function createOpsDispatchRoutes(db, service, opts = {}) {
     try {
       const { venueId } = req.body || {};
       if (!venueId) return res.status(400).json({ error: 'venueId required' });
+      const sample = service.pickSampleRoi(venueId);
       const result = await service.dispatch({
         venueId,
         role: 'merchandiser',
         kind: 'test',
-        title: 'Test task',
+        title: `Test task${sample ? ` — ${sample.zoneName}` : ''}`,
         body: 'This is a Hyperspace dispatch test — reposition the highlighted shelf.',
         payload: {
           type: 'underperforming_zone',
-          zoneName: 'Sample shelf',
+          zoneName: sample?.zoneName || 'Sample shelf',
+          roiId: sample?.roiId || null,
           suggestedFix: 'Reposition high-demand products to create a "speed bump" effect.',
           impact: { min: 100, max: 500, currency: 'EUR' },
         },

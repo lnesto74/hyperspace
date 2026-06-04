@@ -186,6 +186,11 @@ export class OpsDispatchService {
       value: measured != null ? measured : (lowerIsBetter ? 0.6 : 0.12),
       source: measured != null ? 'measured' : 'estimated',
     };
+    // Concrete location for the field person: centroid of the target ROI (store metres).
+    if (payload.roiId && !payload.coordinates) {
+      const c = this._roiCentroid(venueId, payload.roiId);
+      if (c) payload.coordinates = c;
+    }
     const task = this.store.createTask({
       venueId,
       role,
@@ -244,12 +249,13 @@ export class OpsDispatchService {
     const emoji = ROLE_EMOJI[task.role] || '📋';
     const venueName = this._venueName(task.venueId);
     const impact = p.impact ? `\nEst. impact: <b>${escapeHtml(impactText(p.impact))}</b>` : '';
+    const coords = p.coordinates ? `\n📍 Location: <b>x ${p.coordinates.x}m · z ${p.coordinates.z}m</b>` : '';
     const zone = p.zoneName ? `\n<b>${escapeHtml(p.zoneName)}</b>` : '';
     const fix = p.suggestedFix ? `\n${escapeHtml(p.suggestedFix)}` : (task.body ? `\n${escapeHtml(task.body)}` : '');
     const header = isEscalation
       ? `${emoji} <b>ESCALATED — ${escapeHtml(ROLE_LABELS[task.role])}</b>`
       : `${emoji} <b>${escapeHtml(ROLE_LABELS[task.role])} task — ${escapeHtml(venueName)}</b>`;
-    const text = `${header}${zone}${fix}${impact}`;
+    const text = `${header}${zone}${fix}${impact}${coords}`;
     const mapUrl = this._mapUrl(cfg, task.token);
     const rows = [];
     if (mapUrl) rows.push([bot.urlBtn('🗺 Open map', mapUrl)]);
@@ -270,6 +276,32 @@ export class OpsDispatchService {
       }
     }
     return bot.sendMessage(chatId, text, kb);
+  }
+
+  /** Centroid of a venue ROI polygon, in store metres. */
+  _roiCentroid(venueId, roiId) {
+    try {
+      const row = this.db.prepare('SELECT vertices FROM regions_of_interest WHERE id = ? AND venue_id = ?').get(roiId, venueId);
+      const verts = row ? safeJson(row.vertices, []) : [];
+      if (!Array.isArray(verts) || verts.length < 3) return null;
+      let sx = 0, sz = 0, n = 0;
+      for (const v of verts) {
+        const x = v.x; const z = v.z ?? v.y ?? 0;
+        if (Number.isFinite(x) && Number.isFinite(z)) { sx += x; sz += z; n++; }
+      }
+      if (!n) return null;
+      return { x: +(sx / n).toFixed(2), z: +(sz / n).toFixed(2) };
+    } catch { return null; }
+  }
+
+  /** Pick a representative ROI (prefer shelves/engagement) so the test task can pulse. */
+  pickSampleRoi(venueId) {
+    try {
+      const rows = this.db.prepare('SELECT id, name FROM regions_of_interest WHERE venue_id = ?').all(venueId);
+      if (!rows.length) return null;
+      const pref = rows.find((r) => /shelf|engagement|aisle/i.test(r.name || '')) || rows[0];
+      return { roiId: pref.id, zoneName: pref.name || 'Shelf' };
+    } catch { return null; }
   }
 
   /** Venue geometry (DWG objects + ROI polygons) for map rendering. */

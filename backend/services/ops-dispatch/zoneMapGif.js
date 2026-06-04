@@ -95,13 +95,25 @@ function buildSvg({ fixtures, regions, targetSet, wave, t }) {
     if (targetSet.has(r.id)) continue;
     s += `<polygon points="${poly(r.verts)}" fill="#8b5cf6" fill-opacity="0.04" stroke="#8b5cf6" stroke-opacity="0.16" stroke-width="1" stroke-linejoin="round"/>`;
   }
-  // target ROI — pulsing red with glow halo
+  // target ROI — pulsing red with glow halo + coordinate pin
   const sw = 2 + wave * 4;
   for (const r of regions) {
     if (!targetSet.has(r.id)) continue;
     s += `<polygon points="${poly(r.verts)}" fill="none" stroke="#ff2d2d" stroke-opacity="${(0.08 + wave * 0.12).toFixed(3)}" stroke-width="${(sw + 12).toFixed(1)}" stroke-linejoin="round"/>`;
     s += `<polygon points="${poly(r.verts)}" fill="none" stroke="#ff3b3b" stroke-opacity="${(0.12 + wave * 0.18).toFixed(3)}" stroke-width="${(sw + 5).toFixed(1)}" stroke-linejoin="round"/>`;
     s += `<polygon points="${poly(r.verts)}" fill="#ff2d2d" fill-opacity="${(0.18 + wave * 0.3).toFixed(3)}" stroke="#ff5a5a" stroke-opacity="${(0.7 + wave * 0.3).toFixed(3)}" stroke-width="${sw.toFixed(1)}" stroke-linejoin="round"/>`;
+    // centroid pin + world-coordinate label
+    const cx = r.verts.reduce((a, p) => a + p.x, 0) / r.verts.length;
+    const cz = r.verts.reduce((a, p) => a + p.z, 0) / r.verts.length;
+    const px = t.tx(cx); const py = t.tz(cz);
+    s += `<circle cx="${px.toFixed(1)}" cy="${py.toFixed(1)}" r="${(5 + wave * 3).toFixed(1)}" fill="#ffffff" fill-opacity="0.9"/>`;
+    s += `<circle cx="${px.toFixed(1)}" cy="${py.toFixed(1)}" r="3" fill="#ff2d2d"/>`;
+    const label = `x ${cx.toFixed(1)}m  z ${cz.toFixed(1)}m`;
+    const lw = label.length * 7 + 14;
+    const lx = Math.min(Math.max(px - lw / 2, 4), W - lw - 4);
+    const ly = Math.min(py + 12, H - 24);
+    s += `<rect x="${lx.toFixed(1)}" y="${ly.toFixed(1)}" width="${lw}" height="18" rx="4" fill="#000000" fill-opacity="0.6"/>`;
+    s += `<text x="${(lx + lw / 2).toFixed(1)}" y="${(ly + 13).toFixed(1)}" font-family="monospace" font-size="11" fill="#ffffff" text-anchor="middle">${label}</text>`;
   }
   s += `</svg>`;
   return s;

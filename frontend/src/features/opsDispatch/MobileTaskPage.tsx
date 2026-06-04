@@ -80,16 +80,23 @@ function TaskMap({ snap }: { snap: TaskSnapshot }) {
           <path key={`r-${r.id}`} d={polygonPath(r.vertices)} fill="rgba(139,92,246,0.05)" stroke="rgba(139,92,246,0.22)" strokeWidth={0.04} strokeLinejoin="round" />
         )
       })}
-      {normRegions.filter(r => r.id === targetRoiId && r.vertices.length >= 3).map(r => (
-        <path
-          key={`t-${r.id}`}
-          d={polygonPath(r.vertices)}
-          fill={`rgba(255,40,40,${0.18 + pulseWave * 0.24})`}
-          stroke={`rgba(255,70,70,${0.7 + pulseWave * 0.3})`}
-          strokeWidth={0.1 + pulseWave * 0.06}
-          strokeLinejoin="round"
-        />
-      ))}
+      {normRegions.filter(r => r.id === targetRoiId && r.vertices.length >= 3).map(r => {
+        const cx = r.vertices.reduce((a, p) => a + p.x, 0) / r.vertices.length
+        const cz = r.vertices.reduce((a, p) => a + p.z, 0) / r.vertices.length
+        return (
+          <g key={`t-${r.id}`}>
+            <path
+              d={polygonPath(r.vertices)}
+              fill={`rgba(255,40,40,${0.18 + pulseWave * 0.24})`}
+              stroke={`rgba(255,70,70,${0.7 + pulseWave * 0.3})`}
+              strokeWidth={0.1 + pulseWave * 0.06}
+              strokeLinejoin="round"
+            />
+            <circle cx={cx} cy={cz} r={0.18 + pulseWave * 0.1} fill="#ffffff" />
+            <circle cx={cx} cy={cz} r={0.09} fill="#ff2d2d" />
+          </g>
+        )
+      })}
     </svg>
   )
 }
@@ -171,6 +178,9 @@ export default function MobileTaskPage() {
           {isCashier ? 'Go to checkout' : 'Reposition this shelf'}
         </h1>
         {p.zoneName && <p className="text-sm text-gray-300 mt-0.5">{p.zoneName}</p>}
+        {p.coordinates && (
+          <p className="text-[11px] text-gray-500 mt-1 font-mono">📍 x {p.coordinates.x}m · z {p.coordinates.z}m</p>
+        )}
       </div>
 
       {/* Map */}
