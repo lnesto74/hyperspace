@@ -28,6 +28,7 @@ import { useNarrator2 } from '../../context/Narrator2Context';
 import { useVenue } from '../../context/VenueContext';
 import type { ViewPackKpi, Narrator2Action, KpiStatus } from '../../types/narrator2';
 import VenueKPIThresholdsPanel from '../kpi/VenueKPIThresholdsPanel';
+import { useStoryRailInsetPx } from '../storymode/StoryNarrativeLayout';
 
 interface Narrator2DrawerProps {
   onExecuteIntent?: (intent: string) => void;
@@ -188,6 +189,7 @@ export default function Narrator2Drawer({ onExecuteIntent }: Narrator2DrawerProp
   } = useNarrator2();
 
   const { venue } = useVenue();
+  const storyRailInset = useStoryRailInsetPx();
 
   const [questionInput, setQuestionInput] = useState('');
   const [isAskingQuestion, setIsAskingQuestion] = useState(false);
@@ -212,7 +214,10 @@ export default function Narrator2Drawer({ onExecuteIntent }: Narrator2DrawerProp
   if (!isOpen) return null;
 
   return (
-    <div className="fixed right-0 top-0 h-full w-96 bg-gray-900 border-l border-gray-700 shadow-2xl z-50 flex flex-col">
+    <div
+      className="fixed top-0 h-full w-96 bg-gray-900 border-l border-gray-700 shadow-2xl z-50 flex flex-col"
+      style={{ right: storyRailInset }}
+    >
       {/* Header */}
       <div className="h-14 border-b border-gray-700 flex items-center justify-between px-4 bg-gradient-to-r from-purple-900/50 to-gray-800">
         <div className="flex items-center gap-2">

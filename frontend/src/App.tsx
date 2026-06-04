@@ -46,6 +46,7 @@ import { API_BASE } from './config/api'
 import LoginPage from './components/auth/LoginPage'
 import CompaniesPage from './components/admin/CompaniesPage'
 import StoryMode from './components/storymode/StoryMode'
+import StoryNarrativeLayout from './components/storymode/StoryNarrativeLayout'
 import MobileTaskPage from './features/opsDispatch/MobileTaskPage'
 import { isDemo, getDemoVenueId, isDemoActivated, getPendingDemoToken, activateDemoFromToken } from './config/demo'
 import DemoLinksModal from './components/admin/DemoLinksModal'
@@ -623,8 +624,9 @@ function MainApp() {
   
   return (
     <ViewModeContext.Provider value={{ mode: viewMode, setMode: setViewMode, launchPadOpen, setLaunchPadOpen, neuralDashboardEnabled, setNeuralDashboardEnabled }}>
-      <GlobalHeatmapModal />
       <PlanogramProvider>
+        <StoryNarrativeLayout>
+        <GlobalHeatmapModal />
         {/* DWG Importer View */}
         {viewMode === 'dwgImporter' && (
           <DwgImporterPage 
@@ -633,7 +635,7 @@ function MainApp() {
         )}
         {/* LiDAR Planner View */}
         {viewMode === 'lidarPlanner' && (
-          <div className="fixed inset-0 z-50 bg-gray-900">
+          <div className="absolute inset-0 z-50 bg-gray-900">
             <div className="h-10 border-b border-gray-700 flex items-center px-4 bg-gray-800">
               <button
                 onClick={() => setViewMode('main')}
@@ -715,6 +717,8 @@ function MainApp() {
             Return to LaunchPad
           </button>
         )}
+
+        </StoryNarrativeLayout>
 
         {/* Demo storytelling overlay — opt-in, additive; restores state on exit */}
         <StoryMode

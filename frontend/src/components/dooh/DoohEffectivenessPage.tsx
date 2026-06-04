@@ -591,7 +591,7 @@ export default function DoohEffectivenessPage({ onClose }: DoohEffectivenessPage
 
   if (!featureEnabled) {
     return (
-      <div className="fixed inset-0 z-50 bg-gray-900 flex items-center justify-center">
+      <div className="absolute inset-0 z-50 bg-gray-900 flex items-center justify-center">
         <div className="text-center p-8">
           <AlertCircle className="w-16 h-16 text-amber-500 mx-auto mb-4" />
           <h2 className="text-xl font-bold text-white mb-2">DOOH Attribution Not Enabled</h2>
@@ -610,7 +610,7 @@ export default function DoohEffectivenessPage({ onClose }: DoohEffectivenessPage
   }
 
   return (
-    <div className="fixed inset-0 z-50 bg-gray-900 overflow-hidden flex flex-col">
+    <div className="absolute inset-0 z-50 bg-gray-900 overflow-hidden flex flex-col">
       {/* Header */}
       <div className="h-14 border-b border-gray-700 flex items-center justify-between px-4 bg-gray-800 shrink-0">
         <div className="flex items-center gap-4">

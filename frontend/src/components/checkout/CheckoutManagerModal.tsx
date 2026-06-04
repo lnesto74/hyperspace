@@ -8,6 +8,7 @@ import { useVenue } from '../../context/VenueContext'
 import { QueueCircles } from '../settings/QueueCircles'
 import { API_BASE } from '../../config/api'
 import CheckoutCommandMapTab from './CheckoutCommandMapTab'
+import { useStoryRailInsetPx } from '../storymode/StoryNarrativeLayout'
 
 
 // Types
@@ -146,6 +147,7 @@ const DEFAULT_RULES: CheckoutAlertRule[] = [
 
 export default function CheckoutManagerModal({ isOpen, onClose }: CheckoutManagerModalProps) {
   const { venue } = useVenue()
+  const storyRailInset = useStoryRailInsetPx()
   const [status, setStatus] = useState<CheckoutStatus | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -423,7 +425,10 @@ export default function CheckoutManagerModal({ isOpen, onClose }: CheckoutManage
   const isCommandMapTab = activeTab === 'commandMap'
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+    <div
+      className={`fixed z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm ${storyRailInset ? '' : 'inset-0'}`}
+      style={storyRailInset ? { top: 0, left: 0, bottom: 0, right: storyRailInset } : undefined}
+    >
       <div className={`bg-gray-900 border border-gray-700 rounded-xl shadow-2xl w-full mx-4 overflow-hidden flex flex-col ${
         isCommandMapTab ? 'max-w-7xl max-h-[95vh]' : 'max-w-5xl max-h-[90vh]'
       }`}>

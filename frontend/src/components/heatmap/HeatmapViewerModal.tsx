@@ -15,6 +15,7 @@ import {
 import { getCategoryVisual } from '../../features/businessReporting/operationsConsole/categoryVisuals'
 import type { CategoryRankingRow } from '../../features/businessReporting/components/CategoryRankingPanel'
 import type { RegionOfInterest } from '../../types'
+import { useStoryRailInsetPx } from '../storymode/StoryNarrativeLayout'
 
 const KPI_OPTIONS = [
   { value: 'visits', label: 'Visits' },
@@ -63,6 +64,7 @@ export default function HeatmapViewerModal({ isOpen, onClose }: HeatmapViewerMod
     setOpacity,
     loadHeatmap,
   } = useHeatmap()
+  const storyRailInset = useStoryRailInsetPx()
 
   const [selectedZoneIds, setSelectedZoneIds] = useState<Set<string>>(new Set())
   const [modalRegions, setModalRegions] = useState<RegionOfInterest[]>([])
@@ -555,7 +557,11 @@ export default function HeatmapViewerModal({ isOpen, onClose }: HeatmapViewerMod
   if (!isOpen) return null
 
   return (
-    <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-[70]" onClick={onClose}>
+    <div
+      className={`fixed bg-black/70 backdrop-blur-sm flex items-center justify-center z-[70] ${storyRailInset ? '' : 'inset-0'}`}
+      style={storyRailInset ? { top: 0, left: 0, bottom: 0, right: storyRailInset } : undefined}
+      onClick={onClose}
+    >
       <div 
         className="bg-gray-900 border border-gray-700 rounded-xl shadow-2xl w-[1320px] h-[700px] max-w-[95vw] max-h-[90vh] overflow-hidden flex flex-col"
         onClick={e => e.stopPropagation()}

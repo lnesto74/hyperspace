@@ -403,7 +403,7 @@ export default function ProfitRadarPage({ onClose }: ProfitRadarPageProps) {
   }, [selectedRoiId, fingerprint, zoneField])
 
   return (
-    <div className="fixed inset-0 z-50 bg-gray-900 flex flex-col">
+    <div className="absolute inset-0 z-50 bg-gray-900 flex flex-col">
       {/* Header */}
       <div className="h-12 border-b border-gray-700 flex items-center justify-between px-4 bg-gray-800 flex-shrink-0">
         <div className="flex items-center gap-3">
