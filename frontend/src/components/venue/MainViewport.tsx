@@ -782,6 +782,7 @@ export default function MainViewport({
   const { storyReplayActive } = useTracking()
   const storyReplayActiveRef = useRef(storyReplayActive)
   storyReplayActiveRef.current = storyReplayActive
+  const storyModeActiveRef = useRef(false)
   const storyPickModeRef = useRef(false)
   const [storyPickMode, setStoryPickMode] = useState(false)
   const vtlModeRef = useVtlModeRef()
@@ -3071,6 +3072,20 @@ export default function MainViewport({
   /** Classic intro: floor empty until settle; then cyan point-cloud tracks + trails. */
   const cinematicShowTracksRef = useRef(false)
   const cinematicStoryTrackStyleRef = useRef(false)
+
+  useEffect(() => {
+    const onStoryMode = (e: Event) => {
+      const active = !!(e as CustomEvent<{ active?: boolean }>).detail?.active
+      storyModeActiveRef.current = active
+      if (!active) {
+        cinematicStoryTrackStyleRef.current = false
+        forcePurgeMeshesRef.current = true
+      }
+    }
+    window.addEventListener('hyperspace:story-mode-state', onStoryMode)
+    return () => window.removeEventListener('hyperspace:story-mode-state', onStoryMode)
+  }, [])
+
   // Track-ID layer state around the cinematic: turned off during the closed-store
   // intro, switched on a beat after shoppers appear, restored on exit.
   const trackIdsPrevRef = useRef(false)
@@ -4707,8 +4722,9 @@ export default function MainViewport({
 
         const isStoryRaw = key.startsWith('story-raw-')
         const isStoryRecon = key.startsWith('story-recon-')
-        const isStoryCinematicTracks =
-          cinematicStoryTrackStyleRef.current || storyReplayActiveRef.current
+        const isStoryCinematicTracks = storyModeActiveRef.current && (
+          cinematicStoryTrackStyleRef.current || !cinematicActiveRef.current
+        )
         if (isStoryCinematicTracks) color = 0x00e5ff
         else if (isStoryRaw) color = 0x60a5fa
         else if (isStoryRecon) color = 0x34d399
