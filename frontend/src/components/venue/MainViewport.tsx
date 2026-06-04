@@ -3066,6 +3066,10 @@ export default function MainViewport({
   // True while the Store Awakening cinematic is running — used to keep the floor
   // empty (closed store) by suppressing live track meshes in the sync loop.
   const cinematicActiveRef = useRef(false)
+  // Track-ID layer state around the cinematic: turned off during the closed-store
+  // intro, switched on a beat after shoppers appear, restored on exit.
+  const trackIdsPrevRef = useRef(false)
+  const idRevealTimerRef = useRef<number | null>(null)
 
   // ── Story Mode "Store Awakening" cinematic on the REAL scene ──
   // Fully additive: driven by window events from StoryMode. It snapshots the
@@ -3082,14 +3086,24 @@ export default function MainViewport({
       camPos: THREE.Vector3; target: THREE.Vector3; controlsEnabled: boolean
       ambient: number; directional: number; dirPos: THREE.Vector3; bg: THREE.Color | null
     } | null = null
-    // Original colors of the DWG fixtures/wireframes so we can restore them after
-    // the "closed store" grey-out.
-    let dimmed: { mat: THREE.Material; color?: number; emissive?: number; ei?: number }[] = []
+    // "Powered off" grey for a closed-store wireframe look.
+    const GREY = 0x23262e
+    const GREY_COLOR = new THREE.Color(GREY)
+    // Original colors of the DWG fixtures/wireframes so we can lerp them back
+    // ("the store powers on") and snap to the exact originals at the end.
+    let dimmed: {
+      mat: THREE.Material
+      color?: number
+      origColor?: THREE.Color
+      emissive?: number
+      ei?: number
+    }[] = []
+    // Active ROI fill/outline materials, hidden at start and faded in on reveal.
+    let roiMats: { mat: THREE.Material & { opacity: number; transparent: boolean }; opacity: number }[] = []
 
     // Dim every DWG fixture + wireframe line to a dark grey ("powered off"), and
     // remember the originals. Shared materials are only touched once.
     const dimObjects = () => {
-      const GREY = 0x23262e
       const seen = new Set<THREE.Material>()
       const touch = (mat: THREE.Material | THREE.Material[] | undefined) => {
         if (!mat) return
@@ -3098,7 +3112,13 @@ export default function MainViewport({
           if (seen.has(m)) return
           seen.add(m)
           const am = m as THREE.Material & { color?: THREE.Color; emissive?: THREE.Color; emissiveIntensity?: number }
-          dimmed.push({ mat: m, color: am.color?.getHex(), emissive: am.emissive?.getHex(), ei: am.emissiveIntensity })
+          dimmed.push({
+            mat: m,
+            color: am.color?.getHex(),
+            origColor: am.color ? am.color.clone() : undefined,
+            emissive: am.emissive?.getHex(),
+            ei: am.emissiveIntensity,
+          })
           am.color?.setHex(GREY)
           if (am.emissive) { am.emissive.setHex(0x000000); am.emissiveIntensity = 0 }
         })
@@ -3121,6 +3141,46 @@ export default function MainViewport({
         if (ei !== undefined && am.emissiveIntensity !== undefined) am.emissiveIntensity = ei
       })
       dimmed = []
+    }
+
+    // Hide the active ROI zones at the start (closed store has no overlays yet),
+    // remembering each material's target opacity so we can fade them in.
+    const hideRois = () => {
+      roiMeshesRef.current.forEach((group) => {
+        if (!group.visible) return
+        group.traverse((child) => {
+          if (child.userData?.isRoiVertex) return
+          const anyC = child as THREE.Mesh & { isMesh?: boolean; isLine?: boolean; material?: THREE.Material | THREE.Material[] }
+          if (!(anyC.isMesh || anyC.isLine)) return
+          const list = Array.isArray(anyC.material) ? anyC.material : [anyC.material]
+          list.forEach((m) => {
+            const am = m as (THREE.Material & { opacity: number; transparent: boolean }) | undefined
+            if (!am || typeof am.opacity !== 'number') return
+            roiMats.push({ mat: am, opacity: am.opacity })
+            am.transparent = true
+            am.opacity = 0
+          })
+        })
+      })
+    }
+
+    // Fade active ROIs + recolor every dimmed fixture from grey → original as the
+    // store "powers on". rv in [0,1].
+    const reveal = (rv: number) => {
+      dimmed.forEach((d) => {
+        const am = d.mat as THREE.Material & { color?: THREE.Color; emissive?: THREE.Color; emissiveIntensity?: number }
+        if (d.origColor && am.color) am.color.lerpColors(GREY_COLOR, d.origColor, rv)
+        if (am.emissive && d.emissive !== undefined) {
+          am.emissive.setHex(d.emissive)
+          if (am.emissiveIntensity !== undefined) am.emissiveIntensity = (d.ei ?? 0) * rv
+        }
+      })
+      roiMats.forEach((r) => { r.mat.opacity = r.opacity * rv })
+    }
+
+    const restoreRois = () => {
+      roiMats.forEach(({ mat, opacity }) => { mat.opacity = opacity })
+      roiMats = []
     }
 
     const disposeAdded = () => {
@@ -3153,6 +3213,7 @@ export default function MainViewport({
       disposeAdded()
       resetLidars()
       restoreObjects()
+      restoreRois()
       const camera = cameraRef.current, controls = controlsRef.current, scene = sceneRef.current
       const amb = ambientLightRef.current, dir = directionalLightRef.current
       if (snapshot) {
@@ -3189,11 +3250,18 @@ export default function MainViewport({
         bg: scene.background instanceof THREE.Color ? scene.background.clone() : null,
       }
       controls.enabled = false
-      // Closed store: keep the floor empty and grey-out the fixtures.
+      // Closed store: keep the floor empty, grey-out the fixtures, and hide the
+      // ROI overlays until the "power on" reveal fades them in.
       cinematicActiveRef.current = true
       trackMeshesRef.current.forEach((g) => { g.visible = false })
       trailLinesRef.current.forEach((t) => { t.visible = false })
       dimObjects()
+      hideRois()
+      // Track IDs come on a few seconds AFTER shoppers appear; turn them off for
+      // the closed-store intro and remember the prior choice to restore on exit.
+      trackIdsPrevRef.current = showTrackIdsRef.current
+      if (idRevealTimerRef.current) { window.clearTimeout(idRevealTimerRef.current); idRevealTimerRef.current = null }
+      setShowTrackIdsLayer(false)
 
       const b = dwgSceneBounds
       const venueW = venue?.width ?? 20, venueD = venue?.depth ?? 20
@@ -3203,7 +3271,9 @@ export default function MainViewport({
 
       const overviewPos = new THREE.Vector3(centerX + viewSize * 0.8, viewSize * 0.7, centerZ + viewSize * 0.8)
       const overviewTarget = new THREE.Vector3(centerX, 0, centerZ)
-      const startPos = new THREE.Vector3(centerX - viewSize * 0.3, viewSize * 0.07, centerZ + viewSize * 0.6)
+      // Open on a calm, high & wide aerial of the whole dark store (not a close-up
+      // low angle), then descend into the fitted overview.
+      const startPos = new THREE.Vector3(centerX + viewSize * 0.12, viewSize * 1.45, centerZ + viewSize * 1.15)
       const overview = { pos: overviewPos, target: overviewTarget }
 
       // Real LiDAR placements (world positions). They wake as the roaming light
@@ -3267,10 +3337,12 @@ export default function MainViewport({
       camera.position.copy(startPos)
       controls.target.copy(overviewTarget)
 
-      const SWEEP_START = 1100, SWEEP_END = 6200
-      const FLY_START = 1300, FLY_END = 8200
-      const SETTLE_START = 8200, SETTLE_END = 10500
-      const TOTAL = 10800
+      const SWEEP_START = 1100, SWEEP_END = 6000
+      const FLY_START = 1300, FLY_END = 8400
+      // 5s "power on" reveal: ROIs fade in and every fixture lerps grey → colored.
+      const REVEAL_START = 5600, REVEAL_END = 10600
+      const SETTLE_START = 9200, SETTLE_END = 11600
+      const TOTAL = 12000
       const WAKE_RADIUS = viewSize * 0.16
 
       const t0 = performance.now()
@@ -3312,10 +3384,16 @@ export default function MainViewport({
           }
         }
 
-        // Camera fly-in (dramatic low angle → fitted overview)
+        // Camera fly-in (high aerial → fitted overview)
         if (t >= FLY_START) {
           const f = ease(c01((t - FLY_START) / (FLY_END - FLY_START)))
           camera.position.lerpVectors(startPos, overviewPos, f)
+        }
+
+        // "Power on" reveal: smoothly fade ROIs in and recolor the fixtures.
+        if (t >= REVEAL_START) {
+          const rvRaw = c01((t - REVEAL_START) / (REVEAL_END - REVEAL_START))
+          reveal(rvRaw < 0.5 ? 4 * rvRaw * rvRaw * rvRaw : 1 - Math.pow(-2 * rvRaw + 2, 3) / 2)
         }
 
         // Real LiDARs wake as the roaming light passes near them (proximity);
@@ -3357,7 +3435,14 @@ export default function MainViewport({
         })
 
         if (t >= TOTAL) {
+          reveal(1)
           end(false, overview)
+          // Shoppers are now on the floor; bring the track IDs on a beat later.
+          if (idRevealTimerRef.current) window.clearTimeout(idRevealTimerRef.current)
+          idRevealTimerRef.current = window.setTimeout(() => {
+            setShowTrackIdsLayer(true)
+            idRevealTimerRef.current = null
+          }, 3200)
           window.dispatchEvent(new CustomEvent('hyperspace:cinematic-intro-done'))
           return
         }
@@ -3368,6 +3453,8 @@ export default function MainViewport({
 
     const onStart = () => start()
     const onStop = () => {
+      if (idRevealTimerRef.current) { window.clearTimeout(idRevealTimerRef.current); idRevealTimerRef.current = null }
+      setShowTrackIdsLayer(trackIdsPrevRef.current)
       const b = dwgSceneBounds
       const venueW = venue?.width ?? 20, venueD = venue?.depth ?? 20
       const floorW = b?.floorW ?? venueW, floorD = b?.floorD ?? venueD
@@ -3383,6 +3470,7 @@ export default function MainViewport({
     return () => {
       window.removeEventListener('hyperspace:cinematic-intro-start', onStart)
       window.removeEventListener('hyperspace:cinematic-intro-stop', onStop)
+      if (idRevealTimerRef.current) { window.clearTimeout(idRevealTimerRef.current); idRevealTimerRef.current = null }
       end(false)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps

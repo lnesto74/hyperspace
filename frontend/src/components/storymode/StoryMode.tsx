@@ -613,51 +613,66 @@ export default function StoryMode({ viewMode, setViewMode, neuralEnabled, setNeu
     <>
     {dim !== 'none' && <Spotlight mode={dim} />}
     <div className="fixed inset-0 z-[70] pointer-events-none">
-      {/* Narrative card (draggable) */}
+      {/* Narrative card (draggable) — glass panel, serif headline, no accent bar */}
       <div
-        className="absolute bottom-24 left-6 max-w-sm pointer-events-auto"
+        className="absolute bottom-24 left-6 w-[24rem] max-w-[88vw] pointer-events-auto"
         style={{ transform: `translate(${cardDrag.x}px, ${cardDrag.y}px)` }}
       >
-        <div className="rounded-2xl bg-gray-900/95 backdrop-blur-md border border-gray-700 shadow-2xl overflow-hidden">
-          <div className="h-1" style={{ backgroundColor: color }} />
+        <div
+          className="relative rounded-2xl overflow-hidden border border-white/10 shadow-2xl"
+          style={{
+            background: 'linear-gradient(155deg, rgba(20,23,32,0.74), rgba(9,11,17,0.62))',
+            backdropFilter: 'blur(22px) saturate(135%)',
+            WebkitBackdropFilter: 'blur(22px) saturate(135%)',
+            boxShadow: '0 24px 60px -20px rgba(0,0,0,0.7), inset 0 1px 0 rgba(255,255,255,0.06)',
+          }}
+        >
+          {/* Header doubles as the drag handle */}
           <div
             onPointerDown={startCardDrag}
-            className="flex items-center justify-center py-1 cursor-move text-gray-600 hover:text-gray-400 select-none touch-none"
+            className="flex items-center justify-between px-5 pt-3.5 pb-1 cursor-move select-none touch-none"
             title="Drag to reposition"
           >
-            <GripHorizontal className="w-4 h-4" />
-          </div>
-          <div className="px-4 pb-4">
-            <div className="flex items-center gap-2 mb-2">
-              <span className="text-xs font-semibold tracking-wide text-white">{beat.time}</span>
-              <span className="text-[10px] text-gray-500">{beat.period}</span>
+            <div className="flex items-center gap-2.5">
+              <span className="font-mono text-[11px] tracking-wider text-white/75">{beat.time}</span>
+              <span className="text-[9px] uppercase tracking-[0.22em] text-white/40">{beat.period}</span>
               {replayLive && (
-                <span className="flex items-center gap-1 text-[9px] text-emerald-400">
+                <span className="flex items-center gap-1 text-[9px] tracking-wide text-emerald-400/90">
                   <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
                   REPLAY
                 </span>
               )}
-              <span
-                className="ml-auto text-[10px] font-semibold px-2 py-0.5 rounded-full"
-                style={{ color, backgroundColor: `${color}22`, border: `1px solid ${color}55` }}
-              >
-                {beat.rung}
+            </div>
+            <div className="flex items-center gap-2.5">
+              <span className="text-[9px] font-medium uppercase tracking-[0.2em]" style={{ color }}>{beat.rung}</span>
+              <GripHorizontal className="w-3.5 h-3.5 text-white/25" />
+            </div>
+          </div>
+
+          <div className="px-5 pb-5 pt-1.5">
+            <h3
+              className="text-white mb-4"
+              style={{ fontFamily: "'Noto Serif Display', Georgia, serif", fontSize: '1.4rem', lineHeight: 1.22, fontWeight: 500, letterSpacing: '-0.01em' }}
+            >
+              {beat.title}
+            </h3>
+
+            <div className="space-y-3">
+              <div>
+                <div className="text-[9px] font-semibold uppercase tracking-[0.18em] text-white/35 mb-1">On the floor</div>
+                <p className="text-[13px] leading-relaxed text-white/55">{beat.floor}</p>
+              </div>
+              <div>
+                <div className="text-[9px] font-semibold uppercase tracking-[0.18em] text-white/35 mb-1">What Hyperspace does</div>
+                <p className="text-[13px] leading-relaxed text-white/85">{beat.hyperspace}</p>
+              </div>
+            </div>
+
+            <div className="mt-4 pt-3 flex items-end justify-between border-t border-white/10">
+              <span style={{ fontFamily: "'Noto Serif Display', Georgia, serif", color, fontSize: '1.05rem', fontWeight: 500, lineHeight: 1.1 }}>
+                {beat.outcome}
               </span>
-            </div>
-            <h3 className="text-sm font-semibold text-white leading-snug mb-3">{beat.title}</h3>
-
-            <div className="mb-2">
-              <div className="text-[10px] font-semibold text-gray-500 tracking-wider mb-0.5">ON THE FLOOR</div>
-              <div className="text-xs text-gray-400 leading-relaxed">{beat.floor}</div>
-            </div>
-            <div className="mb-3">
-              <div className="text-[10px] font-semibold text-gray-500 tracking-wider mb-0.5">WHAT HYPERSPACE DOES</div>
-              <div className="text-xs text-gray-200 leading-relaxed">{beat.hyperspace}</div>
-            </div>
-
-            <div className="flex items-center justify-between border-t border-gray-800 pt-2.5">
-              <span className="text-sm font-semibold" style={{ color }}>{beat.outcome}</span>
-              <span className="text-[10px] text-gray-500">{beat.component}</span>
+              <span className="text-[9px] uppercase tracking-[0.14em] text-white/40 text-right max-w-[42%]">{beat.component}</span>
             </div>
           </div>
         </div>
