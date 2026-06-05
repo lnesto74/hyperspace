@@ -1,5 +1,6 @@
 import { TrajectoryReconciler, normalizeReconcilerConfig, DEFAULT_CONFIG } from '../../backend/services/TrajectoryReconciler.js';
 import { reconcileV2Pipeline } from '../../backend/services/offline/reconcileV2/reconcileV2.js';
+import { reconcileV3Pipeline } from '../../backend/services/offline/reconcileV3/reconcileV3.js';
 import { IDENTITY_TRANSFORM } from '../../backend/services/PerceptionTransform.js';
 import { streamMessages } from './load_jsonl.mjs';
 
@@ -255,6 +256,54 @@ export async function runReconcileV2Stream(filePath, overrides, { venueId, after
     last_ts: lastTs,
     raw_messages: totalRaw,
     tracklets: trackletCount,
+    links_accepted: stats?.links_accepted ?? null,
+    spatial,
+    ...metrics,
+  };
+}
+
+/** Map-aware v3 (v2 + concurrent-duplicate fusion), same scorecard shape as v2. */
+export async function runReconcileV3Stream(filePath, overrides, { venueId, afterMs, beforeMs, label, onProgress, transform, db } = {}) {
+  const { engine, ...cfgRest } = overrides || {};
+  const {
+    mergedTracks, totalRaw, perceptionIdCount, firstTs, lastTs, trackletCount, trackletCountRaw, fuseStats, stats,
+  } = await reconcileV3Pipeline({
+    filePath,
+    venueId,
+    transform: transform || IDENTITY_TRANSFORM,
+    configOverrides: { ...cfgRest, logGraph: false },
+    db: db || null,
+    afterMs,
+    beforeMs,
+    onProgress: onProgress ? (p) => { if (p.messages) onProgress(p.messages, label); } : undefined,
+  });
+
+  const rollups = new Map();
+  const timelineBuckets = new Map();
+  for (const [cid, tr] of mergedTracks) {
+    for (const s of tr.samples) {
+      const r = rollups.get(cid);
+      if (!r) rollups.set(cid, createTrackRollup(s.t, s.x, s.z));
+      else updateTrackRollup(r, s.t, s.x, s.z);
+      const t0 = Math.floor(s.t / BUCKET_MS) * BUCKET_MS;
+      let bucket = timelineBuckets.get(t0);
+      if (!bucket) { bucket = []; timelineBuckets.set(t0, bucket); }
+      if (bucket.length < 2000) bucket.push({ x: s.x, z: s.z });
+    }
+  }
+
+  const metrics = scoreStableTracks(rollups, totalRaw, perceptionIdCount, { ghost_dropped: 0 });
+  const spatial = buildReconcilerSpatial(rollups, metrics, label, firstTs, lastTs, timelineBuckets);
+  return {
+    config: { engine: 'v3', ...cfgRest },
+    engine: 'v3',
+    first_ts: firstTs,
+    last_ts: lastTs,
+    raw_messages: totalRaw,
+    tracklets: trackletCount,
+    tracklets_raw: trackletCountRaw,
+    fused_groups: fuseStats?.fused_groups ?? 0,
+    fused_removed: fuseStats?.removed ?? 0,
     links_accepted: stats?.links_accepted ?? null,
     spatial,
     ...metrics,

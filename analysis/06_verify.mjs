@@ -8,7 +8,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { VERIFY_CONFIGS } from './lib/configs.mjs';
 import { detectPrimaryVenue, parseWhen } from './lib/load_jsonl.mjs';
-import { runReconcilerStream, runReconcileV2Stream } from './lib/reconciler_metrics.mjs';
+import { runReconcilerStream, runReconcileV2Stream, runReconcileV3Stream } from './lib/reconciler_metrics.mjs';
 import { loadEntranceContext, computeEntranceFootfall } from './lib/footfall.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -85,10 +85,11 @@ const main = async () => {
   const outPath = path.join(outDir, '06_verify.json');
   const results = [];
   for (const [name, cfg] of VERIFY_CONFIGS) {
-    const isV2 = cfg?.engine === 'v2';
-    console.log(`Running ${name} (${isV2 ? 'map-aware v2, batch' : 'streaming'}) ...`);
+    const engine = cfg?.engine || 'v1';
+    const engineLabel = engine === 'v3' ? 'map-aware v3' : engine === 'v2' ? 'map-aware v2' : 'streaming';
+    console.log(`Running ${name} (${engineLabel}) ...`);
     const t0 = Date.now();
-    const runner = isV2 ? runReconcileV2Stream : runReconcilerStream;
+    const runner = engine === 'v3' ? runReconcileV3Stream : engine === 'v2' ? runReconcileV2Stream : runReconcilerStream;
     const r = await runner(filePath, cfg, {
       venueId,
       afterMs,

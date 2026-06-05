@@ -47,7 +47,7 @@ export default function ReconciliationProofTab({ detail }: { detail: BenchmarkRu
 
   // which reconciled preset (engine) we compare raw against — user-selectable
   const [presets, setPresets] = useState<PresetOpt[]>([])
-  const [presetId, setPresetId] = useState<string>('GROCERY_V2_MAP')
+  const [presetId, setPresetId] = useState<string>('GROCERY_V3_MAP')
   const recon = detail.scorecard?.layers?.reconciler?.[presetId]
   const presetLabel = presets.find((p) => p.presetId === presetId)?.presetLabel || presetId
 
@@ -92,7 +92,9 @@ export default function ReconciliationProofTab({ detail }: { detail: BenchmarkRu
         setPresetId((prev) => (
           list.some((p) => p.presetId === prev)
             ? prev
-            : (list.find((p) => p.presetId === 'GROCERY_V2_MAP')?.presetId || list[0]?.presetId || 'GROCERY_V2_MAP')
+            : (list.find((p) => p.presetId === 'GROCERY_V3_MAP')?.presetId
+              || list.find((p) => p.presetId === 'GROCERY_V2_MAP')?.presetId
+              || list[0]?.presetId || 'GROCERY_V3_MAP')
         ))
       })
       .catch(() => setPresets([]))

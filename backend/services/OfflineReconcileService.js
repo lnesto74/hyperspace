@@ -8,6 +8,7 @@ import { randomUUID } from 'crypto';
 import { getOfflinePreset, listOfflinePresets } from '../config/offlineReconcilePresets.js';
 import { runBatchReconciliationToFile } from './offline/BatchTrajectoryReconciler.js';
 import { runReconcileV2ToFile } from './offline/reconcileV2/reconcileV2.js';
+import { runReconcileV3ToFile } from './offline/reconcileV3/reconcileV3.js';
 import { normalizePerceptionTransform, IDENTITY_TRANSFORM } from './PerceptionTransform.js';
 import { venueQueries } from '../database/schema.js';
 import { readStoriesFile, storiesPathForArtifact } from './offline/storyBuilder.js';
@@ -378,8 +379,19 @@ export class OfflineReconcileService {
       };
 
       let result;
-      if (engine === 'v2') {
-        const walkabilityCachePath = path.join(this.replayDir, `walkability_${ctx.venueId || 'default'}.json`);
+      const walkabilityCachePath = path.join(this.replayDir, `walkability_${ctx.venueId || 'default'}.json`);
+      if (engine === 'v3') {
+        result = await runReconcileV3ToFile({
+          filePath: ctx.fullPath,
+          artifactPath: ctx.artifactPath,
+          venueId: ctx.venueId,
+          transform,
+          configOverrides: { ...ctx.preset.config, walkabilityCachePath },
+          meta: jobMeta,
+          onProgress,
+          db: this.db,
+        });
+      } else if (engine === 'v2') {
         result = await runReconcileV2ToFile({
           filePath: ctx.fullPath,
           artifactPath: ctx.artifactPath,

@@ -47,6 +47,8 @@ const LINK_COLORS: Record<string, string> = {
 
 const TRACK_VIEW_OPTIONS: { id: TrackViewMode; label: string }[] = [
   { id: 'raw', label: 'Before — raw perception' },
+  { id: 'overlay_GROCERY_V3_MAP', label: 'Before + After (Map-aware v3)' },
+  { id: 'GROCERY_V3_MAP', label: 'After — Map-aware v3 only' },
   { id: 'overlay_GROCERY_V2_MAP', label: 'Before + After (Map-aware v2)' },
   { id: 'GROCERY_V2_MAP', label: 'After — Map-aware v2 only' },
   { id: 'overlay_GROCERY_BALANCED', label: 'Before + After (Grocery Balanced)' },

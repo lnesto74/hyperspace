@@ -105,7 +105,7 @@ export const OFFLINE_RECONCILE_PRESETS = [
   {
     id: 'GROCERY_V2_MAP',
     label: 'Grocery — Map-aware v2 (beta)',
-    description: 'Map-constrained physics reconciler: tracklets + geodesic probabilistic association (motion vector + density + EXIT). Routes around shelves, no teleports. Conservative (fewer false merges).',
+    description: 'Map-constrained physics reconciler: tracklets + geodesic probabilistic association (motion vector + density + EXIT). Routes around shelves, no teleports. Conservative (fewer false merges). Baseline for v3.',
     engine: 'v2',
     config: {
       engine: 'v2',
@@ -116,6 +116,20 @@ export const OFFLINE_RECONCILE_PRESETS = [
       // ceilings to their physically-plausible limits → ~43 frag/person (vs ~57) with
       // ZERO label violations on the 4 'different' guards. (Floor is gated by concurrent
       // duplicate IDs that need a separate fusion pass — see RECONCILIATION_V2_DESIGN.)
+      associate: { C_max: 12, margin: 0.3, T_max_s: 45, D_max_m: 8 },
+    },
+  },
+  {
+    id: 'GROCERY_V3_MAP',
+    label: 'Grocery — Map-aware v3',
+    description: 'v2 + Stage-0 concurrent-duplicate fusion: merges overlapping near-duplicate tracklets (multi-sensor split IDs) before geodesic association. Same map constraints, fewer fragments.',
+    engine: 'v3',
+    config: {
+      engine: 'v3',
+      smoothing_alpha: 0.6,
+      min_chain_life_ms: 0,
+      tracklet: {},
+      fuseConcurrent: { proximityM: 1.5, minOverlapMs: 300, requireDifferentSource: true },
       associate: { C_max: 12, margin: 0.3, T_max_s: 45, D_max_m: 8 },
     },
   },

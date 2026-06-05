@@ -1,7 +1,8 @@
 # Map-Constrained Trajectory Reconciliation (v2) — Design for Review
 
 **Status:** DRAFT for review — no production changes until approved
-**Scope:** Offline post-process reconciler (replay/benchmark) first; live reconciler second
+**Scope:** Offny texts or elements during the storytelling demo
+line post-process reconciler (replay/benchmark) first; live reconciler second
 **Author/Context:** Trajectory reconciliation redesign for TREVIGLIO grocery (venue `55fdd53b-3298-4355-97c0-b4e789b11d06`)
 
 ---
@@ -394,3 +395,22 @@ fusion pass** before association — cluster tracklets that overlap in time AND 
 genuine occlusion gaps. Secondary: relax walkability inflation near the UNREACHABLE spots;
 investigate R_max/cost for the 2 FEASIBLE pairs. A few labels (25 m "same", 15 m/s) look
 mistaken and are worth re-checking in the annotation panel.
+
+---
+
+## 14. v3 — concurrent-duplicate fusion (implemented)
+
+**Preset:** `GROCERY_V3_MAP` · **Engine:** `v3` · **Module:** `backend/services/offline/reconcileV3/`
+
+v3 = **v2 baseline unchanged** (walkability grid, tracklet split, geodesic association, geodesic
+bridge rendering) **plus Stage-0** before association:
+
+1. Find tracklet pairs from **different** perception IDs whose time ranges overlap ≥ 300 ms.
+2. During the overlap, positions must stay within **1.5 m** at every 500 ms sample.
+3. Union-find clusters → merge samples into one fused tracklet (`fuse#N`).
+4. Run the same v2 associator on the reduced tracklet set (`chainPrefix: v3`).
+
+v2 (`GROCERY_V2_MAP`) remains the frozen baseline for A/B. v1 presets are legacy comparison only
+(straight-line stitching — not physically valid for grocery).
+
+**Recall names:** v1 = streaming Euclidean · v2 = map-aware sequential · v3 = v2 + concurrent fusion.

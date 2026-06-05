@@ -55,7 +55,7 @@ function pickReconciled(verifyRows) {
   for (const name of [
     'BYPASS_RAW', 'BASELINE_DEFAULT',
     'GROCERY_BALANCED', 'GROCERY_AGGRESSIVE', 'GROCERY_CONSERVATIVE',
-    'RAJ_v1_CONSERVATIVE', 'RAJ_v1_BALANCED', 'GROCERY_V2_MAP',
+    'RAJ_v1_CONSERVATIVE', 'RAJ_v1_BALANCED', 'GROCERY_V2_MAP', 'GROCERY_V3_MAP',
   ]) {
     const r = byName[name];
     if (!r) continue;

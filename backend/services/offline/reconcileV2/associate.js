@@ -216,7 +216,7 @@ export function associateTracklets(tracklets, grid, opts = {}) {
   let chainSeq = 0, bridgePoints = 0;
   for (let i = 0; i < N; i++) {
     if (pred[i] !== -1) continue; // not a head
-    const chainId = `v2-${chainSeq++}`;
+    const chainId = `${opts.chainPrefix || 'v2'}-${chainSeq++}`;
     const merged = [];
     const members = chainMembers ? [] : null;
     let cur = i;
