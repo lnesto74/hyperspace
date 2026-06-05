@@ -73,7 +73,7 @@ function parseLine(line) {
  */
 export async function computeEntranceFootfall(filePath, {
   venueId, roiVertices, transform = IDENTITY_TRANSFORM, afterMs = null, beforeMs = null,
-  moveM = 0.3, dedupT = 3000, dedupD = 1.2, onProgress,
+  moveM = 0.3, dedupT = 3000, dedupD = 1.2, dedupVariants = [], onProgress,
 } = {}) {
   if (!roiVertices || roiVertices.length < 3) {
     return { footfall: null, reason: 'no entrance ROI' };
@@ -167,34 +167,40 @@ export async function computeEntranceFootfall(filePath, {
   const nmag = Math.hypot(ndx, ndz) || 1; const ndir = { x: ndx / nmag, z: ndz / nmag };
   const dirEvents = events.filter((e) => (e.dx * ndir.x + e.dz * ndir.z) >= 0);
 
-  // de-dup directional events into people
-  const sortedDir = [...dirEvents].sort((a, b) => a.t - b.t);
-  const clustersDir = [];
-  for (const e of sortedDir) {
-    let merged = false;
-    for (let c = clustersDir.length - 1; c >= 0; c--) {
-      const cl = clustersDir[c];
-      if (e.t - cl.t > dedupT) break;
-      if (Math.hypot(e.x - cl.x, e.z - cl.z) <= dedupD) { cl.t = e.t; cl.x = e.x; cl.z = e.z; merged = true; break; }
+  const dedupPeople = (list, T, D, matchDir = false) => {
+    const sorted = [...list].sort((a, b) => a.t - b.t);
+    const clusters = [];
+    for (const e of sorted) {
+      let merged = false;
+      for (let c = clusters.length - 1; c >= 0; c--) {
+        const cl = clusters[c];
+        if (e.t - cl.t > T) break;
+        const distOk = Math.hypot(e.x - cl.x, e.z - cl.z) <= D;
+        const dirOk = !matchDir || (e.dx * cl.dx + e.dz * cl.dz) >= 0;
+        if (distOk && dirOk) { cl.t = e.t; cl.x = e.x; cl.z = e.z; merged = true; break; }
+      }
+      if (!merged) clusters.push({ t: e.t, x: e.x, z: e.z, dx: e.dx, dz: e.dz });
     }
-    if (!merged) clustersDir.push({ t: e.t, x: e.x, z: e.z, dx: e.dx, dz: e.dz });
-  }
-  // de-dup all-direction events (diagnostic)
-  const sortedAll = [...events].sort((a, b) => a.t - b.t);
-  const clustersAll = [];
-  for (const e of sortedAll) {
-    let merged = false;
-    for (let c = clustersAll.length - 1; c >= 0; c--) {
-      const cl = clustersAll[c];
-      if (e.t - cl.t > dedupT) break;
-      if (Math.hypot(e.x - cl.x, e.z - cl.z) <= dedupD && (e.dx * cl.dx + e.dz * cl.dz) >= 0) { cl.t = e.t; cl.x = e.x; cl.z = e.z; merged = true; break; }
-    }
-    if (!merged) clustersAll.push({ t: e.t, x: e.x, z: e.z, dx: e.dx, dz: e.dz });
+    return clusters.length;
+  };
+
+  const clustersDir = dedupPeople(dirEvents, dedupT, dedupD, false);
+  const clustersAll = dedupPeople(events, dedupT, dedupD, true);
+
+  // Optional extra dedup presets (one gate pass, many denominators for tuning).
+  const dedup_variants = {};
+  for (const v of dedupVariants) {
+    const T = v.dedupT ?? dedupT, D = v.dedupD ?? dedupD;
+    dedup_variants[v.id] = {
+      directional: dedupPeople(dirEvents, T, D, false),
+      all_directions: dedupPeople(events, T, D, true),
+    };
   }
 
   return {
-    footfall: clustersDir.length,            // recommended: directional, fragment-deduped people
-    footfall_all_directions: clustersAll.length,
+    footfall: clustersDir,            // recommended: directional, fragment-deduped people
+    footfall_all_directions: clustersAll,
+    dedup_variants,
     counted_tracks_inclusive: countedTracks,
     touched_tracks: touchedTracks,
     engagement_events: events.length,
