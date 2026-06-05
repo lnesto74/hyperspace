@@ -38,11 +38,18 @@ function hue(str: string) { let h = 0; for (let i = 0; i < str.length; i++) h = 
 const colorId = (str: string, a = 1) => `hsla(${hue(str)}, 72%, 60%, ${a})`
 function fmt(n: number | undefined | null, d = 1) { if (n == null || Number.isNaN(n)) return '—'; return n.toFixed(d) }
 
+interface PresetOpt { presetId: string; presetLabel: string }
+
 export default function ReconciliationProofTab({ detail }: { detail: BenchmarkRunDetail }) {
   const sourceFile = detail.scorecard?.source_file || detail.summary?.source_file || ''
   const perception = detail.scorecard?.layers?.perception
-  const recon = detail.scorecard?.layers?.reconciler?.GROCERY_V2_MAP
   const footfall = detail.scorecard?.layers?.footfall
+
+  // which reconciled preset (engine) we compare raw against — user-selectable
+  const [presets, setPresets] = useState<PresetOpt[]>([])
+  const [presetId, setPresetId] = useState<string>('GROCERY_V2_MAP')
+  const recon = detail.scorecard?.layers?.reconciler?.[presetId]
+  const presetLabel = presets.find((p) => p.presetId === presetId)?.presetLabel || presetId
 
   const [graph, setGraph] = useState<Graph | null>(null)
   const [loading, setLoading] = useState(false)
@@ -68,11 +75,34 @@ export default function ReconciliationProofTab({ detail }: { detail: BenchmarkRu
   const rafRef = useRef<number | null>(null)
   const lastFrameRef = useRef<number>(0)
 
-  // ---- load graph ----
+  // ---- discover which reconciled presets exist for this capture (populate the select) ----
   useEffect(() => {
-    if (!sourceFile) return
+    if (!sourceFile) { setPresets([]); return }
+    fetch(`${API_BASE}/api/replay/reconcile/jobs?sourceFile=${encodeURIComponent(sourceFile)}`)
+      .then((r) => (r.ok ? r.json() : { jobs: [] }))
+      .then((j) => {
+        const seen = new Set<string>()
+        const list: PresetOpt[] = []
+        for (const job of (j.jobs || []) as { status?: string; presetId?: string; presetLabel?: string }[]) {
+          if (job.status !== 'complete' || !job.presetId || seen.has(job.presetId)) continue
+          seen.add(job.presetId)
+          list.push({ presetId: job.presetId, presetLabel: job.presetLabel || job.presetId })
+        }
+        setPresets(list)
+        setPresetId((prev) => (
+          list.some((p) => p.presetId === prev)
+            ? prev
+            : (list.find((p) => p.presetId === 'GROCERY_V2_MAP')?.presetId || list[0]?.presetId || 'GROCERY_V2_MAP')
+        ))
+      })
+      .catch(() => setPresets([]))
+  }, [sourceFile])
+
+  // ---- load graph for the selected reconciled preset (raw vs that engine) ----
+  useEffect(() => {
+    if (!sourceFile || !presetId) return
     setLoading(true); setError(null); setGraph(null); setSelected(null); setTNow(0); setPlaying(false)
-    fetch(`${API_BASE}/api/replay/reconcile/graph?sourceFile=${encodeURIComponent(sourceFile)}&full=1`)
+    fetch(`${API_BASE}/api/replay/reconcile/graph?sourceFile=${encodeURIComponent(sourceFile)}&presetId=${encodeURIComponent(presetId)}&full=1`)
       .then(async (r) => {
         if (!r.ok) { const j = await r.json().catch(() => ({})); throw new Error(j.error || `No reconciliation graph for this capture (HTTP ${r.status})`) }
         return r.json()
@@ -80,7 +110,7 @@ export default function ReconciliationProofTab({ detail }: { detail: BenchmarkRu
       .then((j) => setGraph(j.graph as Graph))
       .catch((e) => setError(e instanceof Error ? e.message : String(e)))
       .finally(() => setLoading(false))
-  }, [sourceFile])
+  }, [sourceFile, presetId])
 
   // ---- load store fixtures (venue frame — same frame as v2 graph paths) for the ghost wireframe ----
   useEffect(() => {
@@ -387,7 +417,7 @@ export default function ReconciliationProofTab({ detail }: { detail: BenchmarkRu
   if (error) return (
     <div className="rounded-xl border border-amber-800/50 bg-amber-950/20 p-6 text-sm text-amber-200">
       {error}
-      <p className="text-amber-300/70 mt-2 text-xs">This tab needs a v2 reconciliation graph sidecar for the capture. Run the map-aware v2 post-process (or graph-only generator) on <code>{sourceFile}</code>.</p>
+      <p className="text-amber-300/70 mt-2 text-xs">Run a reconciliation post-process for <code>{presetLabel}</code> on <code>{sourceFile}</code>, then pick it from the “Reconciled” selector above to compare it against the raw perception.</p>
     </div>
   )
 
@@ -420,6 +450,21 @@ export default function ReconciliationProofTab({ detail }: { detail: BenchmarkRu
 
       {/* toolbar */}
       <div className="flex flex-wrap items-center gap-2">
+        {presets.length > 0 && (
+          <div className="flex items-center gap-1.5 bg-gray-800 rounded-lg p-1 pl-2">
+            <span className="text-[10px] uppercase text-gray-500">Reconciled</span>
+            <select
+              value={presetId}
+              onChange={(e) => setPresetId(e.target.value)}
+              title="Compare raw perception against this reconciled preset"
+              className="bg-gray-900 text-gray-100 text-xs rounded px-2 py-1 border border-gray-700 focus:outline-none focus:border-emerald-600"
+            >
+              {presets.map((p) => (
+                <option key={p.presetId} value={p.presetId}>{p.presetLabel}</option>
+              ))}
+            </select>
+          </div>
+        )}
         <div className="flex items-center gap-1 bg-gray-800 rounded-lg p-1">
           <span className="text-[10px] uppercase text-gray-500 px-1.5">View</span>
           <ViewBtn id="trails" label="Trails" />
@@ -489,7 +534,7 @@ export default function ReconciliationProofTab({ detail }: { detail: BenchmarkRu
         </div>
         <div className="rounded-xl border border-emerald-900/40 bg-[#0b0e14] overflow-hidden">
           <div className="flex items-center justify-between px-3 py-2 border-b border-gray-800">
-            <span className="text-xs font-medium text-emerald-300">RECONCILED v2 <span className="text-gray-600">· click a track to follow</span></span>
+            <span className="text-xs font-medium text-emerald-300">RECONCILED · {presetLabel} <span className="text-gray-600">· click a track to follow</span></span>
             <span className="text-xs text-gray-400 flex items-center gap-1"><Users className="w-3 h-3" /> {paneCount('rec')}</span>
           </div>
           <canvas ref={recCanvas} width={CW} height={CH} onClick={onRecClick} className="w-full block cursor-pointer" style={{ aspectRatio: `${CW}/${CH}` }} />

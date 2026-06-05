@@ -11,6 +11,7 @@ import { runReconcileV2ToFile } from './offline/reconcileV2/reconcileV2.js';
 import { normalizePerceptionTransform, IDENTITY_TRANSFORM } from './PerceptionTransform.js';
 import { venueQueries } from '../database/schema.js';
 import { readStoriesFile, storiesPathForArtifact } from './offline/storyBuilder.js';
+import { buildGraphFromArtifact } from './offline/buildGraphFromArtifact.js';
 
 function parseDwgTransform(json) {
   if (!json) return {};
@@ -556,6 +557,39 @@ export class OfflineReconcileService {
     return this._readGraph(p, full);
   }
 
+  /**
+   * Before/after graph for a SPECIFIC reconciled preset on a capture, so the Proof
+   * tab can show raw vs v1 OR raw vs v2 (whichever the user picks).
+   *
+   * v2 ships a rich `.graph.json` sidecar — use it as-is. v1 (and any preset that
+   * lacks a sidecar) is synthesized once from its `*.reconciled.jsonl` artifact and
+   * cached next to it as `*.graph.json`, so subsequent loads are instant.
+   */
+  async getGraphForSourcePreset(sourceFile, presetId, { full = false } = {}) {
+    const base = path.parse(path.basename(String(sourceFile))).name;
+    const artifactName = `${base}__${presetId}.reconciled.jsonl`;
+    const artifactPath = this._resolveExistingArtifactPath({ artifactName });
+    if (!artifactPath) return null;
+
+    const graphPath = artifactPath.replace(/\.reconciled\.jsonl$/, '.graph.json');
+    if (!fs.existsSync(graphPath)) {
+      const job = this.findCompleteJob(`${base}.jsonl`, presetId);
+      const g = await buildGraphFromArtifact(artifactPath, {
+        venueId: job?.venueId || null,
+        sourceFile: `${base}.jsonl`,
+        presetId,
+      });
+      try {
+        fs.writeFileSync(graphPath, JSON.stringify(g));
+      } catch (err) {
+        // Couldn't cache (read-only volume / disk full) — still serve it this time.
+        console.warn(`[OfflineReconcile] could not cache synthesized graph ${graphPath}: ${err.message}`);
+        return full ? this._enrichGraphForRender(g) : this._graphSummary(g);
+      }
+    }
+    return this._readGraph(graphPath, full);
+  }
+
   /** Compact summary of the training graph (full edge/tracklet arrays omitted unless full=true). */
   getGraphForJob(jobId, { full = false } = {}) {
     const p = this.graphPathForJob(jobId);
@@ -606,9 +640,7 @@ export class OfflineReconcileService {
     return g;
   }
 
-  _readGraph(p, full) {
-    const g = JSON.parse(fs.readFileSync(p, 'utf8'));
-    if (full) return this._enrichGraphForRender(g);
+  _graphSummary(g) {
     const decCounts = {};
     for (const e of g.edges || []) decCounts[e.dec] = (decCounts[e.dec] || 0) + 1;
     return {
@@ -616,6 +648,12 @@ export class OfflineReconcileService {
       firstTs: g.firstTs, lastTs: g.lastTs, params: g.params,
       counts: { tracklets: g.tracklets?.length || 0, chains: g.chains?.length || 0, edges: g.edges?.length || 0, edge_decisions: decCounts },
     };
+  }
+
+  _readGraph(p, full) {
+    const g = JSON.parse(fs.readFileSync(p, 'utf8'));
+    if (full) return this._enrichGraphForRender(g);
+    return this._graphSummary(g);
   }
 
   _rowToAnnotation(r) {

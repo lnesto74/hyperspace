@@ -383,14 +383,22 @@ export default function replayRoutes({ replayService, mqttRecordService, mqttSer
     }
   });
 
-  router.get('/reconcile/graph', (req, res) => {
+  router.get('/reconcile/graph', async (req, res) => {
     try {
       if (!offlineReconcileService) return res.status(503).json({ error: 'Offline reconciliation not available' });
-      const { sourceFile } = req.query;
+      const { sourceFile, presetId } = req.query;
       if (!sourceFile) return res.status(400).json({ error: 'sourceFile is required' });
       const full = String(req.query.full || '') === '1';
-      const graph = offlineReconcileService.getGraphForSource(String(sourceFile), { full });
-      if (!graph) return res.status(404).json({ error: 'No graph for this capture yet — generate it (reconcile_graph) first.' });
+      const graph = presetId
+        ? await offlineReconcileService.getGraphForSourcePreset(String(sourceFile), String(presetId), { full })
+        : offlineReconcileService.getGraphForSource(String(sourceFile), { full });
+      if (!graph) {
+        return res.status(404).json({
+          error: presetId
+            ? `No reconciled artifact for "${presetId}" on this capture — run the post-process for that preset first.`
+            : 'No graph for this capture yet — generate it (reconcile_graph) first.',
+        });
+      }
       res.json({ success: true, graph });
     } catch (err) {
       res.status(400).json({ error: err.message });
