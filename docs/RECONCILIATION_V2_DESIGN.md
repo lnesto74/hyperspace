@@ -406,7 +406,8 @@ v3 = **v2 baseline unchanged** (walkability grid, tracklet split, geodesic assoc
 bridge rendering) **plus Stage-0** before association:
 
 1. Find tracklet pairs from **different** perception IDs whose time ranges overlap ≥ 300 ms.
-2. During the overlap, positions must stay within **1.5 m** at every 500 ms sample.
+2. During the overlap, positions must stay within **proximityM** (default **2.5 m** after
+   capture 0406 sweep; was 1.5 m) at every 500 ms sample.
 3. Union-find clusters → merge samples into one fused tracklet (`fuse#N`).
 4. Run the same v2 associator on the reduced tracklet set (`chainPrefix: v3`).
 

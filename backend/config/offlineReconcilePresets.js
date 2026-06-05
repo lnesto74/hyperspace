@@ -129,7 +129,9 @@ export const OFFLINE_RECONCILE_PRESETS = [
       smoothing_alpha: 0.6,
       min_chain_life_ms: 0,
       tracklet: {},
-      fuseConcurrent: { proximityM: 1.5, minOverlapMs: 300, requireDifferentSource: true },
+      // proximityM sweep (capture 0406, walkability cache): 1.0→2.5m monotonic gain;
+      // 2.5m −1349 chains vs v2 (−4.1%). Conservative cap — wider risks false merges.
+      fuseConcurrent: { proximityM: 2.5, minOverlapMs: 300, requireDifferentSource: true },
       associate: { C_max: 12, margin: 0.3, T_max_s: 45, D_max_m: 8 },
     },
   },

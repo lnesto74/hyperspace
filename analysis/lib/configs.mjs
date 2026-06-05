@@ -122,7 +122,7 @@ export const VERIFY_CONFIGS = [
     smoothing_alpha: 0.6,
     min_chain_life_ms: 0,
     tracklet: {},
-    fuseConcurrent: { proximityM: 1.5, minOverlapMs: 300, requireDifferentSource: true },
+    fuseConcurrent: { proximityM: 2.5, minOverlapMs: 300, requireDifferentSource: true },
     associate: { C_max: 12, margin: 0.3, T_max_s: 45, D_max_m: 8 },
   }],
 ];
