@@ -74,7 +74,7 @@ const main = async () => {
       process.stdout.write('\n');
       footfall.roi = { id: roi.id, name: roi.name };
       fs.writeFileSync(path.join(outDir, 'entrance_footfall.json'), JSON.stringify(footfall, null, 2));
-      console.log(`  → entrance_footfall.json (${footfall.footfall} entrants, dominant ${footfall.dominant_dir_deg}°, purity ${footfall.directional_purity})`);
+      console.log(`  → entrance_footfall.json (${footfall.footfall} entrants all-dir, ${footfall.footfall_directional ?? '?'} directional-only, purity ${footfall.directional_purity})`);
     } else {
       console.log('Footfall: no entrance ROI found for venue — fragments-per-shopper will be unavailable');
     }

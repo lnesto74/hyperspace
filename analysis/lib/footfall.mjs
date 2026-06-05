@@ -1,15 +1,14 @@
 // Entrance-gate footfall — a single "real shoppers" denominator per capture.
 //
-// Counts distinct PEOPLE crossing the entrance ROI, using the method validated
-// in analysis/gate_entrants.mjs: stream raw → light v1 reconciler (reduces
-// fragments near the gate) → engagement events for any track that touches the
-// gate polygon (full pass / born-inside-exit / enter-die-inside / through-move,
-// no duration floor) → de-duplicate events that are close in time+space+
-// direction → keep only crossings within ±90° of the dominant flow.
+// Counts gate crossings using the method validated in analysis/gate_entrants.mjs:
+// stream raw → light v1 reconciler (reduces fragments near the gate) →
+// engagement events for any track that touches the gate polygon (full pass /
+// born-inside-exit / enter-die-inside / through-move, no duration floor) →
+// de-duplicate events close in time+space (3s / 1.2m).
 //
-// The directional, de-duplicated count is the recommended entrant estimate and
-// is used as the SHARED denominator for fragments-per-shopper across raw + every
-// reconciler config, so the benchmark comparison is apples-to-apples.
+// PRIMARY denominator (`footfall`): ALL directions — entries AND exits through
+// the gate (Option B). More stable across captures than dominant-flow-only.
+// `footfall_directional` keeps the old dominant-direction-only count for audit.
 import fs from 'fs';
 import readline from 'readline';
 import { createRequire } from 'module';
@@ -198,7 +197,8 @@ export async function computeEntranceFootfall(filePath, {
   }
 
   return {
-    footfall: clustersDir,            // recommended: directional, fragment-deduped people
+    footfall: clustersAll,              // Option B: all-direction gate crossings (deduped)
+    footfall_directional: clustersDir,  // legacy dominant-flow-only count
     footfall_all_directions: clustersAll,
     dedup_variants,
     counted_tracks_inclusive: countedTracks,
@@ -206,6 +206,6 @@ export async function computeEntranceFootfall(filePath, {
     engagement_events: events.length,
     dominant_dir_deg: +(Math.atan2(ndir.z, ndir.x) * 180 / Math.PI).toFixed(1),
     directional_purity: +(events.length ? nmag / events.length : 0).toFixed(3),
-    method: 'entrance_gate_directional_deduped',
+    method: 'entrance_gate_all_directions_deduped',
   };
 }

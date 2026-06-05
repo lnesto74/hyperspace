@@ -99,6 +99,7 @@ export function buildScorecard({ meta, artifactsDir, verifyRows, startedAt, fini
       footfall: footfall
         ? {
             entrance_footfall: footfall.footfall,
+            entrance_footfall_directional: footfall.footfall_directional ?? null,
             method: footfall.method,
             roi: footfall.roi || null,
             counted_tracks_inclusive: footfall.counted_tracks_inclusive,
