@@ -50,7 +50,7 @@ export class TrajectoryStorageService extends EventEmitter {
     this.DEFAULT_DWELL_THRESHOLD_MS = 60 * 1000;       // 60 seconds default
     this.DEFAULT_ENGAGEMENT_THRESHOLD_MS = 120 * 1000; // 120 seconds default
     this.VISIT_END_GRACE_MS = 1000;       // 1 second grace period before ending visit
-    this.MIN_VISIT_DURATION_MS = 1000;    // Minimum 1 second to count as a visit
+    this.MIN_VISIT_DURATION_MS = 300;     // Min 300ms — keep fast entrance-gate crossings (a ~2m gate is crossed in 1-2s)
     this.DATA_RETENTION_MS = 7 * 24 * 60 * 60 * 1000; // Keep 7 days of detailed data for week heatmaps
     this.MAX_POSITIONS_PER_SESSION = 100; // Limit positions stored per visit session
     
@@ -1661,7 +1661,7 @@ export class TrajectoryStorageService extends EventEmitter {
       `);
       const visitStatsStmt = this.db.prepare(`
         SELECT 
-          COUNT(DISTINCT track_key) as visits,
+          COUNT(*) as visits,
           SUM(duration_ms) as time_spent_ms,
           SUM(CASE WHEN is_dwell = 1 THEN 1 ELSE 0 END) as dwells,
           SUM(CASE WHEN is_engagement = 1 THEN 1 ELSE 0 END) as engagements
@@ -1751,7 +1751,7 @@ export class TrajectoryStorageService extends EventEmitter {
     `);
     const visitStatsStmt = this.db.prepare(`
       SELECT 
-        COUNT(DISTINCT track_key) as visits,
+        COUNT(*) as visits,
         SUM(duration_ms) as time_spent_ms,
         SUM(CASE WHEN is_dwell = 1 THEN 1 ELSE 0 END) as dwells_cumulative,
         COUNT(DISTINCT CASE WHEN is_dwell = 1 THEN track_key END) as dwells_unique,

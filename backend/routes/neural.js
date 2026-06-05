@@ -19,6 +19,7 @@ import { getCheckoutLanes } from '../services/CheckoutLiveStatus.js';
 import { resolveKpiContext, demoCacheSuffix } from '../utils/demoKpiContext.js';
 import { resolveShelfCategories } from '../services/ShelfCategoryResolver.js';
 import { isTrafficZoneName } from '../lib/storeHours.js';
+import { INGRESS_VISIT_COUNT_SQL } from '../lib/ingressFootfall.js';
 import {
   computeVenueSkuPerformance,
   buildSkuPerformanceAlerts,
@@ -287,6 +288,7 @@ export default function createNeuralRoutes(db, trackAggregator, demoSessionServi
       const result = cached(cacheKey, 25000, () => {
         const perf = computeVenueSkuPerformance(db, venueId, {
           windowMs: parseInt(windowMs, 10) || 30000,
+          trackAggregator,
         });
         return {
           ...perf,
@@ -577,8 +579,8 @@ function resolveEntranceRoiIds(db, venueId) {
 }
 
 /**
- * Phase A footfall: entrance ROI only, quality filter (≥30s or non-bounce ≥5s).
- * Excludes cashier ghost keys and incomplete flicker visits.
+ * Phase A footfall: entrance ROI only. Option B — every ingress zone crossing
+ * (entries and exits), not one count per fragment ID. Excludes cashier ghost keys.
  */
 function computeEntranceVisitors(db, venueId, startTime) {
   const roiIds = resolveEntranceRoiIds(db, venueId);
@@ -589,12 +591,11 @@ function computeEntranceVisitors(db, venueId, startTime) {
   try {
     const placeholders = roiIds.map(() => '?').join(',');
     const row = db.prepare(`
-      SELECT COUNT(DISTINCT track_key) AS cnt
+      SELECT ${INGRESS_VISIT_COUNT_SQL} AS cnt
       FROM zone_visits
       WHERE venue_id = ?
         AND roi_id IN (${placeholders})
         AND start_time >= ?
-        AND (duration_ms >= 30000 OR duration_ms >= 5000)
         AND track_key NOT LIKE '%cashier%'
     `).get(venueId, ...roiIds, startTime);
     return {
@@ -863,7 +864,7 @@ function computeAlerts(db, venueId, trackAggregator) {
 
   // 5. SKU best / worst performers (rolling 30s, planogram + proximity)
   try {
-    const perf = computeVenueSkuPerformance(db, venueId, { windowMs: 30000 });
+    const perf = computeVenueSkuPerformance(db, venueId, { windowMs: 30000, trackAggregator });
     alerts.push(...buildSkuPerformanceAlerts(perf, now));
   } catch (e) {
     console.error('[Neural] sku performance:', e.message);

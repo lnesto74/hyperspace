@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import TimelineRangeBrush from './TimelineRangeBrush';
 import BarCategoryBadges from './BarCategoryBadges';
 import { CATEGORY_BADGE_MAX_BARS } from './categoryVisuals';
+import { buildYAxisTicks } from './chartYAxis';
 import type { OperationsTimeline } from './types';
 
 type SeriesMode = 'occupancy' | 'footfall';
@@ -65,6 +66,9 @@ export default function OperationsTimelineChart({
     [visiblePoints],
   );
 
+  const yTicks = useMemo(() => buildYAxisTicks(maxVal), [maxVal]);
+  const chartPlotH = CHART_H + (showCategoryBadges ? 20 : 0);
+
   const grainLabel = timeline.grain === 'hour' ? 'Hourly' : timeline.grain === 'day' ? 'Daily' : 'Weekly';
   const valueLabel = activeMode === 'footfall' ? 'Visits' : 'Peak shoppers';
   const showCategoryBadges = activeMode === 'occupancy' && visiblePoints.length <= CATEGORY_BADGE_MAX_BARS;
@@ -93,7 +97,7 @@ export default function OperationsTimelineChart({
         <div>
           <h3 className="text-xs font-semibold text-white">Store Activity</h3>
           <p className="text-[10px] text-gray-500">
-            {grainLabel} · {activeMode === 'occupancy' ? 'peak IDs per frame (same as MQTT live)' : 'ingress visits'}
+            {grainLabel} · {activeMode === 'occupancy' ? 'peak IDs per frame (same as MQTT live)' : 'ingress crossings (entry + exit)'}
             {showCategoryBadges && ' · top categories on bars when zoomed in'}
           </p>
         </div>
@@ -125,12 +129,21 @@ export default function OperationsTimelineChart({
 
       <div className="flex flex-col overflow-visible">
         <div
-          className="relative w-full overflow-visible pt-7"
+          className="relative w-full overflow-visible pt-7 flex gap-1.5"
           onMouseLeave={() => setHoveredIdx(null)}
         >
           <div
-            className="flex items-end justify-center gap-1 w-full"
-            style={{ height: CHART_H + (showCategoryBadges ? 20 : 0) }}
+            className="flex flex-col justify-between shrink-0 text-[9px] text-gray-500 tabular-nums py-0.5"
+            style={{ height: chartPlotH, minWidth: 24 }}
+            aria-hidden
+          >
+            {yTicks.map(tick => (
+              <span key={tick} className="leading-none">{tick}</span>
+            ))}
+          </div>
+          <div
+            className="flex items-end justify-center gap-1 flex-1 min-w-0"
+            style={{ height: chartPlotH }}
           >
             {visiblePoints.map((p, i) => {
               const barH = Math.max(Math.round((p.value / maxVal) * CHART_H), p.value > 0 ? 4 : 0);
@@ -178,7 +191,7 @@ export default function OperationsTimelineChart({
           </div>
         </div>
 
-        <div className="flex justify-between text-[9px] text-gray-500 mt-2 px-0.5">
+        <div className="flex justify-between text-[9px] text-gray-500 mt-2 pl-7 pr-0.5">
           <span className="truncate max-w-[30%]">{visiblePoints[0]?.label}</span>
           {visiblePoints.length > 2 && (
             <span className="truncate max-w-[30%] text-center">

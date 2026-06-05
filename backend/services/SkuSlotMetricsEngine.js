@@ -18,7 +18,7 @@ export const DEFAULT_SKU_PROXIMITY = {
   vSlowMax: 0.35,
   sampleGapCapMs: 5000,
   windowMs: 30000,
-  minAudience: 2,
+  minAudience: 1,
   minViewers: 1,
   weightAttraction: 0.4,
   weightAttention: 0.6,
@@ -215,6 +215,57 @@ export function computeSkuSlotMetrics({
   return { slotMetrics, shelfAudience };
 }
 
+const LIVE_TRAIL_STEP_MS = 100;
+
+/**
+ * Live tracks from TrackAggregator (~10s trail) — fills gap before track_positions DB sync (60s).
+ */
+export function collectLiveTrackPositions(trackAggregator, venueId, windowStart, windowEnd) {
+  if (!trackAggregator || trackAggregator.venueId !== venueId) return [];
+
+  const now = Date.now();
+  const positions = [];
+
+  for (const [trackKey, entry] of trackAggregator.tracks) {
+    if (now - entry.lastUpdate > 15000) continue;
+
+    const trail = entry.trail || [];
+    const vx = entry.track?.velocity?.x || 0;
+    const vz = entry.track?.velocity?.z || 0;
+
+    for (let i = 0; i < trail.length; i++) {
+      const ts = entry.lastUpdate - (trail.length - 1 - i) * LIVE_TRAIL_STEP_MS;
+      if (ts < windowStart || ts > windowEnd) continue;
+      const pt = trail[i];
+      positions.push({
+        track_key: trackKey,
+        timestamp: ts,
+        position_x: pt.x,
+        position_z: pt.z,
+        velocity_x: vx,
+        velocity_z: vz,
+      });
+    }
+  }
+
+  return positions;
+}
+
+export function mergeTrackPositions(dbPositions, livePositions) {
+  const seen = new Set(
+    dbPositions.map((p) => `${p.track_key}:${Math.floor(p.timestamp / 1000)}`),
+  );
+  const merged = [...dbPositions];
+  for (const p of livePositions) {
+    const key = `${p.track_key}:${Math.floor(p.timestamp / 1000)}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    merged.push(p);
+  }
+  merged.sort((a, b) => a.timestamp - b.timestamp || a.track_key.localeCompare(b.track_key));
+  return merged;
+}
+
 export function pickBestWorstSlots(slotMetrics, params = DEFAULT_SKU_PROXIMITY) {
   const eligible = slotMetrics.filter(
     (m) => m.audience >= params.minAudience && m.viewers >= params.minViewers,
@@ -235,18 +286,28 @@ export function computeVenueSkuPerformance(db, venueId, options = {}) {
   const params = { ...DEFAULT_SKU_PROXIMITY, ...options };
   const windowEnd = options.windowEnd ?? Date.now();
   const windowStart = windowEnd - params.windowMs;
+  const trackAggregator = options.trackAggregator ?? null;
 
   const { shelves, slots } = loadVenueSkuSlots(db, venueId);
   if (!slots.length) {
-    return { best: null, worst: null, slotMetrics: [], windowMs: params.windowMs };
+    return {
+      best: null,
+      worst: null,
+      slotMetrics: [],
+      windowMs: params.windowMs,
+      diagnostic: 'no_planogram_slots',
+    };
   }
 
-  const positions = db.prepare(`
+  const dbPositions = db.prepare(`
     SELECT track_key, timestamp, position_x, position_z, velocity_x, velocity_z
     FROM track_positions
     WHERE venue_id = ? AND timestamp >= ? AND timestamp <= ?
     ORDER BY track_key, timestamp ASC
   `).all(venueId, windowStart, windowEnd);
+
+  const livePositions = collectLiveTrackPositions(trackAggregator, venueId, windowStart, windowEnd);
+  const positions = mergeTrackPositions(dbPositions, livePositions);
 
   const { slotMetrics } = computeSkuSlotMetrics({
     shelves,
@@ -257,7 +318,14 @@ export function computeVenueSkuPerformance(db, venueId, options = {}) {
     params,
   });
 
-  const { best, worst } = pickBestWorstSlots(slotMetrics, params);
+  const { best, worst, eligible } = pickBestWorstSlots(slotMetrics, params);
+
+  let diagnostic = null;
+  if (!best) {
+    if (positions.length === 0) diagnostic = 'no_track_samples_in_window';
+    else if (eligible.length === 0) diagnostic = 'insufficient_audience_near_shelves';
+    else diagnostic = 'no_ranked_slots';
+  }
 
   return {
     best,
@@ -267,7 +335,11 @@ export function computeVenueSkuPerformance(db, venueId, options = {}) {
     windowStart,
     windowEnd,
     sampleCount: positions.length,
+    dbSampleCount: dbPositions.length,
+    liveSampleCount: livePositions.length,
     slotCount: slots.length,
+    eligibleCount: eligible.length,
+    diagnostic,
   };
 }
 
@@ -336,6 +408,8 @@ export function buildSkuPerformanceAlerts(performance, now = Date.now()) {
 
 export default {
   DEFAULT_SKU_PROXIMITY,
+  collectLiveTrackPositions,
+  mergeTrackPositions,
   computeSkuSlotMetrics,
   pickBestWorstSlots,
   computeVenueSkuPerformance,

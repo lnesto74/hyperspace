@@ -22,6 +22,7 @@ import {
   isHourWithinStoreHours,
   isTrafficZoneName,
 } from '../lib/storeHours.js';
+import { INGRESS_VISIT_COUNT_SQL } from '../lib/ingressFootfall.js';
 
 export default function createBusinessReportingRoutes(db, trajectoryStorage, trackAggregator, mqttService) {
 const router = Router();
@@ -404,7 +405,7 @@ function assessIngressHealth(db, venueId, startTs, endTs, storeHours) {
   if (roiIds.length) {
     const placeholders = roiIds.map(() => '?').join(',');
     const row = safeQuery(db, `
-      SELECT COUNT(DISTINCT track_key) as c
+      SELECT ${INGRESS_VISIT_COUNT_SQL} as c
       FROM zone_visits
       WHERE venue_id = ? AND roi_id IN (${placeholders})
         AND start_time >= ? AND start_time < ?
@@ -575,7 +576,7 @@ function fetchFootfallVisitorCount(db, venueId, startTs, endTs, storeHours) {
 
   const placeholders = roiIds.map(() => '?').join(',');
   const fromVisits = safeQuery(db, `
-    SELECT COUNT(DISTINCT track_key) as c
+    SELECT ${INGRESS_VISIT_COUNT_SQL} as c
     FROM zone_visits
     WHERE venue_id = ? AND roi_id IN (${placeholders})
       AND start_time >= ? AND start_time < ?
@@ -609,7 +610,7 @@ function fetchFootfallVisitsByHour(db, roiIds, startTs, endTs) {
   const fromVisits = safeQueryAll(db, `
     SELECT
       strftime('%H', datetime(start_time/1000, 'unixepoch', 'localtime')) as hour,
-      COUNT(DISTINCT track_key) as visits
+      ${INGRESS_VISIT_COUNT_SQL} as visits
     FROM zone_visits
     WHERE roi_id IN (${placeholders})
       AND start_time >= ? AND start_time < ?
@@ -661,7 +662,7 @@ function fetchPeriodDeltasForFootfall(db, venueId, startTs, endTs, storeHours, d
     const placeholders = storeHours.trafficRoiIds.map(() => '?').join(',');
     const countVisitors = (start, end) => {
       const r = safeQuery(db, `
-        SELECT COUNT(DISTINCT track_key) as visitors
+        SELECT ${INGRESS_VISIT_COUNT_SQL} as visitors
         FROM zone_visits
         WHERE venue_id = ? AND roi_id IN (${placeholders})
           AND start_time >= ? AND start_time < ?
@@ -972,7 +973,7 @@ function fetchOperationsTimeline(db, venueId, startTs, endTs, grain, storeHours,
     if (grain === 'hour') {
       return safeQueryAll(db, `
         SELECT (start_time / 3600000) * 3600000 as bucketStartTs,
-          COUNT(DISTINCT track_key) as value
+          ${INGRESS_VISIT_COUNT_SQL} as value
         FROM zone_visits
         WHERE venue_id = ? AND roi_id IN (${roiPlaceholders})
           AND start_time >= ? AND start_time < ?
@@ -992,7 +993,7 @@ function fetchOperationsTimeline(db, venueId, startTs, endTs, grain, storeHours,
       if (!rows.length) {
         rows = safeQueryAll(db, `
           SELECT date(start_time / 1000, 'unixepoch', 'localtime') as date,
-            COUNT(DISTINCT track_key) as value
+            ${INGRESS_VISIT_COUNT_SQL} as value
           FROM zone_visits
           WHERE venue_id = ? AND roi_id IN (${roiPlaceholders})
             AND start_time >= ? AND start_time < ?
@@ -1020,7 +1021,7 @@ function fetchOperationsTimeline(db, venueId, startTs, endTs, grain, storeHours,
       rows = safeQueryAll(db, `
         SELECT strftime('%Y-W%W', datetime(start_time/1000, 'unixepoch', 'localtime')) as weekKey,
           MIN(date(start_time/1000, 'unixepoch', 'localtime')) as weekStart,
-          COUNT(DISTINCT track_key) as value
+          ${INGRESS_VISIT_COUNT_SQL} as value
         FROM zone_visits
         WHERE venue_id = ? AND roi_id IN (${roiPlaceholders})
           AND start_time >= ? AND start_time < ?

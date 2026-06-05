@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
+import { buildYAxisTicks } from './chartYAxis';
 import type { FootfallSummary, StoreActivityHourRow } from './types';
 
 interface OperationsFootfallPanelProps {
@@ -19,6 +20,7 @@ export default function OperationsFootfallPanel({
     : storeActivityByHour.map(h => ({ hour: h.hour, value: h.avgOccupancy, isOpen: h.isOpen }));
 
   const maxVal = Math.max(...rows.map(r => r.value), 0.1);
+  const yTicks = useMemo(() => buildYAxisTicks(maxVal), [maxVal]);
   const peakRow = rows.reduce((best, r) => (r.value > (best?.value || 0) ? r : best), rows[0]);
 
   return (
@@ -51,9 +53,19 @@ export default function OperationsFootfallPanel({
       </div>
 
       <div
-        className="relative overflow-visible pt-6"
+        className="relative overflow-visible pt-6 flex gap-1.5"
         onMouseLeave={() => setHoveredHour(null)}
       >
+        <div
+          className="flex flex-col justify-between shrink-0 text-[8px] text-gray-500 tabular-nums py-0.5"
+          style={{ height: CHART_H, minWidth: 20 }}
+          aria-hidden
+        >
+          {yTicks.map(tick => (
+            <span key={tick} className="leading-none">{tick}</span>
+          ))}
+        </div>
+        <div className="relative flex-1 min-w-0">
         <div className="flex items-end gap-0.5" style={{ height: CHART_H }}>
           {rows.map(row => {
             const barH = Math.max(Math.round((row.value / maxVal) * (CHART_H - 8)), row.value > 0 ? 3 : 0);
@@ -82,8 +94,9 @@ export default function OperationsFootfallPanel({
             );
           })}
         </div>
+        </div>
       </div>
-      <div className="flex justify-between text-[8px] text-gray-600 mt-1">
+      <div className="flex justify-between text-[8px] text-gray-600 mt-1 pl-6">
         <span>00</span>
         <span>12</span>
         <span>23</span>
