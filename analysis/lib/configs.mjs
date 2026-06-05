@@ -1,7 +1,13 @@
-/** Reconciler presets for benchmark verify step. */
+/** Reconciler presets for benchmark verify step.
+ *
+ * INVARIANT: every enabled reconciler must emit <= raw perception-id count.
+ * `persist_perception_bindings: true` guarantees this — a raw id keeps ONE
+ * stable id for the whole capture (resurrects under the same id after gaps)
+ * instead of fragmenting into many. This is what fixed reconciled > raw.
+ */
 export const VERIFY_CONFIGS = [
   ['BYPASS_RAW', { enabled: false }],
-  ['BASELINE_DEFAULT', {}],
+  ['BASELINE_DEFAULT', { persist_perception_bindings: true }],
   ['GROCERY_BALANCED', {
     enabled: true,
     ghost_max_speed_m_s: 3.5,
@@ -19,6 +25,7 @@ export const VERIFY_CONFIGS = [
     smoothing_alpha: 0.7,
     active_to_lost_timeout_ms: 1500,
     trail_max_length: 32,
+    persist_perception_bindings: true,
   }],
   ['GROCERY_AGGRESSIVE', {
     enabled: true,
@@ -37,6 +44,7 @@ export const VERIFY_CONFIGS = [
     smoothing_alpha: 0.7,
     active_to_lost_timeout_ms: 2000,
     trail_max_length: 48,
+    persist_perception_bindings: true,
   }],
   ['GROCERY_CONSERVATIVE', {
     enabled: true,
@@ -55,6 +63,7 @@ export const VERIFY_CONFIGS = [
     smoothing_alpha: 0.7,
     active_to_lost_timeout_ms: 1200,
     trail_max_length: 32,
+    persist_perception_bindings: true,
   }],
   // Raj v1.0.1 — tighter re-ID (analysis/runs/raj_preset_sweep, 35m window May 2026)
   ['RAJ_v1_CONSERVATIVE', {
@@ -74,6 +83,7 @@ export const VERIFY_CONFIGS = [
     smoothing_alpha: 0.7,
     active_to_lost_timeout_ms: 1500,
     trail_max_length: 32,
+    persist_perception_bindings: true,
   }],
   ['RAJ_v1_BALANCED', {
     enabled: true,
@@ -92,6 +102,7 @@ export const VERIFY_CONFIGS = [
     smoothing_alpha: 0.7,
     active_to_lost_timeout_ms: 1500,
     trail_max_length: 32,
+    persist_perception_bindings: true,
   }],
   // Map-aware v2 (batch): tracklets + geodesic probabilistic association.
   // Runs in the raw perception frame with a capture-derived walkability grid so

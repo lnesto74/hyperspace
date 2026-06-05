@@ -21,14 +21,18 @@ function createTrackRollup(t, x, z) {
 }
 
 function updateTrackRollup(r, t, x, z) {
-  const dt = Math.max((t - r.lastT) / 1000, 0.001);
+  // Capture streams are not guaranteed globally time-sorted (multi-sensor /
+  // clock skew). Track the true time span via min/max so lifetime can never go
+  // negative; use |dt| for the incremental speed estimate.
+  const dt = Math.max(Math.abs(t - r.lastT) / 1000, 0.001);
   const step = Math.hypot(x - r.lastX, z - r.lastZ);
   r.totalDisp += step;
   const sp = step / dt;
   if (sp > 3.0) r.teleports++;
   if (Math.abs(sp - r.prevSpeed) / dt > 5) r.accelSpikes++;
   r.prevSpeed = sp;
-  r.lastTs = t;
+  if (t < r.firstTs) r.firstTs = t;
+  if (t > r.lastTs) r.lastTs = t;
   r.lastX = x;
   r.lastZ = z;
   r.lastT = t;

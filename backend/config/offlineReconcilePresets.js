@@ -33,6 +33,7 @@ export const OFFLINE_RECONCILE_PRESETS = [
       active_to_lost_timeout_ms: 2500,
       trail_max_length: 64,
       offline_instant_promote: true,
+      persist_perception_bindings: true,
     }),
   },
   {
@@ -54,6 +55,7 @@ export const OFFLINE_RECONCILE_PRESETS = [
       active_to_lost_timeout_ms: 3500,
       trail_max_length: 80,
       offline_instant_promote: true,
+      persist_perception_bindings: true,
     }),
   },
   {
@@ -75,6 +77,7 @@ export const OFFLINE_RECONCILE_PRESETS = [
       active_to_lost_timeout_ms: 1800,
       trail_max_length: 48,
       offline_instant_promote: true,
+      persist_perception_bindings: true,
     }),
   },
   {
@@ -96,6 +99,7 @@ export const OFFLINE_RECONCILE_PRESETS = [
       active_to_lost_timeout_ms: 4000,
       trail_max_length: 100,
       offline_instant_promote: true,
+      persist_perception_bindings: true,
     }),
   },
   {
@@ -119,7 +123,7 @@ export const OFFLINE_RECONCILE_PRESETS = [
     id: 'BASELINE_DEFAULT',
     label: 'Baseline (production default)',
     description: 'Standard online reconciler params — for comparison only.',
-    config: normalizeReconcilerConfig({ ...DEFAULT_CONFIG, enabled: true, offline_instant_promote: true }),
+    config: normalizeReconcilerConfig({ ...DEFAULT_CONFIG, enabled: true, offline_instant_promote: true, persist_perception_bindings: true }),
   },
 ];
 

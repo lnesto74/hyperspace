@@ -81,6 +81,11 @@ export function normalizeReconcilerConfig(raw) {
   merged.active_to_lost_timeout_ms = num(raw.active_to_lost_timeout_ms, DEFAULT_CONFIG.active_to_lost_timeout_ms);
   merged.trail_max_length = num(raw.trail_max_length, DEFAULT_CONFIG.trail_max_length);
   merged.offline_instant_promote = raw.offline_instant_promote === true;
+  // Batch/offline mode: a perception id keeps ONE stable id for the whole
+  // recording. Bindings survive expiry so a long, gappy id is never shattered
+  // into multiple stable ids (which made reconciled worse than raw). Default
+  // OFF for the live reconciler, where freeing ids for occupancy matters.
+  merged.persist_perception_bindings = raw.persist_perception_bindings === true;
   return merged;
 }
 
@@ -120,6 +125,7 @@ class VenueState {
       ghost_drop_reasons: { ...this.stats.ghost_drop_reasons },
       reid_count: this.stats.reid_count,
       new_stable_ids: this.stats.new_stable_ids,
+      resurrected: this.stats.resurrected || 0,
       ghost_rejection_rate: this.stats.raw_total > 0 ? this.stats.ghost_dropped / this.stats.raw_total : 0,
       reid_success_rate: (this.stats.reid_count + this.stats.new_stable_ids) > 0
         ? this.stats.reid_count / (this.stats.reid_count + this.stats.new_stable_ids)
@@ -224,7 +230,19 @@ export class TrajectoryReconciler {
         active.perceptionIds.add(perceptionId);
         return this._emit(track, active, perceptionId);
       }
-      // Stale binding — drop it and treat as new perception ID
+      if (cfg.persist_perception_bindings) {
+        // Stable track was swept out of the active/lost pools, but this is the
+        // SAME perception id reappearing. Resurrect under the SAME stable id so
+        // one raw id never fragments into many stable ids (the core defect that
+        // made reconciled identity counts exceed raw). Reuse → stable_count is
+        // bounded by the number of distinct perception ids.
+        const resurrected = this._createTrackState(pos, vel, now, cfg, existingStableId);
+        resurrected.perceptionIds.add(perceptionId);
+        state.activeTracks.set(existingStableId, resurrected);
+        state.stats.resurrected = (state.stats.resurrected || 0) + 1;
+        return this._emit(track, resurrected, perceptionId);
+      }
+      // Live mode: stale binding — drop it and treat as new perception ID.
       state.perceptionToStable.delete(perceptionId);
     }
 
@@ -326,7 +344,12 @@ export class TrajectoryReconciler {
             && t.totalDisplacement < cfg.ghost_static_displacement_m) {
           // Static "fixture" — drop and free the stable ID.
           state.activeTracks.delete(stableId);
-          for (const pid of t.perceptionIds) state.perceptionToStable.delete(pid);
+          // In persist mode keep the binding so a reappearing id resurrects under
+          // the SAME stable id (never mints a fresh one) — preserves the
+          // stable_count <= perception_id_count invariant.
+          if (!cfg.persist_perception_bindings) {
+            for (const pid of t.perceptionIds) state.perceptionToStable.delete(pid);
+          }
           events.push({ venueId: state.venueId, stableId, trackKey: t.lastTrackKey, reason: 'static_fixture' });
           state.stats.ghost_dropped++;
           state.stats.ghost_drop_reasons.static_fixture = (state.stats.ghost_drop_reasons.static_fixture || 0) + 1;
@@ -342,7 +365,11 @@ export class TrajectoryReconciler {
       for (const [stableId, t] of state.lostTracks) {
         if (now - t.lastTs > cfg.reid_max_gap_s * 1000) {
           state.lostTracks.delete(stableId);
-          for (const pid of t.perceptionIds) state.perceptionToStable.delete(pid);
+          // Persist mode: keep perception->stable bindings past expiry so the
+          // same id resurrects under the same stable id instead of fragmenting.
+          if (!cfg.persist_perception_bindings) {
+            for (const pid of t.perceptionIds) state.perceptionToStable.delete(pid);
+          }
           events.push({ venueId: state.venueId, stableId, trackKey: t.lastTrackKey, reason: 'expired' });
         }
       }
@@ -374,9 +401,9 @@ export class TrajectoryReconciler {
     state.stats.ghost_drop_reasons[reason] = (state.stats.ghost_drop_reasons[reason] || 0) + 1;
   }
 
-  _createTrackState(pos, vel, now, cfg) {
+  _createTrackState(pos, vel, now, cfg, forcedId = null) {
     return {
-      stableId: randomUUID(),
+      stableId: forcedId || randomUUID(),
       position: { x: pos.x, y: pos.y || 0, z: pos.z },
       velocity: { x: vel.x || 0, y: vel.y || 0, z: vel.z || 0 },
       smoothedPos: { x: pos.x, y: pos.y || 0, z: pos.z },
