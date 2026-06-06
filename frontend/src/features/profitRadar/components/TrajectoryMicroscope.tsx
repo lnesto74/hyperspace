@@ -27,7 +27,8 @@ const AXIS_LABELS: Record<IntentAxisName, string> = {
   friction: 'Friction',
 }
 
-const TRAIL_MAX = 100
+/** ~220ms per point at 1× — matches recorded MQTT cadence in the demo window */
+const DEMO_TRAIL_STEP_MS = 220
 
 interface TrajectoryMicroscopeProps {
   venueId: string
@@ -37,10 +38,6 @@ interface TrajectoryMicroscopeProps {
   showcaseMoment?: BehaviorShowcaseMoment | null
 }
 
-/**
- * Magnified crop locked to the shopper trajectory (not the full zone polygon).
- * In long aisles the zone view is too wide — this follows the path at ~2–3 m scale.
- */
 export default function TrajectoryMicroscope({
   venueId,
   roiId,
@@ -52,41 +49,24 @@ export default function TrajectoryMicroscope({
   const { trackAxes } = useProfitRadar()
   const { objects, zoneVerts } = useZoneMapData(venueId, roiId)
 
-  const trailsRef = useRef<Map<string, { x: number; z: number; t: number }[]>>(new Map())
-  const [, forceTick] = useState(0)
+  const showcaseStartedRef = useRef(Date.now())
+  const [animTick, setAnimTick] = useState(0)
 
   useEffect(() => {
+    showcaseStartedRef.current = Date.now()
+    setAnimTick(0)
+  }, [showcaseMoment?.id])
+
+  useEffect(() => {
+    if (!showcaseMoment?.demoTrail?.length) return
     let raf = 0
     const tick = () => {
-      forceTick(f => (f + 1) % 1000)
+      setAnimTick(t => t + 1)
       raf = requestAnimationFrame(tick)
     }
     raf = requestAnimationFrame(tick)
     return () => cancelAnimationFrame(raf)
-  }, [])
-
-  useEffect(() => {
-    trailsRef.current.clear()
-  }, [showcaseMoment?.id])
-
-  useEffect(() => {
-    const m = trailsRef.current
-    const now = Date.now()
-    const seen = new Set<string>()
-    tracks.forEach(t => {
-      const p = t.venuePosition ?? t.position
-      if (!p) return
-      seen.add(t.trackKey)
-      const arr = m.get(t.trackKey) ?? []
-      const last = arr[arr.length - 1]
-      if (!last || Math.hypot(last.x - p.x, last.z - p.z) > 0.02) {
-        arr.push({ x: p.x, z: p.z, t: now })
-        if (arr.length > TRAIL_MAX) arr.shift()
-        m.set(t.trackKey, arr)
-      }
-    })
-    for (const k of Array.from(m.keys())) if (!seen.has(k)) m.delete(k)
-  }, [tracks])
+  }, [showcaseMoment?.id, showcaseMoment?.demoTrail?.length])
 
   const fixtures = useMemo(() => venueObjectsToFixtures(objects), [objects])
 
@@ -101,30 +81,64 @@ export default function TrajectoryMicroscope({
     return out
   }, [tracks, zoneVerts])
 
-  const focusKey = showcaseMoment
-    ? (focusTrackKey && trackKeyMatchesMoment(focusTrackKey, showcaseMoment) ? focusTrackKey : null)
-    : (focusTrackKey ?? inZoneTracks[0]?.key ?? null)
-  const focusTrail = focusKey ? (trailsRef.current.get(focusKey) ?? []) : []
-  const focusAxes = focusKey ? trackAxes.find(t => t.trackKey === focusKey)?.axes : null
+  const resolvedFocusKey = useMemo(() => {
+    if (showcaseMoment) {
+      if (focusTrackKey && trackKeyMatchesMoment(focusTrackKey, showcaseMoment)) return focusTrackKey
+      for (const t of tracks.values()) {
+        if (trackKeyMatchesMoment(t.trackKey, showcaseMoment)) return t.trackKey
+      }
+      return null
+    }
+    return focusTrackKey ?? inZoneTracks[0]?.key ?? null
+  }, [showcaseMoment, focusTrackKey, tracks, inZoneTracks])
+
+  const liveTrail = useMemo(() => {
+    if (!resolvedFocusKey) return [] as { x: number; z: number }[]
+    const t = tracks.get(resolvedFocusKey)
+    if (!t?.trail?.length) return []
+    return t.trail.map(p => ({ x: p.x, z: p.z }))
+  }, [resolvedFocusKey, tracks])
+
+  const demoTrail = showcaseMoment?.demoTrail ?? []
+  const usingLiveTrail = liveTrail.length >= 2
+
+  const animatedDemoIdx = useMemo(() => {
+    if (!showcaseMoment || demoTrail.length < 2) return 0
+    void animTick
+    const elapsed = Date.now() - showcaseStartedRef.current
+    return Math.min(demoTrail.length - 1, Math.floor(elapsed / DEMO_TRAIL_STEP_MS))
+  }, [showcaseMoment, demoTrail.length, animTick])
+
+  const animatedDemoTrail = demoTrail.slice(0, animatedDemoIdx + 1)
+  const displayTrail = usingLiveTrail ? liveTrail : animatedDemoTrail
+
+  const focusAxes = resolvedFocusKey ? trackAxes.find(t => t.trackKey === resolvedFocusKey)?.axes : null
   const displayAxes = focusAxes ?? (showcaseMoment ? showcaseMoment.catalogAxes : null)
 
   const viewBox = useMemo(() => {
-    const trailPts = focusTrail.length >= 1
-      ? focusTrail
+    const base = demoTrail.length >= 2 ? demoTrail : displayTrail
+    const trailPts = base.length >= 1
+      ? base
       : showcaseMoment
-        ? [{ x: showcaseMoment.center.x, z: showcaseMoment.center.z }]
+        ? [showcaseMoment.center]
         : []
     if (trailPts.length === 0) return boundsToViewBox(trajectoryBounds([], 0.5, 2.4))
     const minSpan = showcaseMoment ? Math.max(2.0, Math.min(3.2, showcaseMoment.spanM + 1.8)) : 2.4
     return boundsToViewBox(trajectoryBounds(trailPts, 0.5, minSpan))
-  }, [focusTrail, showcaseMoment])
+  }, [demoTrail, displayTrail, showcaseMoment])
 
   const annotation = useMemo(() => {
+    if (showcaseMoment && !usingLiveTrail) {
+      const pct = demoTrail.length > 1
+        ? Math.round((animatedDemoIdx / (demoTrail.length - 1)) * 100)
+        : 0
+      return `${showcaseMoment.storyLine} (${showcaseMoment.label} · replay ${pct}%)`
+    }
     if (showcaseMoment && !focusAxes) {
-      return `${showcaseMoment.storyLine} (${showcaseMoment.label} · ${(showcaseMoment.axisScore * 100).toFixed(0)}%)`
+      return `${showcaseMoment.storyLine} (${showcaseMoment.label} · live)`
     }
     if (!focusAxes) {
-      if (focusTrail.length >= 2) return 'Shopper moving — fingerprint building as trajectory evolves…'
+      if (displayTrail.length >= 2) return 'Shopper moving — fingerprint building as trajectory evolves…'
       return 'Select a shopper on the map or wait for movement in zone'
     }
     const engage = focusAxes.engagement_with_POI ?? 0
@@ -144,20 +158,32 @@ export default function TrajectoryMicroscope({
     const dominant = (Object.entries(focusAxes) as [IntentAxisName, number][])
       .sort((a, b) => b[1] - a[1])[0]
     return `Dominant: ${AXIS_LABELS[dominant[0]]} (${(dominant[1] * 100).toFixed(0)}%)`
-  }, [focusAxes, focusTrail.length, showcaseMoment])
-
-  const ghostTrails = useMemo(() => {
-    return inZoneTracks
-      .filter(t => t.key !== focusKey)
-      .slice(0, 2)
-      .map(t => ({ key: t.key, pts: trailsRef.current.get(t.key) ?? [] }))
-  }, [inZoneTracks, focusKey, tracks])
+  }, [focusAxes, displayTrail.length, showcaseMoment, usingLiveTrail, demoTrail.length, animatedDemoIdx])
 
   const strokeScale = useMemo(() => {
     const parts = viewBox.split(/\s+/).map(Number)
     const w = parts[2] || 3
     return Math.max(0.04, Math.min(0.12, w * 0.025))
   }, [viewBox])
+
+  const headPoint = displayTrail[displayTrail.length - 1]
+    ?? demoTrail[demoTrail.length - 1]
+    ?? showcaseMoment?.center
+
+  const renderTrail = (pts: { x: number; z: number }[], stroke: string, width: number, opacity = 1) => {
+    if (pts.length < 2) return null
+    return (
+      <polyline
+        points={pts.map(p => `${p.x},${p.z}`).join(' ')}
+        fill="none"
+        stroke={stroke}
+        strokeOpacity={opacity}
+        strokeWidth={width}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    )
+  }
 
   return (
     <div className="shrink-0 border-t border-gray-700/60 bg-gray-950/80">
@@ -171,9 +197,9 @@ export default function TrajectoryMicroscope({
             {showcaseMoment.label}
           </span>
         )}
-        {focusKey && (
+        {resolvedFocusKey && (
           <span className="ml-auto text-[9px] text-red-300/80 font-mono truncate max-w-[120px]">
-            track {focusKey.slice(-8)}
+            {usingLiveTrail ? 'live' : 'demo'} · {resolvedFocusKey.slice(-8)}
           </span>
         )}
       </div>
@@ -203,68 +229,33 @@ export default function TrajectoryMicroscope({
               )
             })}
 
-            {ghostTrails.map(({ key, pts }) => {
-              if (pts.length < 2) return null
-              return (
-                <polyline
-                  key={`g-${key}`}
-                  points={pts.map(p => `${p.x},${p.z}`).join(' ')}
-                  fill="none"
-                  stroke="rgba(96,165,250,0.18)"
-                  strokeWidth={strokeScale * 0.6}
-                  strokeLinecap="round"
-                />
-              )
-            })}
-
-            {focusTrail.length >= 2 && (
-              <>
-                <polyline
-                  points={focusTrail.map(p => `${p.x},${p.z}`).join(' ')}
-                  fill="none"
-                  stroke="#f87171"
-                  strokeWidth={strokeScale * 1.2}
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                />
-                {focusTrail.filter((_, i) => i > 0 && i % 3 === 0).map((p, i) => (
-                  <circle
-                    key={`dw-${i}`}
-                    cx={p.x}
-                    cy={p.z}
-                    r={strokeScale * 1.4}
-                    fill="rgba(251,191,36,0.35)"
-                    stroke="#fbbf24"
-                    strokeWidth={strokeScale * 0.25}
-                  />
-                ))}
-                {(() => {
-                  const last = focusTrail[focusTrail.length - 1]
-                  const prev = focusTrail[Math.max(0, focusTrail.length - 3)]
-                  const dx = last.x - prev.x
-                  const dz = last.z - prev.z
-                  const len = Math.hypot(dx, dz) || 1
-                  const ax = last.x + (dx / len) * (strokeScale * 3)
-                  const az = last.z + (dz / len) * (strokeScale * 3)
-                  return (
-                    <>
-                      <circle cx={last.x} cy={last.z} r={strokeScale * 1.6} fill="#f87171" stroke="#fff" strokeWidth={strokeScale * 0.35} />
-                      <line x1={last.x} y1={last.z} x2={ax} y2={az} stroke="#fca5a5" strokeWidth={strokeScale * 0.8} />
-                    </>
-                  )
-                })()}
-              </>
+            {!usingLiveTrail && demoTrail.length >= 2 && (
+              renderTrail(demoTrail, 'rgba(248,113,113,0.22)', strokeScale * 0.9, 1)
             )}
 
-            {focusTrail.length < 2 && showcaseMoment && (
-              <circle
-                cx={focusTrail[0]?.x ?? showcaseMoment.center.x}
-                cy={focusTrail[0]?.z ?? showcaseMoment.center.z}
-                r={strokeScale * 2.2}
-                fill="rgba(248,113,113,0.35)"
-                stroke="#f87171"
-                strokeWidth={strokeScale * 0.5}
-              />
+            {usingLiveTrail
+              ? renderTrail(liveTrail, '#f87171', strokeScale * 1.2)
+              : renderTrail(animatedDemoTrail, '#f87171', strokeScale * 1.2)}
+
+            {headPoint && (
+              <>
+                <circle
+                  cx={headPoint.x}
+                  cy={headPoint.z}
+                  r={strokeScale * 2}
+                  fill="rgba(248,113,113,0.35)"
+                  stroke="#f87171"
+                  strokeWidth={strokeScale * 0.5}
+                />
+                <circle
+                  cx={headPoint.x}
+                  cy={headPoint.z}
+                  r={strokeScale * 1.4}
+                  fill="#f87171"
+                  stroke="#fff"
+                  strokeWidth={strokeScale * 0.35}
+                />
+              </>
             )}
           </svg>
         </div>
@@ -293,7 +284,9 @@ export default function TrajectoryMicroscope({
               ))}
             </div>
           )}
-          <p className="text-[9px] text-gray-600 mt-2">1× replay · zoom follows trajectory</p>
+          <p className="text-[9px] text-gray-600 mt-2">
+            1× replay · {usingLiveTrail ? 'live trail' : 'recorded demo path'}
+          </p>
         </div>
       </div>
     </div>

@@ -17,6 +17,7 @@ import {
   getShowcaseMoment,
   BEHAVIOR_SHOWCASE_MOMENTS,
   BEHAVIOR_SHOWCASE_RECORDING,
+  SHOWCASE_SEEK_LEAD_PCT,
   type BehaviorShowcaseMoment,
 } from './behaviorShowcaseCatalog'
 import { PROFIT_RADAR_SHOWCASE_EVENT } from '../../components/storymode/storyReplayConfig'
@@ -315,9 +316,10 @@ export default function ProfitRadarPage({ onClose }: ProfitRadarPageProps) {
 
   const seekShowcaseReplay = useCallback(async (moment: BehaviorShowcaseMoment) => {
     setMqttReplayActive(true)
+    const progress = Math.max(0.01, moment.seekPct - SHOWCASE_SEEK_LEAD_PCT)
     const body = {
       file: BEHAVIOR_SHOWCASE_RECORDING,
-      progress: moment.seekPct,
+      progress,
       speed: 1,
     }
     try {
@@ -330,7 +332,7 @@ export default function ProfitRadarPage({ onClose }: ProfitRadarPageProps) {
         await fetch(`${API_BASE}/api/replay/start`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ ...body, rewriteTimestamps: true, startProgress: moment.seekPct }),
+          body: JSON.stringify({ ...body, rewriteTimestamps: true, startProgress: progress }),
         })
       }
     } catch { /* replay may not be running */ }

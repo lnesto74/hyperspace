@@ -1,4 +1,7 @@
 import { INTENT_AXIS_NAMES, type IntentAxes, type IntentAxisName } from '../../types'
+import { BEHAVIOR_SHOWCASE_DEMO_TRAILS, type DemoTrailPoint } from './behaviorShowcaseDemoTrails'
+
+export { SHOWCASE_SEEK_LEAD_PCT } from './behaviorShowcaseDemoTrails'
 
 /** Recording analyzed with analysis/find_behavior_moments.mjs */
 export const BEHAVIOR_SHOWCASE_RECORDING =
@@ -19,6 +22,8 @@ export interface BehaviorShowcaseMoment {
   axisScore: number
   /** Pre-computed axes from offline analysis — instant radar while replay seeks */
   catalogAxes: IntentAxes
+  /** Recorded path slice for microscope — always visible even if live track is missed */
+  demoTrail: DemoTrailPoint[]
   storyTitle: string
   storyLine: string
 }
@@ -56,6 +61,7 @@ export const BEHAVIOR_SHOWCASE_MOMENTS: BehaviorShowcaseMoment[] = [
     }),
     storyTitle: 'Lost in the aisle',
     storyLine: 'Backtracks and loops — confusion dominates before they re-orient.',
+    demoTrail: BEHAVIOR_SHOWCASE_DEMO_TRAILS.confusion,
   },
   {
     id: 'urgency',
@@ -79,6 +85,7 @@ export const BEHAVIOR_SHOWCASE_MOMENTS: BehaviorShowcaseMoment[] = [
     }),
     storyTitle: 'Rush-through traffic',
     storyLine: 'Fast, straight movement — high urgency, minimal dwell at the shelf.',
+    demoTrail: BEHAVIOR_SHOWCASE_DEMO_TRAILS.urgency,
   },
   {
     id: 'hesitation',
@@ -102,6 +109,7 @@ export const BEHAVIOR_SHOWCASE_MOMENTS: BehaviorShowcaseMoment[] = [
     }),
     storyTitle: 'Stop–look–leave',
     storyLine: 'Micro-movements and pauses — engaged with the shelf but unable to commit.',
+    demoTrail: BEHAVIOR_SHOWCASE_DEMO_TRAILS.hesitation,
   },
   {
     id: 'goal_directedness',
@@ -125,6 +133,7 @@ export const BEHAVIOR_SHOWCASE_MOMENTS: BehaviorShowcaseMoment[] = [
     }),
     storyTitle: 'Knows where they are going',
     storyLine: 'Efficient path with high straightness — classic goal-directed shopping.',
+    demoTrail: BEHAVIOR_SHOWCASE_DEMO_TRAILS.goal_directedness,
   },
   {
     id: 'commitment',
@@ -148,6 +157,7 @@ export const BEHAVIOR_SHOWCASE_MOMENTS: BehaviorShowcaseMoment[] = [
     }),
     storyTitle: 'Purchase intent building',
     storyLine: 'Sustained direction and dwell — commitment axis rises as they progress.',
+    demoTrail: BEHAVIOR_SHOWCASE_DEMO_TRAILS.commitment,
   },
 ]
 
