@@ -9,7 +9,7 @@ import {
   venueObjectsToFixtures,
 } from '../../../utils/venueFloorPlanMap'
 import { pointInPolygon, trajectoryBounds, useZoneMapData } from '../hooks/useZoneMapData'
-import type { BehaviorShowcaseMoment } from '../behaviorShowcaseCatalog'
+import { trackKeyMatchesMoment, type BehaviorShowcaseMoment } from '../behaviorShowcaseCatalog'
 import type { IntentAxisName } from '../../../types'
 
 const AXIS_LABELS: Record<IntentAxisName, string> = {
@@ -66,6 +66,10 @@ export default function TrajectoryMicroscope({
   }, [])
 
   useEffect(() => {
+    trailsRef.current.clear()
+  }, [showcaseMoment?.id])
+
+  useEffect(() => {
     const m = trailsRef.current
     const now = Date.now()
     const seen = new Set<string>()
@@ -97,12 +101,15 @@ export default function TrajectoryMicroscope({
     return out
   }, [tracks, zoneVerts])
 
-  const focusKey = focusTrackKey ?? inZoneTracks[0]?.key ?? null
+  const focusKey = showcaseMoment
+    ? (focusTrackKey && trackKeyMatchesMoment(focusTrackKey, showcaseMoment) ? focusTrackKey : null)
+    : (focusTrackKey ?? inZoneTracks[0]?.key ?? null)
   const focusTrail = focusKey ? (trailsRef.current.get(focusKey) ?? []) : []
   const focusAxes = focusKey ? trackAxes.find(t => t.trackKey === focusKey)?.axes : null
+  const displayAxes = focusAxes ?? (showcaseMoment ? showcaseMoment.catalogAxes : null)
 
   const viewBox = useMemo(() => {
-    const trailPts = focusTrail.length >= 2
+    const trailPts = focusTrail.length >= 1
       ? focusTrail
       : showcaseMoment
         ? [{ x: showcaseMoment.center.x, z: showcaseMoment.center.z }]
@@ -113,7 +120,7 @@ export default function TrajectoryMicroscope({
   }, [focusTrail, showcaseMoment])
 
   const annotation = useMemo(() => {
-    if (showcaseMoment) {
+    if (showcaseMoment && !focusAxes) {
       return `${showcaseMoment.storyLine} (${showcaseMoment.label} · ${(showcaseMoment.axisScore * 100).toFixed(0)}%)`
     }
     if (!focusAxes) {
@@ -248,6 +255,17 @@ export default function TrajectoryMicroscope({
                 })()}
               </>
             )}
+
+            {focusTrail.length < 2 && showcaseMoment && (
+              <circle
+                cx={focusTrail[0]?.x ?? showcaseMoment.center.x}
+                cy={focusTrail[0]?.z ?? showcaseMoment.center.z}
+                r={strokeScale * 2.2}
+                fill="rgba(248,113,113,0.35)"
+                stroke="#f87171"
+                strokeWidth={strokeScale * 0.5}
+              />
+            )}
           </svg>
         </div>
 
@@ -256,14 +274,14 @@ export default function TrajectoryMicroscope({
             <p className="text-[10px] font-medium text-indigo-300 mb-1">{showcaseMoment.storyTitle}</p>
           )}
           <p className="text-[11px] text-gray-300 leading-relaxed">{annotation}</p>
-          {focusAxes && (
+          {displayAxes && (
             <div className="mt-2 flex flex-wrap gap-1.5">
               {[
-                ['Hesitate', focusAxes.hesitation, '#f59e0b'],
-                ['Confused', focusAxes.confusion, '#f97316'],
-                ['Urgent', focusAxes.urgency, '#ef4444'],
-                ['Commit', focusAxes.commitment, '#10b981'],
-                ['Goal', focusAxes.goal_directedness, '#22c55e'],
+                ['Hesitate', displayAxes.hesitation, '#f59e0b'],
+                ['Confused', displayAxes.confusion, '#f97316'],
+                ['Urgent', displayAxes.urgency, '#ef4444'],
+                ['Commit', displayAxes.commitment, '#10b981'],
+                ['Goal', displayAxes.goal_directedness, '#22c55e'],
               ].map(([label, val, c]) => (
                 <span
                   key={label as string}

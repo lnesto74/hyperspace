@@ -52,15 +52,34 @@ export default function DiscoveryTheater({
   const barItems = buildBenchmarkBars(insight, storeAvg)
 
   useEffect(() => {
-    setFocusTrackKey(null)
     setSessionLeak(0)
   }, [insight.id, showcaseMoment?.id])
 
   useEffect(() => {
+    setFocusTrackKey(null)
+  }, [insight.id])
+
+  useEffect(() => {
     if (!showcaseMoment) return
-    const matched = matchTrackKeyForMoment(Array.from(tracks.values()), showcaseMoment)
-    if (matched) setFocusTrackKey(matched)
-  }, [showcaseMoment, tracks])
+    setFocusTrackKey(null)
+    let active = true
+    const tryMatch = () => {
+      if (!active) return
+      const matched = matchTrackKeyForMoment(Array.from(tracks.values()), showcaseMoment)
+      if (matched) setFocusTrackKey(matched)
+    }
+    tryMatch()
+    const iv = window.setInterval(tryMatch, 350)
+    const stop = window.setTimeout(() => {
+      active = false
+      window.clearInterval(iv)
+    }, 10000)
+    return () => {
+      active = false
+      window.clearInterval(iv)
+      window.clearTimeout(stop)
+    }
+  }, [showcaseMoment?.id, tracks])
 
   useEffect(() => {
     leakTimerRef.current = window.setInterval(() => {

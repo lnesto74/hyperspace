@@ -1,7 +1,7 @@
 import { useMemo } from 'react'
 import { Activity } from 'lucide-react'
 import { INTENT_AXIS_NAMES, type IntentAxes, type IntentAxisName, type ZoneFieldEntry } from '../../../types'
-import type { BehaviorShowcaseMoment } from '../behaviorShowcaseCatalog'
+import { trackKeyMatchesMoment, type BehaviorShowcaseMoment } from '../behaviorShowcaseCatalog'
 import IntentRadar from './IntentRadar'
 import BenchmarkBars, { type BenchmarkBarItem } from './BenchmarkBars'
 
@@ -50,13 +50,6 @@ function dominantFromAxes(axes: IntentAxes): IntentAxisName {
   )
 }
 
-function estimatedAxesFromShowcase(moment: BehaviorShowcaseMoment): IntentAxes {
-  const means = {} as IntentAxes
-  for (const axis of INTENT_AXIS_NAMES) means[axis] = 0.12
-  means[moment.axis] = moment.axisScore
-  return means
-}
-
 export default function LiveFingerprintPanel({
   zoneField,
   roiId,
@@ -69,6 +62,31 @@ export default function LiveFingerprintPanel({
   const live = useMemo(() => {
     const avg = storeAvg(zoneField)
 
+    if (showcaseMoment) {
+      const focusMatches = !!focusTrackKey && trackKeyMatchesMoment(focusTrackKey, showcaseMoment)
+      if (focusMatches && focusTrackKey) {
+        const trackEntry = trackAxes.find(t => t.trackKey === focusTrackKey)
+        if (trackEntry) {
+          return {
+            mode: 'track' as const,
+            means: trackEntry.axes,
+            avg,
+            dominant: dominantFromAxes(trackEntry.axes),
+            subtitle: 'Live fingerprint for this shopper',
+          }
+        }
+      }
+      return {
+        mode: focusMatches ? ('track-estimated' as const) : ('showcase-catalog' as const),
+        means: showcaseMoment.catalogAxes,
+        avg,
+        dominant: showcaseMoment.axis,
+        subtitle: focusMatches
+          ? 'Pattern preview — refines as replay builds their trail'
+          : 'Curated demo moment — replay is seeking this shopper',
+      }
+    }
+
     if (focusTrackKey) {
       const trackEntry = trackAxes.find(t => t.trackKey === focusTrackKey)
       if (trackEntry) {
@@ -78,16 +96,6 @@ export default function LiveFingerprintPanel({
           avg,
           dominant: dominantFromAxes(trackEntry.axes),
           subtitle: 'Live fingerprint for this shopper',
-        }
-      }
-      if (showcaseMoment && showcaseMoment.trackKey === focusTrackKey) {
-        const means = estimatedAxesFromShowcase(showcaseMoment)
-        return {
-          mode: 'track-estimated' as const,
-          means,
-          avg,
-          dominant: showcaseMoment.axis,
-          subtitle: 'Pattern preview — refines as replay builds their trail',
         }
       }
     }
@@ -118,7 +126,7 @@ export default function LiveFingerprintPanel({
         {live?.mode === 'track' && (
           <span className="ml-auto text-[10px] text-emerald-500/80">This shopper</span>
         )}
-        {live?.mode === 'track-estimated' && (
+        {(live?.mode === 'track-estimated' || live?.mode === 'showcase-catalog') && (
           <span className="ml-auto text-[10px] text-amber-500/80">Demo pattern</span>
         )}
       </div>

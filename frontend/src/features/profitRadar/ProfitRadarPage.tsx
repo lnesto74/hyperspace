@@ -3,6 +3,7 @@ import { ChevronDown, ChevronUp, Eye, Lightbulb, Wrench, BarChart3, Package, Act
 import { getCategoryVisual } from '../businessReporting/operationsConsole/categoryVisuals'
 import { useProfitRadar } from '../../context/ProfitRadarContext'
 import { useVenue } from '../../context/VenueContext'
+import { useTracking } from '../../context/TrackingContext'
 import { API_BASE } from '../../config/api'
 import ZonePerformanceViewport, { type ZonePerformanceItem } from '../businessReporting/components/ZonePerformanceViewport'
 import IntentRadar from './components/IntentRadar'
@@ -261,6 +262,7 @@ interface ProfitRadarPageProps {
 export default function ProfitRadarPage({ onClose }: ProfitRadarPageProps) {
   const { insights, zoneField, clusters, selectedInsight, setSelectedInsight } = useProfitRadar()
   const { venue } = useVenue()
+  const { setMqttReplayActive } = useTracking()
   const [showEconomics, setShowEconomics] = useState(false)
   const [layoutMode, setLayoutMode] = useState<'operational' | 'theater'>('operational')
   const [showcaseMoment, setShowcaseMoment] = useState<BehaviorShowcaseMoment | null>(null)
@@ -311,6 +313,29 @@ export default function ProfitRadarPage({ onClose }: ProfitRadarPageProps) {
     return () => window.removeEventListener('hyperspace:profit-radar-select-zone', handler)
   }, [selectedInsight, setSelectedInsight])
 
+  const seekShowcaseReplay = useCallback(async (moment: BehaviorShowcaseMoment) => {
+    setMqttReplayActive(true)
+    const body = {
+      file: BEHAVIOR_SHOWCASE_RECORDING,
+      progress: moment.seekPct,
+      speed: 1,
+    }
+    try {
+      const res = await fetch(`${API_BASE}/api/replay/seek`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+      if (!res.ok) {
+        await fetch(`${API_BASE}/api/replay/start`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ...body, rewriteTimestamps: true, startProgress: moment.seekPct }),
+        })
+      }
+    } catch { /* replay may not be running */ }
+  }, [setMqttReplayActive])
+
   useEffect(() => {
     const handler = (e: Event) => {
       const momentId = (e as CustomEvent<{ momentId?: string }>).detail?.momentId
@@ -327,7 +352,7 @@ export default function ProfitRadarPage({ onClose }: ProfitRadarPageProps) {
     }
     window.addEventListener(PROFIT_RADAR_SHOWCASE_EVENT, handler)
     return () => window.removeEventListener(PROFIT_RADAR_SHOWCASE_EVENT, handler)
-  }, [setSelectedInsight])
+  }, [setSelectedInsight, seekShowcaseReplay])
 
   useEffect(() => {
     const handler = () => {
@@ -340,20 +365,6 @@ export default function ProfitRadarPage({ onClose }: ProfitRadarPageProps) {
     window.addEventListener('hyperspace:profit-radar-theater', handler)
     return () => window.removeEventListener('hyperspace:profit-radar-theater', handler)
   }, [setSelectedInsight])
-
-  const seekShowcaseReplay = useCallback(async (moment: BehaviorShowcaseMoment) => {
-    try {
-      await fetch(`${API_BASE}/api/replay/seek`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          file: BEHAVIOR_SHOWCASE_RECORDING,
-          progress: moment.seekPct,
-          speed: 1,
-        }),
-      })
-    } catch { /* replay may not be running */ }
-  }, [])
 
   const onSelectShowcase = useCallback((moment: BehaviorShowcaseMoment) => {
     setShowcaseMoment(moment)
