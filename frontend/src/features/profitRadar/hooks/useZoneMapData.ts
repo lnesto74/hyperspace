@@ -39,6 +39,37 @@ export function zoneBounds(verts: { x: number; z: number }[], pad = 0.6) {
   return { minX: minX - pad, maxX: maxX + pad, minZ: minZ - pad, maxZ: maxZ + pad }
 }
 
+/** Tight crop around a moving trajectory — used by the microscope (not full zone). */
+export function trajectoryBounds(
+  pts: { x: number; z: number }[],
+  pad = 0.55,
+  minSpan = 2.4,
+) {
+  if (pts.length === 0) {
+    return { minX: -1, maxX: 1, minZ: -1, maxZ: 1 }
+  }
+  let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity
+  for (const p of pts) {
+    minX = Math.min(minX, p.x)
+    maxX = Math.max(maxX, p.x)
+    minZ = Math.min(minZ, p.z)
+    maxZ = Math.max(maxZ, p.z)
+  }
+  const cx = (minX + maxX) / 2
+  const cz = (minZ + maxZ) / 2
+  let spanX = maxX - minX
+  let spanZ = maxZ - minZ
+  if (spanX < minSpan) {
+    minX = cx - minSpan / 2
+    maxX = cx + minSpan / 2
+  }
+  if (spanZ < minSpan) {
+    minZ = cz - minSpan / 2
+    maxZ = cz + minSpan / 2
+  }
+  return { minX: minX - pad, maxX: maxX + pad, minZ: minZ - pad, maxZ: maxZ + pad }
+}
+
 export function useZoneMapData(venueId: string, roiId: string | null) {
   const { objects: ctxObjects, venue: ctxVenue } = useVenue()
   const [rois, setRois] = useState<RoiShape[]>([])

@@ -12,6 +12,13 @@ import ImpactSimulator from './components/ImpactSimulator'
 import VenueEconomicsModal from './components/VenueEconomicsModal'
 import DiscoveryTheater from './components/DiscoveryTheater'
 import { TYPE_CONFIG, SEVERITY_BADGE, buildBenchmarkBars } from './insightConfig'
+import {
+  getShowcaseMoment,
+  BEHAVIOR_SHOWCASE_MOMENTS,
+  BEHAVIOR_SHOWCASE_RECORDING,
+  type BehaviorShowcaseMoment,
+} from './behaviorShowcaseCatalog'
+import { PROFIT_RADAR_SHOWCASE_EVENT } from '../../components/storymode/storyReplayConfig'
 import { INTENT_AXIS_NAMES, type IntentAxes, type IntentAxisName } from '../../types'
 import type { ProfitRadarInsight } from '../../types'
 
@@ -256,6 +263,7 @@ export default function ProfitRadarPage({ onClose }: ProfitRadarPageProps) {
   const { venue } = useVenue()
   const [showEconomics, setShowEconomics] = useState(false)
   const [layoutMode, setLayoutMode] = useState<'operational' | 'theater'>('operational')
+  const [showcaseMoment, setShowcaseMoment] = useState<BehaviorShowcaseMoment | null>(null)
 
   // Zone performance (dead/top zones) — same source as the Business Reporting
   // "Zone Performance Map", so the underperforming-zone detail can reuse it.
@@ -304,6 +312,24 @@ export default function ProfitRadarPage({ onClose }: ProfitRadarPageProps) {
   }, [selectedInsight, setSelectedInsight])
 
   useEffect(() => {
+    const handler = (e: Event) => {
+      const momentId = (e as CustomEvent<{ momentId?: string }>).detail?.momentId
+      if (!momentId) return
+      const moment = getShowcaseMoment(momentId)
+      if (!moment) return
+      setShowcaseMoment(moment)
+      const list = insightsRef.current
+      const zone = list.find(i => i.type === 'underperforming_zone')
+      const pick = zone ?? list[0]
+      if (pick) setSelectedInsight(pick)
+      setLayoutMode('theater')
+      void seekShowcaseReplay(moment)
+    }
+    window.addEventListener(PROFIT_RADAR_SHOWCASE_EVENT, handler)
+    return () => window.removeEventListener(PROFIT_RADAR_SHOWCASE_EVENT, handler)
+  }, [setSelectedInsight])
+
+  useEffect(() => {
     const handler = () => {
       const list = insightsRef.current
       const zone = list.find(i => i.type === 'underperforming_zone')
@@ -314,6 +340,25 @@ export default function ProfitRadarPage({ onClose }: ProfitRadarPageProps) {
     window.addEventListener('hyperspace:profit-radar-theater', handler)
     return () => window.removeEventListener('hyperspace:profit-radar-theater', handler)
   }, [setSelectedInsight])
+
+  const seekShowcaseReplay = useCallback(async (moment: BehaviorShowcaseMoment) => {
+    try {
+      await fetch(`${API_BASE}/api/replay/seek`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          file: BEHAVIOR_SHOWCASE_RECORDING,
+          progress: moment.seekPct,
+          speed: 1,
+        }),
+      })
+    } catch { /* replay may not be running */ }
+  }, [])
+
+  const onSelectShowcase = useCallback((moment: BehaviorShowcaseMoment) => {
+    setShowcaseMoment(moment)
+    void seekShowcaseReplay(moment)
+  }, [seekShowcaseReplay])
 
   const insightIndex = selectedInsight ? insights.findIndex(i => i.id === selectedInsight.id) : -1
   const cycleInsight = useCallback((dir: -1 | 1) => {
@@ -456,7 +501,10 @@ export default function ProfitRadarPage({ onClose }: ProfitRadarPageProps) {
           venueId={venue.id}
           selectedRoiId={selectedRoiId}
           zoneName={selectedZoneNames[0] || selectedInsight.title}
-          onExitTheater={() => setLayoutMode('operational')}
+          showcaseMoment={showcaseMoment}
+          showcaseMoments={BEHAVIOR_SHOWCASE_MOMENTS}
+          onSelectShowcase={onSelectShowcase}
+          onExitTheater={() => { setLayoutMode('operational'); setShowcaseMoment(null) }}
           onPrevInsight={() => cycleInsight(-1)}
           onNextInsight={() => cycleInsight(1)}
           insightIndex={Math.max(0, insightIndex)}

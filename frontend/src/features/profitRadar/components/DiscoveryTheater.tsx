@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { ChevronLeft, ChevronRight, Film } from 'lucide-react'
+import { useTracking } from '../../../context/TrackingContext'
 import { INTENT_AXIS_NAMES, type IntentAxes, type ProfitRadarInsight } from '../../../types'
 import { TYPE_CONFIG, SEVERITY_BADGE, buildBenchmarkBars } from '../insightConfig'
+import { matchTrackKeyForMoment, BEHAVIOR_SHOWCASE_MOMENTS, type BehaviorShowcaseMoment } from '../behaviorShowcaseCatalog'
 import ZoneEventReplay from './ZoneEventReplay'
 import TrajectoryMicroscope from './TrajectoryMicroscope'
 import LiveFingerprintPanel from './LiveFingerprintPanel'
@@ -13,6 +15,9 @@ interface DiscoveryTheaterProps {
   venueId: string
   selectedRoiId: string | null
   zoneName: string
+  showcaseMoment?: BehaviorShowcaseMoment | null
+  showcaseMoments?: BehaviorShowcaseMoment[]
+  onSelectShowcase?: (moment: BehaviorShowcaseMoment) => void
   onExitTheater: () => void
   onPrevInsight: () => void
   onNextInsight: () => void
@@ -26,6 +31,9 @@ export default function DiscoveryTheater({
   venueId,
   selectedRoiId,
   zoneName,
+  showcaseMoment = null,
+  showcaseMoments = BEHAVIOR_SHOWCASE_MOMENTS,
+  onSelectShowcase,
   onExitTheater,
   onPrevInsight,
   onNextInsight,
@@ -34,6 +42,7 @@ export default function DiscoveryTheater({
   onShowEconomics,
 }: DiscoveryTheaterProps) {
   const { zoneField } = useProfitRadar()
+  const { tracks } = useTracking()
   const [focusTrackKey, setFocusTrackKey] = useState<string | null>(null)
   const [sessionLeak, setSessionLeak] = useState(0)
   const leakTimerRef = useRef<number | null>(null)
@@ -45,7 +54,13 @@ export default function DiscoveryTheater({
   useEffect(() => {
     setFocusTrackKey(null)
     setSessionLeak(0)
-  }, [insight.id])
+  }, [insight.id, showcaseMoment?.id])
+
+  useEffect(() => {
+    if (!showcaseMoment) return
+    const matched = matchTrackKeyForMoment(Array.from(tracks.values()), showcaseMoment)
+    if (matched) setFocusTrackKey(matched)
+  }, [showcaseMoment, tracks])
 
   useEffect(() => {
     leakTimerRef.current = window.setInterval(() => {
@@ -120,6 +135,27 @@ export default function DiscoveryTheater({
         </div>
       </div>
 
+      {showcaseMoments.length > 0 && onSelectShowcase && (
+        <div className="shrink-0 flex items-center gap-1.5 px-3 py-1.5 border-b border-gray-800/80 bg-gray-950/90 overflow-x-auto">
+          <span className="text-[9px] text-gray-500 uppercase tracking-wider shrink-0 mr-1">Patterns</span>
+          {showcaseMoments.map(m => (
+            <button
+              key={m.id}
+              type="button"
+              onClick={() => onSelectShowcase(m)}
+              className={`shrink-0 text-[10px] px-2 py-1 rounded-full border transition-colors ${
+                showcaseMoment?.id === m.id
+                  ? 'bg-indigo-600 border-indigo-500 text-white'
+                  : 'bg-gray-800/80 border-gray-700 text-gray-300 hover:border-gray-500'
+              }`}
+            >
+              {m.label}
+            </button>
+          ))}
+          <span className="ml-auto text-[9px] text-gray-600 shrink-0">1× replay</span>
+        </div>
+      )}
+
       <div className="flex-1 flex min-h-0">
         <div className="flex-[62] flex flex-col min-w-0 min-h-0 border-r border-gray-700/60">
           <div className="flex-1 min-h-0 flex flex-col">
@@ -138,6 +174,7 @@ export default function DiscoveryTheater({
             roiId={selectedRoiId}
             zoneName={zoneName}
             focusTrackKey={focusTrackKey}
+            showcaseMoment={showcaseMoment}
           />
         </div>
 

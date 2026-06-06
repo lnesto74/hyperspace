@@ -25,6 +25,13 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { Film, X, ChevronLeft, ChevronRight, Play, Pause } from 'lucide-react'
 import { STORY_INTRO_REPLAY_START } from './storyIntroConfig'
 import {
+  STORY_DEMO_RECORDING,
+  STORY_REPLAY_SPEED_DEFAULT,
+  STORY_THEATER_REPLAY_SPEED,
+  PROFIT_RADAR_SHOWCASE_EVENT,
+} from './storyReplayConfig'
+import { BEHAVIOR_SHOWCASE_MOMENTS } from '../../features/profitRadar/behaviorShowcaseCatalog'
+import {
   dispatchStoryNarrativeSync,
   STORY_NARRATIVE_GOTO,
   STORY_NARRATIVE_TOGGLE_COLLAPSED,
@@ -87,6 +94,7 @@ interface StageActions {
   openStoryGrid: () => void
   selectFirstCampaign: (name?: string) => void
   selectRadarZone: () => void
+  playBehaviorShowcase: (momentId: string) => void
 }
 
 interface Beat {
@@ -106,12 +114,10 @@ interface Beat {
    * recording keep playing continuously from wherever it is.
    */
   seekPct?: number
-  /**
-   * Spotlight focus for this beat — dims the rest of the UI so attention lands on
-   * the component this beat is about. 'tight' for centered modals/dashboards,
-   * 'soft' for the live floor, 'none' for full-page views that need to stay
-   * fully readable. Defaults to 'soft'. The intro beat uses its own curtain.
-   */
+  /** Replay speed for this beat (default 3×; theater beats use 1×). */
+  replaySpeed?: number
+  /** Auto-advance delay when story is playing (ms). */
+  autoAdvanceMs?: number
   dim?: 'soft' | 'tight' | 'none'
 }
 
@@ -125,6 +131,23 @@ const RUNG_COLOR: Record<Rung, string> = {
   RECOMMEND: '#3ea06b',
   REMEMBER: '#9ca3af',
 }
+
+const BEHAVIOR_SHOWCASE_BEATS: Beat[] = BEHAVIOR_SHOWCASE_MOMENTS.map((m, i) => ({
+  id: `showcase-${m.id}`,
+  time: `15:${String(i * 2).padStart(2, '0')}`,
+  period: 'Afternoon' as const,
+  rung: 'EXPLAIN' as const,
+  title: m.storyTitle,
+  floor: 'One shopper, one movement signature — readable in the trajectory microscope.',
+  hyperspace: `${m.storyLine} Watch the behavioral fingerprint build at 1× speed as the path evolves.`,
+  outcome: `${m.label} · ${Math.round(m.axisScore * 100)}%`,
+  component: `Profit Radar · ${m.label}`,
+  seekPct: m.seekPct,
+  replaySpeed: STORY_THEATER_REPLAY_SPEED,
+  autoAdvanceMs: 26000,
+  stage: (a) => { a.setViewMode('profitRadar'); a.playBehaviorShowcase(m.id) },
+  dim: 'none' as const,
+}))
 
 const BEATS: Beat[] = [
   {
@@ -194,18 +217,22 @@ const BEATS: Beat[] = [
     dim: 'none',
   },
   {
-    id: 'radar',
-    time: '15:00',
+    id: 'radar-intro',
+    time: '14:55',
     period: 'Afternoon',
     rung: 'QUANTIFY',
     title: 'Opportunity, priced in euros',
     floor: 'A high-traffic aisle feels fine. Its real upside is invisible on a spreadsheet.',
-    hyperspace: 'Profit Radar ranks opportunities by \u20ac impact and proposes the exact merchandising fix.',
+    hyperspace: 'Profit Radar ranks opportunities by \u20ac impact — then replays real shoppers to prove the behavioral pattern.',
     outcome: '\u20ac2,400 / wk recoverable',
     component: 'Profit Radar',
     stage: (a) => { a.setViewMode('profitRadar'); a.selectRadarZone() },
+    seekPct: BEHAVIOR_SHOWCASE_MOMENTS[0]?.seekPct,
+    replaySpeed: STORY_THEATER_REPLAY_SPEED,
+    autoAdvanceMs: 12000,
     dim: 'none',
   },
+  ...BEHAVIOR_SHOWCASE_BEATS,
   {
     id: 'funnel',
     time: '16:30',
@@ -248,7 +275,7 @@ const BEATS: Beat[] = [
 ]
 
 const AUTO_ADVANCE_MS = 14000
-const REPLAY_SPEED = 3 // recording playback speed (recorded-time / wall-time)
+const REPLAY_SPEED = STORY_REPLAY_SPEED_DEFAULT
 const NARRATIVE_COLLAPSED_KEY = 'hyperspace-story-narrative-collapsed'
 
 function getNarrativeCollapsedPref(): boolean {
@@ -414,7 +441,8 @@ export default function StoryMode({ viewMode, setViewMode, neuralEnabled, setNeu
       const list: Array<{ name: string }> = (data?.files || []).filter(
         (f: { name: string }) => !String(f.name).endsWith('.reconciled.jsonl'),
       )
-      const file = list[0]?.name
+      const preferred = list.find(f => f.name === STORY_DEMO_RECORDING)
+      const file = preferred?.name ?? list[0]?.name
       if (!file || token !== tokenRef.current) { setReplayLive(false); return }
 
       recordingFileRef.current = file
@@ -447,7 +475,7 @@ export default function StoryMode({ viewMode, setViewMode, neuralEnabled, setNeu
   }, [setMqttReplayActive, setStoryReplayActive, setReplayMode, startDemoSession])
 
   // Jump the running recording to a position so a beat's moment lands on cue.
-  const seekRecording = useCallback(async (pct: number) => {
+  const seekRecording = useCallback(async (pct: number, speed = REPLAY_SPEED) => {
     const file = recordingFileRef.current
     if (!file || !recordingActiveRef.current) return
     const progress = Math.max(0, Math.min(1, pct))
@@ -455,7 +483,7 @@ export default function StoryMode({ viewMode, setViewMode, neuralEnabled, setNeu
       await fetch(`${API_BASE}/api/replay/seek`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ file, progress, speed: REPLAY_SPEED }),
+        body: JSON.stringify({ file, progress, speed }),
       })
     } catch { /* non-fatal: recording keeps playing from wherever it is */ }
   }, [])
@@ -470,6 +498,14 @@ export default function StoryMode({ viewMode, setViewMode, neuralEnabled, setNeu
 
   // Preselect an underperforming-zone insight on the Profit Radar beat. Retried
   // because Profit Radar insights stream in async.
+  const playBehaviorShowcase = useCallback((momentId: string) => {
+    const fire = () => window.dispatchEvent(
+      new CustomEvent(PROFIT_RADAR_SHOWCASE_EVENT, { detail: { momentId } }),
+    )
+    fire()
+    ;[400, 900, 1800, 3200].forEach(ms => window.setTimeout(fire, ms))
+  }, [])
+
   const selectRadarZone = useCallback(() => {
     const fireSelect = () => window.dispatchEvent(new CustomEvent('hyperspace:profit-radar-select-zone'))
     const fireTheater = () => window.dispatchEvent(new CustomEvent('hyperspace:profit-radar-theater'))
@@ -501,6 +537,7 @@ export default function StoryMode({ viewMode, setViewMode, neuralEnabled, setNeu
     openStoryGrid,
     selectFirstCampaign,
     selectRadarZone,
+    playBehaviorShowcase,
   }
 
   // Close every transient surface this layer can open, so each beat starts clean.
@@ -519,7 +556,9 @@ export default function StoryMode({ viewMode, setViewMode, neuralEnabled, setNeu
     resetStage()
     beat.stage(actions)
     // Recording plays continuously; only jump when a beat pins a specific moment.
-    if (typeof beat.seekPct === 'number') void seekRecording(beat.seekPct)
+    if (typeof beat.seekPct === 'number') {
+      void seekRecording(beat.seekPct, beat.replaySpeed ?? REPLAY_SPEED)
+    }
   }
 
   const enter = useCallback(() => {
@@ -686,7 +725,7 @@ export default function StoryMode({ viewMode, setViewMode, neuralEnabled, setNeu
         applyBeatRef.current(n)
         return n
       })
-    }, AUTO_ADVANCE_MS)
+    }, BEATS[index]?.autoAdvanceMs ?? AUTO_ADVANCE_MS)
     return () => window.clearTimeout(id)
   }, [active, playing, index])
 
