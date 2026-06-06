@@ -73,7 +73,7 @@ interface BusinessReportingPageProps {
 }
 
 export default function BusinessReportingPage({ onClose }: BusinessReportingPageProps) {
-  const { venue, venues } = useVenue();
+  const { venue, venueList } = useVenue();
   const { openHeatmapForCategory } = useHeatmap();
   const [selectedVenueId, setSelectedVenueId] = useState<string | null>(venue?.id || null);
   const [selectedPersonaId, setSelectedPersonaId] = useState<string>(PERSONAS[0].id);
@@ -295,7 +295,7 @@ export default function BusinessReportingPage({ onClose }: BusinessReportingPage
             onChange={(e) => setSelectedVenueId(e.target.value)}
             className="bg-gray-700 border border-gray-600 rounded-md px-2 py-1 text-xs text-white max-w-[140px] sm:max-w-none"
           >
-            {(venues || []).map(v => (
+            {(venueList || []).map(v => (
               <option key={v.id} value={v.id}>{v.name}</option>
             ))}
           </select>

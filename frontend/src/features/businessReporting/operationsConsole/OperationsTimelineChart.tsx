@@ -67,11 +67,11 @@ export default function OperationsTimelineChart({
   );
 
   const yTicks = useMemo(() => buildYAxisTicks(maxVal), [maxVal]);
+  const showCategoryBadges = activeMode === 'occupancy' && visiblePoints.length <= CATEGORY_BADGE_MAX_BARS;
   const chartPlotH = CHART_H + (showCategoryBadges ? 20 : 0);
 
   const grainLabel = timeline.grain === 'hour' ? 'Hourly' : timeline.grain === 'day' ? 'Daily' : 'Weekly';
   const valueLabel = activeMode === 'footfall' ? 'Visits' : 'Peak shoppers';
-  const showCategoryBadges = activeMode === 'occupancy' && visiblePoints.length <= CATEGORY_BADGE_MAX_BARS;
 
   if (!points.length || !points.some(p => p.value > 0)) {
     const altHasData = altPoints.some(p => p.value > 0);
