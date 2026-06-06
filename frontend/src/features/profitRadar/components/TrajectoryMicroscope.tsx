@@ -30,6 +30,24 @@ const AXIS_LABELS: Record<IntentAxisName, string> = {
 /** ~220ms per point at 1× — matches recorded MQTT cadence in the demo window */
 const DEMO_TRAIL_STEP_MS = 220
 
+function trailVelocity(trail: { x: number; z: number }[]) {
+  if (trail.length < 2) return null
+  const last = trail[trail.length - 1]
+  let prev = trail[trail.length - 2]
+  for (let i = trail.length - 2; i >= 0; i--) {
+    const p = trail[i]
+    if (Math.hypot(last.x - p.x, last.z - p.z) > 0.015) {
+      prev = p
+      break
+    }
+  }
+  const dx = last.x - prev.x
+  const dz = last.z - prev.z
+  const speed = Math.hypot(dx, dz)
+  if (speed < 0.001) return null
+  return { dx, dz, speed, last }
+}
+
 interface TrajectoryMicroscopeProps {
   venueId: string
   roiId: string | null
@@ -170,6 +188,8 @@ export default function TrajectoryMicroscope({
     ?? demoTrail[demoTrail.length - 1]
     ?? showcaseMoment?.center
 
+  const velocity = useMemo(() => trailVelocity(displayTrail), [displayTrail])
+
   const renderTrail = (pts: { x: number; z: number }[], stroke: string, width: number, opacity = 1) => {
     if (pts.length < 2) return null
     return (
@@ -237,6 +257,18 @@ export default function TrajectoryMicroscope({
               ? renderTrail(liveTrail, '#f87171', strokeScale * 1.2)
               : renderTrail(animatedDemoTrail, '#f87171', strokeScale * 1.2)}
 
+            {displayTrail.length >= 2 && displayTrail.filter((_, i) => i > 0 && i % 3 === 0).map((p, i) => (
+              <circle
+                key={`dw-${i}`}
+                cx={p.x}
+                cy={p.z}
+                r={strokeScale * 1.4}
+                fill="rgba(251,191,36,0.35)"
+                stroke="#fbbf24"
+                strokeWidth={strokeScale * 0.25}
+              />
+            ))}
+
             {headPoint && (
               <>
                 <circle
@@ -255,6 +287,34 @@ export default function TrajectoryMicroscope({
                   stroke="#fff"
                   strokeWidth={strokeScale * 0.35}
                 />
+                {velocity && (() => {
+                  const len = Math.hypot(velocity.dx, velocity.dz) || 1
+                  const arrowLen = strokeScale * (3 + Math.min(5, velocity.speed * 6))
+                  const ax = headPoint.x + (velocity.dx / len) * arrowLen
+                  const az = headPoint.z + (velocity.dz / len) * arrowLen
+                  return (
+                    <line
+                      x1={headPoint.x}
+                      y1={headPoint.z}
+                      x2={ax}
+                      y2={az}
+                      stroke="#fca5a5"
+                      strokeWidth={strokeScale * 0.9}
+                      strokeLinecap="round"
+                    />
+                  )
+                })()}
+                {!velocity && displayTrail.length >= 2 && (
+                  <circle
+                    cx={headPoint.x}
+                    cy={headPoint.z}
+                    r={strokeScale * 2.8}
+                    fill="none"
+                    stroke="#fbbf24"
+                    strokeWidth={strokeScale * 0.35}
+                    strokeDasharray={`${strokeScale * 0.6} ${strokeScale * 0.4}`}
+                  />
+                )}
               </>
             )}
           </svg>
