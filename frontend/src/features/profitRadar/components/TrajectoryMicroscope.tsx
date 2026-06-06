@@ -29,6 +29,22 @@ const AXIS_LABELS: Record<IntentAxisName, string> = {
 
 /** ~220ms per point at 1× — matches recorded MQTT cadence in the demo window */
 const DEMO_TRAIL_STEP_MS = 220
+const DEMO_DT_SEC = DEMO_TRAIL_STEP_MS / 1000
+
+const ARROW_COLOR = '#22d3ee'
+const ARROW_GLOW = 'rgba(34,211,238,0.25)'
+
+interface TrailPhysics {
+  speedMs: number
+  headingDeg: number
+  turnRateDegS: number
+  accelMs2: number
+  curvature: number
+  straightness: number
+  pathLengthM: number
+  netDisplacementM: number
+  dwellPct: number
+}
 
 function trailVelocity(trail: { x: number; z: number }[]) {
   if (trail.length < 2) return null
@@ -46,6 +62,152 @@ function trailVelocity(trail: { x: number; z: number }[]) {
   const speed = Math.hypot(dx, dz)
   if (speed < 0.001) return null
   return { dx, dz, speed, last }
+}
+
+function computeTrailPhysics(trail: { x: number; z: number }[], dtSec = DEMO_DT_SEC): TrailPhysics | null {
+  if (trail.length < 2) return null
+
+  const segments: { dist: number; speed: number; heading: number }[] = []
+  for (let i = 1; i < trail.length; i++) {
+    const dx = trail[i].x - trail[i - 1].x
+    const dz = trail[i].z - trail[i - 1].z
+    const dist = Math.hypot(dx, dz)
+    segments.push({
+      dist,
+      speed: dist / dtSec,
+      heading: (Math.atan2(dz, dx) * 180) / Math.PI,
+    })
+  }
+
+  const last = segments[segments.length - 1]
+  const prev = segments.length >= 2 ? segments[segments.length - 2] : last
+
+  let turnRate = 0
+  if (segments.length >= 2) {
+    let dh = last.heading - prev.heading
+    while (dh > 180) dh -= 360
+    while (dh < -180) dh += 360
+    turnRate = dh / dtSec
+  }
+
+  const curvature = last.speed > 0.05
+    ? Math.abs((turnRate * Math.PI) / 180) / last.speed
+    : 0
+
+  const pathLengthM = segments.reduce((s, seg) => s + seg.dist, 0)
+  const netDisplacementM = Math.hypot(
+    trail[trail.length - 1].x - trail[0].x,
+    trail[trail.length - 1].z - trail[0].z,
+  )
+  const straightness = pathLengthM > 0.01 ? netDisplacementM / pathLengthM : 1
+  const dwellPct = (segments.filter(s => s.speed < 0.08).length / segments.length) * 100
+
+  return {
+    speedMs: last.speed,
+    headingDeg: ((last.heading % 360) + 360) % 360,
+    turnRateDegS: turnRate,
+    accelMs2: segments.length >= 2 ? (last.speed - prev.speed) / dtSec : 0,
+    curvature,
+    straightness,
+    pathLengthM,
+    netDisplacementM,
+    dwellPct,
+  }
+}
+
+function VelocityArrow({
+  origin,
+  velocity,
+  strokeScale,
+}: {
+  origin: { x: number; z: number }
+  velocity: { dx: number; dz: number; speed: number }
+  strokeScale: number
+}) {
+  const len = Math.hypot(velocity.dx, velocity.dz) || 1
+  const ux = velocity.dx / len
+  const uz = velocity.dz / len
+  const shaftLen = strokeScale * (3.2 + Math.min(4.2, velocity.speed * 5))
+  const tipX = origin.x + ux * shaftLen
+  const tipZ = origin.z + uz * shaftLen
+  const nx = -uz
+  const nz = ux
+  const headW = strokeScale * 0.55
+  const headL = strokeScale * 0.95
+  const baseX = tipX - ux * headL
+  const baseZ = tipZ - uz * headL
+  const shaftW = strokeScale * 0.28
+
+  return (
+    <g>
+      <line
+        x1={origin.x}
+        y1={origin.z}
+        x2={baseX}
+        y2={baseZ}
+        stroke={ARROW_GLOW}
+        strokeWidth={shaftW * 2.2}
+        strokeLinecap="round"
+      />
+      <line
+        x1={origin.x}
+        y1={origin.z}
+        x2={baseX}
+        y2={baseZ}
+        stroke={ARROW_COLOR}
+        strokeWidth={shaftW}
+        strokeLinecap="round"
+      />
+      <polygon
+        points={[
+          `${tipX},${tipZ}`,
+          `${baseX + nx * headW},${baseZ + nz * headW}`,
+          `${baseX - nx * headW},${baseZ - nz * headW}`,
+        ].join(' ')}
+        fill={ARROW_COLOR}
+      />
+    </g>
+  )
+}
+
+function MotionReadout({ physics, stopped }: { physics: TrailPhysics | null; stopped: boolean }) {
+  if (!physics) {
+    return (
+      <div className="h-full flex flex-col justify-center px-2 py-2 text-[9px] text-gray-600 leading-relaxed">
+        <div className="text-[8px] uppercase tracking-widest text-cyan-500/70 mb-1.5">Kinematics</div>
+        <span>Waiting for trail…</span>
+      </div>
+    )
+  }
+
+  const rows: { sym: string; label: string; value: string; hint?: string }[] = [
+    { sym: 'v', label: 'speed', value: stopped ? '0.00 m/s' : `${physics.speedMs.toFixed(2)} m/s` },
+    { sym: 'θ', label: 'heading', value: `${physics.headingDeg.toFixed(0)}°` },
+    { sym: 'ω', label: 'turn rate', value: `${physics.turnRateDegS >= 0 ? '+' : ''}${physics.turnRateDegS.toFixed(0)}°/s` },
+    { sym: 'a', label: 'accel', value: `${physics.accelMs2 >= 0 ? '+' : ''}${physics.accelMs2.toFixed(2)} m/s²` },
+    { sym: 'κ', label: 'curvature', value: `${physics.curvature.toFixed(2)} m⁻¹` },
+    { sym: 'S', label: 'straight', value: `${(physics.straightness * 100).toFixed(0)}%` },
+    { sym: 'L', label: 'path', value: `${physics.pathLengthM.toFixed(1)} m` },
+    { sym: 'τ', label: 'dwell', value: `${physics.dwellPct.toFixed(0)}%` },
+  ]
+
+  return (
+    <div className="h-full flex flex-col justify-center px-2 py-1.5 border-r border-gray-800/80 bg-gray-950/90 min-w-[92px] max-w-[92px]">
+      <div className="text-[8px] uppercase tracking-widest text-cyan-400/80 mb-1.5 font-medium">Kinematics</div>
+      <div className="space-y-1">
+        {rows.map(r => (
+          <div key={r.sym} className="flex items-baseline gap-1">
+            <span className="text-cyan-300/90 font-serif w-3 shrink-0 text-[10px]">{r.sym}</span>
+            <span className="text-[9px] text-gray-500 flex-1 truncate">{r.label}</span>
+            <span className="text-[9px] text-gray-200 tabular-nums font-mono shrink-0">{r.value}</span>
+          </div>
+        ))}
+      </div>
+      {stopped && (
+        <div className="mt-1.5 text-[8px] text-amber-400/80 leading-tight">stationary · ω→0</div>
+      )}
+    </div>
+  )
 }
 
 interface TrajectoryMicroscopeProps {
@@ -189,6 +351,8 @@ export default function TrajectoryMicroscope({
     ?? showcaseMoment?.center
 
   const velocity = useMemo(() => trailVelocity(displayTrail), [displayTrail])
+  const physics = useMemo(() => computeTrailPhysics(displayTrail), [displayTrail])
+  const isStopped = displayTrail.length >= 2 && !velocity
 
   const renderTrail = (pts: { x: number; z: number }[], stroke: string, width: number, opacity = 1) => {
     if (pts.length < 2) return null
@@ -225,6 +389,8 @@ export default function TrajectoryMicroscope({
       </div>
 
       <div className="flex items-stretch gap-0" style={{ height: 188 }}>
+        <MotionReadout physics={physics} stopped={isStopped} />
+
         <div className="flex-1 min-w-0 relative">
           <svg viewBox={viewBox} preserveAspectRatio="xMidYMid meet" className="w-full h-full block" style={{ background: '#030508' }}>
             {fixtures.map(f => {
@@ -287,23 +453,9 @@ export default function TrajectoryMicroscope({
                   stroke="#fff"
                   strokeWidth={strokeScale * 0.35}
                 />
-                {velocity && (() => {
-                  const len = Math.hypot(velocity.dx, velocity.dz) || 1
-                  const arrowLen = strokeScale * (3 + Math.min(5, velocity.speed * 6))
-                  const ax = headPoint.x + (velocity.dx / len) * arrowLen
-                  const az = headPoint.z + (velocity.dz / len) * arrowLen
-                  return (
-                    <line
-                      x1={headPoint.x}
-                      y1={headPoint.z}
-                      x2={ax}
-                      y2={az}
-                      stroke="#fca5a5"
-                      strokeWidth={strokeScale * 0.9}
-                      strokeLinecap="round"
-                    />
-                  )
-                })()}
+                {velocity && (
+                  <VelocityArrow origin={headPoint} velocity={velocity} strokeScale={strokeScale} />
+                )}
                 {!velocity && displayTrail.length >= 2 && (
                   <circle
                     cx={headPoint.x}
@@ -320,7 +472,7 @@ export default function TrajectoryMicroscope({
           </svg>
         </div>
 
-        <div className="w-[280px] shrink-0 border-l border-gray-800/80 px-3 py-2 flex flex-col justify-center">
+        <div className="w-[248px] shrink-0 border-l border-gray-800/80 px-3 py-2 flex flex-col justify-center overflow-y-auto">
           {showcaseMoment && (
             <p className="text-[10px] font-medium text-indigo-300 mb-1">{showcaseMoment.storyTitle}</p>
           )}
