@@ -56,9 +56,10 @@ interface ImpactSimulatorProps {
   venueId?: string
   roiId?: string | null
   zoneName?: string
+  variant?: 'default' | 'theater'
 }
 
-export default function ImpactSimulator({ insight, venueId, roiId, zoneName }: ImpactSimulatorProps) {
+export default function ImpactSimulator({ insight, venueId, roiId, zoneName, variant = 'default' }: ImpactSimulatorProps) {
   const [effortPct, setEffortPct] = useState(60)
   const [done, setDone] = useState<Set<string>>(new Set())
   const [dispatchState, setDispatchState] = useState<'idle' | 'sending' | 'sent' | 'queued' | 'error'>('idle')
@@ -119,15 +120,19 @@ export default function ImpactSimulator({ insight, venueId, roiId, zoneName }: I
 
   const act = (id: string) => setDone(prev => new Set(prev).add(id))
 
-  return (
-    <div className="rounded-lg border border-emerald-700/40 bg-emerald-500/5 overflow-hidden">
-      <div className="flex items-center gap-2 px-4 py-3 border-b border-emerald-700/30">
-        <TrendingUp className="w-4 h-4 text-emerald-400" />
-        <span className="text-sm font-medium text-white">Impact Simulator</span>
-        <span className="ml-auto text-[10px] text-emerald-300/80">projected — apply the fix</span>
-      </div>
+  const isTheater = variant === 'theater'
 
-      <div className="p-4 space-y-4">
+  return (
+    <div className={isTheater ? 'overflow-hidden' : 'rounded-lg border border-emerald-700/40 bg-emerald-500/5 overflow-hidden'}>
+      {!isTheater && (
+        <div className="flex items-center gap-2 px-4 py-3 border-b border-emerald-700/30">
+          <TrendingUp className="w-4 h-4 text-emerald-400" />
+          <span className="text-sm font-medium text-white">Impact Simulator</span>
+          <span className="ml-auto text-[10px] text-emerald-300/80">projected — apply the fix</span>
+        </div>
+      )}
+
+      <div className={`${isTheater ? 'px-4 py-3' : 'p-4'} space-y-4`}>
         {/* effort */}
         <div>
           <div className="flex items-center justify-between text-[11px] mb-1.5">
@@ -162,10 +167,12 @@ export default function ImpactSimulator({ insight, venueId, roiId, zoneName }: I
         </div>
 
         {/* € recovered */}
-        <div className="rounded-md bg-gray-900/60 border border-gray-700/60 px-3 py-2.5">
+        <div className={`rounded-md bg-gray-900/60 border border-gray-700/60 px-3 ${isTheater ? 'py-3' : 'py-2.5'}`}>
           <div className="text-[10px] text-gray-500 uppercase tracking-wide">Projected recovery</div>
           <div className="flex items-baseline gap-1.5">
-            <span className="text-xl font-bold text-emerald-400 tabular-nums">+{cur}{Math.round(recoveredPerWeek).toLocaleString()}</span>
+            <span className={`${isTheater ? 'text-2xl' : 'text-xl'} font-bold text-emerald-400 tabular-nums`}>
+              +{cur}{Math.round(recoveredPerWeek).toLocaleString()}
+            </span>
             <span className="text-xs text-gray-500">/ week</span>
           </div>
           <div className="text-[10px] text-gray-500">≈ {cur}{Math.round(recoveredPerDay).toLocaleString()} / day at {effortPct}% effort</div>

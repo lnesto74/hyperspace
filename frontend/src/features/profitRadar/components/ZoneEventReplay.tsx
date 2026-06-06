@@ -1,41 +1,21 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Maximize2, Minimize2, Radio, Users } from 'lucide-react'
-import { useVenue } from '../../../context/VenueContext'
 import { useTracking } from '../../../context/TrackingContext'
-import { API_BASE } from '../../../config/api'
 import {
-  boundsToViewBox,
-  computeFloorPlanBounds,
   getDrawableFixtureOutline,
-  normalizeFloorVertex,
   polygonPath,
   venueObjectsToFixtures,
-  type MapRegion,
 } from '../../../utils/venueFloorPlanMap'
-import type { VenueObject } from '../../../types'
-
-interface RoiShape {
-  id: string
-  name: string
-  vertices: { x: number; z?: number; y?: number }[]
-}
+import { pointInPolygon, useZoneMapData } from '../hooks/useZoneMapData'
 
 interface ZoneEventReplayProps {
   venueId: string
   roiId: string | null
   zoneName: string
-}
-
-function pointInPolygon(p: { x: number; z: number }, verts: { x: number; z: number }[]): boolean {
-  let inside = false
-  for (let i = 0, j = verts.length - 1; i < verts.length; j = i++) {
-    const a = verts[i]
-    const b = verts[j]
-    if (((a.z > p.z) !== (b.z > p.z)) && p.x < ((b.x - a.x) * (p.z - a.z)) / (b.z - a.z) + a.x) {
-      inside = !inside
-    }
-  }
-  return inside
+  variant?: 'card' | 'stage'
+  dimOutside?: boolean
+  focusTrackKey?: string | null
+  onTrackSelect?: (trackKey: string | null) => void
 }
 
 /**
@@ -43,49 +23,25 @@ function pointInPolygon(p: { x: number; z: number }, verts: { x: number; z: numb
  * geometry utils and the real tracking stream (live, or the recorded MQTT
  * replay when active) — so it shows the actual shoppers moving through the zone.
  */
-export default function ZoneEventReplay({ venueId, roiId, zoneName }: ZoneEventReplayProps) {
-  const { objects: ctxObjects, venue: ctxVenue } = useVenue()
+export default function ZoneEventReplay({
+  venueId,
+  roiId,
+  zoneName,
+  variant = 'card',
+  dimOutside = false,
+  focusTrackKey = null,
+  onTrackSelect,
+}: ZoneEventReplayProps) {
   const { tracks, mqttReplayActive, storyReplayActive } = useTracking()
+  const { objects, regions, zoneVerts, viewBox } = useZoneMapData(venueId, roiId)
 
-  const [rois, setRois] = useState<RoiShape[]>([])
-  const [objects, setObjects] = useState<VenueObject[]>([])
-  const [venueSize, setVenueSize] = useState<{ width: number; depth: number } | null>(null)
   const [expanded, setExpanded] = useState(false)
-
   const trailsRef = useRef<Map<string, { x: number; z: number }[]>>(new Map())
   const pulseRef = useRef(0)
   const [, forceTick] = useState(0)
 
-  useEffect(() => {
-    let cancelled = false
-    const load = async () => {
-      if (ctxVenue?.id === venueId && ctxObjects.length > 0) {
-        setObjects(ctxObjects)
-        setVenueSize({ width: ctxVenue.width, depth: ctxVenue.depth })
-      } else {
-        try {
-          const res = await fetch(`${API_BASE}/api/venues/${venueId}`)
-          if (res.ok) {
-            const data = await res.json()
-            if (cancelled) return
-            setObjects(data.objects || [])
-            if (data.venue) setVenueSize({ width: data.venue.width, depth: data.venue.depth })
-          }
-        } catch { /* ignore */ }
-      }
-      try {
-        const roiRes = await fetch(`${API_BASE}/api/venues/${venueId}/roi?all=true`)
-        if (roiRes.ok) {
-          const data = await roiRes.json()
-          if (!cancelled) setRois(data || [])
-        }
-      } catch { /* ignore */ }
-    }
-    load()
-    return () => { cancelled = true }
-  }, [venueId, ctxVenue?.id, ctxVenue?.width, ctxVenue?.depth, ctxObjects.length])
+  const isStage = variant === 'stage'
 
-  // Pulse + redraw loop.
   useEffect(() => {
     let raf = 0
     const tick = (ts: number) => {
@@ -97,7 +53,6 @@ export default function ZoneEventReplay({ venueId, roiId, zoneName }: ZoneEventR
     return () => cancelAnimationFrame(raf)
   }, [])
 
-  // Accumulate short movement trails from the live/replay track stream.
   useEffect(() => {
     const m = trailsRef.current
     const seen = new Set<string>()
@@ -109,33 +64,18 @@ export default function ZoneEventReplay({ venueId, roiId, zoneName }: ZoneEventR
       const last = arr[arr.length - 1]
       if (!last || Math.hypot(last.x - p.x, last.z - p.z) > 0.04) {
         arr.push({ x: p.x, z: p.z })
-        if (arr.length > 12) arr.shift()
+        const maxLen = isStage ? 24 : 12
+        if (arr.length > maxLen) arr.shift()
         m.set(t.trackKey, arr)
       }
     })
     for (const k of Array.from(m.keys())) if (!seen.has(k)) m.delete(k)
-  }, [tracks])
+  }, [tracks, isStage])
 
-  const regions: MapRegion[] = useMemo(
-    () => rois.map(r => ({ id: r.id, vertices: r.vertices.map(normalizeFloorVertex) })),
-    [rois],
-  )
-  const zoneVerts = useMemo(() => {
-    const z = rois.find(r => r.id === roiId)
-    return z ? z.vertices.map(normalizeFloorVertex) : []
-  }, [rois, roiId])
-
-  const bounds = useMemo(
-    () => computeFloorPlanBounds(objects, regions, venueSize ?? undefined),
-    [objects, regions, venueSize],
-  )
-  const viewBox = useMemo(() => boundsToViewBox(bounds), [bounds])
   const fixtures = useMemo(() => venueObjectsToFixtures(objects), [objects])
-
   const pulseWave = 0.5 + 0.5 * Math.sin(pulseRef.current * Math.PI * 2)
   const isReplay = mqttReplayActive || storyReplayActive
 
-  // Live shoppers + how many are inside the focused zone right now.
   const livePoints: { key: string; x: number; z: number; inZone: boolean }[] = []
   tracks.forEach(t => {
     const p = t.venuePosition ?? t.position
@@ -145,10 +85,15 @@ export default function ZoneEventReplay({ venueId, roiId, zoneName }: ZoneEventR
   })
   const inZoneCount = livePoints.filter(p => p.inZone).length
 
-  const mapHeight = expanded ? 560 : 240
+  const mapHeight = isStage ? undefined : (expanded ? 560 : 240)
 
   const svg = (
-    <svg viewBox={viewBox} preserveAspectRatio="xMidYMid meet" className="w-full block" style={{ height: mapHeight, background: '#050810' }}>
+    <svg
+      viewBox={viewBox}
+      preserveAspectRatio="xMidYMid meet"
+      className={`w-full block ${isStage ? 'h-full flex-1' : ''}`}
+      style={isStage ? { background: '#050810', minHeight: 0 } : { height: mapHeight, background: '#050810' }}
+    >
       {fixtures.map(f => {
         const outline = getDrawableFixtureOutline(f)
         if (outline.length < 3) return null
@@ -156,61 +101,101 @@ export default function ZoneEventReplay({ venueId, roiId, zoneName }: ZoneEventR
           <path
             key={f.id}
             d={polygonPath(outline)}
-            fill="rgba(0,210,255,0.04)"
-            stroke="rgba(0,210,255,0.22)"
+            fill={dimOutside ? 'rgba(0,210,255,0.02)' : 'rgba(0,210,255,0.04)'}
+            stroke={dimOutside ? 'rgba(0,210,255,0.12)' : 'rgba(0,210,255,0.22)'}
             strokeWidth={0.04}
             strokeLinejoin="round"
           />
         )
       })}
 
-      {/* non-focused zones, faint */}
       {regions.map(r => {
         if (r.id === roiId) return null
-        return <path key={r.id} d={polygonPath(r.vertices)} fill="rgba(148,163,184,0.05)" stroke="rgba(75,85,99,0.4)" strokeWidth={0.03} />
+        return (
+          <path
+            key={r.id}
+            d={polygonPath(r.vertices)}
+            fill={dimOutside ? 'rgba(15,23,42,0.6)' : 'rgba(148,163,184,0.05)'}
+            stroke={dimOutside ? 'rgba(55,65,81,0.25)' : 'rgba(75,85,99,0.4)'}
+            strokeWidth={0.03}
+          />
+        )
       })}
 
-      {/* focused zone, pulsing red */}
       {zoneVerts.length >= 3 && (
         <path
           d={polygonPath(zoneVerts)}
-          fill={`rgba(255,40,40,${0.12 + pulseWave * 0.18})`}
+          fill={`rgba(255,40,40,${0.12 + pulseWave * 0.22})`}
           stroke={`rgba(255,70,70,${0.65 + pulseWave * 0.35})`}
           strokeWidth={0.08 + pulseWave * 0.04}
           strokeLinejoin="round"
         />
       )}
 
-      {/* movement trails */}
       {Array.from(trailsRef.current.entries()).map(([key, pts]) => {
         if (pts.length < 2) return null
+        const focused = key === focusTrackKey
+        const inZone = livePoints.find(p => p.key === key)?.inZone
         return (
           <polyline
             key={`tr-${key}`}
             points={pts.map(p => `${p.x},${p.z}`).join(' ')}
             fill="none"
-            stroke="rgba(96,165,250,0.4)"
-            strokeWidth={0.05}
+            stroke={focused ? 'rgba(248,113,113,0.85)' : inZone ? 'rgba(248,113,113,0.45)' : 'rgba(96,165,250,0.35)'}
+            strokeWidth={focused ? 0.08 : 0.05}
             strokeLinejoin="round"
             strokeLinecap="round"
           />
         )
       })}
 
-      {/* live shopper dots */}
-      {livePoints.map(p => (
-        <circle
-          key={`dot-${p.key}`}
-          cx={p.x}
-          cy={p.z}
-          r={p.inZone ? 0.2 : 0.15}
-          fill={p.inZone ? '#f87171' : '#60a5fa'}
-          stroke="rgba(0,0,0,0.4)"
-          strokeWidth={0.03}
-        />
-      ))}
+      {livePoints.map(p => {
+        const focused = p.key === focusTrackKey
+        const r = focused ? 0.26 : p.inZone ? 0.2 : 0.15
+        return (
+          <circle
+            key={`dot-${p.key}`}
+            cx={p.x}
+            cy={p.z}
+            r={r}
+            fill={focused ? '#fff' : p.inZone ? '#f87171' : '#60a5fa'}
+            stroke={focused ? '#f87171' : 'rgba(0,0,0,0.4)'}
+            strokeWidth={focused ? 0.06 : 0.03}
+            style={{ cursor: onTrackSelect ? 'pointer' : undefined }}
+            onClick={onTrackSelect ? () => onTrackSelect(focused ? null : p.key) : undefined}
+          />
+        )
+      })}
     </svg>
   )
+
+  if (isStage) {
+    return (
+      <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
+        <div className="flex items-center justify-between px-3 py-2 border-b border-gray-800/80 bg-gray-900/50 shrink-0">
+          <div className="flex items-center gap-2">
+            <Radio className={`w-3.5 h-3.5 ${isReplay ? 'text-amber-400' : 'text-green-400'}`} />
+            <div>
+              <span className="text-xs font-medium text-gray-200">Event Replay</span>
+              <p className="text-[10px] text-gray-500">{zoneName}</p>
+            </div>
+          </div>
+          <div className="flex items-center gap-3">
+            <span className="text-[10px] text-gray-400 hidden md:inline">
+              Click a dot to focus trajectory
+            </span>
+            <span className={`text-[9px] font-semibold px-1.5 py-0.5 rounded-full ${isReplay ? 'bg-amber-500/15 text-amber-300' : 'bg-green-500/15 text-green-300'}`}>
+              {isReplay ? '● REPLAY' : '● LIVE'}
+            </span>
+            <span className="flex items-center gap-1 text-[10px] text-gray-300">
+              <Users className="w-3 h-3" /> {inZoneCount} in zone
+            </span>
+          </div>
+        </div>
+        <div className="flex-1 min-h-0 relative">{svg}</div>
+      </div>
+    )
+  }
 
   return (
     <div className="rounded-lg border border-gray-700 bg-gray-800/60 overflow-hidden">

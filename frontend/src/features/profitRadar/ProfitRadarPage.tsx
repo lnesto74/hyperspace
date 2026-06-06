@@ -1,24 +1,19 @@
-import { useState, useEffect, useRef, useMemo, type ReactNode } from 'react'
-import { AlertTriangle, TrendingDown, Users, LayoutDashboard, ChevronDown, ChevronUp, Eye, Lightbulb, Wrench, BarChart3, Package, Activity, Euro } from 'lucide-react'
+import { useState, useEffect, useRef, useMemo, useCallback, type ReactNode } from 'react'
+import { ChevronDown, ChevronUp, Eye, Lightbulb, Wrench, BarChart3, Package, Activity, Euro, Film } from 'lucide-react'
 import { getCategoryVisual } from '../businessReporting/operationsConsole/categoryVisuals'
 import { useProfitRadar } from '../../context/ProfitRadarContext'
 import { useVenue } from '../../context/VenueContext'
 import { API_BASE } from '../../config/api'
 import ZonePerformanceViewport, { type ZonePerformanceItem } from '../businessReporting/components/ZonePerformanceViewport'
 import IntentRadar from './components/IntentRadar'
-import BenchmarkBars, { type BenchmarkBarItem } from './components/BenchmarkBars'
+import BenchmarkBars from './components/BenchmarkBars'
 import ZoneEventReplay from './components/ZoneEventReplay'
 import ImpactSimulator from './components/ImpactSimulator'
 import VenueEconomicsModal from './components/VenueEconomicsModal'
+import DiscoveryTheater from './components/DiscoveryTheater'
+import { TYPE_CONFIG, SEVERITY_BADGE, buildBenchmarkBars } from './insightConfig'
 import { INTENT_AXIS_NAMES, type IntentAxes, type IntentAxisName } from '../../types'
-import type { ProfitRadarInsight, InsightType } from '../../types'
-
-const TYPE_CONFIG: Record<InsightType, { icon: typeof AlertTriangle; color: string; bgColor: string; label: string; hex: string }> = {
-  lost_sales: { icon: AlertTriangle, color: 'text-red-400', bgColor: 'bg-red-500/10 border-red-500/30', label: 'Lost Sales', hex: '#f87171' },
-  underperforming_zone: { icon: TrendingDown, color: 'text-amber-400', bgColor: 'bg-amber-500/10 border-amber-500/30', label: 'Underperforming Zone', hex: '#f59e0b' },
-  staff_misallocation: { icon: Users, color: 'text-blue-400', bgColor: 'bg-blue-500/10 border-blue-500/30', label: 'Staff Misallocation', hex: '#60a5fa' },
-  layout_friction: { icon: LayoutDashboard, color: 'text-purple-400', bgColor: 'bg-purple-500/10 border-purple-500/30', label: 'Layout Friction', hex: '#a78bfa' },
-}
+import type { ProfitRadarInsight } from '../../types'
 
 function CollapsibleCard({
   icon: Icon,
@@ -44,27 +39,6 @@ function CollapsibleCard({
       {open && <div className="px-4 pb-4 border-t border-gray-700/50 pt-3">{children}</div>}
     </div>
   )
-}
-
-function buildBenchmarkBars(insight: ProfitRadarInsight, avg: IntentAxes | null): BenchmarkBarItem[] {
-  const db = insight.dataBasis || {}
-  const items: BenchmarkBarItem[] = []
-  const push = (key: string, label: string, tone: BenchmarkBarItem['tone'], benchAxis: IntentAxisName) => {
-    if (typeof db[key] === 'number') items.push({ label, value: db[key], tone, benchmark: avg?.[benchAxis] })
-  }
-  push('engagement', 'Engagement', 'neutral', 'engagement_with_POI')
-  push('avoidance', 'Avoidance', 'bad', 'avoidance')
-  push('hesitation', 'Hesitation', 'bad', 'hesitation')
-  push('commitment', 'Commitment', 'neutral', 'commitment')
-  push('queueScore', 'Queue / wait', 'bad', 'waiting_queueing')
-  push('score', 'Friction', 'bad', 'friction')
-  return items
-}
-
-const SEVERITY_BADGE: Record<string, string> = {
-  high: 'bg-red-600 text-white',
-  medium: 'bg-amber-600 text-white',
-  low: 'bg-gray-600 text-gray-200',
 }
 
 function InsightCard({ insight, isSelected, onSelect }: { insight: ProfitRadarInsight; isSelected: boolean; onSelect: () => void }) {
@@ -281,6 +255,7 @@ export default function ProfitRadarPage({ onClose }: ProfitRadarPageProps) {
   const { insights, zoneField, clusters, selectedInsight, setSelectedInsight } = useProfitRadar()
   const { venue } = useVenue()
   const [showEconomics, setShowEconomics] = useState(false)
+  const [layoutMode, setLayoutMode] = useState<'operational' | 'theater'>('operational')
 
   // Zone performance (dead/top zones) — same source as the Business Reporting
   // "Zone Performance Map", so the underperforming-zone detail can reuse it.
@@ -327,6 +302,34 @@ export default function ProfitRadarPage({ onClose }: ProfitRadarPageProps) {
     window.addEventListener('hyperspace:profit-radar-select-zone', handler)
     return () => window.removeEventListener('hyperspace:profit-radar-select-zone', handler)
   }, [selectedInsight, setSelectedInsight])
+
+  useEffect(() => {
+    const handler = () => {
+      const list = insightsRef.current
+      const zone = list.find(i => i.type === 'underperforming_zone')
+      const pick = zone ?? list[0]
+      if (pick) setSelectedInsight(pick)
+      setLayoutMode('theater')
+    }
+    window.addEventListener('hyperspace:profit-radar-theater', handler)
+    return () => window.removeEventListener('hyperspace:profit-radar-theater', handler)
+  }, [setSelectedInsight])
+
+  const insightIndex = selectedInsight ? insights.findIndex(i => i.id === selectedInsight.id) : -1
+  const cycleInsight = useCallback((dir: -1 | 1) => {
+    if (insights.length === 0) return
+    const idx = insightIndex >= 0 ? insightIndex : 0
+    const next = (idx + dir + insights.length) % insights.length
+    setSelectedInsight(insights[next])
+  }, [insights, insightIndex, setSelectedInsight])
+
+  const enterTheater = useCallback(() => {
+    if (!selectedInsight && insights.length > 0) {
+      const zone = insights.find(i => i.type === 'underperforming_zone')
+      setSelectedInsight(zone ?? insights[0])
+    }
+    setLayoutMode('theater')
+  }, [selectedInsight, insights, setSelectedInsight])
 
   // zoneField is rewritten on every live socket tick and only contains zones
   // that currently have tracks, so a zone's id appears/disappears as shoppers
@@ -428,6 +431,18 @@ export default function ProfitRadarPage({ onClose }: ProfitRadarPageProps) {
           >
             <Euro className="w-3.5 h-3.5" /> Economics
           </button>
+          <button
+            onClick={() => layoutMode === 'theater' ? setLayoutMode('operational') : enterTheater()}
+            disabled={insights.length === 0}
+            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium transition-colors disabled:opacity-40 ${
+              layoutMode === 'theater'
+                ? 'bg-indigo-600 text-white'
+                : 'text-gray-300 hover:text-white hover:bg-gray-700/60'
+            }`}
+            title="Discovery Theater — full-screen demo stage"
+          >
+            <Film className="w-3.5 h-3.5" /> Theater
+          </button>
         </div>
       </div>
       {venue?.id && (
@@ -435,6 +450,20 @@ export default function ProfitRadarPage({ onClose }: ProfitRadarPageProps) {
       )}
 
       {/* Body */}
+      {layoutMode === 'theater' && selectedInsight && venue?.id ? (
+        <DiscoveryTheater
+          insight={selectedInsight}
+          venueId={venue.id}
+          selectedRoiId={selectedRoiId}
+          zoneName={selectedZoneNames[0] || selectedInsight.title}
+          onExitTheater={() => setLayoutMode('operational')}
+          onPrevInsight={() => cycleInsight(-1)}
+          onNextInsight={() => cycleInsight(1)}
+          insightIndex={Math.max(0, insightIndex)}
+          insightCount={insights.length}
+          onShowEconomics={() => setShowEconomics(true)}
+        />
+      ) : (
       <div className="flex-1 flex overflow-hidden">
         {/* Left: Insight List */}
         <div className="w-[400px] border-r border-gray-700 flex flex-col overflow-hidden">
@@ -483,6 +512,14 @@ export default function ProfitRadarPage({ onClose }: ProfitRadarPageProps) {
                   </div>
                   <h2 className="text-xl font-semibold text-white mb-1.5">{selectedInsight.title}</h2>
                   <p className="text-sm text-gray-400">{selectedInsight.summary}</p>
+                  {venue?.id && (
+                    <button
+                      onClick={enterTheater}
+                      className="mt-3 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium bg-indigo-600 hover:bg-indigo-500 text-white"
+                    >
+                      <Film className="w-3.5 h-3.5" /> Present in Discovery Theater
+                    </button>
+                  )}
                 </div>
                 <div className="shrink-0 rounded-lg border border-emerald-700/50 bg-emerald-900/20 px-4 py-3 sm:text-right">
                   <div className="text-[10px] uppercase tracking-wide text-emerald-300/80">Estimated impact</div>
@@ -572,6 +609,7 @@ export default function ProfitRadarPage({ onClose }: ProfitRadarPageProps) {
           )}
         </div>
       </div>
+      )}
     </div>
   )
 }

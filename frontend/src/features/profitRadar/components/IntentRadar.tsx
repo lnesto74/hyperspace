@@ -21,13 +21,15 @@ interface IntentRadarProps {
   dominant?: IntentAxisName
   color?: string
   size?: number
+  /** Animate polygon updates (Discovery Theater live stream) */
+  live?: boolean
 }
 
 /**
  * 12-axis behavioral fingerprint (spider chart). Custom SVG — the codebase has
  * no charting lib (sparklines elsewhere are hand-drawn SVG too).
  */
-export default function IntentRadar({ means, avg, dominant, color = '#f59e0b', size = 240 }: IntentRadarProps) {
+export default function IntentRadar({ means, avg, dominant, color = '#f59e0b', size = 240, live = false }: IntentRadarProps) {
   const cx = size / 2
   const cy = size / 2
   const R = size / 2 - 30
@@ -82,7 +84,14 @@ export default function IntentRadar({ means, avg, dominant, color = '#f59e0b', s
         />
       )}
       {/* zone fingerprint */}
-      <polygon points={polyFor(means)} fill={`${color}33`} stroke={color} strokeWidth={2} strokeLinejoin="round" />
+      <polygon
+        points={polyFor(means)}
+        fill={`${color}33`}
+        stroke={color}
+        strokeWidth={2}
+        strokeLinejoin="round"
+        className={live ? 'transition-all duration-700 ease-out' : undefined}
+      />
       {/* dominant axis marker */}
       {dominant && (() => {
         const i = INTENT_AXIS_NAMES.indexOf(dominant)

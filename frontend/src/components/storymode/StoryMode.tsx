@@ -471,9 +471,14 @@ export default function StoryMode({ viewMode, setViewMode, neuralEnabled, setNeu
   // Preselect an underperforming-zone insight on the Profit Radar beat. Retried
   // because Profit Radar insights stream in async.
   const selectRadarZone = useCallback(() => {
-    const fire = () => window.dispatchEvent(new CustomEvent('hyperspace:profit-radar-select-zone'))
-    fire()
-    ;[500, 1100, 2000, 3200].forEach((ms) => window.setTimeout(fire, ms))
+    const fireSelect = () => window.dispatchEvent(new CustomEvent('hyperspace:profit-radar-select-zone'))
+    const fireTheater = () => window.dispatchEvent(new CustomEvent('hyperspace:profit-radar-theater'))
+    fireSelect()
+    fireTheater()
+    ;[500, 1100, 2000, 3200].forEach((ms) => {
+      window.setTimeout(fireSelect, ms)
+      window.setTimeout(fireTheater, ms)
+    })
   }, [])
 
   // Open the Checkout command center on its Command Map tab (not Lane Overview).
