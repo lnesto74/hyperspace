@@ -41,7 +41,7 @@ export default function DiscoveryTheater({
   insightCount,
   onShowEconomics,
 }: DiscoveryTheaterProps) {
-  const { zoneField } = useProfitRadar()
+  const { zoneField, trackAxes } = useProfitRadar()
   const { tracks } = useTracking()
   const [focusTrackKey, setFocusTrackKey] = useState<string | null>(null)
   const [sessionLeak, setSessionLeak] = useState(0)
@@ -184,6 +184,9 @@ export default function DiscoveryTheater({
             roiId={selectedRoiId}
             color={cfg.hex}
             barItems={barItems}
+            focusTrackKey={focusTrackKey}
+            trackAxes={trackAxes}
+            showcaseMoment={showcaseMoment}
           />
 
           <div className="shrink-0 overflow-y-auto">
