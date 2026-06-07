@@ -12,6 +12,7 @@ import ZoneEventReplay from './components/ZoneEventReplay'
 import ImpactSimulator from './components/ImpactSimulator'
 import VenueEconomicsModal from './components/VenueEconomicsModal'
 import DiscoveryTheater from './components/DiscoveryTheater'
+import MonetizationPanel from './components/MonetizationPanel'
 import { TYPE_CONFIG, SEVERITY_BADGE, buildBenchmarkBars } from './insightConfig'
 import {
   getShowcaseMoment,
@@ -525,7 +526,13 @@ export default function ProfitRadarPage({ onClose }: ProfitRadarPageProps) {
           onShowEconomics={() => setShowEconomics(true)}
         />
       ) : (
-      <div className="flex-1 flex overflow-hidden">
+      <div className="flex-1 flex flex-col overflow-hidden">
+        <MonetizationPanel
+          insights={insights}
+          onSelectInsight={(i) => setSelectedInsight(i)}
+          selectedId={selectedInsight?.id ?? null}
+        />
+        <div className="flex-1 flex overflow-hidden">
         {/* Left: Insight List */}
         <div className="w-[400px] border-r border-gray-700 flex flex-col overflow-hidden">
           <div className="px-4 py-3 border-b border-gray-700/50 bg-gray-800/50">
@@ -668,6 +675,7 @@ export default function ProfitRadarPage({ onClose }: ProfitRadarPageProps) {
               <p className="text-sm">Select an insight to see details</p>
             </div>
           )}
+        </div>
         </div>
       </div>
       )}

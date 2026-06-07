@@ -1,41 +1,11 @@
-import { useState } from 'react'
-import { TrendingUp, ClipboardList, Check, Send, Loader2, AlertCircle } from 'lucide-react'
+import { useState, useMemo, useEffect } from 'react'
+import { TrendingUp, ClipboardList, Check, Send, Loader2, AlertCircle, Sparkles } from 'lucide-react'
 import type { ProfitRadarInsight } from '../../../types'
 import { dispatchTask, fetchShelfProducts } from '../../opsDispatch/api'
+import { applicableLevers, recoveryForLever, LEVER_BY_ID, formatCurrency, type Lever } from '../recoveryModel'
 
-function roleForType(type: string): 'merchandiser' | 'cashier' {
+function legacyRoleForType(type: string): 'merchandiser' | 'cashier' {
   return type === 'staff_misallocation' ? 'cashier' : 'merchandiser'
-}
-
-interface MetricModel {
-  label: string
-  current: number
-  /** projected value at a given effort (0..1) */
-  project: (effort: number) => number
-  lowerIsBetter: boolean
-}
-
-function metricFor(insight: ProfitRadarInsight): MetricModel {
-  const db = insight.dataBasis || {}
-  switch (insight.type) {
-    case 'lost_sales': {
-      const current = Number(db.commitment ?? 0.2)
-      return { label: 'Purchase commitment', current, project: e => Math.min(0.85, current + 0.3 * e), lowerIsBetter: false }
-    }
-    case 'staff_misallocation': {
-      const current = Number(db.queueScore ?? 0.6)
-      return { label: 'Queue / wait pressure', current, project: e => Math.max(0.05, current * (1 - 0.6 * e)), lowerIsBetter: true }
-    }
-    case 'layout_friction': {
-      const current = Number(db.score ?? 0.5)
-      return { label: 'Friction score', current, project: e => Math.max(0.05, current * (1 - 0.55 * e)), lowerIsBetter: true }
-    }
-    case 'underperforming_zone':
-    default: {
-      const current = Number(db.engagement ?? 0)
-      return { label: 'Product engagement', current, project: e => Math.min(0.6, current + 0.28 * e), lowerIsBetter: false }
-    }
-  }
 }
 
 function MiniBar({ value, color }: { value: number; color: string }) {
@@ -47,9 +17,11 @@ function MiniBar({ value, color }: { value: number; color: string }) {
 }
 
 /**
- * Turns an insight into an action: projects the upside of applying the fix and
- * offers next-step actions. The € figure is anchored to the insight's own
- * estimated impact (scaled by chosen effort).
+ * Turns an insight into an action. When the backend attached fingerprint-driven
+ * economics (insight.economics), the € is computed bottom-up from the real SKUs
+ * on the shelf, the zone's traffic, and the behavioral fingerprint — and the
+ * shopper can switch the lever (layout / pricing / signage / cross-merch) to see
+ * how each action's recovery differs. Falls back to the legacy band otherwise.
  */
 interface ImpactSimulatorProps {
   insight: ProfitRadarInsight
@@ -60,13 +32,34 @@ interface ImpactSimulatorProps {
 }
 
 export default function ImpactSimulator({ insight, venueId, roiId, zoneName, variant = 'default' }: ImpactSimulatorProps) {
+  const econ = insight.economics
   const [effortPct, setEffortPct] = useState(60)
+  const [leverId, setLeverId] = useState<string>(econ?.recommendedLeverId || 'layout')
   const [done, setDone] = useState<Set<string>>(new Set())
   const [dispatchState, setDispatchState] = useState<'idle' | 'sending' | 'sent' | 'queued' | 'error'>('idle')
   const [dispatchMsg, setDispatchMsg] = useState<string>('')
   const effort = effortPct / 100
+  const isTheater = variant === 'theater'
 
-  const role = roleForType(insight.type)
+  // Reset the lever to the recommended one when the insight changes.
+  useEffect(() => {
+    setLeverId(econ?.recommendedLeverId || 'layout')
+    setDispatchState('idle'); setDispatchMsg('')
+  }, [insight.id, econ?.recommendedLeverId])
+
+  const levers: Lever[] = useMemo(() => (econ ? applicableLevers(econ) : []), [econ])
+  const selectedLever = LEVER_BY_ID[leverId] || levers[0]
+
+  const expected = useMemo(() => (econ ? recoveryForLever(econ, leverId, effort, 'expected') : null), [econ, leverId, effort])
+  const conservative = useMemo(() => (econ ? recoveryForLever(econ, leverId, effort, 'conservative') : null), [econ, leverId, effort])
+  const aggressive = useMemo(() => (econ ? recoveryForLever(econ, leverId, effort, 'aggressive') : null), [econ, leverId, effort])
+
+  const role: 'merchandiser' | 'cashier' = selectedLever?.role || legacyRoleForType(insight.type)
+  const cur = (econ?.currency || insight.impact.currency) === 'EUR' ? '€' : (econ?.currency || insight.impact.currency)
+
+  // Legacy fallback values (no economics on the insight).
+  const legacyDay = insight.impact.min + (insight.impact.max - insight.impact.min) * effort
+  const legacyWeek = legacyDay * 7
 
   const dispatch = async () => {
     if (!venueId || dispatchState === 'sending') return
@@ -86,6 +79,8 @@ export default function ImpactSimulator({ insight, venueId, roiId, zoneName, var
           roiId: roiId || null,
           suggestedFix: insight.suggestedFix,
           impact: insight.impact,
+          lever: selectedLever ? { id: selectedLever.id, label: selectedLever.label } : undefined,
+          projectedPerWeek: expected?.perWeek,
           products,
           insightId: insight.id,
         },
@@ -109,18 +104,7 @@ export default function ImpactSimulator({ insight, venueId, roiId, zoneName, var
     }
   }
 
-  const m = metricFor(insight)
-  const projected = m.project(effort)
-  const cur = insight.impact.currency === 'EUR' ? '€' : insight.impact.currency
-  const recoveredPerDay = insight.impact.min + (insight.impact.max - insight.impact.min) * effort
-  const recoveredPerWeek = recoveredPerDay * 7
-
-  const delta = m.lowerIsBetter ? m.current - projected : projected - m.current
-  const deltaPct = (delta * 100).toFixed(0)
-
   const act = (id: string) => setDone(prev => new Set(prev).add(id))
-
-  const isTheater = variant === 'theater'
 
   return (
     <div className={isTheater ? 'overflow-hidden' : 'rounded-lg border border-emerald-700/40 bg-emerald-500/5 overflow-hidden'}>
@@ -133,50 +117,135 @@ export default function ImpactSimulator({ insight, venueId, roiId, zoneName, var
       )}
 
       <div className={`${isTheater ? 'px-4 py-3' : 'p-4'} space-y-4`}>
-        {/* effort */}
-        <div>
-          <div className="flex items-center justify-between text-[11px] mb-1.5">
-            <span className="text-gray-400">Merchandising effort</span>
-            <span className="text-emerald-300 font-medium tabular-nums">{effortPct}%</span>
-          </div>
-          <input
-            type="range"
-            min={10}
-            max={100}
-            value={effortPct}
-            onChange={e => setEffortPct(Number(e.target.value))}
-            className="w-full accent-emerald-500"
-          />
-        </div>
+        {econ ? (
+          <>
+            {/* Lever selector — the fingerprint recommends one; the rest show why
+                they recover less (low match). */}
+            <div>
+              <div className="flex items-center justify-between text-[11px] mb-1.5">
+                <span className="text-gray-400">Action lever</span>
+                {econ.recommendedLeverId && (
+                  <span className="inline-flex items-center gap-1 text-emerald-300">
+                    <Sparkles className="w-3 h-3" /> Recommended by fingerprint
+                  </span>
+                )}
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {levers.map(l => {
+                  const r = recoveryForLever(econ, l.id, effort, 'expected')
+                  const isSel = l.id === leverId
+                  const isRec = l.id === econ.recommendedLeverId
+                  return (
+                    <button
+                      key={l.id}
+                      onClick={() => setLeverId(l.id)}
+                      title={`${l.blurb} · fingerprint match ${Math.round(r.match * 100)}%`}
+                      className={`px-2 py-1 rounded-md text-[10px] font-medium border transition-colors ${
+                        isSel
+                          ? 'bg-emerald-600 text-white border-emerald-500'
+                          : 'bg-gray-800/60 text-gray-300 border-gray-700 hover:border-gray-500'
+                      }`}
+                    >
+                      {l.label}
+                      {isRec && <span className="ml-1 text-emerald-300">★</span>}
+                      <span className={`ml-1 ${isSel ? 'text-emerald-100' : 'text-gray-500'}`}>{Math.round(r.match * 100)}%</span>
+                    </button>
+                  )
+                })}
+              </div>
+              {selectedLever && (
+                <p className="text-[10px] text-gray-500 mt-1.5">{selectedLever.blurb}.</p>
+              )}
+            </div>
 
-        {/* metric before -> after */}
-        <div className="space-y-1.5">
-          <div className="flex items-center justify-between text-[11px]">
-            <span className="text-gray-400">{m.label}</span>
-            <span className="tabular-nums">
-              <span className="text-gray-500">{(m.current * 100).toFixed(0)}%</span>
-              <span className="text-gray-600 mx-1">→</span>
-              <span className="text-emerald-300 font-semibold">{(projected * 100).toFixed(0)}%</span>
-              <span className="text-emerald-400/80 ml-1">({m.lowerIsBetter ? '−' : '+'}{Math.abs(Number(deltaPct))}pt)</span>
-            </span>
-          </div>
-          <div className="grid grid-cols-2 gap-2">
-            <MiniBar value={m.current} color="#6b7280" />
-            <MiniBar value={projected} color="#34d399" />
-          </div>
-        </div>
+            {/* effort */}
+            <div>
+              <div className="flex items-center justify-between text-[11px] mb-1.5">
+                <span className="text-gray-400">{role === 'cashier' ? 'Staffing effort' : 'Execution effort'}</span>
+                <span className="text-emerald-300 font-medium tabular-nums">{effortPct}%</span>
+              </div>
+              <input
+                type="range"
+                min={10}
+                max={100}
+                value={effortPct}
+                onChange={e => setEffortPct(Number(e.target.value))}
+                className="w-full accent-emerald-500"
+              />
+            </div>
 
-        {/* € recovered */}
-        <div className={`rounded-md bg-gray-900/60 border border-gray-700/60 px-3 ${isTheater ? 'py-3' : 'py-2.5'}`}>
-          <div className="text-[10px] text-gray-500 uppercase tracking-wide">Projected recovery</div>
-          <div className="flex items-baseline gap-1.5">
-            <span className={`${isTheater ? 'text-2xl' : 'text-xl'} font-bold text-emerald-400 tabular-nums`}>
-              +{cur}{Math.round(recoveredPerWeek).toLocaleString()}
-            </span>
-            <span className="text-xs text-gray-500">/ week</span>
+            {/* fingerprint match for the chosen lever */}
+            {expected && (
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between text-[11px]">
+                  <span className="text-gray-400">Fingerprint match · capture</span>
+                  <span className="tabular-nums">
+                    <span className="text-emerald-300 font-semibold">{Math.round(expected.match * 100)}%</span>
+                    <span className="text-gray-600 mx-1">→</span>
+                    <span className="text-emerald-400/80">{Math.round(expected.capture * 100)}% of gap</span>
+                  </span>
+                </div>
+                <MiniBar value={expected.match} color="#34d399" />
+              </div>
+            )}
+
+            {/* € recovered — bottom-up, with a conservative→aggressive range */}
+            <div className={`rounded-md bg-gray-900/60 border border-gray-700/60 px-3 ${isTheater ? 'py-3' : 'py-2.5'}`}>
+              <div className="text-[10px] text-gray-500 uppercase tracking-wide">Projected recovery</div>
+              <div className="flex items-baseline gap-1.5">
+                <span className={`${isTheater ? 'text-2xl' : 'text-xl'} font-bold text-emerald-400 tabular-nums`}>
+                  +{formatCurrency(cur, expected?.perWeek || 0)}
+                </span>
+                <span className="text-xs text-gray-500">/ week</span>
+              </div>
+              <div className="text-[10px] text-gray-500">
+                ≈ {formatCurrency(cur, expected?.perDay || 0)} / day · {formatCurrency(cur, expected?.perYear || 0)} / yr at {effortPct}% effort
+              </div>
+              {conservative && aggressive && (
+                <div className="text-[10px] text-gray-600 mt-0.5">
+                  range {formatCurrency(cur, conservative.perWeek)}–{formatCurrency(cur, aggressive.perWeek)} / wk
+                </div>
+              )}
+            </div>
+
+            {/* grounding — what the number is built from */}
+            <div className="text-[10px] text-gray-500 leading-relaxed border-t border-gray-700/40 pt-2">
+              {econ.isQueue ? (
+                <>{econ.exposedPerDay.toLocaleString()} shoppers/day · {Math.round(econ.benchmark * 100)}% queue/abandonment pressure · {formatCurrency(cur, econ.marginPerUnit)} margin/basket</>
+              ) : (
+                <>{econ.exposedPerDay.toLocaleString()} shoppers/day · {Math.round((econ.conversionRate ?? econ.engagement) * 100)}% buy today (target {Math.round(econ.benchmark * 100)}%) ·
+                {' '}{formatCurrency(cur, econ.marginPerUnit)} margin/unit
+                {econ.skuCount > 0 && <> over {econ.skuCount} SKUs</>} ·
+                {' '}{Math.round(econ.winnable * 100)}% winnable</>
+              )}
+              {econ.basis === 'shelf'
+                ? <span className="text-emerald-500/70"> · grounded in this shelf&apos;s SKUs</span>
+                : econ.basis === 'economics'
+                  ? <span className="text-emerald-500/60"> · store economics (set per-shelf prices for precision)</span>
+                  : <span className="text-amber-500/60"> · reference estimate — add economics</span>}
+            </div>
+          </>
+        ) : (
+          /* Legacy fallback */
+          <div className={`rounded-md bg-gray-900/60 border border-gray-700/60 px-3 ${isTheater ? 'py-3' : 'py-2.5'}`}>
+            <div className="text-[10px] text-gray-500 uppercase tracking-wide">Projected recovery</div>
+            <div className="flex items-baseline gap-1.5">
+              <span className={`${isTheater ? 'text-2xl' : 'text-xl'} font-bold text-emerald-400 tabular-nums`}>
+                +{cur}{Math.round(legacyWeek).toLocaleString()}
+              </span>
+              <span className="text-xs text-gray-500">/ week</span>
+            </div>
+            <div className="text-[10px] text-gray-500">≈ {cur}{Math.round(legacyDay).toLocaleString()} / day at {effortPct}% effort</div>
+            <input
+              type="range"
+              min={10}
+              max={100}
+              value={effortPct}
+              onChange={e => setEffortPct(Number(e.target.value))}
+              className="w-full accent-emerald-500 mt-2"
+            />
           </div>
-          <div className="text-[10px] text-gray-500">≈ {cur}{Math.round(recoveredPerDay).toLocaleString()} / day at {effortPct}% effort</div>
-        </div>
+        )}
 
         {/* actions */}
         <div className="flex flex-wrap gap-2 pt-1">

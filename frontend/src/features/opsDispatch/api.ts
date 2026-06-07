@@ -63,6 +63,8 @@ export interface OpsTaskPayload {
   instruction?: string
   insightId?: string | null
   coordinates?: { x: number; z: number } | null
+  lever?: { id: string; label: string }
+  projectedPerWeek?: number
 }
 
 export interface OpsTaskProof { note: string | null; photoUrl: string | null; at?: string }

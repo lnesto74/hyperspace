@@ -228,6 +228,41 @@ export interface ZoneFieldEvent {
 export type InsightType = 'lost_sales' | 'underperforming_zone' | 'staff_misallocation' | 'layout_friction';
 export type InsightSeverity = 'high' | 'medium' | 'low';
 
+export interface RecoveryLever {
+  leverId: string;
+  leverLabel: string;
+  role: 'merchandiser' | 'cashier';
+  match: number;
+  capture: number;
+  gap: number;
+  perDay: number;
+  perWeek: number;
+  perYear: number;
+}
+
+export interface InsightEconomics {
+  currency: string;
+  tradingDaysPerWeek: number;
+  exposedPerDay: number;
+  engagement: number;
+  conversionRate: number;
+  benchmark: number;
+  winnable: number;
+  marginPerUnit: number;
+  baseAttachRate: number;
+  avgPrice: number;
+  skuCount: number;
+  topSkus: { name: string; price: number; marginPerUnit: number }[];
+  axes: Record<string, number>;
+  commitment: number | null;
+  isQueue: boolean;
+  recommendedLeverId: string;
+  recommendedLeverLabel: string;
+  levers: RecoveryLever[];
+  range: { conservative: number; expected: number; aggressive: number };
+  basis: 'shelf' | 'economics' | 'default';
+}
+
 export interface ProfitRadarInsight {
   id: string;
   type: InsightType;
@@ -239,6 +274,7 @@ export interface ProfitRadarInsight {
   suggestedFix: string;
   impact: { min: number; max: number; currency: string; basis?: 'economics' | 'default' };
   dataBasis: Record<string, any>;
+  economics?: InsightEconomics;
   timestamp: number;
 }
 

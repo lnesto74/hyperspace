@@ -6,6 +6,14 @@
 
 import { AXIS_NAMES } from './intentScorer.js';
 import { computeImpactBand } from './VenueEconomicsConfig.js';
+import {
+  recoverySummary,
+  intentPresence,
+  suggestedFixForLever,
+  HEALTHY_ENGAGEMENT,
+  DEFAULT_DAILY_SHOPPERS,
+  ASSUMED_ITEMS_PER_BASKET,
+} from './recoveryModel.js';
 
 const INSIGHT_TYPES = {
   LOST_SALES: 'lost_sales',
@@ -46,6 +54,8 @@ export class ProfitRadarEngine {
     this.economicsProvider = null;
     // Provider returns engagement zones whose shelf has planogram products.
     this.productZonesProvider = null;
+    // Provider(roiId) returns real per-shelf economics (price/margin/SKUs).
+    this.shelfEconomicsProvider = null;
   }
 
   /** Inject a function that returns the current venue's economics config. */
@@ -53,6 +63,14 @@ export class ProfitRadarEngine {
 
   /** Inject a function that returns the venue's product-bearing engagement zones. */
   setProductZonesProvider(fn) { this.productZonesProvider = fn; }
+
+  /** Inject a function(roiId) returning real per-shelf economics (price/margin). */
+  setShelfEconomicsProvider(fn) { this.shelfEconomicsProvider = fn; }
+
+  _shelfEconomics(roiId) {
+    try { return this.shelfEconomicsProvider ? this.shelfEconomicsProvider(roiId) : null; }
+    catch { return null; }
+  }
 
   _economics() {
     try { return this.economicsProvider ? this.economicsProvider() : null; }
@@ -189,6 +207,147 @@ export class ProfitRadarEngine {
 
     // Keep top 10
     this.insights = guaranteed.slice(0, 10);
+
+    // Replace the flat severity-tier € band with a bottom-up, fingerprint-driven
+    // recovery grounded in real shelf SKUs, traffic and behaviour.
+    this._enrichEconomics(this.insights, zones, economics);
+  }
+
+  /**
+   * Attach fingerprint-driven monetization to each insight:
+   *   - real per-shelf margin/unit  (from the planogram SKUs)
+   *   - exposed shoppers/day        (from this zone's traffic share)
+   *   - recommended lever + per-lever € (from the behavioral fingerprint)
+   *   - a recovery range and a lever-specific merchandiser instruction
+   * Overwrites insight.impact and insight.suggestedFix so the UI varies per shelf.
+   */
+  _enrichEconomics(insights, zones, economics) {
+    if (!insights || insights.length === 0) return;
+    const zoneByRoi = new Map((zones || []).map((z) => [z.roiId, z]));
+    const totalTrackCount = (zones || []).reduce((s, z) => s + (z.trackCount || 0), 0);
+    const configured = !!(economics && economics.configured);
+    const currency = (economics && economics.currency) || '€';
+    const tradingDaysPerWeek = (economics && economics.tradingDaysPerWeek) || 7;
+    const dailyShoppers = configured && economics.dailyTransactions > 0
+      ? economics.dailyTransactions
+      : DEFAULT_DAILY_SHOPPERS;
+    const grossMarginPct = configured ? economics.grossMarginPct : 30;
+    const basketMargin = configured
+      ? economics.avgBasketValue * (economics.grossMarginPct / 100)
+      : 8; // € margin per basket fallback
+    const fallbackUnitMargin = configured
+      ? (economics.avgBasketValue * (economics.grossMarginPct / 100)) / ASSUMED_ITEMS_PER_BASKET
+      : 1.5;
+
+    for (const ins of insights) {
+      const db = ins.dataBasis || {};
+      const roiId = db.roiId || null;
+      const zone = roiId ? zoneByRoi.get(roiId) : null;
+      const isQueue = ins.type === INSIGHT_TYPES.STAFF_MISALLOCATION;
+
+      const axes = (zone && zone.means) || this._synthAxes(db);
+      const engagement = db.engagement != null ? db.engagement : (axes.engagement_with_POI || 0);
+      const commitment = db.commitment != null ? db.commitment : (axes.commitment != null ? axes.commitment : null);
+
+      // exposed shoppers/day: this zone's share of observed traffic, or a stable
+      // small share when the zone isn't currently streaming.
+      const trackCount = db.trackCount || 0;
+      let zoneShare;
+      if (totalTrackCount > 0 && trackCount > 0) zoneShare = trackCount / totalTrackCount;
+      else zoneShare = 0.02 + (this._hash(roiId || ins.id) % 5) / 100; // 0.02–0.06
+      const exposedPerDay = Math.max(10, Math.round(dailyShoppers * zoneShare));
+
+      // real per-shelf margin/unit, else a store-derived fallback.
+      const shelfEcon = roiId ? this._shelfEconomics(roiId) : null;
+      const marginPerUnit = shelfEcon && shelfEcon.basis === 'shelf' && shelfEcon.avgMarginPerUnit > 0
+        ? shelfEcon.avgMarginPerUnit
+        : (isQueue ? basketMargin : fallbackUnitMargin);
+
+      // Buyers today: realized purchase intent (commitment), falling back to a
+      // haircut on dwell when commitment isn't measured.
+      const conversionRate = commitment != null ? commitment : +(engagement * 0.6).toFixed(2);
+
+      const inputs = isQueue
+        ? {
+            exposedPerDay,
+            engagement: 0,
+            conversionRate: 0,
+            benchmark: db.queueScore != null ? db.queueScore : 0.6, // gap == abandonment proxy
+            winnable: 1,
+            marginPerUnit: basketMargin,
+            baseAttachRate: 1,
+            axes,
+            commitment,
+            tradingDaysPerWeek,
+            isQueue: true,
+          }
+        : {
+            exposedPerDay,
+            engagement,
+            conversionRate,
+            benchmark: HEALTHY_ENGAGEMENT,
+            winnable: intentPresence(axes),
+            marginPerUnit,
+            baseAttachRate: 1,
+            axes,
+            commitment,
+            tradingDaysPerWeek,
+            isQueue: false,
+          };
+
+      const summary = recoverySummary(inputs, 0.6);
+      const topSkus = (shelfEcon && shelfEcon.topSkus) || [];
+      const zoneName = db.zone || ins.title;
+
+      ins.economics = {
+        currency,
+        tradingDaysPerWeek,
+        exposedPerDay,
+        engagement: +Number(inputs.engagement).toFixed(2),
+        conversionRate: +Number(inputs.conversionRate).toFixed(2),
+        benchmark: inputs.benchmark,
+        winnable: +Number(inputs.winnable).toFixed(2),
+        marginPerUnit: +Number(marginPerUnit).toFixed(2),
+        baseAttachRate: 1,
+        avgPrice: shelfEcon ? shelfEcon.avgPrice : 0,
+        skuCount: shelfEcon ? shelfEcon.skuCount : 0,
+        topSkus,
+        axes,
+        commitment,
+        isQueue,
+        recommendedLeverId: summary.recommendedLeverId,
+        recommendedLeverLabel: summary.recommended.leverLabel,
+        levers: summary.levers,
+        range: summary.range,
+        basis: (shelfEcon && shelfEcon.basis === 'shelf') ? 'shelf' : (configured ? 'economics' : 'default'),
+      };
+
+      // Recompute the headline band from the recovery range (per day).
+      const min = Math.max(1, summary.range.conservative);
+      const max = Math.max(min + 1, summary.range.aggressive);
+      ins.impact = {
+        min,
+        max,
+        currency,
+        basis: (configured || (shelfEcon && shelfEcon.basis === 'shelf')) ? 'economics' : 'default',
+      };
+
+      // Replace the generic fix with a lever-specific, SKU-aware instruction.
+      ins.suggestedFix = suggestedFixForLever(summary.recommendedLeverId, zoneName, topSkus);
+    }
+  }
+
+  /** Minimal axis vector when a live zone fingerprint isn't available. */
+  _synthAxes(db) {
+    const a = {};
+    AXIS_NAMES.forEach((k) => { a[k] = 0; });
+    if (db.engagement != null) a.engagement_with_POI = db.engagement;
+    if (db.avoidance != null) a.avoidance = db.avoidance;
+    if (db.hesitation != null) a.hesitation = db.hesitation;
+    if (db.commitment != null) a.commitment = db.commitment;
+    if (db.queueScore != null) a.waiting_queueing = db.queueScore;
+    if (db.dominant && a[db.dominant] != null) a[db.dominant] = db.score != null ? db.score : 0.6;
+    return a;
   }
 
   /**

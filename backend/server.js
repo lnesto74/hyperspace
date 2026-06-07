@@ -54,7 +54,7 @@ import companiesRoutes from './routes/companies.js';
 import demoAccessRoutes from './routes/demoAccess.js';
 import { IntentScorer, ZoneAggregator, BehaviorClusterer, ProfitRadarEngine } from './services/profit-radar/index.js';
 import { getVenueEconomics } from './services/profit-radar/VenueEconomicsConfig.js';
-import { getProductZones } from './services/profit-radar/ProductZoneProvider.js';
+import { getProductZones, getShelfEconomicsByRoi } from './services/profit-radar/ProductZoneProvider.js';
 import launchpadRoutes from './routes/launchpad.js';
 import createAiClassifyRoutes from './routes/aiClassify.js';
 import createAiSmartFilterRoutes from './routes/aiSmartFilter.js';
@@ -172,6 +172,11 @@ profitRadarEngine.setEconomicsProvider(() => getVenueEconomics(db, trackAggregat
 // Guarantee the insight list surfaces a few product-rich shelves (so the demo's
 // "What's on this shelf" always has items).
 profitRadarEngine.setProductZonesProvider(() => getProductZones(db, trackAggregator.venueId));
+// Ground recovery € in the real SKUs (price/margin) on each insight's shelf.
+profitRadarEngine.setShelfEconomicsProvider((roiId) => {
+  const econ = getVenueEconomics(db, trackAggregator.venueId);
+  return getShelfEconomicsByRoi(db, roiId, econ.grossMarginPct || 30);
+});
 console.log(`⏱️ STARTUP: profit radar init +${Date.now() - _startupT0}ms`);
 
 // Ops-dispatch (Telegram) — turns suggested fixes / checkout alerts into
