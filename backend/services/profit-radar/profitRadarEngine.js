@@ -43,6 +43,12 @@ const SEVERITY = { HIGH: 'high', MEDIUM: 'medium', LOW: 'low' };
 // turn store volume (daily transactions) into a per-zone daily exposure.
 const ZONE_PASS_RATE = 0.25;
 
+// Max share of baskets actually abandoned at a fully-congested checkout. The raw
+// queue score (dwell/waiting) is NOT an abandonment rate — even bad queues lose
+// only a few %. This keeps staffing recovery comparable to shelf recovery
+// (a recovered basket is worth far more than one item, so the rate must be small).
+const MAX_ABANDON_RATE = 0.08;
+
 let insightCounter = 0;
 
 function makeId() { return `insight-${Date.now()}-${++insightCounter}`; }
@@ -286,7 +292,9 @@ export class ProfitRadarEngine {
             exposedPerDay,
             engagement: 0,
             conversionRate: 0,
-            benchmark: db.queueScore != null ? db.queueScore : 0.6, // gap == abandonment proxy
+            // gap == realistic basket-abandonment rate (queue score is dwell, not
+            // an abandonment %, so scale it down to a sane ceiling).
+            benchmark: (db.queueScore != null ? db.queueScore : 0.6) * MAX_ABANDON_RATE,
             winnable: 1,
             marginPerUnit: basketMargin,
             baseAttachRate: 1,

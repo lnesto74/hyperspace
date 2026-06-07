@@ -211,7 +211,7 @@ export default function ImpactSimulator({ insight, venueId, roiId, zoneName, var
             {/* grounding — what the number is built from */}
             <div className="text-[10px] text-gray-500 leading-relaxed border-t border-gray-700/40 pt-2">
               {econ.isQueue ? (
-                <>{econ.exposedPerDay.toLocaleString()} shoppers/day · {Math.round(econ.benchmark * 100)}% queue/abandonment pressure · {formatUnit(cur, econ.marginPerUnit)} margin/basket</>
+                <>{econ.exposedPerDay.toLocaleString()} shoppers/day · ~{(econ.benchmark * 100).toFixed(1)}% baskets abandoned at peak · {formatUnit(cur, econ.marginPerUnit)} margin/basket</>
               ) : (
                 <>{econ.exposedPerDay.toLocaleString()} shoppers/day · {Math.round((econ.conversionRate ?? econ.engagement) * 100)}% buy today (target {Math.round(econ.benchmark * 100)}%) ·
                 {' '}{formatUnit(cur, econ.marginPerUnit)} margin/unit
