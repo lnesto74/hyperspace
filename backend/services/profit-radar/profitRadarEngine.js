@@ -39,6 +39,10 @@ const AXIS_LABELS = {
 
 const SEVERITY = { HIGH: 'high', MEDIUM: 'medium', LOW: 'low' };
 
+// Share of the store's daily shoppers that walk past a given shelf/zone. Used to
+// turn store volume (daily transactions) into a per-zone daily exposure.
+const ZONE_PASS_RATE = 0.25;
+
 let insightCounter = 0;
 
 function makeId() { return `insight-${Date.now()}-${++insightCounter}`; }
@@ -249,13 +253,20 @@ export class ProfitRadarEngine {
       const engagement = db.engagement != null ? db.engagement : (axes.engagement_with_POI || 0);
       const commitment = db.commitment != null ? db.commitment : (axes.commitment != null ? axes.commitment : null);
 
-      // exposed shoppers/day: this zone's share of observed traffic, or a stable
-      // small share when the zone isn't currently streaming.
+      // Exposed shoppers/day. Instantaneous in-zone counts (a handful during
+      // replay) are far too small to use directly, so we estimate daily footfall
+      // from store volume × the share of shoppers that pass a shelf, modulated by
+      // this zone's RELATIVE popularity (observed traffic vs. the average zone).
+      const numZones = Math.max(1, (zones || []).length);
+      const avgTrack = totalTrackCount > 0 ? totalTrackCount / numZones : 0;
       const trackCount = db.trackCount || 0;
-      let zoneShare;
-      if (totalTrackCount > 0 && trackCount > 0) zoneShare = trackCount / totalTrackCount;
-      else zoneShare = 0.02 + (this._hash(roiId || ins.id) % 5) / 100; // 0.02–0.06
-      const exposedPerDay = Math.max(10, Math.round(dailyShoppers * zoneShare));
+      let relPopularity;
+      if (avgTrack > 0 && trackCount > 0) relPopularity = Math.max(0.3, Math.min(3, trackCount / avgTrack));
+      else relPopularity = 0.7 + (this._hash(roiId || ins.id) % 7) / 10; // 0.7–1.3, stable
+      const exposedPerDay = Math.max(
+        Math.round(dailyShoppers * 0.05),
+        Math.round(dailyShoppers * ZONE_PASS_RATE * relPopularity),
+      );
 
       // real per-shelf margin/unit, else a store-derived fallback.
       const shelfEcon = roiId ? this._shelfEconomics(roiId) : null;
@@ -263,9 +274,12 @@ export class ProfitRadarEngine {
         ? shelfEcon.avgMarginPerUnit
         : (isQueue ? basketMargin : fallbackUnitMargin);
 
-      // Buyers today: realized purchase intent (commitment), falling back to a
-      // haircut on dwell when commitment isn't measured.
-      const conversionRate = commitment != null ? commitment : +(engagement * 0.6).toFixed(2);
+      // Buyers today (purchase likelihood proxy). A shopper must both STOP
+      // (engagement) and be COMMITTED to buy — so a corridor with purposeful but
+      // non-stopping movement (high commitment, low engagement) correctly scores
+      // low, leaving a large recoverable gap. Falls back to a neutral commitment.
+      const com = commitment != null ? commitment : 0.3;
+      const conversionRate = +(engagement * (0.4 + 0.6 * com)).toFixed(3);
 
       const inputs = isQueue
         ? {

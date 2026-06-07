@@ -69,7 +69,7 @@ export function recoveryForLever(
   const match = leverMatch(lever, econ.axes, econ.engagement, econ.commitment)
   const conv = econ.conversionRate != null
     ? econ.conversionRate
-    : (econ.commitment != null ? econ.commitment : econ.engagement * 0.6)
+    : econ.engagement * (0.4 + 0.6 * (econ.commitment ?? 0.3))
   const gap = Math.max(0, econ.benchmark - conv)
 
   const capture = Math.min(CAPTURE_CEILING, lever.base * modeF * e * (MATCH_FLOOR + (1 - MATCH_FLOOR) * match))
@@ -98,11 +98,18 @@ export function applicableLevers(econ: InsightEconomics): Lever[] {
 export function conversionGap(econ: InsightEconomics): number {
   const conv = econ.conversionRate != null
     ? econ.conversionRate
-    : (econ.commitment != null ? econ.commitment : econ.engagement * 0.6)
+    : econ.engagement * (0.4 + 0.6 * (econ.commitment ?? 0.3))
   return Math.max(0, econ.benchmark - conv)
 }
 
 export function formatCurrency(currency: string, value: number): string {
   const sym = currency === 'EUR' ? '€' : currency
+  return `${sym}${Math.round(value).toLocaleString()}`
+}
+
+/** Money formatter that keeps cents for small amounts (e.g. €/unit margins). */
+export function formatUnit(currency: string, value: number): string {
+  const sym = currency === 'EUR' ? '€' : currency
+  if (Math.abs(value) > 0 && Math.abs(value) < 10) return `${sym}${value.toFixed(2)}`
   return `${sym}${Math.round(value).toLocaleString()}`
 }

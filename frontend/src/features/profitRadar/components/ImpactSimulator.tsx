@@ -2,7 +2,7 @@ import { useState, useMemo, useEffect } from 'react'
 import { TrendingUp, ClipboardList, Check, Send, Loader2, AlertCircle, Sparkles } from 'lucide-react'
 import type { ProfitRadarInsight } from '../../../types'
 import { dispatchTask, fetchShelfProducts } from '../../opsDispatch/api'
-import { applicableLevers, recoveryForLever, LEVER_BY_ID, formatCurrency, type Lever } from '../recoveryModel'
+import { applicableLevers, recoveryForLever, LEVER_BY_ID, formatCurrency, formatUnit, type Lever } from '../recoveryModel'
 
 function legacyRoleForType(type: string): 'merchandiser' | 'cashier' {
   return type === 'staff_misallocation' ? 'cashier' : 'merchandiser'
@@ -211,10 +211,10 @@ export default function ImpactSimulator({ insight, venueId, roiId, zoneName, var
             {/* grounding — what the number is built from */}
             <div className="text-[10px] text-gray-500 leading-relaxed border-t border-gray-700/40 pt-2">
               {econ.isQueue ? (
-                <>{econ.exposedPerDay.toLocaleString()} shoppers/day · {Math.round(econ.benchmark * 100)}% queue/abandonment pressure · {formatCurrency(cur, econ.marginPerUnit)} margin/basket</>
+                <>{econ.exposedPerDay.toLocaleString()} shoppers/day · {Math.round(econ.benchmark * 100)}% queue/abandonment pressure · {formatUnit(cur, econ.marginPerUnit)} margin/basket</>
               ) : (
                 <>{econ.exposedPerDay.toLocaleString()} shoppers/day · {Math.round((econ.conversionRate ?? econ.engagement) * 100)}% buy today (target {Math.round(econ.benchmark * 100)}%) ·
-                {' '}{formatCurrency(cur, econ.marginPerUnit)} margin/unit
+                {' '}{formatUnit(cur, econ.marginPerUnit)} margin/unit
                 {econ.skuCount > 0 && <> over {econ.skuCount} SKUs</>} ·
                 {' '}{Math.round(econ.winnable * 100)}% winnable</>
               )}
