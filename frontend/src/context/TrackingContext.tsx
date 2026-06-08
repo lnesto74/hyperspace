@@ -130,6 +130,7 @@ interface TrackingContextType {
   setVisualizationMode: (mode: 'vtl' | 'raw', opts?: { forceClear?: boolean }) => void
   setMqttReplayActive: (active: boolean) => void
   setStoryReplayActive: (active: boolean) => void
+  setInsightReplayActive: (active: boolean) => void
   clearReplayTracks: () => void
   clearStoryTracks: () => void
 }
@@ -152,6 +153,7 @@ interface TrackingActionsType {
   setVisualizationMode: (mode: 'vtl' | 'raw', opts?: { forceClear?: boolean }) => void
   setMqttReplayActive: (active: boolean) => void
   setStoryReplayActive: (active: boolean) => void
+  setInsightReplayActive: (active: boolean) => void
   clearReplayTracks: () => void
   clearStoryTracks: () => void
   setLiveTrackDelivery: (mode: LiveTrackDelivery) => void
@@ -196,6 +198,7 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
   const [isReplayMode, setIsReplayMode] = useState(false)
   const [mqttReplayActive, setMqttReplayActiveState] = useState(false)
   const [storyReplayActive, setStoryReplayActiveState] = useState(false)
+  const [insightReplayActive, setInsightReplayActiveState] = useState(false)
   const [demoSessionId, setDemoSessionId] = useState<string | null>(null)
   const [liveTrackDelivery, setLiveTrackDeliveryState] = useState<LiveTrackDelivery>(readLiveTrackDelivery)
   const demoSessionIdRef = useRef<string | null>(null)
@@ -204,6 +207,8 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
   mqttReplayActiveRef.current = mqttReplayActive
   const storyReplayActiveRef = useRef(false)
   storyReplayActiveRef.current = storyReplayActive
+  const insightReplayActiveRef = useRef(false)
+  insightReplayActiveRef.current = insightReplayActive
   const socketRef = useRef<Socket | null>(null)
   const subscribedVenueRef = useRef<string | null>(null)
   const venueIdRef = useRef<string | null>(null)
@@ -257,9 +262,11 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
   }, [applyVisualizationMode])
   
   // Historical timeline/insight replay uses DB snapshots; MQTT JSONL replay uses live socket.
-  // During historical replay we show ONLY the replay tracks (live is suppressed even if the
-  // clip is momentarily empty), so live shoppers never leak into an episode replay.
-  const useHistoricalTracks = isReplayMode && !mqttReplayActive
+  // Insight mode must show replayTracks even when a demo/MQTT JSONL session is still flagged
+  // active — otherwise the map reads liveTracks (replay-* keys only) and episode clips vanish.
+  const useHistoricalTracks =
+    insightReplayActive ||
+    (isReplayMode && !mqttReplayActive && !storyReplayActive)
   const tracks = useHistoricalTracks ? replayTracks : liveTracks
   
   // Stable ref always points to latest tracks — consumers using useTracksRef() 
@@ -435,9 +442,12 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
         if (isTrackingDiag()) console.warn(`[DIAG] tracks IGNORED  eventVenue=${data.venueId}  subscribed=${subscribedVenueRef.current}  n=${data.tracks.length}  t=${Date.now()}`)
         return
       }
-      // While historical (insight) replay is active, ignore live MQTT so live shoppers
+      // While historical (insight/timeline) replay is active, ignore live MQTT so live shoppers
       // don't keep flowing underneath the episode replay (even if the clip is empty).
-      if (isReplayModeRef.current && !mqttReplayActiveRef.current && !storyReplayActiveRef.current) return
+      if (
+        insightReplayActiveRef.current ||
+        (isReplayModeRef.current && !mqttReplayActiveRef.current && !storyReplayActiveRef.current)
+      ) return
 
       const now = Date.now()
 
@@ -823,7 +833,9 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
 
   const setInterpolation = useCallback((enabled: boolean) => {
     smoothMotionRequestedRef.current = enabled
-    const historicalReplay = isReplayModeRef.current && !mqttReplayActiveRef.current && !storyReplayActiveRef.current
+    const historicalReplay =
+      insightReplayActiveRef.current ||
+      (isReplayModeRef.current && !mqttReplayActiveRef.current && !storyReplayActiveRef.current)
     const trackCount = liveTracksRef.current.size
     const shouldInterp =
       enabled &&
@@ -952,7 +964,7 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
       // JSONL/reconciled replay uses live socket snapshots — insight/timeline DB tracks must not block.
       setReplayTracksState(new Map())
       purgeLiveEdgeTracks()
-    } else if (isReplayModeRef.current) {
+    } else if (isReplayModeRef.current && !insightReplayActiveRef.current) {
       // After MQTT replay stops, resume live edge tracks (don't leave historical snapshot blocking socket).
       setIsReplayMode(false)
       setReplayTracksState(new Map())
@@ -960,13 +972,23 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
     setInterpolationRef.current(smoothMotionRequestedRef.current)
   }, [purgeLiveEdgeTracks, clearStoryTracks])
 
+  const setInsightReplayActive = useCallback((active: boolean) => {
+    insightReplayActiveRef.current = active
+    setInsightReplayActiveState(active)
+    if (active) {
+      // Episode clip uses DB track keys — purge JSONL replay-* meshes from the live bucket.
+      purgeLiveEdgeTracks()
+    }
+    setInterpolationRef.current(smoothMotionRequestedRef.current)
+  }, [purgeLiveEdgeTracks])
+
   // Keep mqttReplayActive in sync when replay runs server-side (ReplayPanel may be closed).
   useEffect(() => {
     if (!venue?.id) return
     let cancelled = false
     const poll = async () => {
       try {
-        if (storyReplayActiveRef.current) return
+        if (storyReplayActiveRef.current || insightReplayActiveRef.current) return
         const res = await fetch(`${API_BASE}/api/replay/status`)
         if (!res.ok || cancelled) return
         const status = await res.json()
@@ -990,6 +1012,7 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
     let cancelled = false
     const poll = async () => {
       try {
+        if (insightReplayActiveRef.current) return
         const res = await fetch(`${API_BASE}/api/replay/stories/status`)
         if (!res.ok || cancelled) return
         const data = await res.json()
@@ -1086,6 +1109,7 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
     setVisualizationMode,
     setMqttReplayActive,
     setStoryReplayActive,
+    setInsightReplayActive,
     clearReplayTracks,
     clearStoryTracks,
     mqttReplayActive,
@@ -1093,7 +1117,7 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
     useHistoricalTracks,
     demoSessionId,
     liveTrackDelivery,
-  }), [tracks, isConnected, isReplayMode, mqttReplayActive, storyReplayActive, useHistoricalTracks, demoSessionId, liveTrackDelivery, subscribe, unsubscribe, setReplayMode, setReplayTracks, setTrackVisibility, setInterpolation, setVisualizationMode, setMqttReplayActive, setStoryReplayActive, clearReplayTracks, clearStoryTracks])
+  }), [tracks, isConnected, isReplayMode, mqttReplayActive, storyReplayActive, useHistoricalTracks, demoSessionId, liveTrackDelivery, subscribe, unsubscribe, setReplayMode, setReplayTracks, setTrackVisibility, setInterpolation, setVisualizationMode, setMqttReplayActive, setStoryReplayActive, setInsightReplayActive, clearReplayTracks, clearStoryTracks])
 
   const actionsValue = useMemo(() => ({
     subscribe,
@@ -1105,13 +1129,14 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
     setVisualizationMode,
     setMqttReplayActive,
     setStoryReplayActive,
+    setInsightReplayActive,
     clearReplayTracks,
     clearStoryTracks,
     setLiveTrackDelivery,
     applyLiveTrackDelivery,
     startDemoSession,
     stopDemoSession,
-  }), [subscribe, unsubscribe, setReplayMode, setReplayTracks, setTrackVisibility, setInterpolation, setVisualizationMode, setMqttReplayActive, setStoryReplayActive, clearReplayTracks, clearStoryTracks, setLiveTrackDelivery, applyLiveTrackDelivery, startDemoSession, stopDemoSession])
+  }), [subscribe, unsubscribe, setReplayMode, setReplayTracks, setTrackVisibility, setInterpolation, setVisualizationMode, setMqttReplayActive, setStoryReplayActive, setInsightReplayActive, clearReplayTracks, clearStoryTracks, setLiveTrackDelivery, applyLiveTrackDelivery, startDemoSession, stopDemoSession])
 
   return (
     <TracksRefContext.Provider value={stableTracksRef}>

@@ -51,9 +51,7 @@ export default function InsightModeOverlay() {
   } = useReplayInsight()
 
   const { venue } = useVenue()
-  const { setReplayMode, setReplayTracks } = useTrackingActions()
-  const isInsightModeRef = useRef(isInsightMode)
-  isInsightModeRef.current = isInsightMode
+  const { setReplayMode, setReplayTracks, setInsightReplayActive } = useTrackingActions()
 
   const [isPlaying, setIsPlaying] = useState(false)
   const [progress, setProgress] = useState(0)
@@ -205,21 +203,21 @@ export default function InsightModeOverlay() {
   }, [progress, isInsightMode, trackData, updateTracksAtProgress])
 
   useEffect(() => {
-    if (isInsightMode && selectedEpisode) {
-      setReplayMode(true)
-      setProgress(0)
-      setIsPlaying(true)
-    }
+    if (!isInsightMode || !selectedEpisode) return
+
+    setInsightReplayActive(true)
+    setReplayMode(true)
+    setProgress(0)
+    setIsPlaying(true)
 
     return () => {
-      if (isInsightModeRef.current) {
-        setReplayMode(false)
-        setReplayTracks(new Map())
-        setIsPlaying(false)
-        setProgress(0)
-      }
+      setInsightReplayActive(false)
+      setReplayMode(false)
+      setReplayTracks(new Map())
+      setIsPlaying(false)
+      setProgress(0)
     }
-  }, [isInsightMode, selectedEpisode?.episode_id, setReplayMode, setReplayTracks])
+  }, [isInsightMode, selectedEpisode?.episode_id, setInsightReplayActive, setReplayMode, setReplayTracks])
 
   // Seed first frame once track data arrives (embedded or fetched).
   useEffect(() => {
