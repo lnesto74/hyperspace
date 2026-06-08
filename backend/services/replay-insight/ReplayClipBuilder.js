@@ -27,13 +27,21 @@ export class ReplayClipBuilder {
       zones: this._getRelevantZoneIds(episode),
     };
 
+    const zoneIds = replayWindow.zones;
+    const zoneScoped = episode.scope === 'zone' && zoneIds.length > 0;
+
     // Get representative track positions for the replay window
     const trackPositions = this._getTrackPositions(
       episode.venue_id,
       episode.representative_tracks || [],
       replayWindow.start,
       replayWindow.end,
-      replayWindow.zones
+      zoneIds,
+      {
+        zoneScoped,
+        episodeStartTs: episode.start_ts,
+        episodeEndTs: episode.end_ts,
+      },
     );
 
     // Get highlight zones with metadata
@@ -57,20 +65,33 @@ export class ReplayClipBuilder {
   /**
    * Build the set of moving tracks for the replay window.
    *
-   * Track IDs in the main DB are heavily fragmented (most track_keys carry only
-   * 1–2 points), so the episode's handful of `representative_tracks` produce a
-   * frozen, unrealistic clip. Instead we gather the people who were actually in
-   * the episode's zones during the window, keep the ones with enough points to
-   * show real movement, and fall back to the window's busiest movers when the
-   * zone set is too sparse. This yields a populated, lifelike replay.
+   * Queue/checkout clips need dense multi-point trajectories. Shelf pass-by episodes
+   * are the opposite — visitors often register only 1–2 LiDAR points while walking
+   * past a category zone. For zone-scoped episodes we pull candidates from zone_visits
+   * and keep anyone who touched the focus zone, without falling back to store-wide
+   * "busy movers" that never enter the highlighted area.
    */
-  _getTrackPositions(venueId, repTracks = [], startTs, endTs, zoneIds = []) {
-    const MIN_POINTS = 4;     // points needed to count as a "mover"
-    const MAX_TRACKS = 40;    // cap on tracks rendered in a clip
+  _getTrackPositions(venueId, repTracks = [], startTs, endTs, zoneIds = [], opts = {}) {
+    const zoneScoped = !!opts.zoneScoped && Array.isArray(zoneIds) && zoneIds.length > 0;
+    const MIN_POINTS = zoneScoped ? 1 : 4;
+    const MAX_TRACKS = 40;
     try {
-      // 1. Candidates: representative tracks + everyone seen in the episode zones.
       const candidates = new Set((repTracks || []).filter(Boolean));
-      if (Array.isArray(zoneIds) && zoneIds.length > 0) {
+      const zoneSet = new Set(zoneIds);
+
+      if (zoneScoped) {
+        const ph = zoneIds.map(() => '?').join(',');
+        const visitStart = opts.episodeStartTs ?? startTs;
+        const visitEnd = opts.episodeEndTs ?? endTs;
+        const visitRows = this.mainDb.prepare(`
+          SELECT DISTINCT track_key FROM zone_visits
+          WHERE venue_id = ? AND roi_id IN (${ph})
+            AND start_time >= ? AND start_time < ?
+        `).all(venueId, ...zoneIds, visitStart, visitEnd);
+        for (const r of visitRows) candidates.add(r.track_key);
+      }
+
+      if (zoneIds.length > 0) {
         const ph = zoneIds.map(() => '?').join(',');
         const rows = this.mainDb.prepare(`
           SELECT DISTINCT track_key FROM track_positions
@@ -80,24 +101,41 @@ export class ReplayClipBuilder {
       }
 
       let byKey = this._fetchPositionsForKeys(venueId, [...candidates], startTs, endTs);
-      let movers = [...byKey.entries()].filter(([, arr]) => arr.length >= MIN_POINTS);
 
-      // 2. Fallback: too few movers near the zones → use the busiest movers in the window.
-      if (movers.length < 3) {
-        const busy = this.mainDb.prepare(`
-          SELECT track_key FROM track_positions
-          WHERE venue_id = ? AND timestamp >= ? AND timestamp <= ?
-          GROUP BY track_key HAVING COUNT(*) >= ?
-          ORDER BY COUNT(*) DESC LIMIT ?
-        `).all(venueId, startTs, endTs, MIN_POINTS, MAX_TRACKS).map(r => r.track_key);
-        if (busy.length > 0) {
-          byKey = this._fetchPositionsForKeys(venueId, busy, startTs, endTs);
-          movers = [...byKey.entries()].filter(([, arr]) => arr.length >= 2);
+      const inZoneCount = (arr) =>
+        arr.filter(p => p.roiId && zoneSet.has(p.roiId)).length;
+
+      let movers;
+      if (zoneScoped) {
+        movers = [...byKey.entries()].filter(([, arr]) => {
+          if (arr.length < MIN_POINTS) return false;
+          return inZoneCount(arr) >= 1;
+        });
+        movers.sort((a, b) => {
+          const inDiff = inZoneCount(b[1]) - inZoneCount(a[1]);
+          if (inDiff !== 0) return inDiff;
+          return b[1].length - a[1].length;
+        });
+      } else {
+        movers = [...byKey.entries()].filter(([, arr]) => arr.length >= MIN_POINTS);
+
+        // Fallback: too few movers near the zones → use the busiest movers in the window.
+        if (movers.length < 3) {
+          const busy = this.mainDb.prepare(`
+            SELECT track_key FROM track_positions
+            WHERE venue_id = ? AND timestamp >= ? AND timestamp <= ?
+            GROUP BY track_key HAVING COUNT(*) >= ?
+            ORDER BY COUNT(*) DESC LIMIT ?
+          `).all(venueId, startTs, endTs, MIN_POINTS, MAX_TRACKS).map(r => r.track_key);
+          if (busy.length > 0) {
+            byKey = this._fetchPositionsForKeys(venueId, busy, startTs, endTs);
+            movers = [...byKey.entries()].filter(([, arr]) => arr.length >= 2);
+          }
         }
+
+        movers.sort((a, b) => b[1].length - a[1].length);
       }
 
-      // 3. Keep the densest tracks (most lifelike), capped.
-      movers.sort((a, b) => b[1].length - a[1].length);
       const positions = {};
       for (const [key, arr] of movers.slice(0, MAX_TRACKS)) positions[key] = arr;
       return positions;
