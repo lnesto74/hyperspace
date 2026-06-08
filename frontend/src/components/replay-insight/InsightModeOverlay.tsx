@@ -13,7 +13,22 @@ import { useTrackingActions } from '../../context/TrackingContext'
 import { useVenue } from '../../context/VenueContext'
 import { API_BASE } from '../../config/api'
 
-type TrackPosition = { timestamp: number; x: number; z: number; vx?: number; vz?: number }
+type TrackPosition = { timestamp: number; x: number; z: number; vx?: number; vz?: number; roiId?: string }
+
+/** Pass-by / shelf episodes — sparse 1–2 point tracks per visitor. */
+const SPARSE_ZONE_EPISODES = new Set([
+  'HIGH_PASSBY_LOW_BROWSE',
+  'BROWSE_NO_CONVERT_PROXY',
+  'PLACEMENT_PENALTY_CLUSTER',
+  'BRAND_UNFAIRNESS',
+  'CATEGORY_SPIKE_FROM_LAYOUT',
+])
+
+function isSparseZoneClip(episode: { episode_type?: string; scope?: string } | null | undefined) {
+  if (!episode) return false
+  if (episode.scope === 'zone') return true
+  return SPARSE_ZONE_EPISODES.has(episode.episode_type || '')
+}
 
 function positionsFromApiTracks(
   tracks: Record<string, Array<{ timestamp: number; x: number; z: number; vx?: number; vz?: number }>>,
@@ -93,7 +108,16 @@ export default function InsightModeOverlay() {
     return fetchedTrackData
   }, [selectedEpisode?.track_positions, fetchedTrackData])
 
+  const sparsePassBy = isSparseZoneClip(selectedEpisode)
+
   const { minTime, maxTime, duration } = useMemo(() => {
+    const win = selectedEpisode?.replay_window
+    // Zone pass-by clips: scrub across the full episode window so visitors appear over time,
+    // not crammed into the timestamp span of the capped 40-track sample.
+    if (sparsePassBy && win?.start && win?.end && win.end > win.start) {
+      return { minTime: win.start, maxTime: win.end, duration: win.end - win.start }
+    }
+
     let min = Infinity
     let max = -Infinity
     for (const positions of trackData.values()) {
@@ -107,11 +131,18 @@ export default function InsightModeOverlay() {
       maxTime: max === -Infinity ? 0 : max,
       duration: min === Infinity ? 0 : max - min,
     }
-  }, [trackData])
+  }, [trackData, sparsePassBy, selectedEpisode?.replay_window])
+
+  /** How long (real ms) a sparse pass-by track stays visible during replay. */
+  const passByVisibilityMs = useMemo(() => {
+    if (!sparsePassBy || duration === 0) return Infinity
+    return Math.min(45_000, Math.max(12_000, duration * 0.04))
+  }, [sparsePassBy, duration])
 
   const getPositionAtTime = useCallback((positions: TrackPosition[], time: number): TrackPosition | null => {
     if (positions.length === 0) return null
-    if (time <= positions[0].timestamp) return positions[0]
+    if (time < positions[0].timestamp) return null
+    if (positions.length === 1) return positions[0]
     if (time >= positions[positions.length - 1].timestamp) return positions[positions.length - 1]
 
     let lo = 0
@@ -135,6 +166,28 @@ export default function InsightModeOverlay() {
     }
   }, [])
 
+  const isTrackVisibleAtTime = useCallback((
+    positions: TrackPosition[],
+    time: number,
+    sparse: boolean,
+    visibilityMs: number,
+  ): boolean => {
+    if (positions.length === 0) return false
+    const first = positions[0].timestamp
+    const last = positions[positions.length - 1].timestamp
+
+    if (!sparse) {
+      return time >= first
+    }
+
+    if (positions.length === 1) {
+      return Math.abs(time - first) <= visibilityMs / 2
+    }
+
+    const pad = visibilityMs / 4
+    return time >= first - pad && time <= last + pad
+  }, [])
+
   const updateTracksAtProgress = useCallback((prog: number) => {
     if (trackData.size === 0 || duration === 0) return
 
@@ -142,6 +195,8 @@ export default function InsightModeOverlay() {
     const trackMap = new Map()
 
     for (const [trackKey, positions] of trackData) {
+      if (!isTrackVisibleAtTime(positions, currentTime, sparsePassBy, passByVisibilityMs)) continue
+
       const pos = getPositionAtTime(positions, currentTime)
       if (!pos) continue
 
@@ -163,7 +218,16 @@ export default function InsightModeOverlay() {
     }
 
     setReplayTracks(trackMap)
-  }, [trackData, minTime, duration, getPositionAtTime, setReplayTracks])
+  }, [
+    trackData,
+    minTime,
+    duration,
+    sparsePassBy,
+    passByVisibilityMs,
+    isTrackVisibleAtTime,
+    getPositionAtTime,
+    setReplayTracks,
+  ])
 
   useEffect(() => {
     if (!isPlaying || duration === 0) return
@@ -265,6 +329,7 @@ export default function InsightModeOverlay() {
             <div className="text-[10px] text-gray-400">
               {selectedEpisode.time_label}
               {!hasTracks && ' · loading trajectories…'}
+              {hasTracks && sparsePassBy && ' · pass-by replay'}
             </div>
           </div>
 
