@@ -139,6 +139,10 @@ export default function AppShell({ onOpenDwgImporter, onOpenEdgeCommissioning, s
   // sidebar while the guided demo runs (restored on exit).
   const [showTeamTelegram, setShowTeamTelegram] = useState(false)
   const [pulseEnabled, setPulseEnabled] = useState(false)
+
+  useEffect(() => {
+    if (pulseEnabled) setIntentFieldEnabled(true)
+  }, [pulseEnabled, setIntentFieldEnabled])
   const prevSidebarRef = useRef<boolean | null>(null)
   useEffect(() => {
     const onState = (e: Event) => {
