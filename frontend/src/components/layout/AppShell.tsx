@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
-import { Eye, Grid3X3, Box, ArrowUp, Sun, X, Radio, History, Crosshair, LayoutGrid, ChevronLeft, ChevronRight, Compass, Sparkles, FileVideo, Tag, Film, Send } from 'lucide-react'
+import { Eye, Grid3X3, Box, ArrowUp, Sun, X, Radio, History, Crosshair, LayoutGrid, ChevronLeft, ChevronRight, Compass, Sparkles, FileVideo, Tag, Film, Send, Activity } from 'lucide-react'
 import TeamTelegramModal from '../../features/opsDispatch/TeamTelegramModal'
+import { HyperspacePulseOverlay } from '../../features/pulse'
 import Sidebar from './Sidebar'
 import RightPanel from './RightPanel'
 import ModeBar from './ModeBar'
@@ -137,6 +138,7 @@ export default function AppShell({ onOpenDwgImporter, onOpenEdgeCommissioning, s
   // overlay's active state to highlight the toggle and auto-collapse the
   // sidebar while the guided demo runs (restored on exit).
   const [showTeamTelegram, setShowTeamTelegram] = useState(false)
+  const [pulseEnabled, setPulseEnabled] = useState(false)
   const prevSidebarRef = useRef<boolean | null>(null)
   useEffect(() => {
     const onState = (e: Event) => {
@@ -621,6 +623,17 @@ export default function AppShell({ onOpenDwgImporter, onOpenEdgeCommissioning, s
               <Film className="w-3.5 h-3.5" />
             </button>
             <button
+              onClick={() => setPulseEnabled(!pulseEnabled)}
+              className={`p-1.5 rounded transition-colors ${
+                pulseEnabled
+                  ? 'bg-cyan-600 text-white'
+                  : 'text-gray-400 hover:text-white hover:bg-gray-700'
+              }`}
+              title="Hyperspace Pulse (wireframe live floor)"
+            >
+              <Activity className="w-3.5 h-3.5" />
+            </button>
+            <button
               onClick={() => setShowTeamTelegram(true)}
               className={`p-1.5 rounded transition-colors ${
                 showTeamTelegram
@@ -681,6 +694,9 @@ export default function AppShell({ onOpenDwgImporter, onOpenEdgeCommissioning, s
         )}
         {venue?.id && (
           <TeamTelegramModal venueId={venue.id} isOpen={showTeamTelegram} onClose={() => setShowTeamTelegram(false)} />
+        )}
+        {pulseEnabled && (
+          <HyperspacePulseOverlay onOpenTelegram={() => setShowTeamTelegram(true)} />
         )}
         </div>
         </div>
