@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { Play, Pause, SkipBack, SkipForward, Clock, ChevronDown, MapPin, RefreshCw } from 'lucide-react'
 import { useTrackingActions } from '../../context/TrackingContext'
+import { useReplayInsight } from '../../context/ReplayInsightContext'
 import { TrackWithTrail } from '../../types'
 import TimelineInsightMarkers from '../replay-insight/TimelineInsightMarkers'
 import {
@@ -48,6 +49,9 @@ const KPI_OPTIONS: KPIOption[] = [
 
 export default function TimelineReplay({ venueId, isOpen, onTimeChange }: TimelineReplayProps) {
   const { setReplayMode, setReplayTracks } = useTrackingActions()
+  const { isInsightMode } = useReplayInsight()
+  const isInsightModeRef = useRef(isInsightMode)
+  isInsightModeRef.current = isInsightMode
   const [timelineData, setTimelineData] = useState<TimeSlot[]>([])
   const [currentIndex, setCurrentIndex] = useState(0)
   const [isPlaying, setIsPlaying] = useState(false)
@@ -70,11 +74,15 @@ export default function TimelineReplay({ venueId, isOpen, onTimeChange }: Timeli
   const slotIntervalMs = getTimelineIntervalMins(dateRange) * 60 * 1000
 
   // Only replace the live canvas while actively scrubbing or playing historical KPI replay.
-  const historicalCanvasActive = isOpen && timelineData.length > 0 && (isPlaying || isDragging)
+  // When Insight Mode is playing an episode clip, leave replay ownership to InsightModeOverlay.
+  const historicalCanvasActive = isOpen && timelineData.length > 0 && (isPlaying || isDragging) && !isInsightMode
   useEffect(() => {
+    if (isInsightMode) return
     setReplayMode(historicalCanvasActive)
-    return () => setReplayMode(false)
-  }, [historicalCanvasActive, setReplayMode])
+    return () => {
+      if (!isInsightModeRef.current) setReplayMode(false)
+    }
+  }, [historicalCanvasActive, isInsightMode, setReplayMode])
 
   // Fetch ROIs/zones for the venue (all layouts — includes DWG smart-kpi shelf zones)
   useEffect(() => {
@@ -177,9 +185,9 @@ export default function TimelineReplay({ venueId, isOpen, onTimeChange }: Timeli
     }
   }, [currentIndex, timelineData, onTimeChange])
 
-  // Fetch historical trajectories when time slot changes
+  // Fetch historical trajectories when time slot changes (not during episode insight replay)
   useEffect(() => {
-    if (!isOpen || !venueId || timelineData.length === 0) return
+    if (!isOpen || !venueId || timelineData.length === 0 || isInsightMode) return
     
     const currentSlot = timelineData[currentIndex]
     if (!currentSlot) return
@@ -222,7 +230,7 @@ export default function TimelineReplay({ venueId, isOpen, onTimeChange }: Timeli
         setReplayTracks(trackMap)
       })
       .catch(err => console.error('Failed to fetch replay trajectories:', err))
-  }, [isOpen, venueId, currentIndex, timelineData, slotIntervalMs, setReplayTracks])
+  }, [isOpen, venueId, currentIndex, timelineData, slotIntervalMs, isInsightMode, setReplayTracks])
 
   // Track width for insight rail alignment with histogram
   useEffect(() => {
