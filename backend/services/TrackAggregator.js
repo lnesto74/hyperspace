@@ -21,8 +21,11 @@ export class TrackAggregator extends EventEmitter {
     if (next === this.replayIsolateLive) return;
     this.replayIsolateLive = next;
     if (next) {
-      for (const trackKey of this.tracks.keys()) {
+      // Drop live tracks from the snapshot map — live MQTT keeps flowing (~1k msg/s)
+      // and would otherwise fill the cap and evict replay-* IDs during JSONL playback.
+      for (const trackKey of [...this.tracks.keys()]) {
         if (!trackKey.startsWith('replay-')) {
+          this.tracks.delete(trackKey);
           this.emit('track_removed', { trackKey, liveSuppressed: true });
         }
       }
@@ -92,6 +95,9 @@ export class TrackAggregator extends EventEmitter {
 
   addTrack(rawTrack) {
     const trackKey = rawTrack.trackKey || `${rawTrack.deviceId}:${rawTrack.id}`;
+    if (this.replayIsolateLive && !trackKey.startsWith('replay-')) {
+      return;
+    }
 
     // If the caller already supplied a venuePosition (e.g. MqttTrajectoryService applied
     // the per-venue perceptionTransform), trust it. Otherwise fall back to the legacy

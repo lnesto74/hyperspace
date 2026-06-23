@@ -6,6 +6,7 @@ export interface OpsRole { id: string; label: string }
 
 export interface OpsPublicConfig {
   enabled: boolean
+  autoDispatchEnabled: boolean
   configured: boolean
   hasToken: boolean
   tokenLast4: string
@@ -117,6 +118,35 @@ export interface OpsSummary {
   currency: string
 }
 
+export interface ValueLedgerToday {
+  discoveredLive: number | null
+  dispatchedDaily: number
+  verifiedDaily: number
+  pipelineDaily: number
+  cumulativeDaily: number
+  counts: {
+    dispatched: number
+    verified: number
+    pipeline: number
+    insightsDispatched: number
+  }
+}
+
+export interface ValueLedgerCumulative {
+  dispatchedDaily: number
+  verifiedDaily: number
+  dispatchedWeekly: number
+  verifiedWeekly: number
+}
+
+export interface ValueLedger {
+  currency: string
+  timezone: string
+  date: string
+  today: ValueLedgerToday
+  cumulative: ValueLedgerCumulative
+}
+
 export interface DispatchResult {
   task: OpsTask
   sent: boolean
@@ -154,6 +184,14 @@ async function jsonOrThrow(res: Response) {
 
 export async function fetchTeams(venueId: string): Promise<OpsTeamsResponse> {
   return jsonOrThrow(await fetch(`${BASE}/teams?venueId=${encodeURIComponent(venueId)}`))
+}
+
+export async function triggerAutoDispatch(venueId: string): Promise<{ results: unknown[] }> {
+  return jsonOrThrow(await fetch(`${BASE}/trigger-auto`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ venueId }),
+  }))
 }
 
 export async function saveConfig(venueId: string, payload: Record<string, any>): Promise<OpsTeamsResponse> {
@@ -205,6 +243,14 @@ export async function fetchFeed(venueId: string): Promise<{ tasks: OpsTask[]; su
 
 export async function fetchSummary(venueId: string): Promise<OpsSummary> {
   return jsonOrThrow(await fetch(`${BASE}/summary?venueId=${encodeURIComponent(venueId)}`))
+}
+
+export async function fetchValueLedger(venueId: string, liveUnveiledDaily?: number): Promise<ValueLedger> {
+  const q = new URLSearchParams({ venueId })
+  if (liveUnveiledDaily != null && Number.isFinite(liveUnveiledDaily)) {
+    q.set('liveUnveiledDaily', String(Math.round(liveUnveiledDaily)))
+  }
+  return jsonOrThrow(await fetch(`${BASE}/value-ledger?${q}`))
 }
 
 /** Submit a completion proof (optional photo + note). Marks the task done. */

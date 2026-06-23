@@ -23,6 +23,19 @@ import {
   isTrafficZoneName,
 } from '../lib/storeHours.js';
 import { INGRESS_VISIT_COUNT_SQL } from '../lib/ingressFootfall.js';
+import multer from 'multer';
+import { computeExecutiveJourney } from '../services/executive/ExecutiveJourneyService.js';
+import {
+  parseErpFile,
+  upsertErpRows,
+  fetchErpForRange,
+  ensureErpTable,
+} from '../services/executive/VenueErpStore.js';
+
+const erpUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 },
+});
 
 export default function createBusinessReportingRoutes(db, trajectoryStorage, trackAggregator, mqttService) {
 const router = Router();
@@ -62,7 +75,7 @@ const checkFeatureFlag = (req, res, next) => {
 router.use(checkFeatureFlag);
 
 // Valid persona IDs
-const VALID_PERSONAS = ['store-manager', 'merchandising', 'retail-media', 'executive'];
+const VALID_PERSONAS = ['store-manager', 'merchandising', 'retail-media', 'executive', 'esselunga-executive'];
 
 // Max time range: 30 days
 const MAX_RANGE_MS = 30 * 24 * 60 * 60 * 1000;
@@ -77,8 +90,61 @@ router.get('/personas', (req, res) => {
       { id: 'merchandising', name: 'Shelf & Category Performance', description: 'Product and category insights' },
       { id: 'retail-media', name: 'PEBLE™ Effectiveness', description: 'In-store media performance' },
       { id: 'executive', name: 'Executive Summary', description: 'High-level business metrics' },
+      { id: 'esselunga-executive', name: 'Esselunga Executive', description: 'Customer journey KPIs (LiDAR + ERP)' },
     ]
   });
+});
+
+/**
+ * GET /api/reporting/erp-status - ERP CSV upload status for a venue
+ */
+router.get('/erp-status', (req, res) => {
+  try {
+    const { venueId, startTs, endTs } = req.query;
+    if (!venueId) return res.status(400).json({ error: 'venueId is required' });
+    ensureErpTable(db);
+    const start = startTs ? parseInt(startTs, 10) : Date.now() - 7 * 24 * 60 * 60 * 1000;
+    const end = endTs ? parseInt(endTs, 10) : Date.now();
+    const erp = fetchErpForRange(db, venueId, start, end);
+    res.json({ venueId, erp });
+  } catch (err) {
+    console.error('[BusinessReporting] ERP status error:', err);
+    res.status(500).json({ error: 'Failed to fetch ERP status' });
+  }
+});
+
+/**
+ * POST /api/reporting/erp-upload - Upload POS/ERP CSV or Excel for demo SPI metrics
+ */
+router.post('/erp-upload', erpUpload.single('file'), (req, res) => {
+  try {
+    const { venueId } = req.body;
+    if (!venueId) return res.status(400).json({ error: 'venueId is required' });
+    if (!req.file?.buffer) return res.status(400).json({ error: 'No file uploaded' });
+
+    const venue = db.prepare('SELECT id FROM venues WHERE id = ?').get(venueId);
+    if (!venue) return res.status(404).json({ error: 'Venue not found' });
+
+    const { rows, errors } = parseErpFile(req.file.buffer);
+    if (!rows.length) {
+      return res.status(422).json({
+        error: 'No valid rows found',
+        parseErrors: errors.slice(0, 10),
+      });
+    }
+
+    const upserted = upsertErpRows(db, venueId, rows);
+    res.json({
+      success: true,
+      fileName: req.file.originalname,
+      upserted,
+      parseErrors: errors.slice(0, 10),
+      preview: fetchErpForRange(db, venueId, Date.now() - 30 * 24 * 60 * 60 * 1000, Date.now()),
+    });
+  } catch (err) {
+    console.error('[BusinessReporting] ERP upload error:', err);
+    res.status(500).json({ error: 'Failed to import ERP file', message: err.message });
+  }
 });
 
 /**
@@ -171,7 +237,7 @@ router.get('/categories', async (req, res) => {
  */
 router.get('/summary', async (req, res) => {
   try {
-    const { personaId, venueId, startTs, endTs, categoryId, shelfId, campaignId, grain } = req.query;
+    const { personaId, venueId, startTs, endTs, categoryId, shelfId, campaignId, grain, variant } = req.query;
     
     // Debug logging
     console.log(`[BusinessReporting] Request: persona=${personaId}, venue=${venueId}, startTs=${startTs}, endTs=${endTs}`);
@@ -224,6 +290,9 @@ router.get('/summary', async (req, res) => {
         break;
       case 'executive':
         ({ kpis, supporting } = await computeExecutiveKpis(db, kpiCalculator, trajectoryStorage, venueId, start, end, campaignId));
+        break;
+      case 'esselunga-executive':
+        ({ kpis, supporting } = computeEsselungaExecutiveKpis(db, venueId, start, end, variant));
         break;
     }
 
@@ -1615,6 +1684,37 @@ async function computeRetailMediaKpis(db, venueId, startTs, endTs, campaignId) {
   supporting.dataWindowEndTs = effectiveEnd;
 
   return { kpis, supporting };
+}
+
+/**
+ * Esselunga Executive: customer journey composite (isolated from executive persona).
+ */
+function computeEsselungaExecutiveKpis(db, venueId, startTs, endTs, variant) {
+  const resolvedVariant = variant === 'hq' ? 'hq' : 'live';
+  const journey = computeExecutiveJourney(db, venueId, startTs, endTs, resolvedVariant);
+
+  const kpis = {
+    totalVisitors: journey.overview.totalVisitors,
+    avgStoreDwellMin: journey.overview.avgStoreDwellMin,
+    currentOccupancy: journey.overview.currentOccupancy,
+    avgTicket: journey.overview.avgTicket,
+    spi: journey.overview.spi,
+    aislePenetrationPct: journey.aisles.penetrationPct,
+    stoppingPowerPct: journey.aisles.stoppingPowerPct,
+    avgWaitMin: journey.checkout.avgWaitMin,
+    checkoutFrictionScore: journey.checkout.frictionScore,
+    shoppingEfficiency: journey.crossKpis.shoppingEfficiency,
+    mediaCes: journey.media.ces,
+    mediaEal: journey.media.eal,
+  };
+
+  return {
+    kpis,
+    supporting: {
+      esselungaJourney: journey,
+      variant: resolvedVariant,
+    },
+  };
 }
 
 /**

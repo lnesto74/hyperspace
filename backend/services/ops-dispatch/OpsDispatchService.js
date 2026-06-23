@@ -21,6 +21,8 @@ import {
   ROLE_LABELS,
 } from './OpsDispatchConfig.js';
 import { OpsStore } from './OpsStore.js';
+import { buildValueLedger } from './valueLedger.js';
+import { buildDispatchFromInsight, pickInsightToDispatch } from './autoDispatch.js';
 import { OpsTelegramBot } from './OpsTelegramBot.js';
 
 function escapeHtml(s) {
@@ -34,7 +36,14 @@ export class OpsDispatchService {
     this.store = new OpsStore(db);
     this.bots = new Map(); // botToken -> OpsTelegramBot
     this.escalationTimer = null;
+    this.autoDispatchTimer = null;
     this.metricsProvider = null; // (venueId, roiId) => { engagement, queueScore, ... } | null
+    this.insightsProvider = null; // () => ProfitRadarInsight[]
+  }
+
+  /** Inject live Profit Radar insights (top signal auto-dispatch). */
+  setInsightsProvider(fn) {
+    this.insightsProvider = fn;
   }
 
   /** Inject a live per-zone metric source (e.g. ProfitRadar's ZoneAggregator). */
@@ -59,12 +68,20 @@ export class OpsDispatchService {
       try { this.processEscalations(); } catch (e) { console.warn('[OpsDispatch] escalation error:', e.message); }
       try { this.processVerifications(); } catch (e) { console.warn('[OpsDispatch] verification error:', e.message); }
     }, 20000);
-    console.log('🤖 OpsDispatchService started');
+    // Auto-dispatch top insight to Telegram — runs server-side, no Pulse required.
+    this.autoDispatchTimer = setInterval(() => {
+      try { this.processAutoDispatch(); } catch (e) { console.warn('[OpsDispatch] auto-dispatch error:', e.message); }
+    }, 5 * 60 * 1000);
+    setTimeout(() => {
+      try { this.processAutoDispatch(); } catch (e) { console.warn('[OpsDispatch] auto-dispatch boot error:', e.message); }
+    }, 20_000);
+    console.log('🤖 OpsDispatchService started (auto-dispatch every 5m)');
   }
 
   stop() {
     if (this.botSyncTimer) clearInterval(this.botSyncTimer);
     if (this.escalationTimer) clearInterval(this.escalationTimer);
+    if (this.autoDispatchTimer) clearInterval(this.autoDispatchTimer);
     for (const bot of this.bots.values()) bot.stop();
     this.bots.clear();
   }
@@ -302,6 +319,100 @@ export class OpsDispatchService {
       const pref = rows.find((r) => /shelf|engagement|aisle/i.test(r.name || '')) || rows[0];
       return { roiId: pref.id, zoneName: pref.name || 'Shelf' };
     } catch { return null; }
+  }
+
+  /** Executive € ledger: dispatched / verified today + cumulative pipeline. */
+  valueLedger(venueId, opts = {}) {
+    return buildValueLedger(this.store, venueId, opts);
+  }
+
+  /**
+   * Venues eligible for server auto-dispatch: active streaming venue + any venue
+   * with auto-dispatch enabled in config (so it works even before a WS client connects).
+   */
+  _autoDispatchVenueIds() {
+    const ids = new Set();
+    const active = this.deps.trackAggregator?.venueId;
+    if (active) ids.add(active);
+    try {
+      const rows = this.db.prepare('SELECT id, ops_dispatch_config_json FROM venues WHERE ops_dispatch_config_json IS NOT NULL').all();
+      for (const row of rows) {
+        try {
+          const cfg = JSON.parse(row.ops_dispatch_config_json);
+          if (cfg.enabled && cfg.autoDispatchEnabled && isValidTelegramToken(cfg.botToken)) {
+            ids.add(row.id);
+          }
+        } catch { /* ignore */ }
+      }
+    } catch { /* ignore */ }
+    return [...ids];
+  }
+
+  /**
+   * Auto-dispatch one venue. Returns a result object for logging / API responses.
+   */
+  async autoDispatchForVenue(venueId) {
+    const cfg = getOpsConfig(this.db, venueId);
+    if (!cfg.enabled) return { venueId, skipped: true, reason: 'dispatch_disabled' };
+    if (!cfg.autoDispatchEnabled) return { venueId, skipped: true, reason: 'auto_dispatch_off' };
+    if (!isValidTelegramToken(cfg.botToken)) return { venueId, skipped: true, reason: 'no_bot_token' };
+    if (!this.insightsProvider) return { venueId, skipped: true, reason: 'no_insights_provider' };
+
+    const activeVenue = this.deps.trackAggregator?.venueId;
+    const insights = this.insightsProvider() || [];
+    if (!insights.length) {
+      return { venueId, skipped: true, reason: 'no_insights', activeVenue: activeVenue || null };
+    }
+    // Profit Radar insights are live for the streaming venue; skip only on explicit mismatch.
+    if (activeVenue && activeVenue !== venueId) {
+      return { venueId, skipped: true, reason: 'venue_not_streaming', activeVenue };
+    }
+
+    const insight = pickInsightToDispatch(insights, this.store, venueId);
+    if (!insight) {
+      return { venueId, skipped: true, reason: 'all_signals_dispatched_today', insightCount: insights.length };
+    }
+
+    const built = buildDispatchFromInsight(insight);
+    const result = await this.dispatch({ venueId, ...built });
+    return {
+      venueId,
+      skipped: !result.sent,
+      reason: result.reason || (result.sent ? 'sent' : 'dispatch_failed'),
+      insightId: insight.id,
+      title: insight.title,
+      sent: result.sent,
+      assigned: result.assigned,
+      task: result.task,
+    };
+  }
+
+  /**
+   * Automatically dispatch the top-ranked insight to Telegram when ops-dispatch
+   * is enabled. Dedupes by insightId per day.
+   */
+  async processAutoDispatch() {
+    const venueIds = this._autoDispatchVenueIds();
+    if (!venueIds.length) {
+      console.log('[OpsDispatch] auto-dispatch: no eligible venues');
+      return [];
+    }
+    const results = [];
+    for (const venueId of venueIds) {
+      try {
+        const r = await this.autoDispatchForVenue(venueId);
+        results.push(r);
+        if (r.sent) {
+          console.log(`[OpsDispatch] auto-dispatched: ${r.title} → ${r.assigned?.displayName || 'team'}`);
+        } else if (r.skipped) {
+          console.log(`[OpsDispatch] auto-dispatch skip (${venueId.slice(0, 8)}…): ${r.reason}`);
+        }
+      } catch (e) {
+        console.warn(`[OpsDispatch] auto-dispatch error (${venueId}):`, e.message);
+        results.push({ venueId, skipped: true, reason: 'error', message: e.message });
+      }
+    }
+    return results;
   }
 
   /** Venue geometry (DWG objects + ROI polygons) for map rendering. */

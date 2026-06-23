@@ -58,13 +58,34 @@ export default function createOpsDispatchRoutes(db, service, opts = {}) {
       if (!venueId) return res.status(400).json({ error: 'venueId required' });
       const exists = db.prepare('SELECT id FROM venues WHERE id = ?').get(venueId);
       if (!exists) return res.status(404).json({ error: 'Venue not found' });
+      const prevCfg = getOpsConfig(db, venueId);
       const result = updateOpsConfig(db, venueId, payload);
       if (result.error) return res.status(400).json(result);
       await service.refreshBotMeta(venueId);
+      if (!prevCfg.autoDispatchEnabled && payload.autoDispatchEnabled === true) {
+        service.processAutoDispatch().catch((e) => {
+          console.warn('[OpsDispatch] immediate auto-dispatch after enable failed:', e.message);
+        });
+      }
       res.json(teamsPayload(venueId));
     } catch (err) {
       console.error('[OpsDispatch] PUT config error:', err.message);
       res.status(500).json({ error: 'Failed to save config' });
+    }
+  });
+
+  router.post('/trigger-auto', async (req, res) => {
+    try {
+      const { venueId } = req.body || {};
+      if (venueId) {
+        const r = await service.autoDispatchForVenue(venueId);
+        return res.json({ results: [r] });
+      }
+      const results = await service.processAutoDispatch();
+      res.json({ results });
+    } catch (err) {
+      console.error('[OpsDispatch] trigger-auto error:', err.message);
+      res.status(500).json({ error: 'Failed to trigger auto-dispatch' });
     }
   });
 
@@ -141,6 +162,19 @@ export default function createOpsDispatchRoutes(db, service, opts = {}) {
     const venueId = req.query.venueId;
     if (!venueId) return res.status(400).json({ error: 'venueId required' });
     res.json(service.store.summary(venueId));
+  });
+
+  /** Executive value ledger — daily + cumulative € from dispatch → verify pipeline. */
+  router.get('/value-ledger', (req, res) => {
+    const venueId = req.query.venueId;
+    if (!venueId) return res.status(400).json({ error: 'venueId required' });
+    const liveUnveiledDaily = req.query.liveUnveiledDaily != null
+      ? Number(req.query.liveUnveiledDaily)
+      : undefined;
+    res.json(service.valueLedger(venueId, {
+      liveUnveiledDaily: Number.isFinite(liveUnveiledDaily) ? liveUnveiledDaily : undefined,
+      timezone: req.query.timezone || undefined,
+    }));
   });
 
   // ── Public mobile task page (no auth) ──

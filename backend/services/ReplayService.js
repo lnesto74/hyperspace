@@ -469,6 +469,7 @@ export default class ReplayService {
     } finally {
       this.state.running = false;
       this._abort = null;
+      this._endReplayIsolation();
       this._tearDownPlayback();
       this.trackAggregator?.flushReplayTracks?.();
       if (!this.state.lastError && this.state.messagesPublished === 0 && this.state.totalBytes > 0) {

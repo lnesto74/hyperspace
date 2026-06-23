@@ -1,8 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Loader2, Send } from 'lucide-react'
 import type { ProfitRadarInsight, ZoneFieldEntry } from '../../types'
-import { dispatchTask, fetchShelfProducts } from '../opsDispatch/api'
-import { LEVER_BY_ID, legacyRoleForType } from './pulseDispatch'
+import { deployInsight } from './pulseDeploy'
 import PulseFingerprintBars from './PulseFingerprintBars'
 import {
   dominantSignal,
@@ -18,6 +17,8 @@ interface Props {
   zoneField: ZoneFieldEntry | null
   liveTrackCount: number
   onOpenTelegram?: () => void
+  onDeployed?: () => void
+  compact?: boolean
 }
 
 function ChainStep({ label, value }: { label: string; value: string }) {
@@ -35,16 +36,13 @@ export default function PulseStoryPanel({
   zoneField,
   liveTrackCount,
   onOpenTelegram,
+  onDeployed,
+  compact = false,
 }: Props) {
   const [effort, setEffort] = useState(60)
   const [dispatchState, setDispatchState] = useState<'idle' | 'sending' | 'sent' | 'queued' | 'error'>('idle')
   const [dispatchMsg, setDispatchMsg] = useState('')
 
-  const roiId = (insight.dataBasis?.roiId as string | undefined) ?? null
-  const econ = insight.economics
-  const leverId = econ?.recommendedLeverId || 'layout'
-  const lever = LEVER_BY_ID[leverId]
-  const role = lever?.role || legacyRoleForType(insight.type)
   const bars = useMemo(() => fingerprintBars(insight, zoneField), [insight, zoneField])
   const weekEur = weeklyRecovery(insight)
   const cur = insight.impact.currency === 'EUR' ? '€' : insight.impact.currency
@@ -71,28 +69,11 @@ export default function PulseStoryPanel({
     setDispatchState('sending')
     setDispatchMsg('')
     try {
-      const products = role === 'merchandiser' && roiId ? await fetchShelfProducts(roiId) : []
-      const res = await dispatchTask({
-        venueId,
-        role,
-        kind: role === 'cashier' ? 'checkout' : 'merchandising',
-        title: insight.title,
-        body: insight.suggestedFix,
-        payload: {
-          type: insight.type,
-          zoneName: (insight.dataBasis?.zone as string) || insight.title,
-          roiId,
-          suggestedFix: insight.suggestedFix,
-          impact: insight.impact,
-          lever: lever ? { id: lever.id, label: lever.label } : undefined,
-          projectedPerWeek: weekEur ?? undefined,
-          products,
-          insightId: insight.id,
-        },
-      })
+      const res = await deployInsight({ insight, venueId })
       if (res.sent) {
         setDispatchState('sent')
         setDispatchMsg(`→ ${res.assigned?.displayName || 'team'}`)
+        onDeployed?.()
       } else {
         setDispatchState('queued')
         setDispatchMsg(
@@ -110,9 +91,53 @@ export default function PulseStoryPanel({
   const valueLine = weekEur != null
     ? `${cur}${Math.round(weekEur)}/wk recoverable`
     : `${cur}${insight.impact.min}–${insight.impact.max}/day`
+  const dailyAtStake = weekEur != null ? Math.round(weekEur / 7) : Math.round(insight.impact.max * insight.confidence)
+
+  if (compact) {
+    return (
+      <div className="shrink-0 border-t border-gray-800/90 bg-[#060a12]/98 px-4 py-2">
+        {dispatchState === 'sent' && (
+          <p className="text-[9px] font-mono text-amber-400 mb-1.5 truncate">
+            Dispatched {dispatchMsg} · {cur}{dailyAtStake}/day at stake
+          </p>
+        )}
+        <div className="flex items-center gap-3 min-w-0">
+          <div className="flex items-center gap-1 min-w-0 flex-1 text-[10px] font-mono text-gray-500">
+            <span className="text-gray-400 shrink-0">{trackN} move</span>
+            <span className="text-gray-700">→</span>
+            <span className="truncate">{dominantSignal(insight, zoneField)}</span>
+            <span className="text-gray-700">→</span>
+            <span className="text-emerald-400/90 shrink-0">{valueLine}</span>
+          </div>
+          <p className="text-[10px] text-gray-400 truncate max-w-[28%] hidden md:block">{shortTitle(insight.title, 36)}</p>
+          <button
+            type="button"
+            onClick={deploy}
+            disabled={dispatchState === 'sending'}
+            className="shrink-0 flex items-center gap-1 text-[9px] uppercase tracking-wider px-3 py-1.5 rounded border border-cyan-500/40 text-cyan-100 hover:bg-cyan-500/10 disabled:opacity-50"
+          >
+            {dispatchState === 'sending' ? <Loader2 className="w-3 h-3 animate-spin" /> : <Send className="w-3 h-3" />}
+            deploy
+          </button>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className="border-t border-gray-800/90 bg-[#060a12]/95 backdrop-blur-sm px-5 py-4 shrink-0">
+      {dispatchState === 'sent' && (
+        <div className="mb-3 flex items-center gap-3 rounded-md border border-amber-400/40 bg-amber-500/10 px-4 py-2.5">
+          <Send className="w-4 h-4 text-amber-300 shrink-0" />
+          <div className="flex-1 min-w-0">
+            <p className="text-[11px] font-bold uppercase tracking-wider text-amber-300">Dispatched to floor team</p>
+            <p className="text-[10px] text-gray-400 font-mono truncate">{dispatchMsg} · awaiting mark done on Telegram</p>
+          </div>
+          <p className="text-xl font-mono font-bold tabular-nums text-amber-300 shrink-0">
+            {cur}{dailyAtStake}<span className="text-xs text-amber-500/80 font-normal">/day</span>
+          </p>
+        </div>
+      )}
       <div className="flex items-center gap-2 mb-3">
         <div className="flex-1 flex items-center gap-1 min-w-0">
           <ChainStep label="move" value={`${trackN} shoppers`} />

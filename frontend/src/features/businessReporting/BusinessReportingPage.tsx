@@ -27,6 +27,8 @@ import ExecutiveSummaryViewport, {
   type ExecutiveHighlights,
   type PeriodDeltas,
 } from './components/ExecutiveSummaryViewport';
+import EsselungaExecutiveViewport from './esselunga/EsselungaExecutiveViewport';
+import type { EsselungaJourneyPayload, ExecutiveVariant } from './esselunga/types';
 import type { DoohScreenMarker } from '../../components/shared/FloorPlanMiniMap';
 
 type TimeRange = '1h' | '24h' | '7d' | 'custom';
@@ -67,6 +69,7 @@ const TIME_RANGES: TimeRangeOption[] = [
 const ZONE_MAP_PERSONAS = new Set(['merchandising']);
 const PEBLE_MAP_PERSONAS = new Set(['retail-media']);
 const EXECUTIVE_PERSONAS = new Set(['executive']);
+const ESSELUNGA_PERSONA = 'esselunga-executive';
 
 interface BusinessReportingPageProps {
   onClose: () => void;
@@ -88,6 +91,7 @@ export default function BusinessReportingPage({ onClose }: BusinessReportingPage
   const [selectedCategoryId, setSelectedCategoryId] = useState<string>('all');
   const [categoriesExpanded, setCategoriesExpanded] = useState(false);
   const [campaignsExpanded, setCampaignsExpanded] = useState(false);
+  const [esselungaVariant, setEsselungaVariant] = useState<ExecutiveVariant>('live');
 
   const selectedPersona = useMemo(
     () => getPersonaById(selectedPersonaId) || PERSONAS[0],
@@ -137,6 +141,13 @@ export default function BusinessReportingPage({ onClose }: BusinessReportingPage
     && selectedVenueId
     && executivePillars.length > 0;
 
+  const esselungaJourney = useMemo(
+    () => supporting.esselungaJourney as EsselungaJourneyPayload | undefined,
+    [supporting.esselungaJourney],
+  );
+
+  const showEsselungaExecutive = selectedPersonaId === ESSELUNGA_PERSONA && !!selectedVenueId;
+
   const topCampaigns = useMemo(
     () => (supporting.topCampaigns as CampaignPerformanceItem[]) || [],
     [supporting.topCampaigns],
@@ -185,6 +196,10 @@ export default function BusinessReportingPage({ onClose }: BusinessReportingPage
         params.set('grain', opsGrain);
       }
 
+      if (selectedPersonaId === ESSELUNGA_PERSONA) {
+        params.set('variant', esselungaVariant);
+      }
+
       const controller = new AbortController();
       const timeoutId = window.setTimeout(() => controller.abort(), 90000);
 
@@ -229,7 +244,7 @@ export default function BusinessReportingPage({ onClose }: BusinessReportingPage
 
   useEffect(() => {
     fetchData();
-  }, [selectedVenueId, selectedPersonaId, selectedTimeRange, selectedCategoryId, opsGrain]);
+  }, [selectedVenueId, selectedPersonaId, selectedTimeRange, selectedCategoryId, opsGrain, esselungaVariant]);
 
   const handleTimeRangeChange = (rangeId: TimeRange) => {
     setSelectedTimeRange(rangeId);
@@ -239,10 +254,10 @@ export default function BusinessReportingPage({ onClose }: BusinessReportingPage
   };
 
   useEffect(() => {
-    if (venue?.id && !selectedVenueId) {
-      setSelectedVenueId(venue.id);
+    if (selectedPersonaId === ESSELUNGA_PERSONA && esselungaVariant === 'hq' && selectedTimeRange !== '7d') {
+      setSelectedTimeRange('7d');
     }
-  }, [venue?.id]);
+  }, [selectedPersonaId, esselungaVariant]);
 
   useEffect(() => {
     const fetchCategories = async () => {
@@ -268,6 +283,11 @@ export default function BusinessReportingPage({ onClose }: BusinessReportingPage
     if (!row.roiIds?.length || !selectedVenueId) return;
     openHeatmapForCategory(row.roiIds, row.category, heatmapTimeframe, selectedVenueId);
   };
+
+  const selectedVenueName = useMemo(
+    () => (venueList || []).find(v => v.id === selectedVenueId)?.name || 'Store',
+    [venueList, selectedVenueId],
+  );
 
   const showCategoryVisits = Array.isArray(topCategories) && topCategories.length > 0
     && selectedPersonaId === 'merchandising';
@@ -368,6 +388,21 @@ export default function BusinessReportingPage({ onClose }: BusinessReportingPage
 
           {!loading && !error && (
             <>
+              {showEsselungaExecutive ? (
+                esselungaJourney ? (
+                <EsselungaExecutiveViewport
+                  journey={esselungaJourney}
+                  venueId={selectedVenueId!}
+                  venueName={selectedVenueName}
+                  variant={esselungaVariant}
+                  onVariantChange={setEsselungaVariant}
+                  onRefresh={fetchData}
+                />
+                ) : (
+                  <div className="text-center py-8 text-gray-500 text-xs">No journey data for this period.</div>
+                )
+              ) : (
+                <>
               {showOperationsConsole && operationsConsole ? (
                 <OperationsPulseConsole
                   consoleData={operationsConsole}
@@ -519,6 +554,8 @@ export default function BusinessReportingPage({ onClose }: BusinessReportingPage
                 </div>
               )}
 
+                </>
+              )}
             </>
           )}
         </div>

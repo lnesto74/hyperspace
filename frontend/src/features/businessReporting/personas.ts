@@ -400,6 +400,82 @@ const executiveKpis: KpiTileDefinition[] = [
 ];
 
 // ============================================
+// PERSONA E: Esselunga Executive Journey (isolated composite)
+// ============================================
+const esselungaExecutiveKpis: KpiTileDefinition[] = [
+  {
+    id: 'totalVisitors',
+    title: 'Store Visitors',
+    unit: 'people',
+    format: 'int',
+    meaning: 'Ingress count from LiDAR traffic zones.',
+    action: 'Track weekly trends for marketing impact.',
+    tooltip: 'Distinct visits through ingress ROI.',
+    thresholds: { good: 500, warn: 200, bad: 50, direction: 'higher' },
+  },
+  {
+    id: 'avgStoreDwellMin',
+    title: 'Avg Store Dwell',
+    unit: 'min',
+    format: 'minutes',
+    meaning: 'Average time shoppers spend in the store.',
+    action: 'Longer dwell with stable conversion improves SPI.',
+    tooltip: 'Mean visit duration across all zone visits.',
+    thresholds: { good: 25, warn: 15, bad: 8, direction: 'higher' },
+  },
+  {
+    id: 'spi',
+    title: 'SPI',
+    unit: '€',
+    format: 'float',
+    meaning: 'Store productivity index — revenue per dwell proxy.',
+    action: 'Upload ERP CSV to enable full SPI.',
+    tooltip: 'Requires ERP CSV upload for revenue component.',
+    thresholds: { good: 100, warn: 50, bad: 20, direction: 'higher' },
+  },
+  {
+    id: 'avgTicket',
+    title: 'Avg Ticket',
+    unit: '€',
+    format: 'float',
+    meaning: 'Average receipt value from POS data.',
+    action: 'Upload daily POS CSV for Treviglio demo.',
+    tooltip: 'From venue_erp_daily after CSV upload.',
+    thresholds: { good: 40, warn: 25, bad: 15, direction: 'higher' },
+  },
+  {
+    id: 'aislePenetrationPct',
+    title: 'Aisle Penetration',
+    unit: '%',
+    format: 'percent',
+    meaning: 'Share of entrants who reach aisle zones.',
+    action: 'Improve layout flow toward high-value aisles.',
+    tooltip: 'Unique aisle visitors / ingress count.',
+    thresholds: { good: 60, warn: 35, bad: 15, direction: 'higher' },
+  },
+  {
+    id: 'stoppingPowerPct',
+    title: 'Stopping Power',
+    unit: '%',
+    format: 'percent',
+    meaning: 'Aisle visits with meaningful dwell.',
+    action: 'Review shelf engagement and blocking.',
+    tooltip: 'Dwell visits / total aisle visits.',
+    thresholds: { good: 40, warn: 20, bad: 8, direction: 'higher' },
+  },
+  {
+    id: 'checkoutFrictionScore',
+    title: 'Checkout Friction',
+    unit: 'ratio',
+    format: 'float',
+    meaning: 'Checkout wait relative to total store dwell.',
+    action: 'Reduce friction by opening lanes or redirecting to self-checkout.',
+    tooltip: 'Avg queue wait / avg store dwell.',
+    thresholds: { good: 0.15, warn: 0.3, bad: 0.5, direction: 'lower' },
+  },
+];
+
+// ============================================
 // PERSONA REGISTRY
 // ============================================
 export const PERSONAS: PersonaConfig[] = [
@@ -438,6 +514,15 @@ export const PERSONAS: PersonaConfig[] = [
     color: '#3b82f6',
     maxKpis: MAX_KPIS_PER_PERSONA,
     kpis: executiveKpis,
+  },
+  {
+    id: 'esselunga-executive',
+    name: 'Esselunga Executive',
+    description: 'Customer journey KPIs — Fresco, aisles, checkout, media + ERP.',
+    icon: 'Landmark',
+    color: '#0ea5e9',
+    maxKpis: MAX_KPIS_PER_PERSONA,
+    kpis: esselungaExecutiveKpis,
   },
 ];
 

@@ -5,13 +5,14 @@ interface Props {
   insights: ProfitRadarInsight[]
   activeId: string | null
   onSelect: (insight: ProfitRadarInsight) => void
+  className?: string
 }
 
-export default function PulseInsightQueue({ insights, activeId, onSelect }: Props) {
+export default function PulseInsightQueue({ insights, activeId, onSelect, className = '' }: Props) {
   if (insights.length === 0) return null
 
   return (
-    <div className="w-44 shrink-0 border-l border-gray-800/80 bg-[#060a12]/60 flex flex-col overflow-hidden hidden lg:flex">
+    <div className={`flex flex-col overflow-hidden ${className}`}>
       <div className="px-3 py-2 border-b border-gray-800/60">
         <span className="text-[8px] uppercase tracking-[0.25em] text-gray-600">signals</span>
       </div>

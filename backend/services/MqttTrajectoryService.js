@@ -319,20 +319,26 @@ class MqttTrajectoryService {
           color
         }
 
-        // Run through reconciler: ghost filter + re-ID + smoothing. Null = ghost / probation.
-        const reconciled = this.reconciler.process(incomingTrack)
-        if (!reconciled) {
-          // Still update raw stats so users can see ingestion volume vs filtered ratio
-        this.stats.messagesReceived++
-        this.stats.lastMessageTs = Date.now()
-        this._recordPipelineSample(frameTs, data.publishedAt)
-        return
-        }
-
-        // Use the stable trackKey for downstream consumers
-        const processedTrack = {
-          ...reconciled,
-          color: reconciled.color || color,
+        const isReplayMsg = data.replay === true || String(incomingTrack.deviceId).startsWith('replay-');
+        let processedTrack;
+        if (isReplayMsg) {
+          // JSONL replay — pass through raw capture IDs; live reconciler would probation-drop
+          // most frames and pollute re-ID state with historical perception IDs.
+          processedTrack = { ...incomingTrack };
+        } else {
+          // Run through reconciler: ghost filter + re-ID + smoothing. Null = ghost / probation.
+          const reconciled = this.reconciler.process(incomingTrack)
+          if (!reconciled) {
+            // Still update raw stats so users can see ingestion volume vs filtered ratio
+            this.stats.messagesReceived++
+            this.stats.lastMessageTs = Date.now()
+            this._recordPipelineSample(frameTs, data.publishedAt)
+            return
+          }
+          processedTrack = {
+            ...reconciled,
+            color: reconciled.color || color,
+          }
         }
 
         this.tracks.set(processedTrack.trackKey, processedTrack)

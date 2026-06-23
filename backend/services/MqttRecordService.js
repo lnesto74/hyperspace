@@ -110,10 +110,14 @@ export default class MqttRecordService {
   }
 
   _flushRecordBuffer() {
-    if (!this.writeStream || this._recordLines.length === 0) return;
+    if (!this.state.recording || !this.writeStream || this._recordLines.length === 0) return;
     const chunk = this._recordLines.join('');
     this._recordLines = [];
-    this.writeStream.write(chunk);
+    try {
+      this.writeStream.write(chunk);
+    } catch (err) {
+      console.error('[MqttRecord] flush error:', err.message);
+    }
   }
 
   _clearRecordBuffer() {
@@ -186,11 +190,12 @@ export default class MqttRecordService {
     }
 
     this._clearAutoStopTimer();
+    // Stop accepting new lines before closing the stream (MQTT keeps flowing after auto-stop).
+    this.state = { ...this.state, recording: false };
+    this._clearRecordBuffer();
 
     return new Promise((resolve) => {
       const finalize = () => {
-        this._flushRecordBuffer();
-        this._clearRecordBuffer();
         this.writeStream = null;
         this._syncFileSize();
         const result = {
@@ -209,8 +214,10 @@ export default class MqttRecordService {
         resolve(result);
       };
 
-      if (this.writeStream) {
-        this.writeStream.end(finalize);
+      const ws = this.writeStream;
+      if (ws) {
+        this.writeStream = null;
+        ws.end(finalize);
       } else {
         finalize();
       }

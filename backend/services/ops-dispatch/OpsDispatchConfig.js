@@ -71,6 +71,7 @@ export function normalizeConfig(input = {}) {
   const esc = cfg.escalation || {};
   return {
     enabled: !!cfg.enabled,
+    autoDispatchEnabled: !!cfg.autoDispatchEnabled,
     botToken: typeof cfg.botToken === 'string' ? cfg.botToken.trim() : '',
     botUsername: cfg.botUsername || null,
     appBaseUrl: (cfg.appBaseUrl || '').trim().replace(/\/$/, ''),
@@ -95,6 +96,7 @@ export function publicConfig(cfg, base) {
   const c = normalizeConfig(cfg);
   return {
     enabled: c.enabled,
+    autoDispatchEnabled: c.autoDispatchEnabled,
     configured: isValidTelegramToken(c.botToken),
     hasToken: isValidTelegramToken(c.botToken),
     tokenLast4: isValidTelegramToken(c.botToken) && c.botToken.length >= 4 ? c.botToken.slice(-4) : '',
@@ -169,6 +171,7 @@ export function updateOpsConfig(db, venueId, payload = {}) {
   const current = getOpsConfig(db, venueId);
   const next = { ...current };
   if (typeof payload.enabled === 'boolean') next.enabled = payload.enabled;
+  if (typeof payload.autoDispatchEnabled === 'boolean') next.autoDispatchEnabled = payload.autoDispatchEnabled;
   if (typeof payload.appBaseUrl === 'string') next.appBaseUrl = payload.appBaseUrl.trim().replace(/\/$/, '');
   if (payload.escalation) {
     next.escalation = {

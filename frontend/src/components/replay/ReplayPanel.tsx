@@ -147,6 +147,23 @@ const formatRecordedTs = (ts?: number | null) => {
   })
 }
 
+async function fetchWithRetry(url: string, init?: RequestInit, attempts = 4): Promise<Response> {
+  let last: Response | null = null
+  for (let i = 0; i < attempts; i++) {
+    try {
+      const res = await fetch(url, init)
+      last = res
+      if (res.ok) return res
+      if (res.status < 500 && res.status !== 408) return res
+    } catch { /* retry */ }
+    if (i < attempts - 1) {
+      await new Promise(r => window.setTimeout(r, 800 * (i + 1)))
+    }
+  }
+  if (last) return last
+  throw new Error('fetch failed')
+}
+
 const tsAtProgress = (meta: FileMeta | null, progress: number) => {
   if (!meta?.firstRecordedTs || !meta?.lastRecordedTs) return null
   return meta.firstRecordedTs + (meta.lastRecordedTs - meta.firstRecordedTs) * progress
@@ -294,9 +311,9 @@ export default function ReplayPanel({ onClose, launch }: ReplayPanelProps) {
 
   const refreshFiles = useCallback(async (preferNewest = false) => {
     setLoading(true)
-    setError(null)
+    if (!preferNewest) setError(null)
     try {
-      const res = await fetch(`${API_BASE}/api/replay/files`)
+      const res = await fetchWithRetry(`${API_BASE}/api/replay/files`)
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const data = await res.json()
       const list: ReplayFile[] = (data.files || []).filter((f: ReplayFile) => !f.name.endsWith('.reconciled.jsonl'))
@@ -315,8 +332,15 @@ export default function ReplayPanel({ onClose, launch }: ReplayPanelProps) {
         if (next && !isReconciledArtifactName(next)) sourceCaptureRef.current = next
         return next
       })
+      if (preferNewest) {
+        setScrubPct(0)
+        setError(null)
+      }
+      return true
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : String(err))
+      const msg = err instanceof Error ? err.message : String(err)
+      setError(friendlyReconcileError(msg))
+      return false
     } finally {
       setLoading(false)
     }
@@ -375,8 +399,14 @@ export default function ReplayPanel({ onClose, launch }: ReplayPanelProps) {
         if (next.file) {
           setSelected(next.file)
           selectedRef.current = next.file
+          sourceCaptureRef.current = next.file
         }
-        await refreshFiles(true)
+        setScrubPct(0)
+        for (let attempt = 0; attempt < 5; attempt++) {
+          const ok = await refreshFiles(true)
+          if (ok) break
+          await new Promise(r => window.setTimeout(r, 1500 * (attempt + 1)))
+        }
         if (next.autoStop) {
           setError(null)
         }
@@ -953,7 +983,18 @@ export default function ReplayPanel({ onClose, launch }: ReplayPanelProps) {
               disabled={running}
               className="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-white"
             >
-              {files.length === 0 && <option value="">(no files in {replayDir || '/data/replay'})</option>}
+              {files.length === 0 && (
+                <option value={selected || ''}>
+                  {error
+                    ? `(file list unavailable — click refresh)`
+                    : `(no files in ${replayDir || '/data/replay'})`}
+                </option>
+              )}
+              {selected && !files.some(f => f.name === selected) && (
+                <option value={selected}>
+                  {selected} (saved — refresh file list)
+                </option>
+              )}
               {files.map(f => (
                 <option key={f.name} value={f.name}>
                   {f.name} ({formatBytes(f.size)}{f.mtimeMs ? ` · ${formatFileAge(f.mtimeMs)}` : ''})

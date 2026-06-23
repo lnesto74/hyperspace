@@ -186,6 +186,7 @@ const opsDispatchService = new OpsDispatchService(db, { trackAggregator });
 opsDispatchService.setMetricsProvider((_venueId, roiId) => {
   try { return zoneAggregator.getZoneField().get(roiId)?.means || null; } catch { return null; }
 });
+opsDispatchService.setInsightsProvider(() => profitRadarEngine.getInsights());
 opsDispatchService.start();
 
 // Pre-load zone links and open lanes for all venues at startup
