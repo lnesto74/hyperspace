@@ -25,6 +25,15 @@ export interface CheckoutChannel {
   roiIds: string[];
 }
 
+export interface AisleCategoryGroup {
+  category: string;
+  visits: number;
+  uniqueVisitors: number;
+  stoppingPowerPct: number;
+  avgDwellMin: number;
+  roiCount: number;
+}
+
 export interface AisleRow {
   id: string;
   name: string;
@@ -57,6 +66,8 @@ export interface EsselungaJourneyPayload {
   };
   overview: {
     totalVisitors: number;
+    ingressEpisodes?: number;
+    ingressUnique?: number;
     avgStoreDwellMin: number;
     currentOccupancy: number;
     avgTicket: number | null;
@@ -70,6 +81,7 @@ export interface EsselungaJourneyPayload {
     bypassPct: number;
     totalAisleVisits: number;
     aisleConversionPct: number | null;
+    categoryGroups?: AisleCategoryGroup[];
     topAisles: AisleRow[];
   };
   checkout: {

@@ -56,6 +56,19 @@ function fetchIngressCount(db, venueId, roiIds, startTs, endTs) {
   return row?.c || 0;
 }
 
+function fetchIngressUniqueCount(db, venueId, roiIds, startTs, endTs) {
+  if (!roiIds.length) return 0;
+  const ph = roiIds.map(() => '?').join(',');
+  const row = safeQuery(db, `
+    SELECT COUNT(DISTINCT track_key) as c
+    FROM zone_visits
+    WHERE venue_id = ? AND roi_id IN (${ph})
+      AND start_time >= ? AND start_time < ?
+      AND track_key NOT LIKE '%cashier%'
+  `, [venueId, ...roiIds, startTs, endTs]);
+  return row?.c || 0;
+}
+
 function fetchZoneVisitStats(db, roiIds, startTs, endTs) {
   if (!roiIds.length) {
     return { visits: 0, dwellVisits: 0, engagementVisits: 0, uniqueVisitors: 0, totalDurationMs: 0, abandonCount: 0 };
@@ -126,10 +139,13 @@ function buildFrescoDepartments(classifiedRois, db, startTs, endTs) {
 
   for (const roi of frescoRois) {
     const dept = roi.classification.subGroup || 'fresco';
+    const displayLabel = roi.classification.categoryLabel || roi.linkedCategory
+      || FRESCO_DEPT_LABELS[dept] || dept;
     if (!byDept.has(dept)) {
-      byDept.set(dept, { serviceIds: [], queueIds: [], browseIds: [] });
+      byDept.set(dept, { serviceIds: [], queueIds: [], browseIds: [], displayLabel });
     }
     const bucket = byDept.get(dept);
+    if (!bucket.displayLabel && displayLabel) bucket.displayLabel = displayLabel;
     if (roi.classification.role === 'queue') bucket.queueIds.push(roi.id);
     else if (roi.classification.role === 'service') bucket.serviceIds.push(roi.id);
     else bucket.browseIds.push(roi.id);
@@ -146,7 +162,7 @@ function buildFrescoDepartments(classifiedRois, db, startTs, endTs) {
 
     return {
       id: dept,
-      label: FRESCO_DEPT_LABELS[dept] || dept.replace(/_/g, ' '),
+      label: ids.displayLabel || FRESCO_DEPT_LABELS[dept] || dept.replace(/_/g, ' '),
       visits: stats.visits,
       uniqueVisitors: stats.uniqueVisitors,
       avgDwellMin,
@@ -204,12 +220,41 @@ function buildCheckoutChannels(classifiedRois, db, startTs, endTs) {
   });
 }
 
-function buildAisleMetrics(classifiedRois, db, ingressCount, startTs, endTs) {
+function buildAisleCategoryGroups(classifiedRois, db, startTs, endTs) {
+  const aisleRois = classifiedRois.filter(r => r.classification.group === 'aisles');
+  const byCat = new Map();
+
+  for (const roi of aisleRois) {
+    const cat = roi.classification.categoryLabel || roi.linkedCategory
+      || roi.classification.subGroup || 'Uncategorized';
+    if (!byCat.has(cat)) byCat.set(cat, []);
+    byCat.get(cat).push(roi.id);
+  }
+
+  return [...byCat.entries()].map(([category, roiIds]) => {
+    const stats = fetchZoneVisitStats(db, roiIds, startTs, endTs);
+    return {
+      category,
+      visits: stats.visits,
+      uniqueVisitors: stats.uniqueVisitors,
+      stoppingPowerPct: stats.visits > 0 ? pct(stats.dwellVisits, stats.visits) : 0,
+      avgDwellMin: stats.uniqueVisitors > 0
+        ? Math.round((stats.totalDurationMs / stats.uniqueVisitors) / 60000 * 10) / 10
+        : 0,
+      roiCount: roiIds.length,
+    };
+  }).sort((a, b) => b.visits - a.visits);
+}
+
+function buildAisleMetrics(classifiedRois, db, ingressUnique, startTs, endTs) {
   const aisleRois = classifiedRois.filter(r => r.classification.group === 'aisles');
   const roiIds = aisleRois.map(r => r.id);
   const stats = fetchZoneVisitStats(db, roiIds, startTs, endTs);
+  const categoryGroups = buildAisleCategoryGroups(classifiedRois, db, startTs, endTs);
 
-  const penetrationPct = ingressCount > 0 ? pct(stats.uniqueVisitors, ingressCount) : 0;
+  const penetrationPct = ingressUnique > 0
+    ? Math.min(100, pct(stats.uniqueVisitors, ingressUnique))
+    : 0;
   const stoppingPowerPct = stats.visits > 0 ? pct(stats.dwellVisits, stats.visits) : 0;
   const bypassPct = Math.max(0, Math.round((100 - stoppingPowerPct) * 10) / 10);
 
@@ -220,7 +265,8 @@ function buildAisleMetrics(classifiedRois, db, ingressCount, startTs, endTs) {
     topAisles.push({
       id: roi.id,
       name: roi.name,
-      category: roi.classification.subGroup,
+      category: roi.classification.categoryLabel || roi.linkedCategory
+        || roi.classification.subGroup || 'Uncategorized',
       visits: s.visits,
       stoppingPowerPct: pct(s.dwellVisits, s.visits),
       avgDwellMin: s.uniqueVisitors > 0
@@ -235,6 +281,7 @@ function buildAisleMetrics(classifiedRois, db, ingressCount, startTs, endTs) {
     stoppingPowerPct,
     bypassPct,
     totalAisleVisits: stats.visits,
+    categoryGroups,
     topAisles: topAisles.slice(0, 8),
   };
 }
@@ -359,7 +406,8 @@ function buildInsights(payload) {
 export function computeExecutiveJourney(db, venueId, startTs, endTs, variant = 'live') {
   const classifiedRois = loadClassifiedRois(db, venueId).map(r => ({ ...r, venue_id: venueId }));
   const trafficRoiIds = resolveTrafficRoiIds(db, venueId);
-  const ingressCount = fetchIngressCount(db, venueId, trafficRoiIds, startTs, endTs);
+  const ingressEpisodes = fetchIngressCount(db, venueId, trafficRoiIds, startTs, endTs);
+  const ingressUnique = fetchIngressUniqueCount(db, venueId, trafficRoiIds, startTs, endTs);
 
   const storeVisitRow = safeQuery(db, `
     SELECT
@@ -387,7 +435,7 @@ export function computeExecutiveJourney(db, venueId, startTs, endTs, variant = '
   const mediaKpis = fetchMediaKpis(db, venueId, startTs, endTs);
   const frescoDepartments = buildFrescoDepartments(classifiedRois, db, startTs, endTs);
   const checkoutChannels = buildCheckoutChannels(classifiedRois, db, startTs, endTs);
-  const aisleMetrics = buildAisleMetrics(classifiedRois, db, ingressCount, startTs, endTs);
+  const aisleMetrics = buildAisleMetrics(classifiedRois, db, ingressUnique, startTs, endTs);
 
   const avgWaitMin = checkoutChannels.length
     ? checkoutChannels.reduce((s, c) => s + c.avgWaitMin, 0) / checkoutChannels.length
@@ -397,7 +445,7 @@ export function computeExecutiveJourney(db, venueId, startTs, endTs, variant = '
     ? Math.round((erp.totalTransactions / aisleMetrics.totalAisleVisits) * 1000) / 10
     : null;
 
-  const crossKpis = computeCrossKpis(erp, ingressCount, avgStoreDwellMin, avgWaitMin, mediaKpis);
+  const crossKpis = computeCrossKpis(erp, ingressUnique, avgStoreDwellMin, avgWaitMin, mediaKpis);
 
   const taxonomySummary = {
     totalRois: classifiedRois.length,
@@ -414,7 +462,9 @@ export function computeExecutiveJourney(db, venueId, startTs, endTs, variant = '
     generatedAt: Date.now(),
     taxonomy: taxonomySummary,
     overview: {
-      totalVisitors: ingressCount,
+      totalVisitors: ingressUnique || ingressEpisodes,
+      ingressEpisodes,
+      ingressUnique,
       avgStoreDwellMin,
       currentOccupancy: liveOcc?.total || 0,
       avgTicket: erp.avgTicket,
@@ -442,7 +492,7 @@ export function computeExecutiveJourney(db, venueId, startTs, endTs, variant = '
       headline: `Weekly executive brief · ${new Date(startTs).toLocaleDateString()} – ${new Date(endTs).toLocaleDateString()}`,
       topInsights: payload.insights,
       kpis: {
-        visitors: ingressCount,
+        visitors: ingressUnique || ingressEpisodes,
         avgDwellMin: avgStoreDwellMin,
         avgTicket: erp.avgTicket,
         spi: crossKpis.spi,

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import {
   Users,
   Clock,
@@ -12,10 +12,21 @@ import {
   Download,
   Radio,
   FileText,
+  ChevronDown,
+  ChevronUp,
 } from 'lucide-react';
 import type { EsselungaJourneyPayload, JourneyTab, ExecutiveVariant } from './types';
 import ErpCsvUploadPanel from './ErpCsvUploadPanel';
 import { exportWeeklyExecutivePdf } from './exportWeeklyPdf';
+import {
+  RingGauge,
+  HorizontalBarChart,
+  DonutSplit,
+  JourneyFunnel,
+  KpiTile,
+  ChannelCompareChart,
+} from './EsselungaCharts';
+import { getCategoryVisual } from '../operationsConsole/categoryVisuals';
 
 interface EsselungaExecutiveViewportProps {
   journey: EsselungaJourneyPayload;
@@ -34,6 +45,12 @@ const TABS: { id: JourneyTab; label: string }[] = [
   { id: 'media', label: 'Media' },
 ];
 
+const CHANNEL_COLORS: Record<string, string> = {
+  traditional: '#22c55e',
+  selfCheckout: '#8b5cf6',
+  selfScan: '#06b6d4',
+};
+
 const INSIGHT_COLOR = {
   good: 'border-green-500/40 bg-green-500/10',
   warn: 'border-amber-500/40 bg-amber-500/10',
@@ -41,35 +58,17 @@ const INSIGHT_COLOR = {
   info: 'border-blue-500/40 bg-blue-500/10',
 };
 
-function MetricCard({
-  label,
-  value,
-  sub,
-  icon: Icon,
-}: {
-  label: string;
-  value: string;
-  sub?: string;
-  icon: typeof Users;
-}) {
+function CategoryChip({ label }: { label: string }) {
+  const v = getCategoryVisual(label);
+  const Icon = v.Icon;
   return (
-    <div className="rounded-lg border border-gray-700/80 bg-gray-800/50 p-3">
-      <div className="flex items-center gap-1.5 mb-1">
-        <Icon className="w-3.5 h-3.5 text-blue-400" />
-        <span className="text-[10px] text-gray-400 uppercase tracking-wide">{label}</span>
-      </div>
-      <div className="text-lg font-semibold text-white">{value}</div>
-      {sub && <div className="text-[10px] text-gray-500 mt-0.5">{sub}</div>}
-    </div>
-  );
-}
-
-function SplitBar({ browsingPct, waitingPct }: { browsingPct: number; waitingPct: number }) {
-  return (
-    <div className="h-2 rounded-full overflow-hidden flex bg-gray-700/80">
-      <div className="bg-emerald-500/80" style={{ width: `${browsingPct}%` }} title={`Browsing ${browsingPct}%`} />
-      <div className="bg-amber-500/80" style={{ width: `${waitingPct}%` }} title={`Waiting ${waitingPct}%`} />
-    </div>
+    <span
+      className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] font-medium"
+      style={{ backgroundColor: v.bg, color: v.color }}
+    >
+      <Icon className="w-3 h-3" />
+      {label}
+    </span>
   );
 }
 
@@ -82,7 +81,35 @@ export default function EsselungaExecutiveViewport({
   onRefresh,
 }: EsselungaExecutiveViewportProps) {
   const [tab, setTab] = useState<JourneyTab>('overview');
+  const [erpOpen, setErpOpen] = useState(!journey.erp.hasData);
   const { overview, fresco, aisles, checkout, crossKpis, media, erp, insights, taxonomy } = journey;
+
+  const aisleCategoryBars = useMemo(
+    () => (aisles.categoryGroups || []).map(g => ({
+      label: g.category,
+      value: g.visits,
+      sub: `${g.stoppingPowerPct}% stop · ${g.avgDwellMin}m`,
+    })),
+    [aisles.categoryGroups],
+  );
+
+  const checkoutChannels = useMemo(
+    () => checkout.channels.map(ch => ({
+      ...ch,
+      color: CHANNEL_COLORS[ch.id] || '#64748b',
+    })),
+    [checkout.channels],
+  );
+
+  const funnelSteps = useMemo(() => [
+    { label: 'Ingress', value: overview.totalVisitors, color: '#3b82f6' },
+    { label: 'Aisles', value: aisles.totalAisleVisits, color: '#f59e0b' },
+    {
+      label: 'Checkout',
+      value: checkout.channels.reduce((s, c) => s + c.sessions, 0),
+      color: '#22c55e',
+    },
+  ], [overview.totalVisitors, aisles.totalAisleVisits, checkout.channels]);
 
   const spiLabel = overview.spi != null
     ? (erp.hasData ? `€${overview.spi}` : String(overview.spi))
@@ -90,20 +117,23 @@ export default function EsselungaExecutiveViewport({
 
   return (
     <div className="space-y-3">
-      {/* Audience + ERP controls */}
       <div className="flex flex-wrap items-center gap-2 justify-between">
-        <div className="flex bg-gray-700/80 rounded-md p-0.5">
+        <div className="flex bg-gray-800/80 rounded-lg p-0.5 border border-gray-700/50">
           <button
             type="button"
             onClick={() => onVariantChange('live')}
-            className={`flex items-center gap-1 px-2.5 py-1 text-xs rounded ${variant === 'live' ? 'bg-cyan-600 text-white' : 'text-gray-400 hover:text-white'}`}
+            className={`flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-md transition-all ${
+              variant === 'live' ? 'bg-cyan-600 text-white shadow-lg shadow-cyan-900/30' : 'text-gray-400 hover:text-white'
+            }`}
           >
             <Radio className="w-3 h-3" /> Store Director
           </button>
           <button
             type="button"
             onClick={() => onVariantChange('hq')}
-            className={`flex items-center gap-1 px-2.5 py-1 text-xs rounded ${variant === 'hq' ? 'bg-indigo-600 text-white' : 'text-gray-400 hover:text-white'}`}
+            className={`flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-md transition-all ${
+              variant === 'hq' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-900/30' : 'text-gray-400 hover:text-white'
+            }`}
           >
             <FileText className="w-3 h-3" /> HQ Weekly
           </button>
@@ -117,30 +147,45 @@ export default function EsselungaExecutiveViewport({
             <Download className="w-3 h-3" /> Export PDF
           </button>
         )}
-        <span className="text-[10px] text-gray-500 ml-auto">
-          {taxonomy.fresco} fresco · {taxonomy.aisles} aisles · {taxonomy.checkout} checkout ROIs
-        </span>
+        <div className="flex gap-2 text-[10px] text-gray-500 ml-auto">
+          <span className="px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400">{taxonomy.fresco} fresco</span>
+          <span className="px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-400">{taxonomy.aisles} aisles</span>
+          <span className="px-2 py-0.5 rounded-full bg-green-500/10 text-green-400">{taxonomy.checkout} checkout</span>
+        </div>
       </div>
 
-      <ErpCsvUploadPanel
-        venueId={venueId}
-        hasData={erp.hasData}
-        lastUpload={erp.lastUpload}
-        onUploaded={onRefresh}
-        compact={variant === 'live'}
-      />
+      <div className="rounded-lg border border-gray-700/50 bg-gray-800/30 overflow-hidden">
+        <button
+          type="button"
+          onClick={() => setErpOpen(v => !v)}
+          className="w-full flex items-center justify-between px-3 py-2 text-left hover:bg-gray-800/50"
+        >
+          <span className="text-xs text-gray-300">ERP / POS data {erp.hasData ? '· connected' : '· upload for SPI'}</span>
+          {erpOpen ? <ChevronUp className="w-3.5 h-3.5 text-gray-500" /> : <ChevronDown className="w-3.5 h-3.5 text-gray-500" />}
+        </button>
+        {erpOpen && (
+          <div className="px-3 pb-3 border-t border-gray-700/40">
+            <ErpCsvUploadPanel
+              venueId={venueId}
+              hasData={erp.hasData}
+              lastUpload={erp.lastUpload}
+              onUploaded={onRefresh}
+              compact
+            />
+          </div>
+        )}
+      </div>
 
-      {/* Journey tabs */}
-      <div className="flex flex-wrap gap-1 border-b border-gray-700/60 pb-1">
+      <div className="flex gap-1 border-b border-gray-700/60">
         {TABS.map(t => (
           <button
             key={t.id}
             type="button"
             onClick={() => setTab(t.id)}
-            className={`px-3 py-1 text-xs rounded-t-md transition-colors ${
+            className={`px-4 py-2 text-xs font-medium rounded-t-lg transition-colors border-b-2 -mb-px ${
               tab === t.id
-                ? 'bg-gray-800 text-white border border-b-0 border-gray-600'
-                : 'text-gray-400 hover:text-white'
+                ? 'text-white border-cyan-500 bg-gray-800/60'
+                : 'text-gray-500 border-transparent hover:text-gray-300'
             }`}
           >
             {t.label}
@@ -149,146 +194,231 @@ export default function EsselungaExecutiveViewport({
       </div>
 
       {tab === 'overview' && (
-        <div className="space-y-3">
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-            <MetricCard icon={Users} label="Store visitors" value={overview.totalVisitors.toLocaleString()} sub="LiDAR ingress" />
-            <MetricCard icon={Clock} label="Avg dwell" value={`${overview.avgStoreDwellMin}m`} sub="Store-wide" />
-            <MetricCard
-              icon={Euro}
-              label="Avg ticket"
-              value={overview.avgTicket != null ? `€${overview.avgTicket.toFixed(2)}` : '—'}
-              sub={erp.hasData ? 'From ERP CSV' : 'Upload ERP CSV'}
-            />
-            <MetricCard icon={TrendingUp} label="SPI" value={spiLabel} sub={erp.hasData ? 'Revenue / dwell proxy' : 'Requires ERP'} />
+        <div className="grid grid-cols-1 xl:grid-cols-12 gap-3">
+          <div className="xl:col-span-8 space-y-3">
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-2">
+              <KpiTile
+                icon={Users}
+                label="Store visitors"
+                value={overview.totalVisitors.toLocaleString()}
+                sub={overview.ingressEpisodes ? `${overview.ingressEpisodes.toLocaleString()} crossings` : 'LiDAR ingress'}
+                accent="#3b82f6"
+              />
+              <KpiTile
+                icon={Clock}
+                label="Avg dwell"
+                value={`${overview.avgStoreDwellMin}m`}
+                sub="Store-wide"
+                accent="#8b5cf6"
+              />
+              <KpiTile
+                icon={Euro}
+                label="Avg ticket"
+                value={overview.avgTicket != null ? `€${overview.avgTicket.toFixed(2)}` : '—'}
+                sub={erp.hasData ? 'ERP' : 'Upload CSV'}
+                accent="#f59e0b"
+              />
+              <KpiTile
+                icon={TrendingUp}
+                label="SPI"
+                value={spiLabel}
+                sub={erp.hasData ? 'Revenue / dwell' : 'Needs ERP'}
+                accent="#10b981"
+              />
+            </div>
+
+            <div className="rounded-xl border border-gray-700/60 bg-gray-800/40 p-4">
+              <h3 className="text-xs font-semibold text-white mb-1">Customer journey funnel</h3>
+              <p className="text-[10px] text-gray-500 mb-3">Ingress → aisle engagement → checkout sessions</p>
+              <JourneyFunnel steps={funnelSteps} />
+            </div>
+
+            {aisleCategoryBars.length > 0 && (
+              <div className="rounded-xl border border-gray-700/60 bg-gray-800/40 p-4">
+                <h3 className="text-xs font-semibold text-white mb-3">Top categories by traffic</h3>
+                <HorizontalBarChart rows={aisleCategoryBars.slice(0, 8)} />
+              </div>
+            )}
           </div>
-          {variant === 'live' && (
-            <div className="text-xs text-gray-400 flex items-center gap-1.5">
-              <Store className="w-3.5 h-3.5 text-cyan-400" />
-              Live occupancy: <span className="text-white font-medium">{overview.currentOccupancy}</span> shoppers in store
+
+          <div className="xl:col-span-4 space-y-3">
+            {variant === 'live' && (
+              <div className="rounded-xl border border-cyan-500/30 bg-cyan-500/5 p-4 flex items-center gap-3">
+                <Store className="w-8 h-8 text-cyan-400 shrink-0" />
+                <div>
+                  <div className="text-2xl font-bold text-white">{overview.currentOccupancy}</div>
+                  <div className="text-xs text-cyan-300/80">shoppers in store now</div>
+                </div>
+              </div>
+            )}
+
+            <div className="rounded-xl border border-gray-700/60 bg-gray-800/40 p-4 grid grid-cols-3 gap-2">
+              <RingGauge value={aisles.penetrationPct} label="Penetration" sub="reach aisles" color="#f59e0b" />
+              <RingGauge value={aisles.stoppingPowerPct} label="Stopping" sub="dwell visits" color="#a78bfa" />
+              <RingGauge value={checkout.avgWaitMin} max={10} label="Avg wait" sub="minutes" color="#22c55e" />
             </div>
-          )}
-          {crossKpis.shoppingEfficiency != null && (
-            <div className="rounded-lg border border-gray-700/60 bg-gray-800/30 px-3 py-2 text-xs text-gray-300">
-              Shopping efficiency: <span className="text-white font-medium">€{crossKpis.shoppingEfficiency}/min</span> dwell
-              {checkout.frictionScore != null && (
-                <span className="text-gray-500 ml-3">Checkout friction: {checkout.frictionScore}</span>
-              )}
-            </div>
-          )}
+
+            {insights.length > 0 && (
+              <div className="rounded-xl border border-gray-700/60 bg-gray-800/40 overflow-hidden">
+                <div className="px-3 py-2 border-b border-gray-700/50 flex items-center gap-2">
+                  <Lightbulb className="w-3.5 h-3.5 text-amber-400" />
+                  <span className="text-xs font-semibold text-white">Actionable insights</span>
+                </div>
+                <div className="p-2 space-y-2">
+                  {insights.slice(0, 3).map(ins => (
+                    <div key={ins.id} className={`rounded-lg border p-2.5 ${INSIGHT_COLOR[ins.severity]}`}>
+                      <div className="text-xs font-medium text-white">{ins.title}</div>
+                      <p className="text-[10px] text-gray-400 mt-0.5 leading-relaxed">{ins.message}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       )}
 
       {tab === 'fresco' && (
-        <div className="space-y-2">
+        <div>
           {fresco.departments.length === 0 ? (
-            <p className="text-xs text-gray-500 py-4">No Piazza del Fresco zones tagged. Check ROI metadata (ortofrutta, macelleria, gastronomia).</p>
+            <div className="rounded-xl border border-gray-700/60 bg-gray-800/30 p-8 text-center">
+              <p className="text-sm text-gray-400">No service counters (banco) detected.</p>
+              <p className="text-xs text-gray-600 mt-1">Tag banco fixtures with categories like Pesce, Pane, Salumi in DWG mapping.</p>
+            </div>
           ) : (
-            fresco.departments.map(dept => (
-              <div key={dept.id} className="rounded-lg border border-gray-700/80 bg-gray-800/40 p-3">
-                <div className="flex items-center justify-between mb-2">
-                  <span className="text-sm font-medium text-white">{dept.label}</span>
-                  <span className="text-xs text-gray-400">{dept.visits.toLocaleString()} visits · {dept.avgDwellMin}m dwell</span>
-                </div>
-                <SplitBar browsingPct={dept.browsingPct} waitingPct={dept.waitingPct} />
-                <div className="flex justify-between text-[10px] text-gray-500 mt-1">
-                  <span>Browsing {dept.browsingPct}%</span>
-                  <span>Waiting {dept.waitingPct}%</span>
-                  {dept.abandonPct > 0 && <span className="text-amber-400">{dept.abandonPct}% abandon</span>}
-                </div>
-              </div>
-            ))
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+              {fresco.departments.map(dept => {
+                const visual = getCategoryVisual(dept.label);
+                const Icon = visual.Icon;
+                return (
+                  <div
+                    key={dept.id}
+                    className="rounded-xl border border-gray-700/60 bg-gray-800/40 p-4 flex flex-col gap-3"
+                    style={{ borderLeftWidth: 3, borderLeftColor: visual.color }}
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <span
+                          className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0"
+                          style={{ backgroundColor: visual.bg }}
+                        >
+                          <Icon className="w-5 h-5" style={{ color: visual.color }} />
+                        </span>
+                        <div className="min-w-0">
+                          <CategoryChip label={dept.label} />
+                          <div className="text-[10px] text-gray-500 mt-1">{dept.visits.toLocaleString()} visits</div>
+                        </div>
+                      </div>
+                      <DonutSplit browsingPct={dept.browsingPct} waitingPct={dept.waitingPct} size={72} />
+                    </div>
+                    <div className="grid grid-cols-3 gap-2 text-center pt-1 border-t border-gray-700/40">
+                      <div>
+                        <div className="text-sm font-semibold text-white">{dept.avgDwellMin}m</div>
+                        <div className="text-[8px] text-gray-500">dwell</div>
+                      </div>
+                      <div>
+                        <div className="text-sm font-semibold text-emerald-400">{dept.browsingPct}%</div>
+                        <div className="text-[8px] text-gray-500">browsing</div>
+                      </div>
+                      <div>
+                        <div className={`text-sm font-semibold ${dept.waitingPct > 15 ? 'text-amber-400' : 'text-gray-300'}`}>
+                          {dept.waitingPct}%
+                        </div>
+                        <div className="text-[8px] text-gray-500">waiting</div>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
           )}
         </div>
       )}
 
       {tab === 'aisles' && (
-        <div className="space-y-3">
-          <div className="grid grid-cols-3 gap-2">
-            <MetricCard icon={ShoppingBag} label="Penetration" value={`${aisles.penetrationPct}%`} sub="Entrants reaching aisles" />
-            <MetricCard icon={Clock} label="Stopping power" value={`${aisles.stoppingPowerPct}%`} sub="Visits with dwell" />
-            <MetricCard icon={TrendingUp} label="Bypass rate" value={`${aisles.bypassPct}%`} sub="Pass-through without stop" />
-          </div>
-          {aisles.aisleConversionPct != null && (
-            <p className="text-xs text-gray-400">Aisle conversion (ERP): <span className="text-white">{aisles.aisleConversionPct}%</span></p>
-          )}
-          {aisles.topAisles.length > 0 && (
-            <div className="rounded-lg border border-gray-700/60 overflow-hidden">
-              <div className="px-3 py-2 border-b border-gray-700/60 text-xs font-medium text-white">Top aisles</div>
-              <table className="w-full text-xs">
-                <thead>
-                  <tr className="text-gray-500 border-b border-gray-700/40">
-                    <th className="text-left px-3 py-1.5 font-normal">Zone</th>
-                    <th className="text-right px-3 py-1.5 font-normal">Visits</th>
-                    <th className="text-right px-3 py-1.5 font-normal">Stop %</th>
-                    <th className="text-right px-3 py-1.5 font-normal">Dwell</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {aisles.topAisles.map(row => (
-                    <tr key={row.id} className="border-b border-gray-800/60">
-                      <td className="px-3 py-1.5 text-gray-200 truncate max-w-[180px]">{row.name}</td>
-                      <td className="px-3 py-1.5 text-right text-gray-300">{row.visits}</td>
-                      <td className="px-3 py-1.5 text-right text-gray-300">{row.stoppingPowerPct}%</td>
-                      <td className="px-3 py-1.5 text-right text-gray-300">{row.avgDwellMin}m</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+        <div className="grid grid-cols-1 xl:grid-cols-12 gap-3">
+          <div className="xl:col-span-5 space-y-3">
+            <div className="grid grid-cols-3 gap-2">
+              <RingGauge value={aisles.penetrationPct} label="Penetration" color="#3b82f6" />
+              <RingGauge value={aisles.stoppingPowerPct} label="Stopping power" color="#a78bfa" />
+              <RingGauge value={aisles.bypassPct} label="Bypass" color="#64748b" />
             </div>
-          )}
+            <div className="rounded-xl border border-gray-700/60 bg-gray-800/40 p-4">
+              <h3 className="text-xs font-semibold text-white mb-3">Traffic by category</h3>
+              <HorizontalBarChart rows={aisleCategoryBars} maxBars={14} />
+            </div>
+          </div>
+          <div className="xl:col-span-7">
+            <div className="rounded-xl border border-gray-700/60 bg-gray-800/40 overflow-hidden h-full">
+              <div className="px-4 py-2.5 border-b border-gray-700/50 flex items-center justify-between">
+                <h3 className="text-xs font-semibold text-white">Zone performance</h3>
+                <span className="text-[10px] text-gray-500">Grouped by DWG category tag</span>
+              </div>
+              <div className="overflow-x-auto max-h-[420px] overflow-y-auto">
+                <table className="w-full text-xs">
+                  <thead className="sticky top-0 bg-gray-900/95 z-10">
+                    <tr className="text-gray-500 border-b border-gray-700/40">
+                      <th className="text-left px-4 py-2 font-medium">Category</th>
+                      <th className="text-left px-4 py-2 font-medium">Zone</th>
+                      <th className="text-right px-4 py-2 font-medium">Visits</th>
+                      <th className="text-right px-4 py-2 font-medium">Stop</th>
+                      <th className="text-right px-4 py-2 font-medium">Dwell</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {aisles.topAisles.map(row => (
+                      <tr key={row.id} className="border-b border-gray-800/50 hover:bg-white/[0.02]">
+                        <td className="px-4 py-2">
+                          <CategoryChip label={row.category} />
+                        </td>
+                        <td className="px-4 py-2 text-gray-500 truncate max-w-[140px]">{row.name}</td>
+                        <td className="px-4 py-2 text-right text-gray-200 tabular-nums">{row.visits.toLocaleString()}</td>
+                        <td className="px-4 py-2 text-right text-gray-300 tabular-nums">{row.stoppingPowerPct}%</td>
+                        <td className="px-4 py-2 text-right text-gray-300 tabular-nums">{row.avgDwellMin}m</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
         </div>
       )}
 
       {tab === 'checkout' && (
-        <div className="space-y-2">
-          {checkout.channels.length === 0 ? (
-            <p className="text-xs text-gray-500 py-4">No checkout zones found. Tag ROIs with checkout_channel metadata.</p>
+        <div className="space-y-3">
+          {checkoutChannels.length === 0 ? (
+            <p className="text-xs text-gray-500 py-8 text-center">No checkout zones found.</p>
           ) : (
-            checkout.channels.map(ch => (
-              <div key={ch.id} className="rounded-lg border border-gray-700/80 bg-gray-800/40 p-3 flex flex-wrap items-center justify-between gap-2">
-                <div className="flex items-center gap-2">
-                  <CreditCard className="w-4 h-4 text-green-400" />
-                  <span className="text-sm font-medium text-white">{ch.label}</span>
+            <>
+              <ChannelCompareChart channels={checkoutChannels} />
+              {checkout.frictionScore != null && (
+                <div className="rounded-lg border border-gray-700/50 bg-gray-800/30 px-4 py-2 flex items-center justify-between text-xs">
+                  <span className="text-gray-400">Checkout friction score</span>
+                  <span className="text-white font-medium">{checkout.frictionScore}</span>
+                  <span className="text-gray-600">wait ÷ store dwell</span>
                 </div>
-                <div className="flex flex-wrap gap-3 text-xs text-gray-400">
-                  <span>{ch.sessions} sessions</span>
-                  <span>{ch.avgWaitMin}m avg wait</span>
-                  <span className={ch.abandonPct > 15 ? 'text-amber-400' : ''}>{ch.abandonPct}% abandon</span>
-                  {variant === 'live' && ch.currentQueue > 0 && (
-                    <span className="text-cyan-400">{ch.currentQueue} in queue now</span>
-                  )}
-                </div>
-              </div>
-            ))
-          )}
-          {checkout.frictionScore != null && (
-            <p className="text-xs text-gray-500">Checkout friction score: {checkout.frictionScore} (wait ÷ store dwell)</p>
+              )}
+            </>
           )}
         </div>
       )}
 
       {tab === 'media' && (
-        <div className="grid grid-cols-2 gap-2 max-w-md">
-          <MetricCard icon={MonitorPlay} label="Campaign score (CES)" value={String(media.ces)} sub="PEBLE effectiveness" />
-          <MetricCard icon={TrendingUp} label="Exposure lift (EAL)" value={`${media.eal}%`} sub="Attributed visits" />
-        </div>
-      )}
-
-      {/* Top 3 insights — always visible */}
-      {insights.length > 0 && (
-        <div className="rounded-lg border border-gray-700/80 bg-gray-800/30 overflow-hidden">
-          <div className="px-3 py-2 border-b border-gray-700/60 flex items-center gap-2">
-            <Lightbulb className="w-3.5 h-3.5 text-amber-400" />
-            <span className="text-xs font-medium text-white">Top {Math.min(3, insights.length)} actionable insights</span>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 max-w-2xl">
+          <div className="rounded-xl border border-purple-500/30 bg-purple-500/5 p-6 flex items-center gap-6">
+            <RingGauge value={media.ces} max={100} label="CES" color="#a78bfa" size={96} />
+            <div>
+              <h3 className="text-sm font-semibold text-white">Campaign effectiveness</h3>
+              <p className="text-xs text-gray-500 mt-1">PEBLE composite score across active screens</p>
+            </div>
           </div>
-          <div className="p-2 space-y-2">
-            {insights.slice(0, 3).map(ins => (
-              <div key={ins.id} className={`rounded-md border p-2.5 ${INSIGHT_COLOR[ins.severity]}`}>
-                <div className="text-xs font-medium text-white">{ins.title}</div>
-                <p className="text-[10px] text-gray-300 mt-0.5">{ins.message}</p>
-                <p className="text-[10px] text-gray-500 mt-1">→ {ins.action}</p>
-              </div>
-            ))}
+          <div className="rounded-xl border border-blue-500/30 bg-blue-500/5 p-6 flex items-center gap-6">
+            <RingGauge value={media.eal} max={100} label="EAL" color="#38bdf8" size={96} />
+            <div>
+              <h3 className="text-sm font-semibold text-white">Exposure lift</h3>
+              <p className="text-xs text-gray-500 mt-1">Incremental visits attributed to DOOH</p>
+            </div>
           </div>
         </div>
       )}

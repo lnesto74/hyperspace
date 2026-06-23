@@ -105,10 +105,11 @@ function isFrescoCategory(text, objectType) {
 export function classifyRoi(roi, zoneSetting = null, linked = {}) {
   const meta = parseMeta(roi.metadata_json);
   const name = norm(roi.name);
-  const linkedCat = norm(linked.categoryLabel || '');
+  const linkedCat = linked.categoryLabel || '';
   const category = norm(
     meta.business_category || meta.business_category_label || linkedCat || '',
   );
+  const categoryLabel = linkedCat || meta.business_category_label || meta.business_category || null;
   const section = norm(meta.executive_section || meta.zone_group || meta.journey_section || '');
   const checkoutChannel = norm(meta.checkout_channel || meta.checkoutChannel || '');
   const zoneType = resolveZoneType(meta, zoneSetting);
@@ -118,54 +119,66 @@ export function classifyRoi(roi, zoneSetting = null, linked = {}) {
   if (isCheckout) {
     const channel = resolveCheckoutChannel(checkoutChannel, name) || 'traditional';
     const role = zoneType === 'service' || name.includes('service') ? 'service' : 'queue';
-    return { group: 'checkout', subGroup: channel, role };
+    return { group: 'checkout', subGroup: channel, role, categoryLabel };
   }
 
-  if (
-    section === 'fresco'
-    || isFrescoCategory(category || name, linked.objectType)
-    || isFrescoCategory(linkedCat, linked.objectType)
-  ) {
-    const dept = mapCategoryToFrescoDept(category || linkedCat || name);
+  if (name.includes('traffic') || name.includes('entrance') || name.includes('ingress')
+    || meta.template === 'entrance-flow') {
+    return { group: 'ingress', subGroup: 'ingress', role: 'traffic', categoryLabel };
+  }
+
+  const isShelfZone = meta.template === 'shelf-engagement'
+    || name.includes('engagement')
+    || name.includes('shelf')
+    || name.includes('scaffale')
+    || name.includes('corsia')
+    || name.includes('aisle')
+    || (meta.type === 'smart-kpi' && !meta.template?.includes('cashier'));
+
+  if (isShelfZone) {
+    return {
+      group: 'aisles',
+      subGroup: categoryLabel || category || 'Uncategorized',
+      role: 'shelf',
+      categoryLabel: categoryLabel || category || 'Uncategorized',
+    };
+  }
+
+  const isFrescoCounter = linked.objectType === 'banco'
+    || name.includes('banco')
+    || name.includes('muretto')
+    || section === 'fresco';
+
+  if (isFrescoCounter) {
+    const dept = mapCategoryToFrescoDept(categoryLabel || category || name);
     if (zoneType === 'queue' || name.includes('queue')) {
-      return { group: 'fresco', subGroup: dept, role: 'queue' };
+      return { group: 'fresco', subGroup: dept, role: 'queue', categoryLabel: categoryLabel || dept };
     }
-    if (zoneType === 'service' || name.includes('service') || linked.objectType === 'banco') {
-      return { group: 'fresco', subGroup: dept, role: 'service' };
+    if (zoneType === 'service' || name.includes('service')) {
+      return { group: 'fresco', subGroup: dept, role: 'service', categoryLabel: categoryLabel || dept };
     }
-    return { group: 'fresco', subGroup: dept, role: 'browse' };
+    return { group: 'fresco', subGroup: dept, role: 'browse', categoryLabel: categoryLabel || dept };
   }
 
   if (checkoutChannel) {
     const channel = resolveCheckoutChannel(checkoutChannel, name);
-    if (channel) return { group: 'checkout', subGroup: channel, role: 'queue' };
-  }
-
-  if (zoneType === 'queue' && (name.includes('checkout') || name.includes('cassa'))) {
-    return { group: 'checkout', subGroup: resolveCheckoutChannel('', name) || 'traditional', role: 'queue' };
+    if (channel) return { group: 'checkout', subGroup: channel, role: 'queue', categoryLabel };
   }
 
   if (zoneType === 'service' || (name.includes('service') && !isCheckout)) {
-    return { group: 'service', subGroup: category || linkedCat || 'service', role: 'service' };
+    return { group: 'service', subGroup: category || linkedCat || 'service', role: 'service', categoryLabel };
   }
 
-  if (name.includes('traffic') || name.includes('entrance') || name.includes('ingress')) {
-    return { group: 'ingress', subGroup: 'ingress', role: 'traffic' };
-  }
-
-  if (
-    name.includes('engagement') || name.includes('shelf') || name.includes('category')
-    || name.includes('scaffale') || name.includes('corsia') || name.includes('aisle')
-    || meta.type === 'smart-kpi'
-  ) {
+  if (meta.type === 'smart-kpi') {
     return {
       group: 'aisles',
-      subGroup: category || linkedCat || meta.business_category_label || 'general',
+      subGroup: categoryLabel || 'Uncategorized',
       role: 'shelf',
+      categoryLabel: categoryLabel || 'Uncategorized',
     };
   }
 
-  return { group: 'other', subGroup: category || linkedCat || 'other', role: 'general' };
+  return { group: 'other', subGroup: category || linkedCat || 'other', role: 'general', categoryLabel };
 }
 
 function resolveCheckoutChannel(explicit, name) {
