@@ -54,12 +54,42 @@ function resolveZoneType(meta, zoneSetting) {
   return zoneSetting?.zone_type || meta.zoneType || null;
 }
 
+const PATTERN_TO_DEPT = {
+  ortofrutta: 'ortofrutta',
+  macelleria: 'macelleria',
+  gastronomia: 'gastronomia',
+  pescheria: 'pescheria',
+  panetteria: 'panetteria',
+  latticini: 'latticini',
+  fresco: 'fresco',
+  fresh: 'fresco',
+  deli: 'gastronomia',
+  bakery: 'panetteria',
+  butcher: 'macelleria',
+  fish: 'pescheria',
+  'piazza del fresco': 'fresco',
+  'frutta e verdura': 'ortofrutta',
+  frutta: 'ortofrutta',
+  verdura: 'ortofrutta',
+  carne: 'macelleria',
+  pesce: 'pescheria',
+  pane: 'panetteria',
+  salumi: 'gastronomia',
+};
+
 function mapCategoryToFrescoDept(label) {
   const n = norm(label);
   for (const [key, dept] of Object.entries(FRESCO_CATEGORY_MAP)) {
     if (n.includes(key)) return dept;
   }
-  return inferFrescoDept(n);
+  for (const [pattern, dept] of Object.entries(PATTERN_TO_DEPT)) {
+    if (n.includes(pattern)) return dept;
+  }
+  return 'fresco';
+}
+
+function inferFrescoDept(text) {
+  return mapCategoryToFrescoDept(text);
 }
 
 function isFrescoCategory(text, objectType) {
@@ -136,19 +166,6 @@ export function classifyRoi(roi, zoneSetting = null, linked = {}) {
   }
 
   return { group: 'other', subGroup: category || linkedCat || 'other', role: 'general' };
-}
-
-function inferFrescoDept(text) {
-  const n = norm(text);
-  for (const p of FRESCO_PATTERNS) {
-    if (n.includes(p) && p !== 'banco') return mapCategoryToFrescoDept(p);
-  }
-  if (n.includes('orto') || n.includes('frutta')) return 'ortofrutta';
-  if (n.includes('macell') || n.includes('carne')) return 'macelleria';
-  if (n.includes('gastronom') || n.includes('salum')) return 'gastronomia';
-  if (n.includes('pes')) return 'pescheria';
-  if (n.includes('pan')) return 'panetteria';
-  return 'fresco';
 }
 
 function resolveCheckoutChannel(explicit, name) {
