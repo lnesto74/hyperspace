@@ -24,6 +24,7 @@ import ReplayService from './services/ReplayService.js';
 import { OfflineReconcileService } from './services/OfflineReconcileService.js';
 import StoryReplayService from './services/StoryReplayService.js';
 import MqttRecordService from './services/MqttRecordService.js';
+import EdgeCaptureService from './services/EdgeCaptureService.js';
 import BenchmarkRunService from './services/BenchmarkRunService.js';
 import BenchmarkCoverageService from './services/BenchmarkCoverageService.js';
 import BenchmarkJobService from './services/BenchmarkJobService.js';
@@ -515,9 +516,10 @@ const replayDir = process.env.REPLAY_DIR || '/data/replay';
 const replayService = new ReplayService({ mqttService, replayDir, trackAggregator });
 const storyReplayService = new StoryReplayService({ io });
 const mqttRecordService = new MqttRecordService({ replayDir });
+const edgeCaptureService = new EdgeCaptureService({ replayDir, db });
 const offlineReconcileService = new OfflineReconcileService({ db, replayDir });
-if (mqttService) mqttService.setMqttRecorder(mqttRecordService);
-app.use('/api/replay', replayRoutes({ replayService, mqttRecordService, mqttService, db, offlineReconcileService, storyReplayService }));
+if (mqttService) mqttService.setMqttRecorder(edgeCaptureService.useEdgeRecording() ? null : mqttRecordService);
+app.use('/api/replay', replayRoutes({ replayService, mqttRecordService, edgeCaptureService, mqttService, db, offlineReconcileService, storyReplayService }));
 const benchmarkRunService = new BenchmarkRunService();
 const benchmarkCoverageService = new BenchmarkCoverageService({
   benchmarkRunService,
@@ -602,7 +604,7 @@ app.get('/api/health', (req, res) => {
 });
 
 // Edge Simulator Control (via Tailscale)
-const DEFAULT_EDGE_SERVER_URL = process.env.EDGE_SERVER_URL || 'http://100.78.174.103:8080';
+const DEFAULT_EDGE_SERVER_URL = process.env.EDGE_SERVER_URL || 'http://100.106.23.6:8080';
 const EDGE_PORT = 8080;
 
 // Helper: Get edge URL from request query param or use default
@@ -1445,6 +1447,15 @@ setImmediate(() => {
 
 // Start server
 httpServer.listen(PORT, async () => {
+  // Harden edge MQTT bridge on startup (fixes live + replay stop-go from cleansession true).
+  if (edgeCaptureService?.useEdgeRecording?.()) {
+    edgeCaptureService.hardenEdgeBridge().then(() => {
+      console.log('🔗 Edge MQTT bridge hardened on startup');
+    }).catch((err) => {
+      console.warn('⚠️ Edge bridge harden on startup skipped:', err.message);
+    });
+  }
+
   // Auto-configure edge simulator backendUrl so SimV2 can fetch zone data
   if (process.env.BACKEND_PUBLIC_URL && DEFAULT_EDGE_SERVER_URL) {
     try {

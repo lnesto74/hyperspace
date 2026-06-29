@@ -23,6 +23,7 @@ import { initHerManager, deployHer, stopHer, getHerStatus, getMode, isHerActive 
 // Perception Adapter (Fast3D → Hyperspace format bridge)
 import { PerceptionAdapter } from './perception-adapter.js';
 import { MqttRecorder } from './mqtt-recorder.js';
+import { applyHardenedBridge, ensureBrokerQueueSettings, BRIDGE_PRODUCTION_ADDRESS } from './mqtt-bridge-config.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -1252,15 +1253,41 @@ app.post('/api/config', async (req, res) => {
 // ============================================
 const MOSQUITTO_CONF_PATH = '/mosquitto/config/mosquitto.conf';
 const BRIDGE_TARGETS = {
-  production: '100.76.196.2:1883',
+  production: BRIDGE_PRODUCTION_ADDRESS,
   development: null, // Will be set dynamically from request
 };
+
+function readMosquittoConf() {
+  const confPath = '/app/mosquitto/config/mosquitto.conf';
+  return fs.readFileSync(confPath, 'utf-8');
+}
+
+function writeMosquittoConf(conf) {
+  const confPath = '/app/mosquitto/config/mosquitto.conf';
+  fs.writeFileSync(confPath, conf);
+}
+
+function restartEdgeMosquitto() {
+  import('child_process').then(({ exec }) => {
+    exec('docker restart edge-mosquitto 2>&1', (err) => {
+      if (err) console.error('[MQTT Bridge] Failed to restart mosquitto:', err.message);
+      else console.log('[MQTT Bridge] Mosquitto restarted successfully');
+    });
+  });
+}
+
+function applyBridgeConfig(address, connectionName) {
+  let conf = ensureBrokerQueueSettings(readMosquittoConf());
+  conf = applyHardenedBridge(conf, address, connectionName);
+  writeMosquittoConf(conf);
+  restartEdgeMosquitto();
+  return conf;
+}
 
 // Get current bridge target from mosquitto.conf
 app.get('/api/mqtt-bridge', (req, res) => {
   try {
-    const confPath = '/app/mosquitto/config/mosquitto.conf';
-    const conf = fs.readFileSync(confPath, 'utf-8');
+    const conf = readMosquittoConf();
     const addressMatch = conf.match(/^address\s+(.+)$/m);
     const currentAddress = addressMatch ? addressMatch[1].trim() : null;
     
@@ -1313,37 +1340,41 @@ app.post('/api/mqtt-bridge', async (req, res) => {
   }
   
   try {
-    const confPath = '/app/mosquitto/config/mosquitto.conf';
-    let conf = fs.readFileSync(confPath, 'utf-8');
-    
-    // Update the address line
-    conf = conf.replace(/^address\s+.+$/m, `address ${bridgeAddress}`);
-    
-    // Update connection name for clarity
     const connectionName = target === 'production' ? 'hyperspace-prod' : 'hyperspace-dev';
-    conf = conf.replace(/^connection\s+.+$/m, `connection ${connectionName}`);
-    
-    fs.writeFileSync(confPath, conf);
-    console.log(`[MQTT Bridge] Updated to ${target}: ${bridgeAddress}`);
-    
-    // Restart mosquitto container to apply changes (using docker socket mounted in container)
-    const { exec } = await import('child_process');
-    exec('docker restart edge-mosquitto 2>&1', (err, stdout, stderr) => {
-      if (err) {
-        console.error('[MQTT Bridge] Failed to restart mosquitto:', err.message);
-      } else {
-        console.log('[MQTT Bridge] Mosquitto restarted successfully');
-      }
-    });
-    
-    res.json({ 
-      success: true, 
-      target, 
+    applyBridgeConfig(bridgeAddress, connectionName);
+    console.log(`[MQTT Bridge] Updated to ${target}: ${bridgeAddress} (hardened)`);
+
+    res.json({
+      success: true,
+      target,
       address: bridgeAddress,
-      message: 'Bridge config updated. Mosquitto restarting...'
+      hardened: true,
+      message: 'Hardened bridge config applied. Mosquitto restarting...',
     });
   } catch (err) {
     console.error('[MQTT Bridge] Failed to update config:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Re-apply hardened bridge settings (cleansession false, queues, keepalive) without changing target.
+app.post('/api/mqtt-bridge/harden', (req, res) => {
+  try {
+    const conf = readMosquittoConf();
+    const addressMatch = conf.match(/^address\s+(.+)$/m);
+    const nameMatch = conf.match(/^connection\s+(.+)$/m);
+    const address = addressMatch?.[1]?.trim() || BRIDGE_TARGETS.production;
+    const connectionName = nameMatch?.[1]?.trim() || 'hyperspace-prod';
+    applyBridgeConfig(address, connectionName);
+    console.log(`[MQTT Bridge] Hardened existing bridge → ${address}`);
+    res.json({
+      success: true,
+      address,
+      connectionName,
+      message: 'Hardened bridge config applied. Mosquitto restarting...',
+    });
+  } catch (err) {
+    console.error('[MQTT Bridge] Harden failed:', err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -1357,9 +1388,12 @@ app.get('/api/edge/mqtt/record/status', (_req, res) => {
 app.get('/api/edge/mqtt/record/probe', async (req, res) => {
   try {
     mqttRecorder.brokerUrl = config.mqttBroker;
-    const durationMs = Math.min(10000, Math.max(1000, Number(req.query.durationMs) || 3000));
+    const durationMs = Math.min(30000, Math.max(1000, Number(req.query.durationMs) || 3000));
     const detailed = req.query.detailed === '1' || req.query.detailed === 'true';
-    const probe = await mqttRecorder.probe({ durationMs, detailed });
+    const topics = req.query.topics
+      ? String(req.query.topics).split(',').map(t => t.trim()).filter(Boolean)
+      : undefined;
+    const probe = await mqttRecorder.probe({ durationMs, detailed, topics });
     res.json({ ok: true, probe, brokerUrl: config.mqttBroker, detailed });
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message });
@@ -1372,8 +1406,8 @@ app.post('/api/edge/mqtt/record/start', (req, res) => {
     if (mqttRecorder.getStatus().recording) {
       return res.status(409).json({ ok: false, error: 'Recording already in progress on this edge' });
     }
-    const { label, topics } = req.body || {};
-    const status = mqttRecorder.start({ label, topics });
+    const { label, topics, durationMinutes } = req.body || {};
+    const status = mqttRecorder.start({ label, topics, durationMinutes });
     res.json({ ok: true, status });
   } catch (err) {
     res.status(400).json({ ok: false, error: err.message });
@@ -1384,6 +1418,24 @@ app.post('/api/edge/mqtt/record/stop', async (_req, res) => {
   try {
     const status = await mqttRecorder.stop();
     res.json({ ok: true, ...status });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+app.delete('/api/edge/mqtt/record/files/:filename', (req, res) => {
+  try {
+    const result = mqttRecorder.deleteFile(req.params.filename);
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    res.status(404).json({ ok: false, error: err.message });
+  }
+});
+
+app.post('/api/edge/mqtt/record/prune', (_req, res) => {
+  try {
+    const result = mqttRecorder.pruneLocal();
+    res.json({ ok: true, ...result });
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message });
   }
@@ -3005,9 +3057,25 @@ server.listen(PORT, '0.0.0.0', () => {
   `);
 
   // Auto-restore saved edge mode after startup (wait for Mosquitto to be ready).
+  const STARTUP_DELAY_MS = 5000;
+  setTimeout(() => {
+    try {
+      const conf = readMosquittoConf();
+      if (/^cleansession\s+true\s*$/m.test(conf)) {
+        const addressMatch = conf.match(/^address\s+(.+)$/m);
+        const nameMatch = conf.match(/^connection\s+(.+)$/m);
+        const address = addressMatch?.[1]?.trim() || BRIDGE_TARGETS.production;
+        const connectionName = nameMatch?.[1]?.trim() || 'hyperspace-prod';
+        console.log('[MQTT Bridge] Auto-hardening legacy cleansession true config...');
+        applyBridgeConfig(address, connectionName);
+      }
+    } catch (err) {
+      console.warn('[MQTT Bridge] Startup harden check skipped:', err.message);
+    }
+  }, 2000);
+
   const savedMode = config.edgeMode;
   if (savedMode && savedMode !== 'off') {
-    const STARTUP_DELAY_MS = 5000;
     console.log(`[EdgeMode] Will auto-restore mode "${savedMode}" in ${STARTUP_DELAY_MS / 1000}s...`);
     setTimeout(async () => {
       try {

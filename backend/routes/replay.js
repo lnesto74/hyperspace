@@ -3,7 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import { venueQueries } from '../database/schema.js';
 
-export default function replayRoutes({ replayService, mqttRecordService, mqttService, db, offlineReconcileService, storyReplayService }) {
+export default function replayRoutes({ replayService, mqttRecordService, edgeCaptureService, mqttService, db, offlineReconcileService, storyReplayService }) {
   const router = Router();
 
   router.get('/files', (_req, res) => {
@@ -212,21 +212,31 @@ export default function replayRoutes({ replayService, mqttRecordService, mqttSer
     }
   });
 
-  // ---- Record MQTT on main server (edge already bridges here) ----
+  // ---- Record MQTT: edge slave (default) or cloud broker (legacy) ----
+
+  const activeRecorder = () => (
+    edgeCaptureService?.useEdgeRecording() ? edgeCaptureService : mqttRecordService
+  );
 
   router.get('/record/status', (_req, res) => {
     try {
-      if (!mqttRecordService) return res.status(503).json({ error: 'Recording not available' });
-      res.json({ success: true, status: mqttRecordService.getStatus(mqttService) });
+      const recorder = activeRecorder();
+      if (!recorder) return res.status(503).json({ error: 'Recording not available' });
+      res.json({ success: true, status: recorder.getStatus(mqttService) });
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
   });
 
-  router.post('/record/start', (req, res) => {
+  router.post('/record/start', async (req, res) => {
     try {
-      if (!mqttRecordService) return res.status(503).json({ error: 'Recording not available' });
-      const { label, durationMinutes } = req.body || {};
+      const recorder = activeRecorder();
+      if (!recorder) return res.status(503).json({ error: 'Recording not available' });
+      const { label, durationMinutes, edgeIp, venueId } = req.body || {};
+      if (recorder === edgeCaptureService) {
+        const status = await edgeCaptureService.start({ label: label || 'capture', durationMinutes, edgeIp, venueId });
+        return res.json({ success: true, status });
+      }
       mqttRecordService.start({ label: label || 'capture', durationMinutes });
       res.json({ success: true, status: mqttRecordService.getStatus(mqttService) });
     } catch (err) {
@@ -234,15 +244,33 @@ export default function replayRoutes({ replayService, mqttRecordService, mqttSer
     }
   });
 
-  router.post('/record/stop', async (_req, res) => {
+  router.post('/record/stop', async (req, res) => {
     try {
-      if (!mqttRecordService) return res.status(503).json({ error: 'Recording not available' });
-      const stopped = await mqttRecordService.stop();
+      const recorder = activeRecorder();
+      if (!recorder) return res.status(503).json({ error: 'Recording not available' });
+      const { edgeIp, venueId } = req.body || {};
+      let stopped;
+      if (recorder === edgeCaptureService) {
+        stopped = await edgeCaptureService.stop({ edgeIp, venueId });
+      } else {
+        stopped = await mqttRecordService.stop();
+      }
       res.json({
         success: true,
         stopped,
         file: stopped.file ? { name: stopped.file, size: stopped.bytesWritten } : null,
       });
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  router.post('/record/harden-bridge', async (req, res) => {
+    try {
+      if (!edgeCaptureService) return res.status(503).json({ error: 'Edge capture not available' });
+      const { edgeIp, venueId } = req.body || {};
+      const result = await edgeCaptureService.hardenEdgeBridge({ edgeIp, venueId });
+      res.json({ success: true, result });
     } catch (err) {
       res.status(400).json({ error: err.message });
     }

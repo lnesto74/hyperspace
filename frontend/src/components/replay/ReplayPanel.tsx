@@ -52,6 +52,9 @@ interface FileMeta {
 
 interface RecordStatus {
   recording: boolean
+  syncing?: boolean
+  source?: 'edge' | 'cloud'
+  edgeUrl?: string | null
   file: string | null
   bytesWritten: number
   messagesRecorded: number
@@ -267,6 +270,7 @@ export default function ReplayPanel({ onClose, launch }: ReplayPanelProps) {
   const selectedMeta = files.find(f => f.name === selected)
 
   const recording = !!recordStatus?.recording
+  const syncing = !!recordStatus?.syncing
 
   const refreshReconcilePresets = useCallback(async () => {
     try {
@@ -499,7 +503,11 @@ export default function ReplayPanel({ onClose, launch }: ReplayPanelProps) {
       const res = await fetch(`${API_BASE}/api/replay/record/start`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ label: recordLabel, durationMinutes }),
+        body: JSON.stringify({
+          label: recordLabel,
+          durationMinutes,
+          venueId: venue?.id,
+        }),
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`)
@@ -510,13 +518,17 @@ export default function ReplayPanel({ onClose, launch }: ReplayPanelProps) {
     } finally {
       setRecordBusy(false)
     }
-  }, [recordLabel, recordDurationMinutes, hasAutoStop, scheduledDurationMinutes])
+  }, [recordLabel, recordDurationMinutes, hasAutoStop, scheduledDurationMinutes, venue?.id])
 
   const stopRecord = useCallback(async () => {
     setRecordBusy(true)
     setError(null)
     try {
-      const res = await fetch(`${API_BASE}/api/replay/record/stop`, { method: 'POST' })
+      const res = await fetch(`${API_BASE}/api/replay/record/stop`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ venueId: venue?.id }),
+      })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`)
       setRecordStatus(data.stopped || null)
@@ -527,7 +539,7 @@ export default function ReplayPanel({ onClose, launch }: ReplayPanelProps) {
     } finally {
       setRecordBusy(false)
     }
-  }, [refreshFiles])
+  }, [refreshFiles, venue?.id])
 
   const waitForReplayStopped = useCallback(async () => {
     for (let i = 0; i < 40; i++) {
@@ -846,14 +858,17 @@ export default function ReplayPanel({ onClose, launch }: ReplayPanelProps) {
             </div>
           </div>
 
-          {/* Record on main server */}
+          {/* Record on edge slave → sync to DO */}
           <div className="space-y-2 pb-3 border-b border-gray-800">
             <div className="flex items-center gap-2">
-              <Circle className={`w-2 h-2 ${recording ? 'fill-red-500 text-red-500 animate-pulse' : 'fill-gray-600 text-gray-600'}`} />
+              <Circle className={`w-2 h-2 ${recording ? 'fill-red-500 text-red-500 animate-pulse' : recordStatus?.syncing ? 'fill-amber-500 text-amber-500 animate-pulse' : 'fill-gray-600 text-gray-600'}`} />
               <span className="font-medium text-white">Record live MQTT</span>
+              {recordStatus?.source === 'edge' && (
+                <span className="text-[10px] uppercase tracking-wider text-cyan-400">edge → DO</span>
+              )}
             </div>
             <p className="text-[10px] text-gray-500">
-              Captures trajectories as they arrive on this server (edge → Mosquitto → here). No edge update needed.
+              Records on the edge slave (full 10 Hz, pre-bridge), syncs the file here for replay, then deletes it on the slave.
             </p>
 
             <div>
@@ -906,7 +921,7 @@ export default function ReplayPanel({ onClose, launch }: ReplayPanelProps) {
               )}
             </div>
 
-            {!recording ? (
+            {!recording && !syncing ? (
               <button
                 onClick={startRecord}
                 disabled={recordBusy}
@@ -917,18 +932,22 @@ export default function ReplayPanel({ onClose, launch }: ReplayPanelProps) {
                   ? `Start recording (${scheduledDurationMinutes} min timer)`
                   : 'Start recording'}
               </button>
+            ) : syncing ? (
+              <div className="text-[11px] text-amber-300 flex items-center gap-2 py-2">
+                <Loader2 className="w-4 h-4 animate-spin" />
+                Syncing capture from edge to server…
+              </div>
             ) : (
-              <button
-                onClick={stopRecord}
-                disabled={recordBusy}
-                className="w-full px-3 py-2 rounded bg-gray-700 hover:bg-gray-600 text-white font-medium flex items-center justify-center gap-2"
-              >
-                {recordBusy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Square className="w-4 h-4" />}
-                Stop recording
-              </button>
-            )}
-
-            {recording && recordStatus && (
+              <>
+                <button
+                  onClick={stopRecord}
+                  disabled={recordBusy}
+                  className="w-full px-3 py-2 rounded bg-gray-700 hover:bg-gray-600 text-white font-medium flex items-center justify-center gap-2"
+                >
+                  {recordBusy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Square className="w-4 h-4" />}
+                  Stop recording
+                </button>
+                {recordStatus && (
               <div className="space-y-1 pt-1">
                 <div className="flex justify-between text-[11px]">
                   <span className="text-gray-500">File</span>
@@ -965,6 +984,8 @@ export default function ReplayPanel({ onClose, launch }: ReplayPanelProps) {
                   {formatBytes(recordStatus.bytesWritten)} (bar ref: 500 MB)
                 </div>
               </div>
+                )}
+              </>
             )}
           </div>
 

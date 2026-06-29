@@ -80,15 +80,28 @@ localStorage.setItem('hyperspace-diag', '1')
 
 Only run this **after** DO layers look healthy. Large socket gaps with smooth DO mqtt ⇒ CDN/proxy/WebSocket path to browser.
 
-## 6. When to add an edge buffer
+## 6. Bridge hardening (live stop-go fix)
 
-Add a JSONL/spool buffer on the slave **only if**:
+If edge local MQTT is smooth 10 Hz but DO mqtt shows ~5s gaps, the Mosquitto **bridge** is dropping
+frames. Harden the edge bridge (see `edge-server/mosquitto/config/mosquitto.conf`):
 
-- Edge probe shows steady msg/s and low gap p95, **but**
-- DO mqtt tap shows drops or high gap p95, **and**
-- Tailscale ping is acceptable
+- `cleansession false` (was `true` — caused burst loss on reconnect)
+- `max_queued_messages 100000` on local broker
+- `restart_timeout 2`, `keepalive_interval 10`
 
-The buffer decouples perception from bridge stalls; it does not fix backend CPU or frontend issues.
+```bash
+bash scripts/apply-edge-bridge-hardening.sh 100.106.23.6
+curl -X POST http://EDGE:8080/api/mqtt-bridge/harden
+```
+
+Also establish a **Tailscale direct** path (not DERP-only) between edge and DO.
+
+## 7. Edge recording → DO sync (replay captures)
+
+Default `REPLAY_RECORD_SOURCE=edge`: Replay panel records on the slave (pre-bridge, full 10 Hz),
+downloads to `/data/replay` on DO, then deletes the file on the slave (max 3 local files / 2 GB cap).
+
+Legacy cloud recording: `REPLAY_RECORD_SOURCE=cloud` (records bridged stream on DO — not recommended).
 
 ## API reference
 
@@ -97,3 +110,4 @@ The buffer decouples perception from bridge stalls; it does not fix backend CPU 
 | `GET /api/tracking/venue/:id/status` | Connection, frame occupancy, last track ts |
 | `GET /api/tracking/venue/:id/pipeline` | 10s rolling mqtt/emit metrics + diagnosis hints |
 | `GET http://EDGE:8080/api/edge/mqtt/record/probe?detailed=1` | Edge local broker rate + gaps |
+| `POST /api/replay/record/harden-bridge` | Apply hardened bridge on edge from DO |

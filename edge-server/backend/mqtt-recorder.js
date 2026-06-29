@@ -6,7 +6,14 @@ import fs from 'fs';
 import path from 'path';
 import mqtt from 'mqtt';
 
-const DEFAULT_TOPICS = ['hyperspace/trajectories/#', 'fast3dis/objects'];
+/** Topics for replay-compatible captures (post-adapter trajectories). */
+export const REPLAY_TOPICS = ['hyperspace/trajectories/#'];
+const DEFAULT_TOPICS = REPLAY_TOPICS;
+
+/** Keep at most this many completed files on the edge (synced files should be deleted). */
+const MAX_LOCAL_FILES = Number(process.env.EDGE_RECORD_MAX_FILES) || 3;
+/** Soft cap — refuse new recordings when local dir exceeds this. */
+const MAX_LOCAL_BYTES = Number(process.env.EDGE_RECORD_MAX_BYTES) || 2 * 1024 * 1024 * 1024;
 
 function sanitizeName(name) {
   return String(name || 'capture')
@@ -14,13 +21,21 @@ function sanitizeName(name) {
     .slice(0, 80) || 'capture';
 }
 
+function parseDurationMinutes(value) {
+  if (value == null || value === '') return null;
+  const mins = Number(value);
+  if (!Number.isFinite(mins) || mins <= 0) return null;
+  return Math.min(720, Math.round(mins));
+}
+
 export class MqttRecorder {
-  constructor({ recordDir, brokerUrl }) {
+  constructor({ recordDir, brokerUrl } = {}) {
     this.recordDir = recordDir;
     this.brokerUrl = brokerUrl;
     this.client = null;
     this.writeStream = null;
     this.state = this._emptyState();
+    this._autoStopTimer = null;
     fs.mkdirSync(this.recordDir, { recursive: true });
   }
 
@@ -36,6 +51,9 @@ export class MqttRecorder {
       topics: DEFAULT_TOPICS,
       brokerUrl: this.brokerUrl,
       error: null,
+      durationMinutes: null,
+      stopsAt: null,
+      autoStop: false,
     };
   }
 
@@ -47,9 +65,40 @@ export class MqttRecorder {
     } catch { /* file may not exist yet */ }
   }
 
+  _clearAutoStopTimer() {
+    if (this._autoStopTimer) {
+      clearTimeout(this._autoStopTimer);
+      this._autoStopTimer = null;
+    }
+  }
+
+  _scheduleAutoStop(durationMinutes) {
+    this._clearAutoStopTimer();
+    if (!durationMinutes) return;
+    const durationMs = durationMinutes * 60 * 1000;
+    this._autoStopTimer = setTimeout(() => {
+      this._autoStopTimer = null;
+      if (!this.state.recording) return;
+      console.log(`[MqttRecorder] Auto-stop after ${durationMinutes} min`);
+      this.stop({ autoStop: true }).catch((err) => {
+        console.error('[MqttRecorder] Auto-stop failed:', err.message);
+      });
+    }, durationMs);
+  }
+
+  getLocalUsage() {
+    const files = this.listFiles();
+    const totalBytes = files.reduce((sum, f) => sum + (f.size || 0), 0);
+    return { fileCount: files.length, totalBytes, maxFiles: MAX_LOCAL_FILES, maxBytes: MAX_LOCAL_BYTES };
+  }
+
   getStatus() {
     if (this.state.recording) this._syncFileSize();
-    return { ...this.state };
+    const usage = this.getLocalUsage();
+    const remainingMs = this.state.stopsAt
+      ? Math.max(0, this.state.stopsAt - Date.now())
+      : null;
+    return { ...this.state, remainingMs, usage };
   }
 
   listFiles() {
@@ -73,9 +122,38 @@ export class MqttRecorder {
     }
   }
 
-  /**
-   * Quick MQTT liveness check — count messages for a few seconds.
-   */
+  /** Delete oldest files until within retention limits (never deletes active recording). */
+  pruneLocal({ keepFile } = {}) {
+    const active = this.state.recording ? this.state.file : null;
+    const keep = new Set([active, keepFile].filter(Boolean));
+    let files = this.listFiles().filter(f => !keep.has(f.name));
+    let totalBytes = files.reduce((s, f) => s + f.size, 0) + (active ? this.state.bytesWritten : 0);
+    const deleted = [];
+
+    while (files.length > MAX_LOCAL_FILES || totalBytes > MAX_LOCAL_BYTES) {
+      const oldest = files.pop();
+      if (!oldest) break;
+      try {
+        fs.unlinkSync(oldest.path);
+        deleted.push(oldest.name);
+        totalBytes -= oldest.size;
+      } catch (err) {
+        console.error('[MqttRecorder] prune delete failed:', err.message);
+        break;
+      }
+    }
+    return { deleted, usage: this.getLocalUsage() };
+  }
+
+  deleteFile(name) {
+    const fp = this.resolveFile(name);
+    if (this.state.recording && this.state.file === path.basename(name)) {
+      throw new Error('Cannot delete the active recording');
+    }
+    fs.unlinkSync(fp);
+    return { deleted: path.basename(name) };
+  }
+
   probe({ topics = DEFAULT_TOPICS, durationMs = 3000, detailed = false } = {}) {
     return new Promise((resolve, reject) => {
       const started = Date.now();
@@ -160,25 +238,43 @@ export class MqttRecorder {
     });
   }
 
-  start({ topics = DEFAULT_TOPICS, label } = {}) {
+  start({ topics = DEFAULT_TOPICS, label, durationMinutes } = {}) {
     if (this.state.recording) {
       throw new Error('Recording already in progress');
     }
+
+    const usage = this.getLocalUsage();
+    if (usage.totalBytes >= MAX_LOCAL_BYTES) {
+      this.pruneLocal();
+      const after = this.getLocalUsage();
+      if (after.totalBytes >= MAX_LOCAL_BYTES) {
+        throw new Error('Edge recording disk cap reached — sync or delete old captures first');
+      }
+    }
+
+    const mins = parseDurationMinutes(durationMinutes);
+    const startedAt = Date.now();
+    const stopsAt = mins ? startedAt + mins * 60 * 1000 : null;
 
     const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
     const file = `${sanitizeName(label)}_${stamp}.jsonl`;
     const filePath = path.join(this.recordDir, file);
 
     this.writeStream = fs.createWriteStream(filePath, { flags: 'a' });
+    this._clearAutoStopTimer();
     this.state = {
       ...this._emptyState(),
       recording: true,
       file,
       filePath,
-      startedAt: Date.now(),
+      startedAt,
+      stopsAt,
+      durationMinutes: mins,
       topics,
       brokerUrl: this.brokerUrl,
     };
+
+    this._scheduleAutoStop(mins);
 
     this.client = mqtt.connect(this.brokerUrl, { reconnectPeriod: 2000, connectTimeout: 8000 });
 
@@ -203,10 +299,13 @@ export class MqttRecorder {
     return this.getStatus();
   }
 
-  stop() {
+  stop({ autoStop = false } = {}) {
     if (!this.state.recording) {
       return Promise.resolve(this.getStatus());
     }
+
+    this._clearAutoStopTimer();
+    this.state = { ...this.state, recording: false };
 
     return new Promise((resolve) => {
       try { this.client?.end(true); } catch { /* ignore */ }
@@ -219,6 +318,8 @@ export class MqttRecorder {
           ...this.state,
           recording: false,
           stoppedAt: Date.now(),
+          autoStop: !!autoStop,
+          remainingMs: 0,
         };
         this.state = { ...result, recording: false };
         console.log(`[MqttRecorder] Stopped — ${result.file} (${result.bytesWritten} bytes, ${result.messagesRecorded} msgs)`);
