@@ -245,7 +245,15 @@ export function ActivityTimelineChart({
 
       <p className="text-[9px] text-gray-500 mb-2">
         {view === 'hourly'
-          ? `Last 24h · ${storeHoursLabel ?? 'store hours'} — perimeter entrants vs aisle stops`
+          ? (() => {
+            const hourly = timelines.hourly;
+            const tz = hourly.timeZone === 'Europe/Rome' ? 'Italy' : (hourly.timeZone || 'store TZ');
+            const through = hourly.throughHourLabel;
+            const open = storeHoursLabel ?? '08:00 – 20:00';
+            return through
+              ? `Today · ${tz} · ${open.split(' – ')[0] ?? '08:00'}–${through} — entrants vs stops`
+              : `Today · ${tz} · ${open} — entrants vs stops`;
+          })()
           : 'Selected period — one bar pair per day'}
       </p>
 

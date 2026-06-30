@@ -30,6 +30,8 @@ interface ReconcilerConfig {
   reid_aligned_distance_boost: number
   reid_isolation_radius_m: number
   reid_occlusion_bypass_promotion: boolean
+  reid_stale_active_ms: number
+  reid_churn_active_ms: number
   smoothing_alpha: number
   active_to_lost_timeout_ms: number
   trail_max_length: number
@@ -70,6 +72,8 @@ const DEFAULT_CONFIG: ReconcilerConfig = {
   reid_aligned_distance_boost: 1.25,
   reid_isolation_radius_m: 2.5,
   reid_occlusion_bypass_promotion: true,
+  reid_stale_active_ms: 1000,
+  reid_churn_active_ms: 80,
   smoothing_alpha: 0.6,
   active_to_lost_timeout_ms: 1000,
   trail_max_length: 32,
@@ -112,6 +116,8 @@ const LUCA_LIVE_CONFIG: ReconcilerConfig = {
   reid_aligned_distance_boost: 1.25,
   reid_isolation_radius_m: 2.5,
   reid_occlusion_bypass_promotion: true,
+  reid_stale_active_ms: 200,
+  reid_churn_active_ms: 80,
   smoothing_alpha: 0.12,
   active_to_lost_timeout_ms: 6000,
   trail_max_length: 100,
@@ -671,6 +677,27 @@ export default function TrajectoryQualityPanel({ venueId, onClose }: TrajectoryQ
                   onChange={v => update('reid_velocity_cosine_min', v)}
                   hint="−1 = allow anything; 0 = same general direction; 1 = exact same direction"
                 />
+                <div className="pt-2 border-t border-gray-800 space-y-3">
+                  <div className="text-[10px] uppercase text-amber-600/90">Active-track re-ID (zig-zag)</div>
+                  <p className="text-[10px] text-gray-500 leading-snug">
+                    How long an active track must be silent before it can be matched by a new perception ID.
+                    Low churn (80ms) causes wrong merges in crowds — raise to reduce zig-zag.
+                  </p>
+                  <SliderRow
+                    label="Churn quiet window (ms)"
+                    value={config.reid_churn_active_ms}
+                    min={0} max={2000} step={20}
+                    onChange={v => update('reid_churn_active_ms', v)}
+                    hint="Min silence before an active track is a re-ID target (default 80). Try 400–600."
+                  />
+                  <SliderRow
+                    label="Stale active window (ms)"
+                    value={config.reid_stale_active_ms}
+                    min={0} max={3000} step={50}
+                    onChange={v => update('reid_stale_active_ms', v)}
+                    hint="Also match quiet active tracks (default 200). Keep ≥ churn window."
+                  />
+                </div>
                 <div className="pt-2 border-t border-gray-800 space-y-3">
                   <div className="text-[10px] uppercase text-gray-500">Cost weights</div>
                   <SliderRow label="w · distance" value={config.reid_weight_distance} min={0} max={5} step={0.1} onChange={v => update('reid_weight_distance', v)} />

@@ -3,6 +3,8 @@
  * One row per crossing event — no dwell, no dedup.
  */
 
+import { aggregateByVenueLocalHour, DEFAULT_VENUE_TIMEZONE } from './storeHours.js';
+
 export function countPerimeterEntrants(db, { venueId, trafficRoiIds, startTs, endTs }) {
   if (!trafficRoiIds?.length) {
     return { count: 0, uniqueTracks: 0, method: 'perimeter_crossing' };
@@ -27,20 +29,38 @@ export function countPerimeterEntrants(db, { venueId, trafficRoiIds, startTs, en
   }
 }
 
-export function fetchPerimeterEntrantsByHour(db, trafficRoiIds, startTs, endTs) {
+export function fetchPerimeterEntrantsByHour(
+  db,
+  trafficRoiIds,
+  startTs,
+  endTs,
+  openingHour = 8,
+  closingHour = 20,
+  timeZone = DEFAULT_VENUE_TIMEZONE,
+  onlyDateKey = null,
+) {
   if (!trafficRoiIds?.length) return [];
   try {
     const ph = trafficRoiIds.map(() => '?').join(',');
-    return db.prepare(`
-      SELECT CAST(strftime('%H', crossed_at / 1000.0, 'unixepoch', 'localtime') AS INTEGER) AS hour,
-             COUNT(*) AS value
+    const rows = db.prepare(`
+      SELECT crossed_at
       FROM ingress_perimeter_crossings
       WHERE roi_id IN (${ph})
         AND crossed_at >= ?
         AND crossed_at < ?
-      GROUP BY hour
-      ORDER BY hour
     `).all(...trafficRoiIds, startTs, endTs);
+    const map = aggregateByVenueLocalHour(
+      rows,
+      r => r.crossed_at,
+      null,
+      openingHour,
+      closingHour,
+      timeZone,
+      onlyDateKey,
+    );
+    return [...map.entries()]
+      .map(([hour, value]) => ({ hour, value }))
+      .sort((a, b) => a.hour - b.hour);
   } catch {
     return [];
   }

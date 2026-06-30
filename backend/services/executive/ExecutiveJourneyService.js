@@ -9,7 +9,11 @@ import {
   isTrafficZoneName,
   formatStoreHoursRange,
   storeHourBucketIndices,
-  buildStoreHourSqlFilter,
+  aggregateByVenueLocalHour,
+  venueLocalDateKey,
+  venueHourBucketsForToday,
+  formatHourLabel,
+  DEFAULT_VENUE_TIMEZONE,
 } from '../../lib/storeHours.js';
 import {
   loadClassifiedRois,
@@ -44,7 +48,7 @@ function resolveStoreHours(db, venueId) {
   return {
     openingHour: row?.opening_hour ?? 8,
     closingHour: row?.closing_hour ?? 21,
-    timeZone: 'Europe/Rome',
+    timeZone: DEFAULT_VENUE_TIMEZONE,
   };
 }
 
@@ -182,10 +186,34 @@ function fetchZoneVisitStats(db, roiIds, startTs, endTs, metricThresholds) {
       AND track_key NOT LIKE '%cashier%'
   `, [dwellMs, engagementMs, dwellMs, ...roiIds, startTs, endTs]) || {};
 
+  // Fragmented live tracks often emit 10s zone_visit slices — sum per track×ROI
+  // so a 20s+ stop split across episodes still counts as one dwell.
+  const trackDwellStops = safeQuery(db, `
+    SELECT COUNT(*) as c FROM (
+      SELECT track_key, roi_id
+      FROM zone_visits
+      WHERE roi_id IN (${ph}) AND start_time >= ? AND start_time < ?
+        AND track_key NOT LIKE '%cashier%'
+      GROUP BY track_key, roi_id
+      HAVING SUM(duration_ms) >= ?
+    )
+  `, [...roiIds, startTs, endTs, dwellMs])?.c || 0;
+
+  const trackEngagementStops = safeQuery(db, `
+    SELECT COUNT(*) as c FROM (
+      SELECT track_key, roi_id
+      FROM zone_visits
+      WHERE roi_id IN (${ph}) AND start_time >= ? AND start_time < ?
+        AND track_key NOT LIKE '%cashier%'
+      GROUP BY track_key, roi_id
+      HAVING SUM(duration_ms) >= ?
+    )
+  `, [...roiIds, startTs, endTs, engagementMs])?.c || 0;
+
   return {
     visits: row.visits || 0,
-    dwellVisits: row.dwellVisits || 0,
-    engagementVisits: row.engagementVisits || 0,
+    dwellVisits: Math.max(row.dwellVisits || 0, trackDwellStops),
+    engagementVisits: Math.max(row.engagementVisits || 0, trackEngagementStops),
     uniqueVisitors: row.uniqueVisitors || 0,
     totalDurationMs: row.totalDurationMs || 0,
     avgDwellMs: row.avgDwellMs || 0,
@@ -271,8 +299,8 @@ function buildFrescoDepartments(classifiedRois, db, startTs, endTs, metricThresh
     );
     const queueStats = fetchQueueStats(db, ids.queueIds, startTs, endTs);
     const hasQueueZones = ids.queueIds.length > 0;
-    const stoppingPct = split.browsingPct;
-    const passThroughPct = Math.round((100 - stoppingPct) * 10) / 10;
+    const stoppingPct = stats.visits > 0 ? pct(stats.dwellVisits, stats.visits) : 0;
+    const passThroughPct = Math.max(0, Math.round((100 - stoppingPct) * 10) / 10);
     const avgDwellSec = stats.dwellVisits > 0 && stats.avgDwellMs > 0
       ? Math.round(stats.avgDwellMs / 1000)
       : 0;
@@ -345,8 +373,8 @@ function buildCheckoutChannels(classifiedRois, db, startTs, endTs) {
   });
 }
 
-function buildHeatmapCategories(categoryGroups) {
-  return (categoryGroups || []).map(g => ({
+function categoryGroupToHeatmapRow(g) {
+  return {
     category: g.category,
     zoneCount: g.roiCount || 0,
     roiIds: g.roiIds || [],
@@ -356,7 +384,43 @@ function buildHeatmapCategories(categoryGroups) {
     engagementRate: g.engagementPct || 0,
     conversionRate: 0,
     avgBrowseTimeMin: g.avgDwellMin || 0,
-  })).filter(r => (r.roiIds?.length ?? 0) > 0);
+  };
+}
+
+function frescoDeptToHeatmapRow(d) {
+  return {
+    category: d.label,
+    zoneCount: d.roiIds?.length || 0,
+    roiIds: d.roiIds || [],
+    totalVisits: d.visits || 0,
+    totalDwellMin: d.avgDwellMin || 0,
+    browsingRate: d.stoppingPct || 0,
+    engagementRate: d.visits > 0 ? pct(d.engagementVisits || 0, d.visits) : 0,
+    conversionRate: 0,
+    avgBrowseTimeMin: d.avgDwellMin || 0,
+  };
+}
+
+/** Merge aisle + fresco categories for heatmap / top-categories (min 5 when data exists). */
+function buildHeatmapCategories(categoryGroups, frescoDepartments = [], aisleFallbackGroups = []) {
+  const merged = new Map();
+  const add = (row) => {
+    if (!row.category || /^(uncategorized|no content available)$/i.test(row.category)) return;
+    if (!(row.roiIds?.length)) return;
+    const prev = merged.get(row.category);
+    if (!prev || row.totalVisits > prev.totalVisits) merged.set(row.category, row);
+  };
+
+  for (const g of categoryGroups || []) add(categoryGroupToHeatmapRow(g));
+  for (const g of aisleFallbackGroups || []) {
+    if (categoryGroups?.some(c => c.category === g.category)) continue;
+    add(categoryGroupToHeatmapRow(g));
+  }
+  for (const d of frescoDepartments || []) add(frescoDeptToHeatmapRow(d));
+
+  return [...merged.values()]
+    .filter(r => r.totalVisits > 0)
+    .sort((a, b) => b.totalVisits - a.totalVisits);
 }
 
 function formatDayLabel(isoDate) {
@@ -385,72 +449,107 @@ function mapHourlyBuckets(hours, rowMap) {
 }
 
 function fetchHourlyTimeline(
-  db, venueId, startTs, endTs, trafficRoiIds, shoppingRoiIds, dwellMs, openingHour, closingHour,
+  db, venueId, startTs, endTs, trafficRoiIds, shoppingRoiIds, dwellMs,
+  openingHour, closingHour, timeZone = DEFAULT_VENUE_TIMEZONE,
 ) {
-  const hours = storeHourBucketIndices(openingHour, closingHour);
-  if (!hours.length) return { grain: 'hour', visitors: [], dwells: [] };
+  const todayKey = venueLocalDateKey(endTs, timeZone);
+  const hours = venueHourBucketsForToday(endTs, openingHour, closingHour, timeZone);
+  if (!hours.length) {
+    return {
+      grain: 'hour',
+      visitors: [],
+      dwells: [],
+      dateKey: todayKey,
+      timeZone,
+      throughHour: null,
+    };
+  }
+
+  // Wide query window; only calendar-today rows in venue TZ are counted.
+  const queryStart = Math.min(startTs, endTs - 36 * 3600000);
 
   const perimeterRows = trafficRoiIds.length
-    ? fetchPerimeterEntrantsByHour(db, trafficRoiIds, startTs, endTs)
+    ? fetchPerimeterEntrantsByHour(
+      db, trafficRoiIds, queryStart, endTs, openingHour, closingHour, timeZone, todayKey,
+    )
     : [];
   const vMap = new Map(perimeterRows.map(r => [Number(r.hour), Number(r.value) || 0]));
 
-  const hourFilter = buildStoreHourSqlFilter(
-    "datetime(start_time/1000, 'unixepoch', 'localtime')",
-    openingHour,
-    closingHour,
-  );
-  let dwellRows = [];
+  let dMap = new Map();
   if (shoppingRoiIds.length) {
     const shopPh = shoppingRoiIds.map(() => '?').join(',');
-    dwellRows = safeQueryAll(db, `
-      SELECT strftime('%H', datetime(start_time/1000, 'unixepoch', 'localtime')) as bucket,
-        COUNT(CASE WHEN duration_ms >= ? THEN 1 END) as c
+    const dwellRaw = safeQueryAll(db, `
+      SELECT start_time, duration_ms
       FROM zone_visits
       WHERE venue_id = ? AND roi_id IN (${shopPh})
         AND start_time >= ? AND start_time < ?
         AND track_key NOT LIKE '%cashier%'
-        AND ${hourFilter}
-      GROUP BY bucket ORDER BY bucket
-    `, [dwellMs, venueId, ...shoppingRoiIds, startTs, endTs]);
+    `, [venueId, ...shoppingRoiIds, queryStart, endTs]);
+    dMap = aggregateByVenueLocalHour(
+      dwellRaw,
+      r => r.start_time,
+      r => (r.duration_ms >= dwellMs ? 1 : 0),
+      openingHour,
+      closingHour,
+      timeZone,
+      todayKey,
+    );
   }
-  const dMap = new Map(dwellRows.map(r => [parseInt(r.bucket, 10), r.c || 0]));
 
+  const throughHour = hours[hours.length - 1] ?? null;
   return {
     grain: 'hour',
     visitors: mapHourlyBuckets(hours, vMap),
     dwells: mapHourlyBuckets(hours, dMap),
+    dateKey: todayKey,
+    timeZone,
+    throughHour,
+    throughHourLabel: throughHour != null ? formatHourLabel(throughHour) : null,
   };
 }
 
-function fetchDailyTimeline(db, venueId, startTs, endTs, trafficRoiIds, shoppingRoiIds, dwellMs) {
-  const visitorRows = trafficRoiIds.length ? safeQueryAll(db, `
-    SELECT date(start_time/1000, 'unixepoch', 'localtime') as bucket,
-      COUNT(*) as c
-    FROM zone_visits
-    WHERE venue_id = ? AND roi_id IN (${trafficRoiIds.map(() => '?').join(',')})
-      AND start_time >= ? AND start_time < ?
-      AND track_key NOT LIKE '%cashier%'
-    GROUP BY bucket ORDER BY bucket
-  `, [venueId, ...trafficRoiIds, startTs, endTs]) : [];
+function fetchDailyTimeline(
+  db, venueId, startTs, endTs, trafficRoiIds, shoppingRoiIds, dwellMs,
+  timeZone = DEFAULT_VENUE_TIMEZONE,
+) {
+  const visitorMap = new Map();
+  if (trafficRoiIds.length) {
+    const rows = safeQueryAll(db, `
+      SELECT start_time
+      FROM zone_visits
+      WHERE venue_id = ? AND roi_id IN (${trafficRoiIds.map(() => '?').join(',')})
+        AND start_time >= ? AND start_time < ?
+        AND track_key NOT LIKE '%cashier%'
+    `, [venueId, ...trafficRoiIds, startTs, endTs]);
+    for (const row of rows) {
+      const key = venueLocalDateKey(row.start_time, timeZone);
+      visitorMap.set(key, (visitorMap.get(key) || 0) + 1);
+    }
+  }
 
-  const dwellRows = shoppingRoiIds.length ? safeQueryAll(db, `
-    SELECT date(start_time/1000, 'unixepoch', 'localtime') as bucket,
-      COUNT(CASE WHEN duration_ms >= ? THEN 1 END) as c
-    FROM zone_visits
-    WHERE venue_id = ? AND roi_id IN (${shoppingRoiIds.map(() => '?').join(',')})
-      AND start_time >= ? AND start_time < ?
-      AND track_key NOT LIKE '%cashier%'
-    GROUP BY bucket ORDER BY bucket
-  `, [dwellMs, venueId, ...shoppingRoiIds, startTs, endTs]) : [];
+  const dwellMap = new Map();
+  if (shoppingRoiIds.length) {
+    const rows = safeQueryAll(db, `
+      SELECT start_time, duration_ms
+      FROM zone_visits
+      WHERE venue_id = ? AND roi_id IN (${shoppingRoiIds.map(() => '?').join(',')})
+        AND start_time >= ? AND start_time < ?
+        AND track_key NOT LIKE '%cashier%'
+    `, [venueId, ...shoppingRoiIds, startTs, endTs]);
+    for (const row of rows) {
+      if (row.duration_ms < dwellMs) continue;
+      const key = venueLocalDateKey(row.start_time, timeZone);
+      dwellMap.set(key, (dwellMap.get(key) || 0) + 1);
+    }
+  }
 
   const daySet = new Set([
-    ...visitorRows.map(r => r.bucket),
-    ...dwellRows.map(r => r.bucket),
+    ...visitorMap.keys(),
+    ...dwellMap.keys(),
   ]);
   const days = [...daySet].sort();
-  const vMap = Object.fromEntries(visitorRows.map(r => [r.bucket, r.c]));
-  const dMap = Object.fromEntries(dwellRows.map(r => [r.bucket, r.c]));
+  const vMap = Object.fromEntries(visitorMap);
+  const dMap = Object.fromEntries(dwellMap);
 
   return {
     grain: 'day',
@@ -466,14 +565,15 @@ function fetchDailyTimeline(db, venueId, startTs, endTs, trafficRoiIds, shopping
 }
 
 function fetchActivityTimelines(
-  db, venueId, startTs, endTs, trafficRoiIds, shoppingRoiIds, dwellMs, openingHour, closingHour,
+  db, venueId, startTs, endTs, trafficRoiIds, shoppingRoiIds, dwellMs,
+  openingHour, closingHour, timeZone = DEFAULT_VENUE_TIMEZONE,
 ) {
   const hourly = fetchHourlyTimeline(
     db, venueId, endTs - 24 * 3600000, endTs, trafficRoiIds, shoppingRoiIds, dwellMs,
-    openingHour, closingHour,
+    openingHour, closingHour, timeZone,
   );
   const daily = fetchDailyTimeline(
-    db, venueId, startTs, endTs, trafficRoiIds, shoppingRoiIds, dwellMs,
+    db, venueId, startTs, endTs, trafficRoiIds, shoppingRoiIds, dwellMs, timeZone,
   );
   const spanMs = endTs - startTs;
   const activityTimeline = spanMs <= 36 * 3600000 ? hourly : daily;
@@ -768,11 +868,17 @@ export function computeExecutiveJourney(db, venueId, startTs, endTs, variant = '
   const aisleMetrics = buildAisleMetrics(
     classifiedRois, db, totalVisitors, startTs, endTs, metricThresholds, sessionAnalytics,
   );
+  const rawAisleCategoryGroups = buildAisleCategoryGroups(classifiedRois, db, startTs, endTs, metricThresholds)
+    .filter(g => g.category && !/^(uncategorized|no content available)$/i.test(g.category));
   const { hourly: activityTimelineHourly, daily: activityTimelineDaily, activityTimeline } = fetchActivityTimelines(
     db, venueId, startTs, endTs, trafficRoiIds, shoppingRoiIds, metricThresholds.dwellMs,
-    storeHours.openingHour, storeHours.closingHour,
+    storeHours.openingHour, storeHours.closingHour, storeHours.timeZone,
   );
-  const heatmapCategories = buildHeatmapCategories(aisleMetrics.categoryGroups);
+  const heatmapCategories = buildHeatmapCategories(
+    aisleMetrics.categoryGroups,
+    frescoDepartments,
+    rawAisleCategoryGroups,
+  );
 
   const avgWaitMin = checkoutChannels.length
     ? checkoutChannels.reduce((s, c) => s + c.avgWaitMin, 0) / checkoutChannels.length
@@ -814,6 +920,7 @@ export function computeExecutiveJourney(db, venueId, startTs, endTs, variant = '
       openingHour: storeHours.openingHour,
       closingHour: storeHours.closingHour,
       hoursLabel: formatStoreHoursRange(storeHours.openingHour, storeHours.closingHour),
+      timeZone: storeHours.timeZone,
     },
     activityTimeline,
     activityTimelines: {

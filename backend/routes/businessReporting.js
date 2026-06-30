@@ -321,7 +321,7 @@ router.get('/summary', async (req, res) => {
     const validGrains = ['hour', 'day', 'week'];
     const resolvedGrain = validGrains.includes(grain) ? grain : 'hour';
 
-    const thresholdPreview = dwellThresholdSec != null || engagementThresholdSec != null;
+    const thresholdPreview = req.query.metricPreview === 'true';
     const metricThresholdOpts = {
       dwellThresholdSec,
       engagementThresholdSec,
@@ -370,8 +370,10 @@ router.get('/summary', async (req, res) => {
       generatedAt: Date.now(),
     };
 
-    // Cache the response
-    setCache(cacheKey, response);
+    // Cache only default-threshold responses — preview must not poison the 30s cache
+    if (!thresholdPreview) {
+      setCache(cacheKey, response);
+    }
 
     res.json(response);
   } catch (err) {

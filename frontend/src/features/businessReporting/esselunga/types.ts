@@ -16,6 +16,11 @@ export interface ActivityTimeline {
   grain: 'hour' | 'day';
   visitors: TimelinePoint[];
   dwells: TimelinePoint[];
+  /** Calendar day in venue TZ (YYYY-MM-DD) for hourly "today" chart */
+  dateKey?: string;
+  timeZone?: string;
+  throughHour?: number | null;
+  throughHourLabel?: string | null;
 }
 
 export interface ActivityTimelineSet {

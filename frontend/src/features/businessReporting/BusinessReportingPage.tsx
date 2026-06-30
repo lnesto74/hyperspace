@@ -101,6 +101,7 @@ export default function BusinessReportingPage({ onClose, publicDashboard = false
   const [metricPreviewLoading, setMetricPreviewLoading] = useState(false);
   const previewAbortRef = useRef<AbortController | null>(null);
   const previewSeqRef = useRef(0);
+  const esselungaMetricsRef = useRef<{ dwellSec: number; engagementSec: number } | null>(null);
 
   useEffect(() => {
     if (!publicDashboard) return;
@@ -226,9 +227,13 @@ export default function BusinessReportingPage({ onClose, publicDashboard = false
 
       if (selectedPersonaId === ESSELUNGA_PERSONA) {
         params.set('variant', esselungaVariant);
-        if (metricOpts) {
-          params.set('dwellThresholdSec', String(metricOpts.dwellSec));
-          params.set('engagementThresholdSec', String(metricOpts.engagementSec));
+        const th = metricOpts ?? esselungaMetricsRef.current;
+        if (th) {
+          params.set('dwellThresholdSec', String(th.dwellSec));
+          params.set('engagementThresholdSec', String(th.engagementSec));
+        }
+        if (isPreview) {
+          params.set('metricPreview', 'true');
         }
       }
 
@@ -265,27 +270,20 @@ export default function BusinessReportingPage({ onClose, publicDashboard = false
       if (isPreview) {
         if (previewSeq !== previewSeqRef.current) return;
         const next = data.supporting?.esselungaJourney as EsselungaJourneyPayload | undefined;
+        if (!next) return;
         setSupporting((prev) => {
           const prevJ = prev.esselungaJourney as EsselungaJourneyPayload | undefined;
-          if (!prevJ || !next) return data.supporting || {};
+          if (!prevJ) return data.supporting || {};
           return {
-            ...data.supporting,
+            ...prev,
             esselungaJourney: {
               ...prevJ,
-              ...next,
-              overview: prevJ.overview,
-              checkout: prevJ.checkout,
-              crossKpis: prevJ.crossKpis,
-              erp: prevJ.erp,
-              media: prevJ.media,
-              journeySignals: prevJ.journeySignals,
-              taxonomy: prevJ.taxonomy,
-              storeHours: prevJ.storeHours ?? next.storeHours,
               aisles: next.aisles,
               fresco: next.fresco,
+              journeySignals: next.journeySignals,
+              heatmapCategories: next.heatmapCategories,
               activityTimeline: next.activityTimeline,
               activityTimelines: next.activityTimelines,
-              heatmapCategories: next.heatmapCategories,
               metricThresholds: next.metricThresholds,
               generatedAt: next.generatedAt,
             },
@@ -293,11 +291,8 @@ export default function BusinessReportingPage({ onClose, publicDashboard = false
         });
         setKpiValues((prev) => ({
           ...prev,
-          ...(data.kpis || {}),
-          avgStoreDwellMin: prev.avgStoreDwellMin,
-          totalVisitors: prev.totalVisitors,
-          perimeterEntrants: prev.perimeterEntrants,
-          currentOccupancy: prev.currentOccupancy,
+          stoppingPowerPct: data.kpis?.stoppingPowerPct ?? prev.stoppingPowerPct,
+          aislePenetrationPct: data.kpis?.aislePenetrationPct ?? prev.aislePenetrationPct,
         }));
       } else {
         setKpiValues(data.kpis || {});
@@ -492,7 +487,11 @@ export default function BusinessReportingPage({ onClose, publicDashboard = false
                   onVariantChange={setEsselungaVariant}
                   onRefresh={() => fetchData()}
                   onMetricThresholdPreview={(dwellSec, engagementSec) => {
+                    esselungaMetricsRef.current = { dwellSec, engagementSec };
                     void fetchData({ dwellSec, engagementSec }, { silent: true });
+                  }}
+                  onMetricThresholdsChange={(dwellSec, engagementSec) => {
+                    esselungaMetricsRef.current = { dwellSec, engagementSec };
                   }}
                   metricPreviewLoading={metricPreviewLoading}
                   publicShare={publicDashboard}

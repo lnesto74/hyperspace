@@ -43,6 +43,7 @@ interface EsselungaExecutiveViewportProps {
   onRefresh: () => void;
   /** Debounced preview — recomputes stopping % from visit durations at new thresholds */
   onMetricThresholdPreview?: (dwellSec: number, engagementSec: number) => void;
+  onMetricThresholdsChange?: (dwellSec: number, engagementSec: number) => void;
   metricPreviewLoading?: boolean;
   /** Hide admin-only controls (ERP upload) on customer share links */
   publicShare?: boolean;
@@ -62,8 +63,8 @@ const INSIGHT_COLOR = {
 };
 
 const LIVE_OCCUPANCY_POLL_MS = 10_000;
-const DEFAULT_DWELL_SEC = 10;
-const DEFAULT_ENGAGE_SEC = 30;
+const DEFAULT_DWELL_SEC = 20;
+const DEFAULT_ENGAGE_SEC = 60;
 
 function clampThreshold(value: number, fallback: number) {
   return Number.isFinite(value) && value > 0 ? value : fallback;
@@ -91,6 +92,7 @@ export default function EsselungaExecutiveViewport({
   onVariantChange,
   onRefresh,
   onMetricThresholdPreview,
+  onMetricThresholdsChange,
   metricPreviewLoading = false,
   publicShare = false,
 }: EsselungaExecutiveViewportProps) {
@@ -107,8 +109,10 @@ export default function EsselungaExecutiveViewport({
     clampThreshold(metricThresholds?.engagementSec ?? DEFAULT_ENGAGE_SEC, DEFAULT_ENGAGE_SEC),
   );
   const previewTimerRef = useRef<number>();
+  const sliderTouchedRef = useRef(false);
 
   useEffect(() => {
+    if (sliderTouchedRef.current) return;
     if (Number.isFinite(metricThresholds?.dwellSec)) {
       setDwellSec(clampThreshold(metricThresholds!.dwellSec, DEFAULT_DWELL_SEC));
     }
@@ -129,18 +133,24 @@ export default function EsselungaExecutiveViewport({
   };
 
   const handleDwellChange = (value: number) => {
+    sliderTouchedRef.current = true;
     const v = clampThreshold(value, DEFAULT_DWELL_SEC);
     setDwellSec(v);
     queueMetricPreview(v, engagementSec);
   };
 
   const handleEngagementChange = (value: number) => {
+    sliderTouchedRef.current = true;
     const v = clampThreshold(value, DEFAULT_ENGAGE_SEC);
     setEngagementSec(v);
     queueMetricPreview(dwellSec, v);
   };
 
   useEffect(() => () => window.clearTimeout(previewTimerRef.current), []);
+
+  useEffect(() => {
+    onMetricThresholdsChange?.(dwellSec, engagementSec);
+  }, [dwellSec, engagementSec, onMetricThresholdsChange]);
 
   const [livePerimeter, setLivePerimeter] = useState({
     count: overview.perimeterEntrants ?? 0,
@@ -246,19 +256,19 @@ export default function EsselungaExecutiveViewport({
   const checkoutCount = checkout.completed ?? checkoutChannels.reduce((s, c) => s + (c.completed ?? c.sessions), 0);
 
   const signals = useMemo(() => {
-    if (journeySignals) return journeySignals;
+    const base = journeySignals;
     return {
-      reconciliationRequired: true,
+      reconciliationRequired: base?.reconciliationRequired ?? true,
       ingress: {
-        visitors: overview.perimeterEntrants ?? overview.totalVisitors,
-        gateEstimated: overview.ingressDirectEstimated,
-        recovered: overview.ingressRecovered ?? 0,
+        visitors: overview.perimeterEntrants ?? overview.totalVisitors ?? base?.ingress?.visitors ?? 0,
+        gateEstimated: overview.ingressDirectEstimated ?? base?.ingress?.gateEstimated,
+        recovered: overview.ingressRecovered ?? base?.ingress?.recovered ?? 0,
       },
       shopping: {
         aisleZoneVisits: aisles.totalAisleVisits,
         dwellVisits: aisles.dwellVisits ?? 0,
-        stoppingPct: aisles.stoppingPowerPct,
-        bypassPct: aisles.bypassPct,
+        stoppingPct: aisles.stoppingPowerPct ?? 0,
+        bypassPct: aisles.bypassPct ?? 0,
       },
       checkout: {
         sessionsCompleted: checkoutCount,
