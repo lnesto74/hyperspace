@@ -1,7 +1,15 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { v4 as uuidv4 } from "uuid";
 import type { Pin, Project, ProjectWithPinCount } from "./types";
-import { generateSecret, generateToken, isSupabaseConfigured } from "./utils";
+import { generateSecret, generateToken, isSupabaseConfigured, isApiPersistence } from "./utils";
+import {
+  listProjectsApi,
+  getProjectByTokenApi,
+  getPinsApi,
+  savePinApi,
+  deletePinApi,
+  submitProjectApi,
+} from "./api";
 
 const LOCAL_PROJECTS_KEY = "shelf-mapper:projects";
 const LOCAL_PINS_PREFIX = "shelf-mapper:pins:";
@@ -59,6 +67,8 @@ function writeLocalPins(projectId: string, pins: Pin[]): void {
 // ─── Projects ──────────────────────────────────────────────────────────────
 
 export async function listProjects(): Promise<ProjectWithPinCount[]> {
+  if (isApiPersistence()) return listProjectsApi();
+
   const client = getSupabase();
   if (client) {
     const { data: projects, error } = await client
@@ -87,6 +97,8 @@ export async function listProjects(): Promise<ProjectWithPinCount[]> {
 }
 
 export async function getProjectByToken(shareToken: string): Promise<Project | null> {
+  if (isApiPersistence()) return getProjectByTokenApi(shareToken);
+
   const client = getSupabase(shareToken);
   if (client) {
     const { data, error } = await client
@@ -107,6 +119,10 @@ export async function createProject(params: {
   imageW: number;
   imageH: number;
 }): Promise<Project> {
+  if (isApiPersistence()) {
+    throw new Error("Create projects from Hyperspace Demo Links panel");
+  }
+
   const now = new Date().toISOString();
   const project: Project = {
     id: uuidv4(),
@@ -135,6 +151,8 @@ export async function createProject(params: {
 }
 
 export async function submitProject(projectId: string, shareToken: string): Promise<void> {
+  if (isApiPersistence()) return submitProjectApi(projectId, shareToken);
+
   const client = getSupabase(shareToken);
   const now = new Date().toISOString();
 
@@ -159,6 +177,8 @@ export async function submitProject(projectId: string, shareToken: string): Prom
 // ─── Pins ──────────────────────────────────────────────────────────────────
 
 export async function getPins(projectId: string, shareToken: string): Promise<Pin[]> {
+  if (isApiPersistence()) return getPinsApi(projectId, shareToken);
+
   const client = getSupabase(shareToken);
   if (client) {
     const { data, error } = await client
@@ -177,6 +197,8 @@ export async function getPins(projectId: string, shareToken: string): Promise<Pi
 }
 
 export async function savePin(pin: Pin, shareToken: string): Promise<Pin> {
+  if (isApiPersistence()) return savePinApi(pin, shareToken);
+
   const now = new Date().toISOString();
   const updated: Pin = { ...pin, updated_at: now };
 
@@ -211,6 +233,8 @@ export async function deletePin(
   projectId: string,
   shareToken: string,
 ): Promise<void> {
+  if (isApiPersistence()) return deletePinApi(pinId, projectId, shareToken);
+
   const client = getSupabase(shareToken);
   if (client) {
     const { error } = await client.from("pins").delete().eq("id", pinId);
@@ -264,8 +288,9 @@ export function createPin(params: {
   };
 }
 
-/** Seed Treviglio project in localStorage if not present */
+/** Seed Treviglio — local mode only; production uses backend seed */
 export function seedTreviglioLocal(): Project | null {
+  if (isApiPersistence()) return null;
   if (typeof window === "undefined") return null;
   const existing = readLocalProjects().find((p) => p.name === "Treviglio");
   if (existing) return existing;

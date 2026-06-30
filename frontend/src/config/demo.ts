@@ -9,6 +9,7 @@
  * Link types:
  * - story (default): auto-starts the guided Story Mode 3D tour
  * - dashboard: opens the Esselunga Executive reporting view for the pinned venue
+ * - mapper: opens the shelf-mapping tool at /m/<token>
  */
 import { API_BASE } from './api'
 
@@ -16,7 +17,7 @@ const DEMO_FLAG_KEY = 'hyperspace_demo'
 const DEMO_VENUE_KEY = 'hyperspace_demo_venue'
 const DEMO_LINK_TYPE_KEY = 'hyperspace_demo_link_type'
 
-export type DemoLinkType = 'story' | 'dashboard'
+export type DemoLinkType = 'story' | 'dashboard' | 'mapper'
 
 /** In-memory fallback when sessionStorage is blocked (e.g. strict privacy mode). */
 let memoryDemoSession: { venueId: string | null; linkType: DemoLinkType } | null = null

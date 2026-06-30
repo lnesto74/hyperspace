@@ -1,8 +1,9 @@
 import { Router } from 'express';
 import { randomBytes } from 'crypto';
 import { requireAuth, requireSuperadmin } from '../middleware/auth.js';
+import { createMapperProjectForToken } from './shelfMapper.js';
 
-const VALID_LINK_TYPES = new Set(['story', 'dashboard']);
+const VALID_LINK_TYPES = new Set(['story', 'dashboard', 'mapper']);
 
 /**
  * Demo access tokens.
@@ -10,17 +11,21 @@ const VALID_LINK_TYPES = new Set(['story', 'dashboard']);
  * A superadmin mints shareable links from the UI. Opening the app with
  * `?demo=<token>` validates the token here (public endpoint) and, if valid,
  * the frontend skips the Google login. Story links auto-start the guided tour;
- * dashboard links open the Esselunga Executive reporting view.
- *
- * Token management (create / list / revoke) requires superadmin. Validation is
- * intentionally public so the demo gate can run before any login.
+ * dashboard links open the Esselunga Executive reporting view;
+ * mapper links open the shelf-mapping tool at /m/<token>.
  */
 export default function demoAccessRoutes(db) {
   const router = Router();
 
+  function normalizeLinkType(raw) {
+    if (raw === 'dashboard') return 'dashboard';
+    if (raw === 'mapper') return 'mapper';
+    return 'story';
+  }
+
   function formatRow(row) {
     const expired = !!row.expires_at && new Date(row.expires_at).getTime() < Date.now();
-    const linkType = row.link_type === 'dashboard' ? 'dashboard' : 'story';
+    const linkType = normalizeLinkType(row.link_type);
     return {
       token: row.token,
       label: row.label,
@@ -48,7 +53,6 @@ export default function demoAccessRoutes(db) {
         return res.status(401).json({ valid: false, error: 'expired' });
       }
 
-      // Best-effort usage tracking.
       try {
         db.prepare(
           "UPDATE demo_tokens SET use_count = use_count + 1, last_used_at = datetime('now') WHERE token = ?",
@@ -61,7 +65,7 @@ export default function demoAccessRoutes(db) {
         valid: true,
         venueId: row.venue_id || null,
         label: row.label || null,
-        linkType: row.link_type === 'dashboard' ? 'dashboard' : 'story',
+        linkType: normalizeLinkType(row.link_type),
       });
     } catch (error) {
       console.error('[DemoAccess] validate error:', error);
@@ -69,11 +73,9 @@ export default function demoAccessRoutes(db) {
     }
   });
 
-  // ── Everything below requires superadmin ──
   router.use(requireAuth);
   router.use(requireSuperadmin);
 
-  // GET /api/demo-access/tokens — list all minted tokens
   router.get('/tokens', (req, res) => {
     try {
       const rows = db.prepare('SELECT * FROM demo_tokens ORDER BY created_at DESC').all();
@@ -84,7 +86,6 @@ export default function demoAccessRoutes(db) {
     }
   });
 
-  // POST /api/demo-access/tokens — mint a new token
   router.post('/tokens', (req, res) => {
     try {
       const { label, venueId, expiresInDays, linkType: rawLinkType } = req.body || {};
@@ -113,6 +114,14 @@ export default function demoAccessRoutes(db) {
         linkType,
       );
 
+      if (linkType === 'mapper') {
+        createMapperProjectForToken(db, {
+          shareToken: token,
+          label: (label && String(label).trim()) || null,
+          venueId: venueId || null,
+        });
+      }
+
       const row = db.prepare('SELECT * FROM demo_tokens WHERE token = ?').get(token);
       res.status(201).json(formatRow(row));
     } catch (error) {
@@ -121,7 +130,6 @@ export default function demoAccessRoutes(db) {
     }
   });
 
-  // DELETE /api/demo-access/tokens/:token — revoke a token
   router.delete('/tokens/:token', (req, res) => {
     try {
       const result = db.prepare('UPDATE demo_tokens SET revoked = 1 WHERE token = ?').run(req.params.token);

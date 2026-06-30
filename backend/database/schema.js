@@ -976,6 +976,36 @@ export function initDatabase() {
     );
 
     CREATE INDEX IF NOT EXISTS idx_demo_tokens_revoked ON demo_tokens(revoked);
+
+    -- Shelf mapper — floorplan pin/category mapping (customer share links)
+    CREATE TABLE IF NOT EXISTS shelf_mapper_projects (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      floorplan_url TEXT NOT NULL,
+      image_w INTEGER NOT NULL,
+      image_h INTEGER NOT NULL,
+      share_token TEXT NOT NULL UNIQUE,
+      owner_secret TEXT NOT NULL,
+      submitted_at TEXT,
+      locked INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS shelf_mapper_pins (
+      id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL REFERENCES shelf_mapper_projects(id) ON DELETE CASCADE,
+      number INTEGER NOT NULL,
+      x REAL NOT NULL,
+      y REAL NOT NULL,
+      label TEXT,
+      categories TEXT NOT NULL DEFAULT '[]',
+      note TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE (project_id, number)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_shelf_mapper_pins_project ON shelf_mapper_pins(project_id);
   `);
 
   // Migration: demo_tokens.link_type — story tour vs executive dashboard public link

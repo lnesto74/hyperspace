@@ -29,6 +29,17 @@
         reverse_proxy backend:3001
     }
 
+    # Shelf mapper (Next.js)
+    handle /m/* {
+        reverse_proxy shelf-mapper:3000
+    }
+    handle /_next/* {
+        reverse_proxy shelf-mapper:3000
+    }
+    handle /floorplans/* {
+        reverse_proxy shelf-mapper:3000
+    }
+
     # Fallback
     handle {
         respond "Use app.hyspace.app for frontend" 200
@@ -65,6 +76,17 @@ app.hyspace.app {
     }
     handle /docs-assets/* {
         reverse_proxy backend:3001
+    }
+
+    # Shelf mapper (Next.js) — customer floorplan pin tool
+    handle /m/* {
+        reverse_proxy shelf-mapper:3000
+    }
+    handle /_next/* {
+        reverse_proxy shelf-mapper:3000
+    }
+    handle /floorplans/* {
+        reverse_proxy shelf-mapper:3000
     }
 
     # Frontend - static files (MUST BE LAST - catch-all)

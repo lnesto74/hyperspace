@@ -1,6 +1,8 @@
-export function getPersistenceMode(): "local" | "supabase" {
+export function getPersistenceMode(): "local" | "supabase" | "api" {
   const mode = process.env.NEXT_PUBLIC_PERSISTENCE ?? "local";
-  return mode === "supabase" ? "supabase" : "local";
+  if (mode === "supabase") return "supabase";
+  if (mode === "api") return "api";
+  return "local";
 }
 
 export function isSupabaseConfigured(): boolean {
@@ -9,6 +11,15 @@ export function isSupabaseConfigured(): boolean {
     Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL) &&
     Boolean(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY)
   );
+}
+
+export function isApiPersistence(): boolean {
+  return getPersistenceMode() === "api";
+}
+
+/** Base URL for Hyperspace API — empty string = same origin (production on DO). */
+export function getApiBase(): string {
+  return process.env.NEXT_PUBLIC_API_BASE ?? "";
 }
 
 export function generateToken(length = 12): string {

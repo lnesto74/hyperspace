@@ -1,71 +1,74 @@
 # Shelf Mapper
 
-Web app for mapping product categories onto store floorplans. Customers open a share link, drop numbered pins on shelves, and assign categories. Owners create projects and export results.
+Customer tool for mapping product categories onto store floorplans. Deployed on **DigitalOcean** as part of the Hyperspace stack at `app.hyspace.app/m/<token>`.
 
-## Quick start (local mode, no Supabase)
+## Production (DigitalOcean)
+
+Deploy with the same rsync + docker compose pattern as the rest of Hyperspace:
+
+```bash
+chmod +x scripts/deploy-shelf-mapper.sh
+./scripts/deploy-shelf-mapper.sh
+```
+
+Or manually (matches your existing workflow):
+
+```bash
+HOST=root@100.76.196.2
+
+# Backend API + schema
+rsync -av backend/routes/shelfMapper.js backend/routes/demoAccess.js $HOST:/opt/hyperspace/backend/routes/
+rsync -av backend/database/schema.js $HOST:/opt/hyperspace/backend/database/
+rsync -av backend/server.js $HOST:/opt/hyperspace/backend/
+
+# Frontend Demo Links panel
+rsync -av frontend/src/components/admin/DemoLinksModal.tsx $HOST:/opt/hyperspace/frontend/src/components/admin/
+rsync -av frontend/src/config/demo.ts $HOST:/opt/hyperspace/frontend/src/config/
+
+# Shelf mapper app + Caddy routes
+rsync -av --exclude node_modules --exclude .next shelf-mapper/ $HOST:/opt/hyperspace/shelf-mapper/
+rsync -av deploy/Caddyfile docker-compose.prod.yml $HOST:/opt/hyperspace/
+
+ssh $HOST 'cd /opt/hyperspace && \
+  docker compose -f docker-compose.prod.yml build backend frontend shelf-mapper && \
+  docker compose -f docker-compose.prod.yml up -d backend frontend shelf-mapper caddy'
+```
+
+## Create a public link
+
+1. Open Hyperspace → **Demo Links** (superadmin)
+2. Select **Shelf mapper** tab
+3. Add a label (e.g. "Treviglio scaffali") → **Generate shelf mapper link**
+4. Send the customer: `https://app.hyspace.app/m/<token>`
+
+Revoking the link in Demo Links also blocks mapper access (token-gated).
+
+**Pre-seeded test link:** `https://app.hyspace.app/m/treviglio-demo`  
+**Owner results:** `https://app.hyspace.app/m/treviglio-demo/results?secret=treviglio-owner`
+
+## Local dev
 
 ```bash
 cd shelf-mapper
 npm install
-cp .env.local.example .env.local
-# NEXT_PUBLIC_PERSISTENCE=local is the default
+cp .env.local.example .env.local   # NEXT_PUBLIC_PERSISTENCE=local
 npm run dev
 ```
 
-Open http://localhost:3000 — a **Treviglio** project is auto-seeded in localStorage.
+## Architecture on DO
 
-**Test share link:** http://localhost:3000/m/treviglio-demo
+```
+app.hyspace.app/m/*     → shelf-mapper container (Next.js)
+app.hyspace.app/api/shelf-mapper/* → backend (SQLite)
+```
 
-**Results (owner):** http://localhost:3000/m/treviglio-demo/results?secret=treviglio-owner
+Persistence mode in production: `NEXT_PUBLIC_PERSISTENCE=api` (no Supabase required).
 
-## Environment variables
+## Env vars (production)
 
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `NEXT_PUBLIC_PERSISTENCE` | No | `local` (default) or `supabase` |
-| `NEXT_PUBLIC_SUPABASE_URL` | Supabase only | Project URL |
-| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Supabase only | Anon/public key |
-| `SUBMIT_WEBHOOK_URL` | No | POST on customer submit (Slack/email bridge) |
-| `NEXT_PUBLIC_RESULTS_SECRET` | No | Global fallback secret for results page |
+| Variable | Value |
+|----------|-------|
+| `NEXT_PUBLIC_PERSISTENCE` | `api` |
+| `NEXT_PUBLIC_API_BASE` | empty (same origin) |
 
-## Supabase setup
-
-1. Create a project at [supabase.com](https://supabase.com)
-2. Run `supabase/schema.sql` in the SQL Editor
-3. Set env vars:
-   ```
-   NEXT_PUBLIC_PERSISTENCE=supabase
-   NEXT_PUBLIC_SUPABASE_URL=https://xxxx.supabase.co
-   NEXT_PUBLIC_SUPABASE_ANON_KEY=eyJ...
-   ```
-4. The schema seeds a Treviglio project with share token `treviglio-demo`
-
-### Share token header
-
-Supabase RLS uses `x-share-token` request header. The client sets this automatically on all pin/project mutations.
-
-## Deploy to Vercel
-
-1. Push `shelf-mapper/` to GitHub (or deploy from monorepo root with **Root Directory** = `shelf-mapper`)
-2. Import project in [vercel.com/new](https://vercel.com/new)
-3. Set environment variables (at minimum `NEXT_PUBLIC_PERSISTENCE`; add Supabase vars if using cloud persistence)
-4. Deploy
-
-**Share link format:** `https://your-app.vercel.app/m/{share_token}`
-
-Copy from the owner dashboard or use the seeded link:
-`https://your-app.vercel.app/m/treviglio-demo`
-
-## Workflow
-
-1. **Owner** → `/` → create project → copy share link
-2. **Customer** → `/m/{token}` → place pins, add categories, Submit
-3. **Owner** → `/m/{token}/results?secret={owner_secret}` → view table + export Excel/CSV/JSON
-
-## Tech
-
-- Next.js 15 App Router, TypeScript, Tailwind
-- `react-zoom-pan-pinch` for map interaction
-- Normalised pin coordinates (0–1) relative to image natural size
-- SheetJS (`xlsx`) for Excel export
-- Italian UI via `lib/i18n.ts`
+Optional: `SUBMIT_WEBHOOK_URL` on shelf-mapper for Slack/email on customer submit.

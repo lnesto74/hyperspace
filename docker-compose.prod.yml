@@ -29,6 +29,29 @@ services:
         condition: service_healthy
       frontend:
         condition: service_started
+      shelf-mapper:
+        condition: service_started
+    networks:
+      - hyperspace
+
+  # ============================================
+  # Shelf Mapper — floorplan category mapping
+  # ============================================
+  shelf-mapper:
+    build:
+      context: ./shelf-mapper
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_PERSISTENCE: api
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    environment:
+      - NEXT_PUBLIC_PERSISTENCE=api
+      - NEXT_PUBLIC_API_BASE=
     networks:
       - hyperspace
 

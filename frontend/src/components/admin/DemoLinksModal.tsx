@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { useAuth } from '../../context/AuthContext'
 import { API_BASE } from '../../config/api'
 import type { DemoLinkType } from '../../config/demo'
-import { Film, Plus, Copy, Check, Trash2, X, Link2, LayoutDashboard } from 'lucide-react'
+import { Film, Plus, Copy, Check, Trash2, X, Link2, LayoutDashboard, MapPin } from 'lucide-react'
 
 interface DemoToken {
   token: string
@@ -23,7 +23,8 @@ interface VenueOption {
   name: string
 }
 
-function buildLink(token: string): string {
+function buildLink(token: string, linkType: DemoLinkType = 'story'): string {
+  if (linkType === 'mapper') return `${window.location.origin}/m/${token}`
   return `${window.location.origin}/?demo=${token}`
 }
 
@@ -55,7 +56,7 @@ export default function DemoLinksModal({ onClose }: { onClose: () => void }) {
         const rows = await tokRes.json()
         setTokens(rows.map((t: DemoToken) => ({
           ...t,
-          linkType: t.linkType === 'dashboard' ? 'dashboard' : 'story',
+          linkType: t.linkType === 'dashboard' ? 'dashboard' : t.linkType === 'mapper' ? 'mapper' : 'story',
         })))
       } else setError('Failed to load demo links (superadmin required).')
       if (venueRes.ok) {
@@ -99,7 +100,7 @@ export default function DemoLinksModal({ onClose }: { onClose: () => void }) {
       setTokens((prev) => [{ ...created, linkType: created.linkType || linkType }, ...prev])
       setLabel('')
       try {
-        await navigator.clipboard.writeText(buildLink(created.token))
+        await navigator.clipboard.writeText(buildLink(created.token, created.linkType || linkType))
         setCopied(created.token)
         setTimeout(() => setCopied((c) => (c === created.token ? null : c)), 2000)
       } catch { /* clipboard may be blocked */ }
@@ -122,9 +123,9 @@ export default function DemoLinksModal({ onClose }: { onClose: () => void }) {
     } catch { /* ignore */ }
   }, [headers])
 
-  const copyLink = useCallback(async (tok: string) => {
+  const copyLink = useCallback(async (tok: string, type: DemoLinkType) => {
     try {
-      await navigator.clipboard.writeText(buildLink(tok))
+      await navigator.clipboard.writeText(buildLink(tok, type))
       setCopied(tok)
       setTimeout(() => setCopied((c) => (c === tok ? null : c)), 2000)
     } catch { /* ignore */ }
@@ -142,6 +143,13 @@ export default function DemoLinksModal({ onClose }: { onClose: () => void }) {
   }
 
   const typeBadge = (type: DemoLinkType) => {
+    if (type === 'mapper') {
+      return (
+        <span className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[9px] uppercase tracking-wider rounded font-semibold bg-amber-500/15 text-amber-400">
+          <MapPin className="w-3 h-3" /> Shelf mapper
+        </span>
+      )
+    }
     if (type === 'dashboard') {
       return (
         <span className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[9px] uppercase tracking-wider rounded font-semibold bg-cyan-500/15 text-cyan-400">
@@ -168,7 +176,7 @@ export default function DemoLinksModal({ onClose }: { onClose: () => void }) {
             <div>
               <h2 className="text-sm font-semibold text-white">Demo Links</h2>
               <p className="text-[11px] text-gray-500">
-                Shareable links that skip login — 3D story tour or Esselunga Executive dashboard
+                Shareable links — 3D story tour, executive dashboard, or shelf mapper
               </p>
             </div>
           </div>
@@ -182,20 +190,29 @@ export default function DemoLinksModal({ onClose }: { onClose: () => void }) {
             <button
               type="button"
               onClick={() => setLinkType('story')}
-              className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-1.5 text-xs rounded-md transition-all ${
+              className={`flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 text-xs rounded-md transition-all ${
                 linkType === 'story' ? 'bg-violet-600 text-white' : 'text-gray-400 hover:text-white'
               }`}
             >
-              <Film className="w-3.5 h-3.5" /> 3D Story tour
+              <Film className="w-3.5 h-3.5" /> Story
             </button>
             <button
               type="button"
               onClick={() => setLinkType('dashboard')}
-              className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-1.5 text-xs rounded-md transition-all ${
+              className={`flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 text-xs rounded-md transition-all ${
                 linkType === 'dashboard' ? 'bg-cyan-600 text-white' : 'text-gray-400 hover:text-white'
               }`}
             >
-              <LayoutDashboard className="w-3.5 h-3.5" /> Dashboard public link
+              <LayoutDashboard className="w-3.5 h-3.5" /> Dashboard
+            </button>
+            <button
+              type="button"
+              onClick={() => setLinkType('mapper')}
+              className={`flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 text-xs rounded-md transition-all ${
+                linkType === 'mapper' ? 'bg-amber-600 text-white' : 'text-gray-400 hover:text-white'
+              }`}
+            >
+              <MapPin className="w-3.5 h-3.5" /> Shelf mapper
             </button>
           </div>
 
@@ -205,7 +222,7 @@ export default function DemoLinksModal({ onClose }: { onClose: () => void }) {
               <input
                 value={label}
                 onChange={(e) => setLabel(e.target.value)}
-                placeholder={linkType === 'dashboard' ? 'e.g. Treviglio executive' : 'e.g. Treviglio customer'}
+                placeholder={linkType === 'dashboard' ? 'e.g. Treviglio executive' : linkType === 'mapper' ? 'e.g. Treviglio scaffali' : 'e.g. Treviglio customer'}
                 className="w-full px-2.5 py-1.5 text-sm bg-gray-800 border border-gray-700 rounded-lg text-white placeholder-gray-600 focus:outline-none focus:border-blue-500"
               />
             </div>
@@ -243,7 +260,7 @@ export default function DemoLinksModal({ onClose }: { onClose: () => void }) {
             onClick={createToken}
             disabled={creating}
             className={`flex items-center gap-2 px-3.5 py-2 text-sm font-medium disabled:opacity-60 text-white rounded-lg transition-colors ${
-              linkType === 'dashboard' ? 'bg-cyan-600 hover:bg-cyan-500' : 'bg-blue-600 hover:bg-blue-500'
+              linkType === 'dashboard' ? 'bg-cyan-600 hover:bg-cyan-500' : linkType === 'mapper' ? 'bg-amber-600 hover:bg-amber-500' : 'bg-blue-600 hover:bg-blue-500'
             }`}
           >
             <Plus className="w-4 h-4" />
@@ -251,7 +268,9 @@ export default function DemoLinksModal({ onClose }: { onClose: () => void }) {
               ? 'Generating…'
               : linkType === 'dashboard'
                 ? 'Generate dashboard public link'
-                : 'Generate demo link'}
+                : linkType === 'mapper'
+                  ? 'Generate shelf mapper link'
+                  : 'Generate demo link'}
           </button>
           {error && <p className="text-xs text-red-400">{error}</p>}
         </div>
@@ -281,12 +300,12 @@ export default function DemoLinksModal({ onClose }: { onClose: () => void }) {
                         {t.expiresAt ? ` · expires ${new Date(t.expiresAt).toLocaleDateString()}` : ' · no expiry'}
                       </p>
                       {active && (
-                        <p className="text-[10px] text-gray-600 font-mono truncate mt-0.5">{buildLink(t.token)}</p>
+                        <p className="text-[10px] text-gray-600 font-mono truncate mt-0.5">{buildLink(t.token, t.linkType || 'story')}</p>
                       )}
                     </div>
                     {active && (
                       <button
-                        onClick={() => copyLink(t.token)}
+                        onClick={() => copyLink(t.token, t.linkType || 'story')}
                         className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs text-gray-300 hover:text-white bg-gray-700/60 hover:bg-gray-700 rounded-lg transition-colors"
                         title="Copy link"
                       >
