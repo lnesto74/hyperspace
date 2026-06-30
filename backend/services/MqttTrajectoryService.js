@@ -141,6 +141,7 @@ class MqttTrajectoryService {
     } else {
       this.venueReconcilerConfigs.set(venueId, normalizeReconcilerConfig(config))
     }
+    this.reconciler.resetVenue(venueId)
     this.reconciler.setVenueConfig(venueId, this.venueReconcilerConfigs.get(venueId) || RECONCILER_DEFAULT)
     this.syncVisualTrackLayer(venueId)
     this._syncAggregatorReconcilerLive(venueId)

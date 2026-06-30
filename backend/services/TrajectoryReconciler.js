@@ -95,6 +95,7 @@ export function normalizeReconcilerConfig(raw) {
   merged.reid_isolation_radius_m = num(raw.reid_isolation_radius_m, DEFAULT_CONFIG.reid_isolation_radius_m);
   merged.reid_occlusion_bypass_promotion = raw.reid_occlusion_bypass_promotion !== false;
   merged.reid_stale_active_ms = num(raw.reid_stale_active_ms, DEFAULT_CONFIG.reid_stale_active_ms);
+  merged.reid_churn_active_ms = num(raw.reid_churn_active_ms, merged.reid_churn_active_ms ?? 80);
   merged.smoothing_alpha = Math.max(0, Math.min(1, num(raw.smoothing_alpha, DEFAULT_CONFIG.smoothing_alpha)));
   merged.active_to_lost_timeout_ms = num(raw.active_to_lost_timeout_ms, DEFAULT_CONFIG.active_to_lost_timeout_ms);
   merged.trail_max_length = num(raw.trail_max_length, DEFAULT_CONFIG.trail_max_length);
@@ -181,6 +182,10 @@ export class TrajectoryReconciler {
     if (state) state.setConfig(config);
   }
 
+  resetVenue(venueId) {
+    this.venues.delete(venueId);
+  }
+
   getOrCreateState(venueId) {
     let state = this.venues.get(venueId);
     if (!state) {
@@ -214,7 +219,9 @@ export class TrajectoryReconciler {
     }
 
     const perceptionId = track.id;
-    const now = track.timestamp || Date.now();
+    // Internal clocks must use wall time — sweep() uses Date.now(). MQTT
+    // track.timestamp can lag minutes and triggers instant static_fixture drops.
+    const now = Date.now();
     const pos = track.venuePosition || track.position;
     const vel = track.velocity || { x: 0, y: 0, z: 0 };
     if (!pos || !Number.isFinite(pos.x) || !Number.isFinite(pos.z)) {
@@ -291,6 +298,16 @@ export class TrajectoryReconciler {
     // ---------- Stage 3: candidate gating (don't promote until proven) ----------
     let candidate = state.candidatePerceptions.get(perceptionId);
     if (!candidate) {
+      const quick = this._tryReid(state, pos, vel, now, cfg);
+      if (quick) {
+        quick.perceptionIds.add(perceptionId);
+        this._claimReidTarget(state, quick);
+        state.perceptionToStable.set(perceptionId, quick.stableId);
+        this._updateTrackState(quick, pos, vel, now, cfg);
+        state.stats.reid_count++;
+        return this._emit(track, quick, perceptionId);
+      }
+      // Raj 1-frame IDs: hold unless re-ID matched — instant mint causes zig-zag.
       candidate = {
         firstSeen: now,
         firstPos: { x: pos.x, z: pos.z },
@@ -299,7 +316,6 @@ export class TrajectoryReconciler {
         totalDisp: 0,
       };
       state.candidatePerceptions.set(perceptionId, candidate);
-      // First sighting — not enough info yet. Hold the frame (don't emit, don't count as ghost).
       return null;
     }
     candidate.totalDisp += Math.hypot(pos.x - candidate.lastPos.x, pos.z - candidate.lastPos.z);
@@ -307,7 +323,7 @@ export class TrajectoryReconciler {
     candidate.lastTs = now;
     const lifetime = now - candidate.firstSeen;
     const initialDisp = Math.hypot(pos.x - candidate.firstPos.x, pos.z - candidate.firstPos.z);
-    if (lifetime < cfg.ghost_min_promotion_lifetime_ms) {
+    if (cfg.ghost_min_promotion_lifetime_ms > 0 && lifetime < cfg.ghost_min_promotion_lifetime_ms) {
       // Occlusion: new blip near a recently-lost track — merge before probation ends.
       if (cfg.reid_occlusion_bypass_promotion !== false) {
         const occlusion = this._tryReid(state, pos, vel, now, cfg, { occlusionOnly: true });
@@ -491,13 +507,16 @@ export class TrajectoryReconciler {
     state.activeTracks.set(t.stableId, t);
   }
 
-  /** Lost tracks + active tracks that have gone quiet but not yet swept to lost. */
+  /** Lost tracks + active tracks quiet enough for re-ID (Raj ID churn). */
   _reidTargets(state, now, cfg) {
-    const staleMs = cfg.reid_stale_active_ms ?? 1000;
+    const minQuietMs = Math.min(
+      cfg.reid_churn_active_ms ?? 80,
+      cfg.reid_stale_active_ms ?? 200,
+    );
     const out = [];
     for (const t of state.lostTracks.values()) out.push(t);
     for (const t of state.activeTracks.values()) {
-      if (now - t.lastTs >= staleMs) out.push(t);
+      if (now - t.lastTs >= minQuietMs) out.push(t);
     }
     return out;
   }
@@ -595,9 +614,8 @@ export class TrajectoryReconciler {
       originalPerceptionId: perceptionId,
       shopperNumber: stableState.shopperNumber,
       trackKey,
-      // Live canvas uses raw perception motion; smoothed kept for analytics forensics.
       venuePosition: { ...stableState.position },
-      velocity: { ...stableState.velocity },
+      velocity: { ...stableState.smoothedVel },
       smoothedPosition: { ...stableState.smoothedPos },
       smoothedVelocity: { ...stableState.smoothedVel },
       rawPosition: originalTrack.venuePosition || originalTrack.position,

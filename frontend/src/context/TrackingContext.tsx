@@ -253,8 +253,8 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
     interpTsRef.current.clear()
     trackLastSeenRef.current.clear()
     liveMetricsRef.current = { frameOccupancy: 0, liveFrameTs: null }
-    // Reconcile preset uses the same live interp pipeline as bypass — longer trails only.
-    setInterpolationRef.current(smoothMotionRequestedRef.current)
+    // Reconcile live: dense step-by-step trails need RAF lerp between 10 Hz MQTT snapshots.
+    setInterpolationRef.current(reconcileLiveRef.current ? true : smoothMotionRequestedRef.current)
     window.dispatchEvent(new CustomEvent('hyperspace:visualization-mode', { detail: { mode } }))
     if (isTrackingDiag()) console.log(`[DIAG] visualization mode → ${mode}  lag=${vtlPlaybackLagRef.current}ms  t=${Date.now()}`)
   }, [])
@@ -319,7 +319,9 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
         if (cancelled) return
         const on = data?.reconciler?.enabled === true
         reconcileLiveRef.current = on
-        if (on) enableLiveSmoothing()
+        if (on) {
+          enableLiveSmoothing()
+        }
       })
       .catch(() => {})
     return () => { cancelled = true }
@@ -413,10 +415,12 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
         for (const [key, track] of cappedKeys) {
           if (!isFiniteTrackPos(track.venuePosition)) continue
           const existing = prev.get(key)
+          const point = { ...track.venuePosition, y: track.venuePosition.y ?? 0 }
           const trail = appendTrailPoint(
             existing?.trail,
-            { ...track.venuePosition, y: track.venuePosition.y ?? 0 },
+            point,
             maxTrailLength(),
+            isReconcileLive() ? 1.2 : TRAIL_JUMP_RESET_M,
           )
 
           next.set(key, { ...track, trail })
@@ -793,7 +797,7 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
     interpLastFlushRef.current = now
     
     interpFrameRef.current++
-    const addTrail = interpFrameRef.current % INTERP_TRAIL_INTERVAL === 0
+    const addTrail = isReconcileLive() || interpFrameRef.current % INTERP_TRAIL_INTERVAL === 0
     
     setLiveTracks(prev => {
       const next = new Map<string, TrackWithTrail>()
@@ -834,7 +838,6 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
           }
         }
 
-        // Raw bypass: no velocity extrap (MQTT positions are authoritative at 10 Hz).
         let tx = baseX
         let tz = baseZ
         if (isReconcileLive()) {
@@ -854,7 +857,11 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
 
           let trail = existing.trail || []
           if (addTrail) {
-            trail = appendTrailPoint(trail, { x: nx, y: 0, z: nz }, maxTrailLength())
+            const last = trail[trail.length - 1]
+            const step = last ? Math.hypot(nx - last.x, nz - last.z) : 1
+            if (!last || step >= (isReconcileLive() ? 0.025 : 0.04)) {
+              trail = appendTrailPoint(trail, { x: nx, y: 0, z: nz }, maxTrailLength())
+            }
           }
 
           next.set(key, {
@@ -878,13 +885,15 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const setInterpolation = useCallback((enabled: boolean) => {
-    smoothMotionRequestedRef.current = enabled
+    if (!reconcileLiveRef.current) {
+      smoothMotionRequestedRef.current = enabled
+    }
     const historicalReplay =
       insightReplayActiveRef.current ||
       (isReplayModeRef.current && !mqttReplayActiveRef.current && !storyReplayActiveRef.current)
     const trackCount = liveTracksRef.current.size
     const shouldInterp =
-      enabled &&
+      (reconcileLiveRef.current ? true : enabled) &&
       !historicalReplay &&
       !mqttReplayActiveRef.current &&
       !storyReplayActiveRef.current
@@ -917,7 +926,11 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
     const mode = readLiveTrackDelivery()
     smoothMotionRequestedRef.current = mode === 'buffered'
     setLiveTrackDeliveryState(mode)
-    setInterpolation(mode === 'buffered')
+    if (reconcileLiveRef.current) {
+      setInterpolation(true)
+    } else {
+      setInterpolation(mode === 'buffered')
+    }
   }, [setInterpolation])
 
   const setLiveTrackDelivery = useCallback((mode: LiveTrackDelivery) => {
@@ -926,7 +939,11 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
     } catch { /* private mode */ }
     smoothMotionRequestedRef.current = mode === 'buffered'
     setLiveTrackDeliveryState(mode)
-    setInterpolation(mode === 'buffered')
+    if (reconcileLiveRef.current) {
+      setInterpolation(true)
+    } else {
+      setInterpolation(mode === 'buffered')
+    }
   }, [setInterpolation])
 
   const purgeLiveEdgeTracks = useCallback(() => {
@@ -995,7 +1012,7 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
     } else {
       clearStoryTracks()
     }
-    setInterpolationRef.current(smoothMotionRequestedRef.current)
+    setInterpolationRef.current(reconcileLiveRef.current ? true : smoothMotionRequestedRef.current)
   }, [purgeLiveEdgeTracks, clearStoryTracks])
 
   const setMqttReplayActive = useCallback((active: boolean) => {
@@ -1015,7 +1032,7 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
       setIsReplayMode(false)
       setReplayTracksState(new Map())
     }
-    setInterpolationRef.current(smoothMotionRequestedRef.current)
+    setInterpolationRef.current(reconcileLiveRef.current ? true : smoothMotionRequestedRef.current)
   }, [purgeLiveEdgeTracks, clearStoryTracks])
 
   const setInsightReplayActive = useCallback((active: boolean) => {
@@ -1025,7 +1042,7 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
       // Episode clip uses DB track keys — purge JSONL replay-* meshes from the live bucket.
       purgeLiveEdgeTracks()
     }
-    setInterpolationRef.current(smoothMotionRequestedRef.current)
+    setInterpolationRef.current(reconcileLiveRef.current ? true : smoothMotionRequestedRef.current)
   }, [purgeLiveEdgeTracks])
 
   // Keep mqttReplayActive in sync when replay runs server-side (ReplayPanel may be closed).

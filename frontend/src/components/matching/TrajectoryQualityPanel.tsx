@@ -91,7 +91,40 @@ interface ReconcilerPreset {
   config: ReconcilerConfig
 }
 
+const LUCA_LIVE_CONFIG: ReconcilerConfig = {
+  enabled: true,
+  ghost_max_speed_m_s: 3.5,
+  ghost_min_promotion_lifetime_ms: 0,
+  ghost_min_promotion_displacement_m: 0,
+  ghost_static_timeout_s: 90,
+  ghost_static_displacement_m: 1.6,
+  reid_max_gap_s: 12,
+  reid_max_distance_m: 12.7,
+  reid_max_implied_speed_m_s: 2.6,
+  reid_velocity_cosine_min: 0.2,
+  reid_weight_distance: 4,
+  reid_weight_velocity: 0.5,
+  reid_weight_time: 3.1,
+  reid_slow_speed_m_s: 0.35,
+  reid_static_max_distance_m: 3.5,
+  reid_static_max_implied_speed_m_s: 1.2,
+  reid_aligned_cosine_min: 0.45,
+  reid_aligned_distance_boost: 1.25,
+  reid_isolation_radius_m: 2.5,
+  reid_occlusion_bypass_promotion: true,
+  smoothing_alpha: 0.12,
+  active_to_lost_timeout_ms: 6000,
+  trail_max_length: 100,
+}
+
 const PRESETS: ReconcilerPreset[] = [
+  {
+    id: 'treviglio_luca_live',
+    label: 'Treviglio — Luca Live ★ (your tuning)',
+    description: 'Owner-tuned live reconciler from Jun 30 afternoon — dense trails, occlusion re-ID, 12s/12.7m gates. Select this to restore your settings.',
+    metrics: { stable: 0, fragX: 0, lifetime_s: 0, displacement_m: 0, teleports_per_1k: 0 },
+    config: { ...LUCA_LIVE_CONFIG },
+  },
   {
     id: 'default',
     label: 'Default',
@@ -263,7 +296,7 @@ const PRESETS: ReconcilerPreset[] = [
       reid_weight_velocity: 0.5,
       reid_weight_time: 3.1,
       reid_slow_speed_m_s: 0.35,
-      reid_static_max_distance_m: 3.0,
+      reid_static_max_distance_m: 3.5,
       reid_static_max_implied_speed_m_s: 1.2,
       reid_aligned_cosine_min: 0.45,
       reid_aligned_distance_boost: 1.25,
@@ -303,17 +336,22 @@ const PRESETS: ReconcilerPreset[] = [
 /** Match a saved config against a preset; returns 'custom' when nothing fits. */
 function detectActivePresetId(cfg: ReconcilerConfig): string {
   if (!cfg.enabled) return 'bypass'
-  const close = (a: number, b: number, tol = 0.001) => Math.abs(a - b) <= tol
+  const close = (a: number, b: number, tol = 0.05) => Math.abs(a - b) <= tol
   for (const p of PRESETS) {
     const c = p.config
-    if (close(cfg.ghost_max_speed_m_s, c.ghost_max_speed_m_s)
-        && close(cfg.ghost_min_promotion_lifetime_ms, c.ghost_min_promotion_lifetime_ms)
-        && close(cfg.ghost_min_promotion_displacement_m, c.ghost_min_promotion_displacement_m)
+    if (close(cfg.ghost_min_promotion_lifetime_ms, c.ghost_min_promotion_lifetime_ms, 1)
+        && close(cfg.ghost_static_timeout_s, c.ghost_static_timeout_s)
+        && close(cfg.ghost_static_displacement_m, c.ghost_static_displacement_m)
         && close(cfg.reid_max_gap_s, c.reid_max_gap_s)
         && close(cfg.reid_max_distance_m, c.reid_max_distance_m)
         && close(cfg.reid_max_implied_speed_m_s, c.reid_max_implied_speed_m_s)
         && close(cfg.reid_velocity_cosine_min, c.reid_velocity_cosine_min)
-        && close(cfg.smoothing_alpha, c.smoothing_alpha)) {
+        && close(cfg.reid_weight_distance, c.reid_weight_distance)
+        && close(cfg.reid_weight_time, c.reid_weight_time)
+        && close(cfg.reid_static_max_distance_m, c.reid_static_max_distance_m)
+        && close(cfg.smoothing_alpha, c.smoothing_alpha)
+        && close(cfg.active_to_lost_timeout_ms, c.active_to_lost_timeout_ms, 50)
+        && close(cfg.trail_max_length, c.trail_max_length, 1)) {
       return p.id
     }
   }

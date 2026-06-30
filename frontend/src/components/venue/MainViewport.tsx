@@ -282,6 +282,8 @@ export default function MainViewport({
   const lidarMeshesRef = useRef<Map<string, THREE.Group>>(new Map())
   const trackMeshesRef = useRef<Map<string, THREE.Group>>(new Map())
   const trailLinesRef = useRef<Map<string, THREE.Line>>(new Map())
+  const trailFootprintsRef = useRef<Map<string, THREE.InstancedMesh>>(new Map())
+  const TRAIL_FOOTPRINT_MAX = 256
   // Grace period: tracks hidden but not disposed, keyed by trackKey -> hide timestamp
   const trackGraceRef = useRef<Map<string, number>>(new Map())
   const emptyTracksSinceRef = useRef<number | null>(null)
@@ -841,6 +843,13 @@ export default function MainViewport({
       trail.geometry.dispose()
       ;(trail.material as THREE.Material).dispose()
       trailLinesRef.current.delete(key)
+    }
+    const fp = trailFootprintsRef.current.get(key)
+    if (fp) {
+      scene.remove(fp)
+      fp.geometry.dispose()
+      ;(fp.material as THREE.Material).dispose()
+      trailFootprintsRef.current.delete(key)
     }
     trackGraceRef.current.delete(key)
     sezEntryTimesRef.current.delete(key)
@@ -2684,6 +2693,12 @@ export default function MainViewport({
       })
       trackMeshesRef.current.clear()
       trailLinesRef.current.clear()
+      trailFootprintsRef.current.forEach((fp) => {
+        scene.remove(fp)
+        fp.geometry.dispose()
+        ;(fp.material as THREE.Material).dispose()
+      })
+      trailFootprintsRef.current.clear()
       sezEntryTimesRef.current.clear()
       
       // Dispose loaded models cache
@@ -4563,6 +4578,12 @@ export default function MainViewport({
           ;(trail.material as THREE.Material).dispose()
         })
         trailLinesRef.current.clear()
+        trailFootprintsRef.current.forEach((fp) => {
+          scene.remove(fp)
+          fp.geometry.dispose()
+          ;(fp.material as THREE.Material).dispose()
+        })
+        trailFootprintsRef.current.clear()
         trackGraceRef.current.clear()
         sezEntryTimesRef.current.clear()
         emptyTracksSinceRef.current = null
@@ -4932,6 +4953,53 @@ export default function MainViewport({
           sezLabel.position.y = cylinderHeight / 2 + 0.5
         }
 
+        if (reconcileLive && track.trail && track.trail.length > 0) {
+          const renderTrail = sanitizeTrailPoints(track.trail)
+          const trailLine = trailLinesRef.current.get(key)
+          if (trailLine) {
+            trailLine.geometry.setDrawRange(0, 0)
+            trailLine.visible = false
+          }
+          const count = Math.min(renderTrail.length, TRAIL_FOOTPRINT_MAX)
+          if (count > 0) {
+            let fpMesh = trailFootprintsRef.current.get(key)
+            if (!fpMesh) {
+              const geo = new THREE.CylinderGeometry(0.22, 0.22, 0.06, 8)
+              const mat = new THREE.MeshStandardMaterial({
+                color,
+                transparent: true,
+                opacity: 0.52,
+                emissive: color,
+                emissiveIntensity: 0.35,
+                depthWrite: false,
+              })
+              fpMesh = new THREE.InstancedMesh(geo, mat, TRAIL_FOOTPRINT_MAX)
+              fpMesh.frustumCulled = false
+              fpMesh.userData.isTrailFootprint = true
+              fpMesh.userData.trackKey = key
+              scene.add(fpMesh)
+              trailFootprintsRef.current.set(key, fpMesh)
+            }
+            const dummy = new THREE.Object3D()
+            for (let i = 0; i < count; i++) {
+              dummy.position.set(renderTrail[i].x, 0.03, renderTrail[i].z)
+              dummy.updateMatrix()
+              fpMesh.setMatrixAt(i, dummy.matrix)
+            }
+            fpMesh.count = count
+            fpMesh.instanceMatrix.needsUpdate = true
+            const fpMat = fpMesh.material as THREE.MeshStandardMaterial
+            fpMat.color.set(color as any)
+            fpMat.emissive.set(color as any)
+            fpMesh.visible = showTracksRef.current
+          }
+        } else {
+          const fpMesh = trailFootprintsRef.current.get(key)
+          if (fpMesh) {
+            fpMesh.count = 0
+            fpMesh.visible = false
+          }
+
         if (track.trail && track.trail.length > 1) {
           const renderTrail = sanitizeTrailPoints(track.trail)
           if (renderTrail.length <= 1) {
@@ -5006,6 +5074,7 @@ export default function MainViewport({
             trailLine.geometry.setDrawRange(0, 0)
             trailLine.visible = false
           }
+        }
         }
 
         const isCylinderMode = isStoryCinematicTracks ? false : currentTracking.trackDisplayMode === 'cylinder'
@@ -5698,6 +5767,9 @@ export default function MainViewport({
     })
     trailLinesRef.current.forEach(trail => {
       trail.visible = showTracksLayer
+    })
+    trailFootprintsRef.current.forEach(fp => {
+      fp.visible = showTracksLayer
     })
   }, [showTracksLayer])
   // Notify backend to throttle KPI processing when tracks are visible (demo mode)
