@@ -23,6 +23,13 @@ interface ReconcilerConfig {
   reid_weight_distance: number
   reid_weight_velocity: number
   reid_weight_time: number
+  reid_slow_speed_m_s: number
+  reid_static_max_distance_m: number
+  reid_static_max_implied_speed_m_s: number
+  reid_aligned_cosine_min: number
+  reid_aligned_distance_boost: number
+  reid_isolation_radius_m: number
+  reid_occlusion_bypass_promotion: boolean
   smoothing_alpha: number
   active_to_lost_timeout_ms: number
   trail_max_length: number
@@ -56,6 +63,13 @@ const DEFAULT_CONFIG: ReconcilerConfig = {
   reid_weight_distance: 1.0,
   reid_weight_velocity: 0.5,
   reid_weight_time: 0.1,
+  reid_slow_speed_m_s: 0.35,
+  reid_static_max_distance_m: 3.5,
+  reid_static_max_implied_speed_m_s: 1.2,
+  reid_aligned_cosine_min: 0.45,
+  reid_aligned_distance_boost: 1.25,
+  reid_isolation_radius_m: 2.5,
+  reid_occlusion_bypass_promotion: true,
   smoothing_alpha: 0.6,
   active_to_lost_timeout_ms: 1000,
   trail_max_length: 32,
@@ -230,6 +244,37 @@ const PRESETS: ReconcilerPreset[] = [
     },
   },
   {
+    id: 'treviglio_occlusion',
+    label: 'Treviglio — Occlusion re-ID',
+    description: 'Your tuned gates + slow/static path: raw distance when slowing/stopping, isolation gate for safe 2–3 m merges after shelf dropout.',
+    metrics: { stable: 0, fragX: 0, lifetime_s: 0, displacement_m: 0, teleports_per_1k: 0 },
+    config: {
+      enabled: true,
+      ghost_max_speed_m_s: 3.5,
+      ghost_min_promotion_lifetime_ms: 0,
+      ghost_min_promotion_displacement_m: 0,
+      ghost_static_timeout_s: 90,
+      ghost_static_displacement_m: 1.6,
+      reid_max_gap_s: 12,
+      reid_max_distance_m: 12.7,
+      reid_max_implied_speed_m_s: 2.6,
+      reid_velocity_cosine_min: 0.2,
+      reid_weight_distance: 4.0,
+      reid_weight_velocity: 0.5,
+      reid_weight_time: 3.1,
+      reid_slow_speed_m_s: 0.35,
+      reid_static_max_distance_m: 3.0,
+      reid_static_max_implied_speed_m_s: 1.2,
+      reid_aligned_cosine_min: 0.45,
+      reid_aligned_distance_boost: 1.25,
+      reid_isolation_radius_m: 2.5,
+      reid_occlusion_bypass_promotion: true,
+      smoothing_alpha: 0.12,
+      active_to_lost_timeout_ms: 6000,
+      trail_max_length: 100,
+    },
+  },
+  {
     id: 'raj_v1_balanced',
     label: 'Raj v1.0.1 — Balanced',
     description: 'More re-ID merge than Raj Conservative — longer trajectories (~34 s mean). Use when tp/1k headroom allows.',
@@ -371,8 +416,9 @@ export default function TrajectoryQualityPanel({ venueId, onClose }: TrajectoryQ
   }, [scheduleSave])
 
   const applyPreset = useCallback((preset: ReconcilerPreset) => {
-    setConfig(preset.config)
-    scheduleSave(preset.config)
+    const next = { ...DEFAULT_CONFIG, ...preset.config }
+    setConfig(next)
+    scheduleSave(next)
   }, [scheduleSave])
 
   const activePresetId = detectActivePresetId(config)
@@ -442,7 +488,8 @@ export default function TrajectoryQualityPanel({ venueId, onClose }: TrajectoryQ
 
           {!experimentalLive && (
             <div className="px-3 py-2 border-b border-gray-800 text-[10px] text-gray-500">
-              Sliders below save venue config for benchmarks only. They do not change live visualization.
+              Sliders save to venue config and apply to live MQTT ingest (zone_visit track_key + ghost/re-ID).
+              Canvas trails stay raw unless you enable experimental live canvas above.
             </div>
           )}
 
@@ -570,7 +617,7 @@ export default function TrajectoryQualityPanel({ venueId, onClose }: TrajectoryQ
                   value={config.reid_max_distance_m}
                   min={0.5} max={20} step={0.1}
                   onChange={v => update('reid_max_distance_m', v)}
-                  hint="A new ID must appear within this radius of the predicted lost position"
+                  hint="Moving re-ID: min(raw, predicted) distance gate; boosted when heading aligned"
                 />
                 <SliderRow
                   label="Max implied speed (m/s)"
@@ -591,6 +638,66 @@ export default function TrajectoryQualityPanel({ venueId, onClose }: TrajectoryQ
                   <SliderRow label="w · distance" value={config.reid_weight_distance} min={0} max={5} step={0.1} onChange={v => update('reid_weight_distance', v)} />
                   <SliderRow label="w · velocity"  value={config.reid_weight_velocity}  min={0} max={5} step={0.1} onChange={v => update('reid_weight_velocity', v)} />
                   <SliderRow label="w · time gap"  value={config.reid_weight_time}      min={0} max={5} step={0.1} onChange={v => update('reid_weight_time', v)} />
+                </div>
+                <div className="pt-2 border-t border-gray-800 space-y-3">
+                  <div className="text-[10px] uppercase text-emerald-600/80">Slow / occlusion re-ID</div>
+                  <p className="text-[10px] text-gray-500 leading-snug">
+                    When someone slows, stops, or vanishes behind a shelf, velocity prediction overshoots.
+                    These rules merge on raw distance instead — only when alone nearby.
+                  </p>
+                  <SliderRow
+                    label="Slow speed threshold (m/s)"
+                    value={config.reid_slow_speed_m_s}
+                    min={0.05} max={1.5} step={0.05}
+                    onChange={v => update('reid_slow_speed_m_s', v)}
+                    hint="Lost or new track below this speed → occlusion rules"
+                  />
+                  <SliderRow
+                    label="Static max distance (m)"
+                    value={config.reid_static_max_distance_m}
+                    min={0.5} max={8} step={0.1}
+                    onChange={v => update('reid_static_max_distance_m', v)}
+                    hint="Raw distance from last position (not velocity-predicted)"
+                  />
+                  <SliderRow
+                    label="Static max implied speed (m/s)"
+                    value={config.reid_static_max_implied_speed_m_s}
+                    min={0.3} max={3} step={0.1}
+                    onChange={v => update('reid_static_max_implied_speed_m_s', v)}
+                    hint="Teleport guard in occlusion mode"
+                  />
+                  <SliderRow
+                    label="Isolation radius (m)"
+                    value={config.reid_isolation_radius_m}
+                    min={0} max={6} step={0.1}
+                    onChange={v => update('reid_isolation_radius_m', v)}
+                    hint="0 = off. Occlusion merge only if no other track within this radius"
+                  />
+                  <SliderRow
+                    label="Aligned cosine min"
+                    value={config.reid_aligned_cosine_min}
+                    min={-1} max={1} step={0.05}
+                    onChange={v => update('reid_aligned_cosine_min', v)}
+                    hint="Same-direction walking boost when cos ≥ this (moving mode only)"
+                  />
+                  <SliderRow
+                    label="Aligned distance boost"
+                    value={config.reid_aligned_distance_boost}
+                    min={1} max={2} step={0.05}
+                    onChange={v => update('reid_aligned_distance_boost', v)}
+                    hint="Multiply max reconnect distance when heading matches"
+                  />
+                  <label className="flex items-start gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={config.reid_occlusion_bypass_promotion}
+                      onChange={e => update('reid_occlusion_bypass_promotion', e.target.checked)}
+                      className="mt-0.5"
+                    />
+                    <span className="text-[11px] text-gray-400">
+                      Bypass promotion for occlusion re-ID (merge before probation ends)
+                    </span>
+                  </label>
                 </div>
               </>
             )}

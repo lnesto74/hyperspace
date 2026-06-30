@@ -40,12 +40,20 @@ export const DEFAULT_CONFIG = Object.freeze({
 
   // Re-identification
   reid_max_gap_s: 10,                      // perception ID gap eligible for re-ID
-  reid_max_distance_m: 3.0,                // hard gate on predicted-vs-new distance
+  reid_max_distance_m: 3.0,                // hard gate on predicted-vs-new distance (moving)
   reid_max_implied_speed_m_s: 2.5,         // hard gate on distance/dt: prevents teleports
   reid_velocity_cosine_min: -0.2,          // reject if walking backwards (cos < this)
   reid_weight_distance: 1.0,
   reid_weight_velocity: 0.5,
   reid_weight_time: 0.1,
+  // Slow / occlusion re-ID (person static or decelerating before drop-out)
+  reid_slow_speed_m_s: 0.35,               // lost or new speed below → occlusion rules
+  reid_static_max_distance_m: 3.5,         // max raw distance from last pos (not velocity-predicted)
+  reid_static_max_implied_speed_m_s: 1.2,  // tighter implied-speed cap in occlusion mode
+  reid_aligned_cosine_min: 0.45,           // same-direction boost when cos ≥ this
+  reid_aligned_distance_boost: 1.25,       // multiply reid_max_distance_m when aligned
+  reid_isolation_radius_m: 2.5,            // occlusion merge only if no other track within (0=off)
+  reid_occlusion_bypass_promotion: true,   // new ID can re-ID lost track before probation ends
 
   // Smoothing
   smoothing_alpha: 0.6,                    // EMA blend (1 = use raw, 0 = no update)
@@ -77,6 +85,13 @@ export function normalizeReconcilerConfig(raw) {
   merged.reid_weight_distance = num(raw.reid_weight_distance, DEFAULT_CONFIG.reid_weight_distance);
   merged.reid_weight_velocity = num(raw.reid_weight_velocity, DEFAULT_CONFIG.reid_weight_velocity);
   merged.reid_weight_time = num(raw.reid_weight_time, DEFAULT_CONFIG.reid_weight_time);
+  merged.reid_slow_speed_m_s = num(raw.reid_slow_speed_m_s, DEFAULT_CONFIG.reid_slow_speed_m_s);
+  merged.reid_static_max_distance_m = num(raw.reid_static_max_distance_m, DEFAULT_CONFIG.reid_static_max_distance_m);
+  merged.reid_static_max_implied_speed_m_s = num(raw.reid_static_max_implied_speed_m_s, DEFAULT_CONFIG.reid_static_max_implied_speed_m_s);
+  merged.reid_aligned_cosine_min = num(raw.reid_aligned_cosine_min, DEFAULT_CONFIG.reid_aligned_cosine_min);
+  merged.reid_aligned_distance_boost = num(raw.reid_aligned_distance_boost, DEFAULT_CONFIG.reid_aligned_distance_boost);
+  merged.reid_isolation_radius_m = num(raw.reid_isolation_radius_m, DEFAULT_CONFIG.reid_isolation_radius_m);
+  merged.reid_occlusion_bypass_promotion = raw.reid_occlusion_bypass_promotion !== false;
   merged.smoothing_alpha = Math.max(0, Math.min(1, num(raw.smoothing_alpha, DEFAULT_CONFIG.smoothing_alpha)));
   merged.active_to_lost_timeout_ms = num(raw.active_to_lost_timeout_ms, DEFAULT_CONFIG.active_to_lost_timeout_ms);
   merged.trail_max_length = num(raw.trail_max_length, DEFAULT_CONFIG.trail_max_length);
@@ -289,7 +304,20 @@ export class TrajectoryReconciler {
     const lifetime = now - candidate.firstSeen;
     const initialDisp = Math.hypot(pos.x - candidate.firstPos.x, pos.z - candidate.firstPos.z);
     if (lifetime < cfg.ghost_min_promotion_lifetime_ms) {
-      // Still in probation period — hold.
+      // Occlusion: new blip near a recently-lost track — merge before probation ends.
+      if (cfg.reid_occlusion_bypass_promotion !== false) {
+        const occlusion = this._tryReid(state, pos, vel, now, cfg, { occlusionOnly: true });
+        if (occlusion) {
+          state.candidatePerceptions.delete(perceptionId);
+          occlusion.perceptionIds.add(perceptionId);
+          state.lostTracks.delete(occlusion.stableId);
+          state.activeTracks.set(occlusion.stableId, occlusion);
+          state.perceptionToStable.set(perceptionId, occlusion.stableId);
+          this._updateTrackState(occlusion, pos, vel, now, cfg);
+          state.stats.reid_count++;
+          return this._emit(track, occlusion, perceptionId);
+        }
+      }
       return null;
     }
     if (candidate.totalDisp < cfg.ghost_min_promotion_displacement_m && initialDisp < cfg.ghost_min_promotion_displacement_m) {
@@ -442,33 +470,75 @@ export class TrajectoryReconciler {
     if (t.trail.length > cfg.trail_max_length) t.trail.shift();
   }
 
-  _tryReid(state, pos, vel, now, cfg) {
+  _countNearbyTracks(state, pos, excludeStableId, radiusM) {
+    if (!radiusM || radiusM <= 0) return 0;
+    const r2 = radiusM * radiusM;
+    let n = 0;
+    for (const pool of [state.activeTracks, state.lostTracks]) {
+      for (const [sid, t] of pool) {
+        if (sid === excludeStableId) continue;
+        const dx = pos.x - t.position.x;
+        const dz = pos.z - t.position.z;
+        if (dx * dx + dz * dz <= r2) n++;
+      }
+    }
+    return n;
+  }
+
+  _tryReid(state, pos, vel, now, cfg, opts = {}) {
+    const { occlusionOnly = false } = opts;
     if (state.lostTracks.size === 0) return null;
+    const slowThresh = cfg.reid_slow_speed_m_s ?? 0.35;
+    const alignedCosMin = cfg.reid_aligned_cosine_min ?? 0.45;
+    const alignedBoost = cfg.reid_aligned_distance_boost ?? 1.25;
+    const staticDMax = cfg.reid_static_max_distance_m ?? 3.5;
+    const staticImplied = cfg.reid_static_max_implied_speed_m_s ?? 1.2;
+    const isoR = cfg.reid_isolation_radius_m ?? 0;
+
     let best = null;
     let bestCost = Infinity;
     for (const t of state.lostTracks.values()) {
       const dt = (now - t.lastTs) / 1000;
       if (dt > cfg.reid_max_gap_s) continue;
-      // Predicted position using last known velocity
+
+      const speedLost = Math.hypot(t.smoothedVel.x || 0, t.smoothedVel.z || 0);
+      const speedNew = Math.hypot(vel.x || 0, vel.z || 0);
+      const slowMode = speedLost < slowThresh || speedNew < slowThresh;
+      if (occlusionOnly && !slowMode) continue;
+
+      const rawDx = pos.x - t.position.x;
+      const rawDz = pos.z - t.position.z;
+      const rawDist = Math.hypot(rawDx, rawDz);
+
+      // Velocity prediction overshoots when the person was slowing down before dropout.
       const px = t.position.x + (t.smoothedVel.x || 0) * dt;
       const pz = t.position.z + (t.smoothedVel.z || 0) * dt;
-      const dx = pos.x - px;
-      const dz = pos.z - pz;
-      const dist = Math.hypot(dx, dz);
-      if (dist > cfg.reid_max_distance_m) continue;
-      // Implied-speed gate: how fast would a person have to move between
-      // the lost track's last known position and the new candidate position?
-      // A teleport across the store implies impossibly high speed.
-      const lastDx = pos.x - t.position.x;
-      const lastDz = pos.z - t.position.z;
-      const rawDist = Math.hypot(lastDx, lastDz);
-      const impliedSpeed = dt > 0.05 ? rawDist / dt : 0;
-      if (impliedSpeed > cfg.reid_max_implied_speed_m_s) continue;
+      const predDist = Math.hypot(pos.x - px, pos.z - pz);
+
+      const dist = slowMode ? rawDist : Math.min(rawDist, predDist);
+
       const cos = _cosine(vel, t.smoothedVel);
-      if (cos < cfg.reid_velocity_cosine_min) continue;
+      let dMax = cfg.reid_max_distance_m;
+      if (slowMode) {
+        dMax = staticDMax;
+      } else if (cos >= alignedCosMin) {
+        dMax *= alignedBoost;
+      }
+      if (dist > dMax) continue;
+
+      const impliedSpeed = dt > 0.05 ? rawDist / dt : 0;
+      const impliedCap = slowMode ? staticImplied : cfg.reid_max_implied_speed_m_s;
+      if (impliedSpeed > impliedCap) continue;
+
+      if (!slowMode && cos < cfg.reid_velocity_cosine_min) continue;
+
+      if (slowMode && isoR > 0 && this._countNearbyTracks(state, pos, t.stableId, isoR) > 0) {
+        continue;
+      }
+
       const cost =
         cfg.reid_weight_distance * dist +
-        cfg.reid_weight_velocity * (1 - cos) +
+        cfg.reid_weight_velocity * (slowMode ? 0 : (1 - cos)) +
         cfg.reid_weight_time * dt;
       if (cost < bestCost) {
         bestCost = cost;
