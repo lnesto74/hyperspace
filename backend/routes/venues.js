@@ -573,9 +573,10 @@ export default function venuesRoutes(db, { mqttService, io, visualTrackService }
 
       const incoming = req.body?.reconciler;
       const cleared = incoming === null;
-      const normalized = cleared ? null : normalizeReconcilerConfig(incoming);
-
       const existing = parseDwgTransform(venue.dwg_transform_json);
+      const normalized = cleared
+        ? null
+        : normalizeReconcilerConfig({ ...(existing.reconciler || {}), ...incoming });
       const nextJson = {
         ...existing,
         reconciler: normalized ? { ...normalized, updated_at: new Date().toISOString() } : null,
