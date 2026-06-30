@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   TransformWrapper,
   TransformComponent,
@@ -24,8 +24,11 @@ interface FloorplanCanvasProps {
   centerOnPinId?: string | null;
 }
 
-function ZoomControls() {
-  const { zoomIn, zoomOut, resetTransform } = useControls();
+const CLICK_THRESHOLD_PX = 8;
+const FIT_PADDING_PX = 32;
+
+function ZoomControls({ onFit }: { onFit: () => void }) {
+  const { zoomIn, zoomOut } = useControls();
 
   return (
     <div className="absolute bottom-4 left-4 z-30 flex gap-1">
@@ -48,7 +51,7 @@ function ZoomControls() {
       <button
         type="button"
         className="rounded-lg bg-white/90 px-3 py-2 text-sm font-medium shadow hover:bg-white"
-        onClick={() => resetTransform()}
+        onClick={onFit}
         aria-label="Fit"
       >
         ⊡
@@ -71,13 +74,45 @@ export function FloorplanCanvas({
 }: FloorplanCanvasProps) {
   const transformRef = useRef<ReactZoomPanPinchRef>(null);
   const imageRef = useRef<HTMLDivElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
   const [zoomScale, setZoomScale] = useState(1);
-  const dragRef = useRef<{
+  const [ready, setReady] = useState(false);
+
+  const pinDragRef = useRef<{
     pinId: string;
     startX: number;
     startY: number;
     moved: boolean;
   } | null>(null);
+
+  const tapRef = useRef<{ x: number; y: number } | null>(null);
+
+  const fitToView = useCallback(
+    (animate = true) => {
+      const api = transformRef.current;
+      const wrapper = api?.instance?.wrapperComponent;
+      if (!api || !wrapper) return;
+
+      const ww = wrapper.clientWidth;
+      const wh = wrapper.clientHeight;
+      if (ww === 0 || wh === 0) return;
+
+      const scale = Math.min(
+        (ww - FIT_PADDING_PX * 2) / imageW,
+        (wh - FIT_PADDING_PX * 2) / imageH,
+      );
+      const x = (ww - imageW * scale) / 2;
+      const y = (wh - imageH * scale) / 2;
+      api.setTransform(x, y, scale, animate ? 250 : 0);
+      setZoomScale(scale);
+    },
+    [imageW, imageH],
+  );
+
+  useLayoutEffect(() => {
+    fitToView(false);
+    setReady(true);
+  }, [fitToView]);
 
   const getImageRect = useCallback(() => {
     const el = imageRef.current;
@@ -86,10 +121,24 @@ export function FloorplanCanvas({
     return { left: r.left, top: r.top, width: r.width, height: r.height };
   }, []);
 
-  const handleMapClick = useCallback(
-    (e: React.MouseEvent) => {
-      if (readOnly || dragRef.current?.moved) return;
+  const handleMapPointerDown = useCallback((e: React.PointerEvent) => {
+    if ((e.target as HTMLElement).closest("[data-pin]")) return;
+    if (e.button !== 0) return;
+    tapRef.current = { x: e.clientX, y: e.clientY };
+  }, []);
+
+  const handleMapPointerUp = useCallback(
+    (e: React.PointerEvent) => {
       if ((e.target as HTMLElement).closest("[data-pin]")) return;
+      if (readOnly || pinDragRef.current?.moved) return;
+
+      const tap = tapRef.current;
+      tapRef.current = null;
+      if (!tap) return;
+
+      const dx = e.clientX - tap.x;
+      const dy = e.clientY - tap.y;
+      if (Math.hypot(dx, dy) > CLICK_THRESHOLD_PX) return;
 
       const rect = getImageRect();
       const norm = pxToNorm({ x: e.clientX, y: e.clientY }, rect);
@@ -98,31 +147,30 @@ export function FloorplanCanvas({
     [readOnly, getImageRect, onAddPin],
   );
 
-  const handleDragStart = useCallback(
+  const handlePinDragStart = useCallback(
     (pinId: string, e: React.PointerEvent) => {
       if (readOnly) return;
       e.stopPropagation();
-      dragRef.current = {
+      tapRef.current = null;
+      pinDragRef.current = {
         pinId,
         startX: e.clientX,
         startY: e.clientY,
         moved: false,
       };
-      (e.target as HTMLElement).setPointerCapture(e.pointerId);
+      (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
     },
     [readOnly],
   );
 
-  const handlePointerMove = useCallback(
+  const handlePinDragMove = useCallback(
     (e: React.PointerEvent) => {
-      const drag = dragRef.current;
+      const drag = pinDragRef.current;
       if (!drag) return;
 
       const dx = e.clientX - drag.startX;
       const dy = e.clientY - drag.startY;
-      if (Math.abs(dx) > 3 || Math.abs(dy) > 3) {
-        drag.moved = true;
-      }
+      if (Math.hypot(dx, dy) > CLICK_THRESHOLD_PX) drag.moved = true;
 
       const rect = getImageRect();
       const norm = pxToNorm({ x: e.clientX, y: e.clientY }, rect);
@@ -131,25 +179,23 @@ export function FloorplanCanvas({
     [getImageRect, onMovePin],
   );
 
-  const handlePointerUp = useCallback(() => {
-    if (dragRef.current?.moved) {
+  const handlePinDragEnd = useCallback(() => {
+    if (pinDragRef.current?.moved) {
       setTimeout(() => {
-        dragRef.current = null;
+        pinDragRef.current = null;
       }, 50);
     } else {
-      dragRef.current = null;
+      pinDragRef.current = null;
     }
   }, []);
 
-  // Fly to pin when selected from list
   useEffect(() => {
     if (!centerOnPinId || !transformRef.current) return;
     const pin = pins.find((p) => p.id === centerOnPinId);
-    if (!pin || !imageRef.current) return;
-
     const wrapper = transformRef.current.instance.wrapperComponent;
-    if (!wrapper) return;
+    if (!pin || !wrapper || !imageRef.current) return;
 
+    const state = transformRef.current.instance.transformState;
     const wrapperRect = wrapper.getBoundingClientRect();
     const imgRect = imageRef.current.getBoundingClientRect();
 
@@ -160,64 +206,82 @@ export function FloorplanCanvas({
     const offsetY = wrapperRect.height / 2 - (pinPxY - wrapperRect.top);
 
     transformRef.current.setTransform(
-      transformRef.current.instance.transformState.positionX + offsetX,
-      transformRef.current.instance.transformState.positionY + offsetY,
-      transformRef.current.instance.transformState.scale,
+      state.positionX + offsetX,
+      state.positionY + offsetY,
+      state.scale,
       200,
     );
   }, [centerOnPinId, pins]);
 
   return (
-    <div className="relative h-full w-full overflow-hidden bg-gray-100">
+    <div
+      ref={containerRef}
+      className="relative h-full w-full overflow-hidden bg-gray-200"
+    >
       <TransformWrapper
         ref={transformRef}
         initialScale={1}
-        minScale={0.3}
-        maxScale={6}
-        centerOnInit
-        wheel={{ step: 0.1 }}
+        minScale={0.15}
+        maxScale={8}
+        centerOnInit={false}
+        limitToBounds={false}
+        panning={{
+          disabled: false,
+          velocityDisabled: true,
+        }}
+        wheel={{ step: 0.12, smoothStep: 0.004 }}
         pinch={{ step: 5 }}
         doubleClick={{ disabled: true }}
         onTransformed={(_ref, state) => setZoomScale(state.scale)}
       >
         <TransformComponent
-          wrapperClass="!h-full !w-full"
-          contentClass="!h-full !w-full flex items-center justify-center"
+          wrapperClass="!h-full !w-full cursor-grab active:cursor-grabbing"
+          contentClass="!w-full !h-full"
+          wrapperStyle={{ touchAction: "none" }}
         >
           <div
-            ref={imageRef}
-            className="relative cursor-crosshair select-none"
-            style={{ width: imageW, height: imageH }}
-            onClick={handleMapClick}
-            onPointerMove={handlePointerMove}
-            onPointerUp={handlePointerUp}
-            onPointerCancel={handlePointerUp}
+            className="flex h-full w-full items-center justify-center"
+            style={{ visibility: ready ? "visible" : "hidden" }}
           >
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src={floorplanUrl}
-              alt="Planimetria"
-              width={imageW}
-              height={imageH}
-              className="block h-full w-full"
-              draggable={false}
-              loading="lazy"
-            />
-            {pins.map((pin) => (
-              <div key={pin.id} data-pin>
-                <Pin
-                  pin={pin}
-                  selected={pin.id === selectedId}
-                  zoomScale={zoomScale}
-                  onSelect={onSelectPin}
-                  onDragStart={handleDragStart}
-                  readOnly={readOnly}
-                />
-              </div>
-            ))}
+            <div
+              ref={imageRef}
+              className="relative shrink-0 select-none"
+              style={{ width: imageW, height: imageH }}
+              onPointerDown={handleMapPointerDown}
+              onPointerUp={handleMapPointerUp}
+            >
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={floorplanUrl}
+                alt="Planimetria"
+                width={imageW}
+                height={imageH}
+                className="pointer-events-none block h-full w-full"
+                draggable={false}
+                loading="lazy"
+              />
+              {pins.map((pin) => (
+                <div
+                  key={pin.id}
+                  data-pin
+                  onPointerMove={handlePinDragMove}
+                  onPointerUp={handlePinDragEnd}
+                  onPointerCancel={handlePinDragEnd}
+                >
+                  <Pin
+                    pin={pin}
+                    selected={pin.id === selectedId}
+                    zoomScale={zoomScale}
+                    onSelect={onSelectPin}
+                    onDragStart={handlePinDragStart}
+                    readOnly={readOnly}
+                  />
+                </div>
+              ))}
+            </div>
           </div>
         </TransformComponent>
-        <ZoomControls />
+        <ZoomControls onFit={() => fitToView(true)} />
       </TransformWrapper>
     </div>
   );
