@@ -29,9 +29,9 @@ export default function PersonaIconRail({ selectedPersonaId, onSelect }: Persona
             type="button"
             onClick={() => onSelect(persona.id)}
             title={`${persona.name} — ${persona.description}`}
-            className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border transition-all ${
+            className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border transition-colors ${
               isSelected
-                ? 'bg-gray-800 border-gray-500 shadow-sm'
+                ? 'bg-gray-800 border-gray-500'
                 : 'bg-gray-800/40 border-gray-700/80 hover:border-gray-600'
             }`}
             style={isSelected ? { borderColor: persona.color } : undefined}

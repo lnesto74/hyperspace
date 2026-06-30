@@ -69,6 +69,13 @@ export class FrameOccupancyTracker {
     return s.lastCompleteTs ?? s.frameTs ?? null;
   }
 
+  /** Milliseconds since last MQTT frame ingest for this venue. */
+  getStreamAgeMs(venueId) {
+    const s = this.venues.get(venueId);
+    if (!s || !s.lastWallMs) return null;
+    return Date.now() - s.lastWallMs;
+  }
+
   isInLiveFrame(venueId, perceptionId, trackTimestamp) {
     const s = this.venues.get(venueId);
     if (!s || perceptionId == null) return false;

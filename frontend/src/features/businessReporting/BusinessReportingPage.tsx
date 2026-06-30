@@ -1,5 +1,5 @@
 import { API_BASE } from '../../config/api'
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import {
   ArrowLeft,
   ShoppingBag,
@@ -30,6 +30,7 @@ import ExecutiveSummaryViewport, {
 import EsselungaExecutiveViewport from './esselunga/EsselungaExecutiveViewport';
 import type { EsselungaJourneyPayload, ExecutiveVariant } from './esselunga/types';
 import type { DoohScreenMarker } from '../../components/shared/FloorPlanMiniMap';
+import { getDemoVenueId } from '../../config/demo';
 
 type TimeRange = '1h' | '24h' | '7d' | 'custom';
 
@@ -73,14 +74,19 @@ const ESSELUNGA_PERSONA = 'esselunga-executive';
 
 interface BusinessReportingPageProps {
   onClose: () => void;
+  /** Customer-facing share link — Esselunga Executive only, no admin chrome */
+  publicDashboard?: boolean;
 }
 
-export default function BusinessReportingPage({ onClose }: BusinessReportingPageProps) {
+export default function BusinessReportingPage({ onClose, publicDashboard = false }: BusinessReportingPageProps) {
   const { venue, venueList } = useVenue();
   const { openHeatmapForCategory } = useHeatmap();
-  const [selectedVenueId, setSelectedVenueId] = useState<string | null>(venue?.id || null);
-  const [selectedPersonaId, setSelectedPersonaId] = useState<string>(PERSONAS[0].id);
-  const [selectedTimeRange, setSelectedTimeRange] = useState<TimeRange>('24h');
+  const pinnedVenueId = publicDashboard ? getDemoVenueId() : null;
+  const [selectedVenueId, setSelectedVenueId] = useState<string | null>(pinnedVenueId || venue?.id || null);
+  const [selectedPersonaId, setSelectedPersonaId] = useState<string>(
+    publicDashboard ? ESSELUNGA_PERSONA : PERSONAS[0].id,
+  );
+  const [selectedTimeRange, setSelectedTimeRange] = useState<TimeRange>(publicDashboard ? '7d' : '24h');
   const [opsGrain, setOpsGrain] = useState<TimelineGrain>('hour');
   const [kpiValues, setKpiValues] = useState<Record<string, number | null>>({});
   const [supporting, setSupporting] = useState<Record<string, unknown>>({});
@@ -92,6 +98,15 @@ export default function BusinessReportingPage({ onClose }: BusinessReportingPage
   const [categoriesExpanded, setCategoriesExpanded] = useState(false);
   const [campaignsExpanded, setCampaignsExpanded] = useState(false);
   const [esselungaVariant, setEsselungaVariant] = useState<ExecutiveVariant>('live');
+  const [metricPreviewLoading, setMetricPreviewLoading] = useState(false);
+  const previewAbortRef = useRef<AbortController | null>(null);
+  const previewSeqRef = useRef(0);
+
+  useEffect(() => {
+    if (!publicDashboard) return;
+    const id = pinnedVenueId || venue?.id;
+    if (id) setSelectedVenueId(id);
+  }, [publicDashboard, pinnedVenueId, venue?.id]);
 
   const selectedPersona = useMemo(
     () => getPersonaById(selectedPersonaId) || PERSONAS[0],
@@ -171,11 +186,24 @@ export default function BusinessReportingPage({ onClose }: BusinessReportingPage
 
   const zoneUtilThresholdPct = (supporting.zoneUtilThresholdPct as number | undefined) ?? 5;
 
-  const fetchData = async () => {
+  const fetchData = async (
+    metricOpts?: { dwellSec: number; engagementSec: number },
+    opts?: { silent?: boolean },
+  ) => {
     if (!selectedVenueId) return;
 
-    setLoading(true);
-    setError(null);
+    const isPreview = !!(opts?.silent && metricOpts);
+    let previewSeq = 0;
+
+    if (!opts?.silent) {
+      setLoading(true);
+      setError(null);
+    } else if (metricOpts) {
+      previewAbortRef.current?.abort();
+      previewAbortRef.current = new AbortController();
+      previewSeq = ++previewSeqRef.current;
+      setMetricPreviewLoading(true);
+    }
 
     try {
       const timeRangeOption = TIME_RANGES.find(t => t.id === selectedTimeRange);
@@ -198,10 +226,16 @@ export default function BusinessReportingPage({ onClose }: BusinessReportingPage
 
       if (selectedPersonaId === ESSELUNGA_PERSONA) {
         params.set('variant', esselungaVariant);
+        if (metricOpts) {
+          params.set('dwellThresholdSec', String(metricOpts.dwellSec));
+          params.set('engagementThresholdSec', String(metricOpts.engagementSec));
+        }
       }
 
-      const controller = new AbortController();
-      const timeoutId = window.setTimeout(() => controller.abort(), 90000);
+      const controller = isPreview ? previewAbortRef.current! : new AbortController();
+      const timeoutId = isPreview
+        ? undefined
+        : window.setTimeout(() => controller.abort(), 90000);
 
       let response: Response;
       try {
@@ -209,7 +243,7 @@ export default function BusinessReportingPage({ onClose }: BusinessReportingPage
           signal: controller.signal,
         });
       } finally {
-        window.clearTimeout(timeoutId);
+        if (timeoutId != null) window.clearTimeout(timeoutId);
       }
 
       if (!response.ok) {
@@ -227,10 +261,55 @@ export default function BusinessReportingPage({ onClose }: BusinessReportingPage
       }
 
       const data = await response.json();
-      setKpiValues(data.kpis || {});
-      setSupporting(data.supporting || {});
+
+      if (isPreview) {
+        if (previewSeq !== previewSeqRef.current) return;
+        const next = data.supporting?.esselungaJourney as EsselungaJourneyPayload | undefined;
+        setSupporting((prev) => {
+          const prevJ = prev.esselungaJourney as EsselungaJourneyPayload | undefined;
+          if (!prevJ || !next) return data.supporting || {};
+          return {
+            ...data.supporting,
+            esselungaJourney: {
+              ...prevJ,
+              ...next,
+              overview: prevJ.overview,
+              checkout: prevJ.checkout,
+              crossKpis: prevJ.crossKpis,
+              erp: prevJ.erp,
+              media: prevJ.media,
+              journeySignals: prevJ.journeySignals,
+              taxonomy: prevJ.taxonomy,
+              storeHours: prevJ.storeHours ?? next.storeHours,
+              aisles: next.aisles,
+              fresco: next.fresco,
+              activityTimeline: next.activityTimeline,
+              activityTimelines: next.activityTimelines,
+              heatmapCategories: next.heatmapCategories,
+              metricThresholds: next.metricThresholds,
+              generatedAt: next.generatedAt,
+            },
+          };
+        });
+        setKpiValues((prev) => ({
+          ...prev,
+          ...(data.kpis || {}),
+          avgStoreDwellMin: prev.avgStoreDwellMin,
+          totalVisitors: prev.totalVisitors,
+          perimeterEntrants: prev.perimeterEntrants,
+          currentOccupancy: prev.currentOccupancy,
+        }));
+      } else {
+        setKpiValues(data.kpis || {});
+        setSupporting(data.supporting || {});
+      }
       setLastUpdated(new Date());
     } catch (err) {
+      if (isPreview) {
+        if (err instanceof DOMException && err.name === 'AbortError') return;
+        console.warn('Metric threshold preview failed:', err);
+        return;
+      }
       console.error('Failed to fetch reporting data:', err);
       if (err instanceof DOMException && err.name === 'AbortError') {
         setError('Request timed out — 7d reports can take up to 90s on a busy server. Try again or use 24h.');
@@ -238,7 +317,10 @@ export default function BusinessReportingPage({ onClose }: BusinessReportingPage
         setError(err instanceof Error ? err.message : 'Failed to load data');
       }
     } finally {
-      setLoading(false);
+      if (!opts?.silent) setLoading(false);
+      if (isPreview && previewSeq === previewSeqRef.current) {
+        setMetricPreviewLoading(false);
+      }
     }
   };
 
@@ -297,28 +379,38 @@ export default function BusinessReportingPage({ onClose }: BusinessReportingPage
       {/* Command strip header */}
       <div className="h-12 border-b border-gray-700 flex items-center justify-between px-3 bg-gray-800 flex-shrink-0 gap-3">
         <div className="flex items-center gap-3 min-w-0">
-          <button
-            onClick={onClose}
-            className="text-gray-400 hover:text-white transition-colors flex items-center gap-1.5 flex-shrink-0"
-          >
-            <ArrowLeft className="w-4 h-4" />
-            <span className="text-xs hidden sm:inline">Back</span>
-          </button>
-          <div className="h-5 w-px bg-gray-700 flex-shrink-0" />
-          <h1 className="text-white text-sm font-semibold truncate">Business Reporting</h1>
+          {!publicDashboard && (
+            <>
+              <button
+                onClick={onClose}
+                className="text-gray-400 hover:text-white transition-colors flex items-center gap-1.5 flex-shrink-0"
+              >
+                <ArrowLeft className="w-4 h-4" />
+                <span className="text-xs hidden sm:inline">Back</span>
+              </button>
+              <div className="h-5 w-px bg-gray-700 flex-shrink-0" />
+            </>
+          )}
+          <h1 className="text-white text-sm font-semibold truncate">
+            {publicDashboard ? `Executive Dashboard · ${selectedVenueName}` : 'Business Reporting'}
+          </h1>
         </div>
 
         <div className="flex items-center gap-2 flex-shrink-0">
-          <Building2 className="w-3.5 h-3.5 text-gray-500 hidden sm:block" />
-          <select
-            value={selectedVenueId || ''}
-            onChange={(e) => setSelectedVenueId(e.target.value)}
-            className="bg-gray-700 border border-gray-600 rounded-md px-2 py-1 text-xs text-white max-w-[140px] sm:max-w-none"
-          >
-            {(venueList || []).map(v => (
-              <option key={v.id} value={v.id}>{v.name}</option>
-            ))}
-          </select>
+          {!publicDashboard && (
+            <>
+              <Building2 className="w-3.5 h-3.5 text-gray-500 hidden sm:block" />
+              <select
+                value={selectedVenueId || ''}
+                onChange={(e) => setSelectedVenueId(e.target.value)}
+                className="bg-gray-700 border border-gray-600 rounded-md px-2 py-1 text-xs text-white max-w-[140px] sm:max-w-none"
+              >
+                {(venueList || []).map(v => (
+                  <option key={v.id} value={v.id}>{v.name}</option>
+                ))}
+              </select>
+            </>
+          )}
 
           <div className="flex bg-gray-700 rounded-md p-0.5">
             {TIME_RANGES.map(tr => (
@@ -369,10 +461,12 @@ export default function BusinessReportingPage({ onClose }: BusinessReportingPage
 
       <div className="flex-1 overflow-y-auto">
         <div className="max-w-[1600px] mx-auto px-3 py-3 space-y-3">
-          <PersonaIconRail
-            selectedPersonaId={selectedPersonaId}
-            onSelect={setSelectedPersonaId}
-          />
+          {!publicDashboard && (
+            <PersonaIconRail
+              selectedPersonaId={selectedPersonaId}
+              onSelect={setSelectedPersonaId}
+            />
+          )}
 
           {error && (
             <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-3">
@@ -396,7 +490,12 @@ export default function BusinessReportingPage({ onClose }: BusinessReportingPage
                   venueName={selectedVenueName}
                   variant={esselungaVariant}
                   onVariantChange={setEsselungaVariant}
-                  onRefresh={fetchData}
+                  onRefresh={() => fetchData()}
+                  onMetricThresholdPreview={(dwellSec, engagementSec) => {
+                    void fetchData({ dwellSec, engagementSec }, { silent: true });
+                  }}
+                  metricPreviewLoading={metricPreviewLoading}
+                  publicShare={publicDashboard}
                 />
                 ) : (
                   <div className="text-center py-8 text-gray-500 text-xs">No journey data for this period.</div>

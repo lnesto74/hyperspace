@@ -1,6 +1,7 @@
 import { createContext, useContext, useState, useCallback, ReactNode } from 'react'
 import { Venue, VenueObject, Vector3 } from '../types'
 import { useToast } from './ToastContext'
+import { API_BASE } from '../config/api'
 import { v4 as uuidv4 } from 'uuid'
 
 interface VenueListItem {
@@ -55,7 +56,7 @@ interface VenueContextType {
   createVenue: (name: string, width: number, depth: number, height: number, tileSize: number) => void
   createVenueFromDwg: (layoutVersionId: string, venueName: string, scaleCorrection?: number, onLidarsLoaded?: (lidars: unknown[]) => void) => Promise<void>
   updateVenue: (updates: Partial<Venue>) => void
-  loadVenue: (id: string, onPlacementsLoaded?: (placements: unknown[]) => void) => Promise<void>
+  loadVenue: (id: string, onPlacementsLoaded?: (placements: unknown[]) => void, opts?: { silent?: boolean }) => Promise<void>
   saveVenue: (placements?: unknown[]) => Promise<void>
   exportVenue: (placements?: unknown[]) => string
   importVenue: (json: string) => void
@@ -252,10 +253,14 @@ export function VenueProvider({ children }: { children: ReactNode }) {
     setVenue(prev => prev ? { ...prev, ...updates, updatedAt: new Date().toISOString() } : null)
   }, [])
 
-  const loadVenue = useCallback(async (id: string, onPlacementsLoaded?: (placements: unknown[]) => void) => {
+  const loadVenue = useCallback(async (
+    id: string,
+    onPlacementsLoaded?: (placements: unknown[]) => void,
+    opts?: { silent?: boolean },
+  ) => {
     setIsLoading(true)
     try {
-      const res = await fetch(`/api/venues/${id}`)
+      const res = await fetch(`${API_BASE}/api/venues/${id}`)
       if (!res.ok) throw new Error('Failed to load venue')
       const data = await res.json()
       
@@ -360,9 +365,11 @@ export function VenueProvider({ children }: { children: ReactNode }) {
         })
         onPlacementsLoaded(data.placements)
       }
-      addToast('success', `Loaded venue: ${loadedVenue.name}`)
     } catch (err) {
-      addToast('error', `Failed to load venue: ${err}`)
+      console.error('[VenueContext] loadVenue failed:', err)
+      if (!opts?.silent) {
+        addToast('error', `Failed to load venue: ${err}`)
+      }
     } finally {
       setIsLoading(false)
     }

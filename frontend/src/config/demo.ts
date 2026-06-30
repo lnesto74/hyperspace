@@ -1,24 +1,25 @@
 /**
  * Demo link support.
  *
- * Lets a single shareable link skip the Google login gate and auto-start the
- * guided Story Mode tour on the production venue + recording — without building
- * a full demo-user / role system.
+ * Lets shareable links skip the Google login gate — without a full demo-user system.
  *
- * Tokens are minted by a superadmin from the UI (Demo Links) and stored in the
- * backend. Opening the app with `?demo=<token>` validates the token against
- * `GET /api/demo-access/validate`; on success the tab is marked as a demo
- * session (persisted in `sessionStorage`), the token is stripped from the URL,
- * and the token's venue (if any) is pinned. The demo gate in App.tsx then skips
- * login and MainApp auto-starts Story Mode.
+ * Tokens are minted by a superadmin from Demo Links and stored in the backend.
+ * Opening the app with `?demo=<token>` validates against GET /api/demo-access/validate.
  *
- * Validation is server-side, so revoking a token in the UI immediately disables
- * its link (the backend rejects it on next open).
+ * Link types:
+ * - story (default): auto-starts the guided Story Mode 3D tour
+ * - dashboard: opens the Esselunga Executive reporting view for the pinned venue
  */
 import { API_BASE } from './api'
 
 const DEMO_FLAG_KEY = 'hyperspace_demo'
 const DEMO_VENUE_KEY = 'hyperspace_demo_venue'
+const DEMO_LINK_TYPE_KEY = 'hyperspace_demo_link_type'
+
+export type DemoLinkType = 'story' | 'dashboard'
+
+/** In-memory fallback when sessionStorage is blocked (e.g. strict privacy mode). */
+let memoryDemoSession: { venueId: string | null; linkType: DemoLinkType } | null = null
 
 function readParam(name: string): string | null {
   try {
@@ -30,6 +31,7 @@ function readParam(name: string): string | null {
 
 /** True if this tab already validated a demo token earlier (survives in-app nav). */
 export function isDemoActivated(): boolean {
+  if (memoryDemoSession) return true
   try {
     return sessionStorage.getItem(DEMO_FLAG_KEY) === '1'
   } catch {
@@ -37,9 +39,29 @@ export function isDemoActivated(): boolean {
   }
 }
 
+/** URL has a share token or this tab already validated one — never show login. */
+export function hasDemoIntent(): boolean {
+  return !!getPendingDemoToken() || isDemoActivated()
+}
+
 /** A demo token present in the URL (`?demo=`) awaiting validation, if any. */
 export function getPendingDemoToken(): string | null {
   return readParam('demo')
+}
+
+export function getDemoLinkType(): DemoLinkType {
+  if (memoryDemoSession?.linkType === 'dashboard') return 'dashboard'
+  try {
+    const stored = sessionStorage.getItem(DEMO_LINK_TYPE_KEY)
+    if (stored === 'dashboard') return 'dashboard'
+  } catch {
+    /* ignore */
+  }
+  return 'story'
+}
+
+export function isDashboardDemo(): boolean {
+  return isDemoActivated() && getDemoLinkType() === 'dashboard'
 }
 
 /**
@@ -56,14 +78,16 @@ export async function activateDemoFromToken(): Promise<boolean> {
     const data = await res.json().catch(() => null)
     if (!data?.valid) return false
 
-    const venueId = data.venueId || readParam('venue')
+    const venueId = data.venueId || readParam('venue') || null
+    const linkType: DemoLinkType = data.linkType === 'dashboard' ? 'dashboard' : 'story'
+    memoryDemoSession = { venueId, linkType }
     try {
       sessionStorage.setItem(DEMO_FLAG_KEY, '1')
+      sessionStorage.setItem(DEMO_LINK_TYPE_KEY, linkType)
       if (venueId) sessionStorage.setItem(DEMO_VENUE_KEY, venueId)
     } catch {
-      /* ignore — still active for this load via the return value */
+      /* sessionStorage blocked — memoryDemoSession keeps this tab public */
     }
-    // Clean the URL (drop token + venue) but keep the path.
     try {
       window.history.replaceState({}, '', window.location.pathname)
     } catch {
@@ -82,6 +106,7 @@ export function isDemo(): boolean {
 
 /** The venue to pin for the demo, if any (token venue, `?venue=`, or env fallback). */
 export function getDemoVenueId(): string | null {
+  if (memoryDemoSession?.venueId) return memoryDemoSession.venueId
   try {
     const stored = sessionStorage.getItem(DEMO_VENUE_KEY)
     if (stored) return stored

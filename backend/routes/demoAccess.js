@@ -2,13 +2,15 @@ import { Router } from 'express';
 import { randomBytes } from 'crypto';
 import { requireAuth, requireSuperadmin } from '../middleware/auth.js';
 
+const VALID_LINK_TYPES = new Set(['story', 'dashboard']);
+
 /**
  * Demo access tokens.
  *
  * A superadmin mints shareable links from the UI. Opening the app with
  * `?demo=<token>` validates the token here (public endpoint) and, if valid,
- * the frontend skips the Google login and auto-starts the guided Story Mode
- * tour on the token's venue (or the first venue).
+ * the frontend skips the Google login. Story links auto-start the guided tour;
+ * dashboard links open the Esselunga Executive reporting view.
  *
  * Token management (create / list / revoke) requires superadmin. Validation is
  * intentionally public so the demo gate can run before any login.
@@ -18,10 +20,12 @@ export default function demoAccessRoutes(db) {
 
   function formatRow(row) {
     const expired = !!row.expires_at && new Date(row.expires_at).getTime() < Date.now();
+    const linkType = row.link_type === 'dashboard' ? 'dashboard' : 'story';
     return {
       token: row.token,
       label: row.label,
       venueId: row.venue_id,
+      linkType,
       createdBy: row.created_by,
       createdAt: row.created_at,
       expiresAt: row.expires_at,
@@ -53,7 +57,12 @@ export default function demoAccessRoutes(db) {
         /* non-fatal */
       }
 
-      res.json({ valid: true, venueId: row.venue_id || null, label: row.label || null });
+      res.json({
+        valid: true,
+        venueId: row.venue_id || null,
+        label: row.label || null,
+        linkType: row.link_type === 'dashboard' ? 'dashboard' : 'story',
+      });
     } catch (error) {
       console.error('[DemoAccess] validate error:', error);
       res.status(500).json({ valid: false, error: 'Validation failed' });
@@ -78,7 +87,12 @@ export default function demoAccessRoutes(db) {
   // POST /api/demo-access/tokens — mint a new token
   router.post('/tokens', (req, res) => {
     try {
-      const { label, venueId, expiresInDays } = req.body || {};
+      const { label, venueId, expiresInDays, linkType: rawLinkType } = req.body || {};
+      const linkType = VALID_LINK_TYPES.has(rawLinkType) ? rawLinkType : 'story';
+      if (linkType === 'dashboard' && !venueId) {
+        return res.status(400).json({ error: 'venueId is required for dashboard public links' });
+      }
+
       const token = randomBytes(18).toString('hex');
 
       let expiresAt = null;
@@ -88,14 +102,15 @@ export default function demoAccessRoutes(db) {
       }
 
       db.prepare(`
-        INSERT INTO demo_tokens (token, label, venue_id, created_by, expires_at)
-        VALUES (?, ?, ?, ?, ?)
+        INSERT INTO demo_tokens (token, label, venue_id, created_by, expires_at, link_type)
+        VALUES (?, ?, ?, ?, ?, ?)
       `).run(
         token,
         (label && String(label).trim()) || null,
         venueId || null,
         req.user?.email || null,
         expiresAt,
+        linkType,
       );
 
       const row = db.prepare('SELECT * FROM demo_tokens WHERE token = ?').get(token);

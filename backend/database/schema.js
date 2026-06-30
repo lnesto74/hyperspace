@@ -971,11 +971,23 @@ export function initDatabase() {
       revoked INTEGER NOT NULL DEFAULT 0,
       use_count INTEGER NOT NULL DEFAULT 0,
       last_used_at TEXT,
+      link_type TEXT NOT NULL DEFAULT 'story',
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
     CREATE INDEX IF NOT EXISTS idx_demo_tokens_revoked ON demo_tokens(revoked);
   `);
+
+  // Migration: demo_tokens.link_type — story tour vs executive dashboard public link
+  try {
+    const demoCols = db.prepare('PRAGMA table_info(demo_tokens)').all();
+    if (demoCols.length > 0 && !demoCols.map((c) => c.name).includes('link_type')) {
+      db.exec("ALTER TABLE demo_tokens ADD COLUMN link_type TEXT NOT NULL DEFAULT 'story'");
+      console.log('📦 Migration: Added link_type column to demo_tokens');
+    }
+  } catch {
+    /* table may not exist yet on fresh installs */
+  }
 
   // Migration: Add DWG-related columns to venues table if they don't exist
   try {

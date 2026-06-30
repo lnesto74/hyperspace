@@ -322,6 +322,29 @@ export class TrajectoryStorageService extends EventEmitter {
     }
 
     try {
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS ingress_perimeter_crossings (
+          id TEXT PRIMARY KEY,
+          venue_id TEXT NOT NULL,
+          roi_id TEXT NOT NULL,
+          track_key TEXT NOT NULL,
+          crossed_at INTEGER NOT NULL,
+          position_x REAL,
+          position_z REAL,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          FOREIGN KEY (venue_id) REFERENCES venues(id) ON DELETE CASCADE,
+          FOREIGN KEY (roi_id) REFERENCES regions_of_interest(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_ingress_cross_venue_time
+          ON ingress_perimeter_crossings(venue_id, crossed_at);
+        CREATE INDEX IF NOT EXISTS idx_ingress_cross_roi_time
+          ON ingress_perimeter_crossings(roi_id, crossed_at);
+      `);
+    } catch (err) {
+      console.log('ingress_perimeter_crossings migration:', err.message);
+    }
+
+    try {
       const visitCols = this.db.prepare('PRAGMA table_info(zone_visits)').all().map(c => c.name);
       if (!visitCols.includes('visitor_session_id')) {
         this.db.exec(`ALTER TABLE zone_visits ADD COLUMN visitor_session_id TEXT`);
@@ -1147,9 +1170,10 @@ export class TrajectoryStorageService extends EventEmitter {
     
     // Cache the ROI IDs to avoid repeated map() calls
     const currentRoiIds = currentRois.map(r => r.id);
-    
-    // Update visit sessions for each ROI
+
+    // Update visit sessions for each ROI (entrance/traffic = perimeter crossing only, not polygon inside)
     for (const roi of currentRois) {
+      if (vsCtx.entranceRoiIds.has(roi.id)) continue;
       this.updateVisitSession(venueId, track.trackKey, roi.id, positionData, track.stableId || null);
       
       // Track queue sessions for queue zones (per queue theory)
@@ -1381,6 +1405,56 @@ export class TrajectoryStorageService extends EventEmitter {
     } catch (err) {
       console.error('Failed to write visit to file:', err);
     }
+  }
+
+  /**
+   * Live entrance footfall: one row per perimeter-edge crossing (no dwell, no dedup).
+   * Also writes a zero-duration zone_visit for backward-compatible ingress KPI queries.
+   */
+  recordPerimeterCrossing({ venueId, roiId, trackKey, crossedAt, x, z, stableId = null }) {
+    const id = `perim-${crossedAt}-${Math.random().toString(36).slice(2, 11)}`;
+    const vsCtx = this.getVisitSessionContext(venueId);
+
+    try {
+      this.db.prepare(`
+        INSERT INTO ingress_perimeter_crossings (id, venue_id, roi_id, track_key, crossed_at, position_x, position_z)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `).run(id, venueId, roiId, trackKey, crossedAt, x, z);
+    } catch (err) {
+      console.warn('[EntrancePerimeter] DB insert failed:', err.message);
+    }
+
+    const visitorSessionId = visitSessionManager.resolveForVisit(
+      venueId,
+      {
+        trackKey,
+        stableId,
+        startTime: crossedAt,
+        endTime: crossedAt,
+        durationMs: 0,
+        entryPosition: { x, z },
+        exitPosition: { x, z },
+      },
+      { isEntranceRoi: true, isCheckoutRoi: false, config: vsCtx.config },
+    );
+
+    this.writeVisitToFile({
+      id,
+      venueId,
+      roiId,
+      trackKey,
+      startTime: crossedAt,
+      endTime: crossedAt,
+      durationMs: 0,
+      isCompleteTrack: true,
+      isDwell: false,
+      isEngagement: false,
+      isConversion: false,
+      visitorSessionId: visitorSessionId || null,
+      entryPosition: { x, z },
+      exitPosition: { x, z },
+      perimeterCrossing: true,
+    });
   }
 
   /**

@@ -87,9 +87,9 @@ const PRESETS: ReconcilerPreset[] = [
   },
   {
     id: 'grocery_balanced',
-    label: 'Grocery — Balanced (recommended)',
-    description: 'Opens the re-ID gates to cover ~91% of fragmentation events with very few teleports. Best general-purpose grocery setting.',
-    metrics: { stable: 1451, fragX: 3.0, lifetime_s: 81.7, displacement_m: 16.9, teleports_per_1k: 1.94 },
+    label: 'Grocery — Balanced',
+    description: 'Aggressive merge — inflates dwell on paper but creates shelf-crossing artifacts on Treviglio (Jun 29 capture). Do NOT use live.',
+    metrics: { stable: 4580, fragX: 5.0, lifetime_s: 47, displacement_m: 28.4, teleports_per_1k: 9.54 },
     config: {
       enabled: true,
       ghost_max_speed_m_s: 3.5,
@@ -160,8 +160,8 @@ const PRESETS: ReconcilerPreset[] = [
   {
     id: 'raj_v1_live',
     label: 'Raj v1.0.1 — Live Visual (recommended)',
-    description: 'Raw perception speed + ghost filter + re-ID. Same motion as bypass with longer trails — use for live Treviglio canvas.',
-    metrics: { stable: 8529, fragX: 1.7, lifetime_s: 25.6, displacement_m: 7.9, teleports_per_1k: 4.51 },
+    description: 'Raw perception speed + ghost filter + re-ID (8s / 4m). Saved on Treviglio — best live v1 balance from Jun 29 sweep (66 frag/shopper, lt_p95 64s).',
+    metrics: { stable: 12070, fragX: 1.9, lifetime_s: 18.5, displacement_m: 7.1, teleports_per_1k: 4.56 },
     config: {
       enabled: true,
       ghost_max_speed_m_s: 3.5,
@@ -203,6 +203,30 @@ const PRESETS: ReconcilerPreset[] = [
       smoothing_alpha: 0.7,
       active_to_lost_timeout_ms: 1500,
       trail_max_length: 32,
+    },
+  },
+  {
+    id: 'treviglio_dwell_v1',
+    label: 'Treviglio — Dwell v1 (29/06 sweep)',
+    description: 'Tight-grid winner for live dwell without Balanced artifacts: 5s gap, 4m Euclidean (77 frag/shopper, lt_p95 53s, tp/1k 4.1 on afternoon capture).',
+    metrics: { stable: 14115, fragX: 1.6, lifetime_s: 15.0, displacement_m: 5.6, teleports_per_1k: 4.14 },
+    config: {
+      enabled: true,
+      ghost_max_speed_m_s: 3.5,
+      ghost_min_promotion_lifetime_ms: 200,
+      ghost_min_promotion_displacement_m: 0.05,
+      ghost_static_timeout_s: 90,
+      ghost_static_displacement_m: 0.3,
+      reid_max_gap_s: 5,
+      reid_max_distance_m: 4.0,
+      reid_max_implied_speed_m_s: 2.0,
+      reid_velocity_cosine_min: 0.0,
+      reid_weight_distance: 1.0,
+      reid_weight_velocity: 0.5,
+      reid_weight_time: 0.1,
+      smoothing_alpha: 0.12,
+      active_to_lost_timeout_ms: 6000,
+      trail_max_length: 100,
     },
   },
   {
@@ -390,8 +414,9 @@ export default function TrajectoryQualityPanel({ venueId, onClose }: TrajectoryQ
       {!collapsed && (
         <>
           <div className="px-3 py-2 border-b border-gray-800 bg-emerald-950/40 text-[11px] text-emerald-100/90">
-            <strong className="text-emerald-300">Recommended:</strong> record MQTT → open <strong>Replay</strong> panel →
-            post-process with a preset → replay the reconciled artifact. Live floor stays raw (no preset on canvas).
+            <strong className="text-emerald-300">Live reconciler (v1):</strong> presets below tune MQTT ingest + zone_visit <code className="text-emerald-200">track_key</code> stability.
+            Map-aware v2/v3 is <strong>offline only</strong> (Replay → Post-process). For dwell KPIs without shelf-crossing artifacts, use{' '}
+            <strong className="text-emerald-300">Raj Live Visual</strong> or <strong className="text-emerald-300">Treviglio Dwell v1</strong> — not Grocery Balanced.
           </div>
 
           <div className="px-3 py-2 border-b border-gray-800">

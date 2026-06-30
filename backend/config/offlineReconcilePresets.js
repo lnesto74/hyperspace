@@ -103,6 +103,19 @@ export const OFFLINE_RECONCILE_PRESETS = [
     }),
   },
   {
+    id: 'GROCERY_V2_TIGHT',
+    label: 'Grocery — Map-aware v2 tight (29/06 sweep)',
+    description: 'Geodesic re-ID: T=5s, D=2m walk-around. Best reliability on Treviglio afternoon capture — routes around shelves. Offline / Replay only.',
+    engine: 'v2',
+    config: {
+      engine: 'v2',
+      smoothing_alpha: 0.6,
+      min_chain_life_ms: 0,
+      tracklet: {},
+      associate: { C_max: 12, margin: 0.3, T_max_s: 5, D_max_m: 2 },
+    },
+  },
+  {
     id: 'GROCERY_V2_MAP',
     label: 'Grocery — Map-aware v2 (beta)',
     description: 'Map-constrained physics reconciler: tracklets + geodesic probabilistic association (motion vector + density + EXIT). Routes around shelves, no teleports. Conservative (fewer false merges). Baseline for v3.',

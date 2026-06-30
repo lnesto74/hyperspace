@@ -1,10 +1,8 @@
 /**
- * Live ingress footfall counting (Option B).
+ * Ingress footfall denominator.
  *
- * Aligns Business Reporting with analysis/lib/footfall.mjs: count every qualifying
- * crossing through the entrance ROI (entries and exits), not one row per fragment ID.
- *
- * zone_visits stores one row per in-zone episode; COUNT(*) sums all episodes while
- * COUNT(DISTINCT track_key) under-counts re-entries and over-weights fragment splits.
+ * Entrance / traffic ROIs are counted via live perimeter-edge crossing (~10Hz MQTT trail),
+ * written to ingress_perimeter_crossings and mirrored as zero-duration zone_visits.
+ * COUNT(*) = one row per crossing event (no dwell, no dedup).
  */
 export const INGRESS_VISIT_COUNT_SQL = 'COUNT(*)';

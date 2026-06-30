@@ -77,3 +77,22 @@ export function computeStoreFootfallFromHourly(visitsByHour, openingHour = 8, cl
 export function isTrafficZoneName(name) {
   return /entrance|entry|exit|door|gate|traffic|ingress|ingresso|uscita/i.test(name || '');
 }
+
+/** Hour indices (0–23) when the store is open. */
+export function storeHourBucketIndices(openingHour = 8, closingHour = 20) {
+  const out = [];
+  for (let h = 0; h < 24; h++) {
+    if (isHourWithinStoreHours(h, openingHour, closingHour)) out.push(h);
+  }
+  return out;
+}
+
+/** SQLite filter: event local hour within store opening window. */
+export function buildStoreHourSqlFilter(timeExpr, openingHour = 8, closingHour = 20) {
+  const open = Number(openingHour);
+  const close = Number(closingHour);
+  const h = `CAST(strftime('%H', ${timeExpr}) AS INTEGER)`;
+  if (!Number.isFinite(open) || !Number.isFinite(close) || open === close) return '1=1';
+  if (open < close) return `${h} >= ${open} AND ${h} < ${close}`;
+  return `(${h} >= ${open} OR ${h} < ${close})`;
+}

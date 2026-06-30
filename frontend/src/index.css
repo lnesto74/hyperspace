@@ -113,15 +113,25 @@ canvas {
 }
 
 /* SKU Detection Debug - fade slide in animation */
-@keyframes fadeSlideIn {
-  from {
-    opacity: 0;
-    transform: translateX(-20px);
-  }
-  to {
-    opacity: 1;
-    transform: translateX(0);
-  }
+@keyframes execDrawLine {
+  from { stroke-dashoffset: 200; }
+  to { stroke-dashoffset: 0; }
+}
+
+@keyframes execFadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes execShimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+.exec-kpi-shimmer {
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.06), transparent);
+  background-size: 200% 100%;
+  animation: execShimmer 3s ease-in-out infinite;
 }
 
 /* ═══════════ Neural X-Ray Halo System ═══════════ */

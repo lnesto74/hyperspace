@@ -566,6 +566,7 @@ class MqttTrajectoryService {
           venueTracksLast10s: vs.tracksLast10s,
           frameOccupancy,
           liveFrameTs: this.getLiveFrameTimestamp(venueId),
+          mqttStreamAgeMs: this.frameOccupancy.getStreamAgeMs(venueId),
         }
       } else {
         return {
@@ -576,6 +577,7 @@ class MqttTrajectoryService {
           venueTracksLast10s: 0,
           frameOccupancy,
           liveFrameTs: this.getLiveFrameTimestamp(venueId),
+          mqttStreamAgeMs: this.frameOccupancy.getStreamAgeMs(venueId),
         }
       }
     }

@@ -3,13 +3,25 @@
  */
 
 import { INGRESS_VISIT_COUNT_SQL } from '../../lib/ingressFootfall.js';
-import { isTrafficZoneName } from '../../lib/storeHours.js';
+import { computeIngressFootfallWithRecovery } from '../../lib/ingressFootfallRecovery.js';
+import { countPerimeterEntrants, fetchPerimeterEntrantsByHour } from '../../lib/ingressPerimeterFootfall.js';
+import {
+  isTrafficZoneName,
+  formatStoreHoursRange,
+  storeHourBucketIndices,
+  buildStoreHourSqlFilter,
+} from '../../lib/storeHours.js';
 import {
   loadClassifiedRois,
   CHECKOUT_CHANNEL_LABELS,
   FRESCO_DEPT_LABELS,
 } from './ExecutiveZoneTaxonomy.js';
 import { fetchErpForRange } from './VenueErpStore.js';
+import { ensureRoiCategoryLabels } from './roiCategorySync.js';
+import {
+  computeExecutiveSessionAnalytics,
+  buildSessionCategoryGroups,
+} from './ExecutiveSessionAnalytics.js';
 
 function safeQuery(db, sql, params = []) {
   try {
@@ -27,9 +39,90 @@ function safeQueryAll(db, sql, params = []) {
   }
 }
 
+function resolveStoreHours(db, venueId) {
+  const row = safeQuery(db, 'SELECT opening_hour, closing_hour FROM venues WHERE id = ?', [venueId]);
+  return {
+    openingHour: row?.opening_hour ?? 8,
+    closingHour: row?.closing_hour ?? 21,
+    timeZone: 'Europe/Rome',
+  };
+}
+
+function resolveShoppingRoiIds(classifiedRois) {
+  return classifiedRois
+    .filter(r => r.classification.group === 'aisles' || r.classification.group === 'fresco')
+    .map(r => r.id);
+}
+
 function pct(num, den) {
   if (!den) return 0;
   return Math.round((num / den) * 1000) / 10;
+}
+
+/** Venue defaults or API preview overrides — executive metrics use duration_ms, not stale is_dwell flags. */
+export function resolveExecutiveMetricThresholds(db, venueId, dwellThresholdSec, engagementThresholdSec) {
+  const venue = safeQuery(db, `
+    SELECT default_dwell_threshold_sec, default_engagement_threshold_sec FROM venues WHERE id = ?
+  `, [venueId]);
+  const hasDwellOverride = dwellThresholdSec != null && dwellThresholdSec !== '';
+  const hasEngageOverride = engagementThresholdSec != null && engagementThresholdSec !== '';
+  const dwellSec = hasDwellOverride
+    ? Math.max(1, Number(dwellThresholdSec))
+    : (venue?.default_dwell_threshold_sec ?? 10);
+  const engagementSec = hasEngageOverride
+    ? Math.max(1, Number(engagementThresholdSec))
+    : (venue?.default_engagement_threshold_sec ?? 30);
+  return {
+    dwellSec,
+    engagementSec,
+    dwellMs: dwellSec * 1000,
+    engagementMs: engagementSec * 1000,
+    minVisitMs: 300,
+    source: hasDwellOverride || hasEngageOverride ? 'preview' : 'venue_default',
+  };
+}
+
+function fetchAisleDwellUnique(db, aisleRoiIds, startTs, endTs, dwellMs) {
+  if (!aisleRoiIds.length) return 0;
+  const ph = aisleRoiIds.map(() => '?').join(',');
+  const row = safeQuery(db, `
+    SELECT COUNT(DISTINCT track_key) as c
+    FROM zone_visits
+    WHERE roi_id IN (${ph})
+      AND start_time >= ? AND start_time < ?
+      AND track_key NOT LIKE '%cashier%'
+      AND duration_ms >= ?
+  `, [...aisleRoiIds, startTs, endTs, dwellMs]);
+  return row?.c || 0;
+}
+
+function buildJourneySignals(totalVisitors, footfall, aisleMetrics, checkoutChannels, checkoutCompleted, avgWaitMin) {
+  const totalSessions = checkoutChannels.reduce((s, c) => s + c.sessions, 0);
+  const avgAbandon = checkoutChannels.length
+    ? Math.round(checkoutChannels.reduce((s, c) => s + (c.abandonPct || 0), 0) / checkoutChannels.length * 10) / 10
+    : 0;
+
+  return {
+    reconciliationRequired: true,
+    ingress: {
+      visitors: totalVisitors,
+      gateEstimated: footfall.directEstimated ?? footfall.directUnique,
+      recovered: footfall.recoveredEstimated ?? 0,
+    },
+    shopping: {
+      aisleZoneVisits: aisleMetrics.totalAisleVisits,
+      dwellVisits: aisleMetrics.dwellVisits ?? 0,
+      stoppingPct: aisleMetrics.stoppingPowerPct,
+      bypassPct: aisleMetrics.bypassPct,
+    },
+    checkout: {
+      sessionsCompleted: checkoutCompleted,
+      totalSessions,
+      avgWaitMin,
+      abandonPct: avgAbandon,
+      laneCount: checkoutChannels.length,
+    },
+  };
 }
 
 function resolveTrafficRoiIds(db, venueId) {
@@ -69,22 +162,25 @@ function fetchIngressUniqueCount(db, venueId, roiIds, startTs, endTs) {
   return row?.c || 0;
 }
 
-function fetchZoneVisitStats(db, roiIds, startTs, endTs) {
+function fetchZoneVisitStats(db, roiIds, startTs, endTs, metricThresholds) {
   if (!roiIds.length) {
-    return { visits: 0, dwellVisits: 0, engagementVisits: 0, uniqueVisitors: 0, totalDurationMs: 0, abandonCount: 0 };
+    return { visits: 0, dwellVisits: 0, engagementVisits: 0, uniqueVisitors: 0, totalDurationMs: 0, abandonCount: 0, avgDwellMs: 0 };
   }
   const ph = roiIds.map(() => '?').join(',');
+  const dwellMs = metricThresholds.dwellMs;
+  const engagementMs = metricThresholds.engagementMs;
   const row = safeQuery(db, `
     SELECT
       COUNT(*) as visits,
-      COUNT(CASE WHEN is_dwell = 1 THEN 1 END) as dwellVisits,
-      COUNT(CASE WHEN is_engagement = 1 THEN 1 END) as engagementVisits,
+      COUNT(CASE WHEN duration_ms >= ? THEN 1 END) as dwellVisits,
+      COUNT(CASE WHEN duration_ms >= ? THEN 1 END) as engagementVisits,
       COUNT(DISTINCT track_key) as uniqueVisitors,
-      SUM(duration_ms) as totalDurationMs
+      SUM(duration_ms) as totalDurationMs,
+      AVG(CASE WHEN duration_ms >= ? THEN duration_ms END) as avgDwellMs
     FROM zone_visits
     WHERE roi_id IN (${ph}) AND start_time >= ? AND start_time < ?
       AND track_key NOT LIKE '%cashier%'
-  `, [...roiIds, startTs, endTs]) || {};
+  `, [dwellMs, engagementMs, dwellMs, ...roiIds, startTs, endTs]) || {};
 
   return {
     visits: row.visits || 0,
@@ -92,6 +188,7 @@ function fetchZoneVisitStats(db, roiIds, startTs, endTs) {
     engagementVisits: row.engagementVisits || 0,
     uniqueVisitors: row.uniqueVisitors || 0,
     totalDurationMs: row.totalDurationMs || 0,
+    avgDwellMs: row.avgDwellMs || 0,
   };
 }
 
@@ -117,23 +214,38 @@ function fetchQueueStats(db, roiIds, startTs, endTs) {
   };
 }
 
-function fetchFrescoBrowsingSplit(db, serviceRoiIds, queueRoiIds, startTs, endTs) {
-  const serviceStats = fetchZoneVisitStats(db, serviceRoiIds, startTs, endTs);
-  const queueStats = fetchZoneVisitStats(db, queueRoiIds, startTs, endTs);
+function fetchFrescoBrowsingSplit(db, serviceRoiIds, queueRoiIds, browseRoiIds, startTs, endTs, metricThresholds) {
+  const serviceStats = fetchZoneVisitStats(db, serviceRoiIds, startTs, endTs, metricThresholds);
+  const queueStats = fetchZoneVisitStats(db, queueRoiIds, startTs, endTs, metricThresholds);
+  const browseStats = fetchZoneVisitStats(db, browseRoiIds, startTs, endTs, metricThresholds);
+
   const queueVisits = queueStats.visits;
-  const serviceVisits = serviceStats.visits;
-  const total = serviceVisits + queueVisits;
+  const browsingVisits = serviceStats.visits + browseStats.visits;
+  const total = browsingVisits + queueVisits;
+
   if (!total) return { browsingPct: 0, waitingPct: 0, serviceVisits: 0, queueVisits: 0 };
+
+  // No queue/service counters — use dwell rate on engagement zones as browsing proxy
+  if (queueVisits === 0 && serviceStats.visits === 0 && browseStats.visits > 0) {
+    const engagedPct = pct(browseStats.dwellVisits, browseStats.visits);
+    return {
+      browsingPct: engagedPct,
+      waitingPct: 0,
+      serviceVisits: browseStats.dwellVisits,
+      queueVisits: 0,
+    };
+  }
+
   const waitingPct = pct(queueVisits, total);
   return {
     browsingPct: Math.round((100 - waitingPct) * 10) / 10,
     waitingPct,
-    serviceVisits,
+    serviceVisits: serviceStats.visits + browseStats.visits,
     queueVisits,
   };
 }
 
-function buildFrescoDepartments(classifiedRois, db, startTs, endTs) {
+function buildFrescoDepartments(classifiedRois, db, startTs, endTs, metricThresholds) {
   const frescoRois = classifiedRois.filter(r => r.classification.group === 'fresco');
   const byDept = new Map();
 
@@ -153,20 +265,32 @@ function buildFrescoDepartments(classifiedRois, db, startTs, endTs) {
 
   return [...byDept.entries()].map(([dept, ids]) => {
     const allIds = [...ids.serviceIds, ...ids.queueIds, ...ids.browseIds];
-    const stats = fetchZoneVisitStats(db, allIds, startTs, endTs);
-    const split = fetchFrescoBrowsingSplit(db, ids.serviceIds, ids.queueIds, startTs, endTs);
+    const stats = fetchZoneVisitStats(db, allIds, startTs, endTs, metricThresholds);
+    const split = fetchFrescoBrowsingSplit(
+      db, ids.serviceIds, ids.queueIds, ids.browseIds, startTs, endTs, metricThresholds,
+    );
     const queueStats = fetchQueueStats(db, ids.queueIds, startTs, endTs);
-    const avgDwellMin = stats.uniqueVisitors > 0
-      ? Math.round((stats.totalDurationMs / stats.uniqueVisitors) / 60000 * 10) / 10
+    const hasQueueZones = ids.queueIds.length > 0;
+    const stoppingPct = split.browsingPct;
+    const passThroughPct = Math.round((100 - stoppingPct) * 10) / 10;
+    const avgDwellSec = stats.dwellVisits > 0 && stats.avgDwellMs > 0
+      ? Math.round(stats.avgDwellMs / 1000)
       : 0;
+    const avgDwellMin = avgDwellSec > 0 ? Math.round((avgDwellSec / 60) * 10) / 10 : 0;
 
     return {
       id: dept,
       label: ids.displayLabel || FRESCO_DEPT_LABELS[dept] || dept.replace(/_/g, ' '),
       visits: stats.visits,
+      dwellVisits: stats.dwellVisits,
+      engagementVisits: stats.engagementVisits,
       uniqueVisitors: stats.uniqueVisitors,
       avgDwellMin,
-      browsingPct: split.browsingPct,
+      avgDwellSec,
+      stoppingPct,
+      passThroughPct,
+      hasQueueZones,
+      browsingPct: stoppingPct,
       waitingPct: split.waitingPct,
       abandonPct: queueStats.abandonPct,
       serviceEfficiency: queueStats.completed > 0
@@ -212,6 +336,7 @@ function buildCheckoutChannels(classifiedRois, db, startTs, endTs) {
       id: channel,
       label: CHECKOUT_CHANNEL_LABELS[channel] || channel,
       sessions: q.sessions,
+      completed: q.completed,
       avgWaitMin: q.avgWaitMin,
       abandonPct: q.abandonPct,
       currentQueue,
@@ -220,7 +345,142 @@ function buildCheckoutChannels(classifiedRois, db, startTs, endTs) {
   });
 }
 
-function buildAisleCategoryGroups(classifiedRois, db, startTs, endTs) {
+function buildHeatmapCategories(categoryGroups) {
+  return (categoryGroups || []).map(g => ({
+    category: g.category,
+    zoneCount: g.roiCount || 0,
+    roiIds: g.roiIds || [],
+    totalVisits: g.visits || 0,
+    totalDwellMin: g.avgDwellMin || 0,
+    browsingRate: g.stoppingPowerPct || 0,
+    engagementRate: g.engagementPct || 0,
+    conversionRate: 0,
+    avgBrowseTimeMin: g.avgDwellMin || 0,
+  })).filter(r => (r.roiIds?.length ?? 0) > 0);
+}
+
+function formatDayLabel(isoDate) {
+  try {
+    const d = new Date(`${isoDate}T12:00:00`);
+    return d.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric' });
+  } catch {
+    return isoDate?.slice(5) || isoDate;
+  }
+}
+
+function emptyHourlyTimeline(openingHour = 8, closingHour = 20) {
+  const hours = storeHourBucketIndices(openingHour, closingHour);
+  const mk = () => hours.map(h => ({
+    label: `${String(h).padStart(2, '0')}:00`,
+    value: 0,
+  }));
+  return { grain: 'hour', visitors: mk(), dwells: mk() };
+}
+
+function mapHourlyBuckets(hours, rowMap) {
+  return hours.map(h => ({
+    label: `${String(h).padStart(2, '0')}:00`,
+    value: rowMap.get(h) || 0,
+  }));
+}
+
+function fetchHourlyTimeline(
+  db, venueId, startTs, endTs, trafficRoiIds, shoppingRoiIds, dwellMs, openingHour, closingHour,
+) {
+  const hours = storeHourBucketIndices(openingHour, closingHour);
+  if (!hours.length) return { grain: 'hour', visitors: [], dwells: [] };
+
+  const perimeterRows = trafficRoiIds.length
+    ? fetchPerimeterEntrantsByHour(db, trafficRoiIds, startTs, endTs)
+    : [];
+  const vMap = new Map(perimeterRows.map(r => [Number(r.hour), Number(r.value) || 0]));
+
+  const hourFilter = buildStoreHourSqlFilter(
+    "datetime(start_time/1000, 'unixepoch', 'localtime')",
+    openingHour,
+    closingHour,
+  );
+  let dwellRows = [];
+  if (shoppingRoiIds.length) {
+    const shopPh = shoppingRoiIds.map(() => '?').join(',');
+    dwellRows = safeQueryAll(db, `
+      SELECT strftime('%H', datetime(start_time/1000, 'unixepoch', 'localtime')) as bucket,
+        COUNT(CASE WHEN duration_ms >= ? THEN 1 END) as c
+      FROM zone_visits
+      WHERE venue_id = ? AND roi_id IN (${shopPh})
+        AND start_time >= ? AND start_time < ?
+        AND track_key NOT LIKE '%cashier%'
+        AND ${hourFilter}
+      GROUP BY bucket ORDER BY bucket
+    `, [dwellMs, venueId, ...shoppingRoiIds, startTs, endTs]);
+  }
+  const dMap = new Map(dwellRows.map(r => [parseInt(r.bucket, 10), r.c || 0]));
+
+  return {
+    grain: 'hour',
+    visitors: mapHourlyBuckets(hours, vMap),
+    dwells: mapHourlyBuckets(hours, dMap),
+  };
+}
+
+function fetchDailyTimeline(db, venueId, startTs, endTs, trafficRoiIds, shoppingRoiIds, dwellMs) {
+  const visitorRows = trafficRoiIds.length ? safeQueryAll(db, `
+    SELECT date(start_time/1000, 'unixepoch', 'localtime') as bucket,
+      COUNT(*) as c
+    FROM zone_visits
+    WHERE venue_id = ? AND roi_id IN (${trafficRoiIds.map(() => '?').join(',')})
+      AND start_time >= ? AND start_time < ?
+      AND track_key NOT LIKE '%cashier%'
+    GROUP BY bucket ORDER BY bucket
+  `, [venueId, ...trafficRoiIds, startTs, endTs]) : [];
+
+  const dwellRows = shoppingRoiIds.length ? safeQueryAll(db, `
+    SELECT date(start_time/1000, 'unixepoch', 'localtime') as bucket,
+      COUNT(CASE WHEN duration_ms >= ? THEN 1 END) as c
+    FROM zone_visits
+    WHERE venue_id = ? AND roi_id IN (${shoppingRoiIds.map(() => '?').join(',')})
+      AND start_time >= ? AND start_time < ?
+      AND track_key NOT LIKE '%cashier%'
+    GROUP BY bucket ORDER BY bucket
+  `, [dwellMs, venueId, ...shoppingRoiIds, startTs, endTs]) : [];
+
+  const daySet = new Set([
+    ...visitorRows.map(r => r.bucket),
+    ...dwellRows.map(r => r.bucket),
+  ]);
+  const days = [...daySet].sort();
+  const vMap = Object.fromEntries(visitorRows.map(r => [r.bucket, r.c]));
+  const dMap = Object.fromEntries(dwellRows.map(r => [r.bucket, r.c]));
+
+  return {
+    grain: 'day',
+    visitors: days.map(d => ({
+      label: formatDayLabel(d),
+      value: vMap[d] || 0,
+    })),
+    dwells: days.map(d => ({
+      label: formatDayLabel(d),
+      value: dMap[d] || 0,
+    })),
+  };
+}
+
+function fetchActivityTimelines(
+  db, venueId, startTs, endTs, trafficRoiIds, shoppingRoiIds, dwellMs, openingHour, closingHour,
+) {
+  const hourly = fetchHourlyTimeline(
+    db, venueId, endTs - 24 * 3600000, endTs, trafficRoiIds, shoppingRoiIds, dwellMs,
+    openingHour, closingHour,
+  );
+  const daily = fetchDailyTimeline(
+    db, venueId, startTs, endTs, trafficRoiIds, shoppingRoiIds, dwellMs,
+  );
+  const spanMs = endTs - startTs;
+  const activityTimeline = spanMs <= 36 * 3600000 ? hourly : daily;
+  return { hourly, daily, activityTimeline };
+}
+
+function buildAisleCategoryGroups(classifiedRois, db, startTs, endTs, metricThresholds) {
   const aisleRois = classifiedRois.filter(r => r.classification.group === 'aisles');
   const byCat = new Map();
 
@@ -232,35 +492,65 @@ function buildAisleCategoryGroups(classifiedRois, db, startTs, endTs) {
   }
 
   return [...byCat.entries()].map(([category, roiIds]) => {
-    const stats = fetchZoneVisitStats(db, roiIds, startTs, endTs);
+    const stats = fetchZoneVisitStats(db, roiIds, startTs, endTs, metricThresholds);
     return {
       category,
       visits: stats.visits,
       uniqueVisitors: stats.uniqueVisitors,
       stoppingPowerPct: stats.visits > 0 ? pct(stats.dwellVisits, stats.visits) : 0,
+      engagementPct: stats.visits > 0 ? pct(stats.engagementVisits, stats.visits) : 0,
       avgDwellMin: stats.uniqueVisitors > 0
         ? Math.round((stats.totalDurationMs / stats.uniqueVisitors) / 60000 * 10) / 10
         : 0,
       roiCount: roiIds.length,
+      roiIds,
     };
   }).sort((a, b) => b.visits - a.visits);
 }
 
-function buildAisleMetrics(classifiedRois, db, ingressUnique, startTs, endTs) {
+function buildAisleMetrics(classifiedRois, db, totalVisitors, startTs, endTs, metricThresholds, sessionAnalytics) {
   const aisleRois = classifiedRois.filter(r => r.classification.group === 'aisles');
   const roiIds = aisleRois.map(r => r.id);
-  const stats = fetchZoneVisitStats(db, roiIds, startTs, endTs);
-  const categoryGroups = buildAisleCategoryGroups(classifiedRois, db, startTs, endTs);
+  const stats = fetchZoneVisitStats(db, roiIds, startTs, endTs, metricThresholds);
 
-  const penetrationPct = ingressUnique > 0
-    ? Math.min(100, pct(stats.uniqueVisitors, ingressUnique))
-    : 0;
+  const roiIdsByCategory = new Map();
+  for (const roi of aisleRois) {
+    const cat = roi.classification.categoryLabel || roi.linkedCategory
+      || roi.classification.subGroup || 'Uncategorized';
+    if (!roiIdsByCategory.has(cat)) roiIdsByCategory.set(cat, []);
+    roiIdsByCategory.get(cat).push(roi.id);
+  }
+
+  const categoryGroups = (() => {
+    const sessionGroups = sessionAnalytics?.categoryMetrics
+      ? buildSessionCategoryGroups(
+        sessionAnalytics.categoryMetrics,
+        classifiedRois,
+        db,
+        startTs,
+        endTs,
+        metricThresholds,
+        roiIdsByCategory,
+      )
+      : [];
+    if (sessionGroups.length > 0) return sessionGroups;
+    return buildAisleCategoryGroups(classifiedRois, db, startTs, endTs, metricThresholds)
+      .filter(g => g.category && !/^(uncategorized|no content available)$/i.test(g.category));
+  })();
+
+  const penetrationPct = sessionAnalytics?.aislePenetration?.reliable
+    ? sessionAnalytics.aislePenetration.penetrationPct
+    : null;
+  const aisleDwellUnique = sessionAnalytics?.aislePenetration?.sessionsWithAisleStop
+    ?? fetchAisleDwellUnique(db, roiIds, startTs, endTs, metricThresholds.dwellMs);
+  const aisleReachReliable = sessionAnalytics?.aislePenetration?.reliable
+    ?? (totalVisitors > 0 && aisleDwellUnique <= totalVisitors * 1.05);
   const stoppingPowerPct = stats.visits > 0 ? pct(stats.dwellVisits, stats.visits) : 0;
   const bypassPct = Math.max(0, Math.round((100 - stoppingPowerPct) * 10) / 10);
 
   const topAisles = [];
   for (const roi of aisleRois.slice(0, 20)) {
-    const s = fetchZoneVisitStats(db, [roi.id], startTs, endTs);
+    const s = fetchZoneVisitStats(db, [roi.id], startTs, endTs, metricThresholds);
     if (s.visits === 0) continue;
     topAisles.push({
       id: roi.id,
@@ -278,6 +568,10 @@ function buildAisleMetrics(classifiedRois, db, ingressUnique, startTs, endTs) {
 
   return {
     penetrationPct,
+    aisleDwellUnique,
+    aisleReachReliable,
+    dwellVisits: stats.dwellVisits,
+    engagementVisits: stats.engagementVisits,
     stoppingPowerPct,
     bypassPct,
     totalAisleVisits: stats.visits,
@@ -364,7 +658,7 @@ function buildInsights(payload) {
   }
 
   const topAisle = payload.aisles.topAisles?.[0];
-  if (topAisle && payload.aisles.penetrationPct < 40) {
+  if (topAisle && payload.aisles.penetrationPct != null && payload.aisles.penetrationPct < 40) {
     insights.push({
       id: 'aisle-penetration',
       severity: 'info',
@@ -403,49 +697,99 @@ function buildInsights(payload) {
 /**
  * @param {'live'|'hq'} variant
  */
-export function computeExecutiveJourney(db, venueId, startTs, endTs, variant = 'live') {
+export function computeExecutiveJourney(db, venueId, startTs, endTs, variant = 'live', metricThresholdOpts = {}) {
+  try {
+    ensureRoiCategoryLabels(db, venueId);
+  } catch (err) {
+    console.warn('[ExecutiveJourney] ROI category sync skipped:', err.message);
+  }
+
+  const metricThresholds = resolveExecutiveMetricThresholds(
+    db,
+    venueId,
+    metricThresholdOpts.dwellThresholdSec,
+    metricThresholdOpts.engagementThresholdSec,
+  );
+  const thresholdPreview = metricThresholdOpts.thresholdPreview === true;
   const classifiedRois = loadClassifiedRois(db, venueId).map(r => ({ ...r, venue_id: venueId }));
   const trafficRoiIds = resolveTrafficRoiIds(db, venueId);
-  const ingressEpisodes = fetchIngressCount(db, venueId, trafficRoiIds, startTs, endTs);
-  const ingressUnique = fetchIngressUniqueCount(db, venueId, trafficRoiIds, startTs, endTs);
+  const shoppingRoiIds = resolveShoppingRoiIds(classifiedRois);
+  const storeHours = resolveStoreHours(db, venueId);
 
-  const storeVisitRow = safeQuery(db, `
-    SELECT
-      COUNT(DISTINCT track_key) as visitors,
-      SUM(duration_ms) as totalDurationMs
-    FROM zone_visits
-    WHERE venue_id = ? AND start_time >= ? AND start_time < ?
-      AND track_key NOT LIKE '%cashier%'
-  `, [venueId, startTs, endTs]) || {};
+  const footfall = computeIngressFootfallWithRecovery(db, {
+    venueId,
+    trafficRoiIds,
+    shoppingRoiIds,
+    startTs,
+    endTs,
+    openingHour: storeHours.openingHour,
+    closingHour: storeHours.closingHour,
+    timeZone: storeHours.timeZone,
+  });
 
-  const avgStoreDwellMin = storeVisitRow.visitors > 0
-    ? Math.round((storeVisitRow.totalDurationMs / storeVisitRow.visitors) / 60000 * 10) / 10
-    : 0;
+  const perimeterFootfall = countPerimeterEntrants(db, {
+    venueId,
+    trafficRoiIds,
+    startTs,
+    endTs,
+  });
 
-  const liveOcc = safeQuery(db, `
-    SELECT SUM(zo.occupancy_count) as total
-    FROM zone_occupancy zo
-    JOIN regions_of_interest r ON r.id = zo.roi_id
-    WHERE zo.venue_id = ?
-      AND zo.timestamp = (SELECT MAX(timestamp) FROM zone_occupancy WHERE venue_id = ?)
-      AND r.name NOT LIKE '%Queue%'
-  `, [venueId, venueId]);
+  const ingressEpisodes = footfall.directCrossings;
+  const ingressUnique = footfall.directUnique;
+  const totalVisitors = footfall.totalVisitors;
+
+  const sessionAnalytics = thresholdPreview
+    ? null
+    : computeExecutiveSessionAnalytics(
+      db,
+      venueId,
+      startTs,
+      endTs,
+      classifiedRois,
+      shoppingRoiIds,
+      classifiedRois.filter(r => r.classification.group === 'aisles').map(r => r.id),
+      metricThresholds,
+      footfall,
+    );
+  const dwellStats = sessionAnalytics?.storeDwell ?? {
+    reliable: false,
+    avgStoreDwellMin: 0,
+    medianStoreDwellMin: 0,
+    dwellP25Min: null,
+    dwellP75Min: null,
+    sessionCount: 0,
+    method: 'preview_skip',
+  };
 
   const erp = fetchErpForRange(db, venueId, startTs, endTs);
   const mediaKpis = fetchMediaKpis(db, venueId, startTs, endTs);
-  const frescoDepartments = buildFrescoDepartments(classifiedRois, db, startTs, endTs);
+  const frescoDepartments = buildFrescoDepartments(classifiedRois, db, startTs, endTs, metricThresholds);
   const checkoutChannels = buildCheckoutChannels(classifiedRois, db, startTs, endTs);
-  const aisleMetrics = buildAisleMetrics(classifiedRois, db, ingressUnique, startTs, endTs);
+  const aisleMetrics = buildAisleMetrics(
+    classifiedRois, db, totalVisitors, startTs, endTs, metricThresholds, sessionAnalytics,
+  );
+  const { hourly: activityTimelineHourly, daily: activityTimelineDaily, activityTimeline } = fetchActivityTimelines(
+    db, venueId, startTs, endTs, trafficRoiIds, shoppingRoiIds, metricThresholds.dwellMs,
+    storeHours.openingHour, storeHours.closingHour,
+  );
+  const heatmapCategories = buildHeatmapCategories(aisleMetrics.categoryGroups);
 
   const avgWaitMin = checkoutChannels.length
     ? checkoutChannels.reduce((s, c) => s + c.avgWaitMin, 0) / checkoutChannels.length
     : 0;
 
+  const checkoutCompleted = checkoutChannels.reduce((s, c) => s + (c.completed || 0), 0);
+  const journeySignals = buildJourneySignals(
+    perimeterFootfall.count, footfall, aisleMetrics, checkoutChannels, checkoutCompleted, avgWaitMin,
+  );
+
   const aisleConversion = erp.hasData && aisleMetrics.totalAisleVisits > 0
     ? Math.round((erp.totalTransactions / aisleMetrics.totalAisleVisits) * 1000) / 10
     : null;
 
-  const crossKpis = computeCrossKpis(erp, ingressUnique, avgStoreDwellMin, avgWaitMin, mediaKpis);
+  const avgStoreDwellMin = dwellStats.medianStoreDwellMin || dwellStats.avgStoreDwellMin;
+
+  const crossKpis = computeCrossKpis(erp, totalVisitors, avgStoreDwellMin, avgWaitMin, mediaKpis);
 
   const taxonomySummary = {
     totalRois: classifiedRois.length,
@@ -460,20 +804,58 @@ export function computeExecutiveJourney(db, venueId, startTs, endTs, variant = '
     venueId,
     range: { startTs, endTs },
     generatedAt: Date.now(),
+    metricThresholds: {
+      dwellSec: metricThresholds.dwellSec,
+      engagementSec: metricThresholds.engagementSec,
+      minVisitMs: metricThresholds.minVisitMs,
+      source: metricThresholds.source,
+    },
+    storeHours: {
+      openingHour: storeHours.openingHour,
+      closingHour: storeHours.closingHour,
+      hoursLabel: formatStoreHoursRange(storeHours.openingHour, storeHours.closingHour),
+    },
+    activityTimeline,
+    activityTimelines: {
+      hourly: activityTimelineHourly,
+      daily: activityTimelineDaily,
+    },
+    heatmapCategories,
     taxonomy: taxonomySummary,
     overview: {
-      totalVisitors: ingressUnique || ingressEpisodes,
+      totalVisitors,
+      perimeterEntrants: perimeterFootfall.count,
+      perimeterUniqueTracks: perimeterFootfall.uniqueTracks,
+      perimeterMethod: perimeterFootfall.method,
       ingressEpisodes,
       ingressUnique,
+      ingressRecovered: footfall.recoveredEstimated,
+      ingressDirectEstimated: footfall.directEstimated,
+      footfallRecoveryPct: footfall.recoveryPct,
+      footfallMethod: footfall.method,
       avgStoreDwellMin,
-      currentOccupancy: liveOcc?.total || 0,
+      medianStoreDwellMin: dwellStats.medianStoreDwellMin,
+      dwellP25Min: dwellStats.dwellP25Min,
+      dwellP75Min: dwellStats.dwellP75Min,
+      avgStoreDwellReliable: dwellStats.reliable,
+      dwellSessionCount: dwellStats.sessionCount,
+      sessionAnalyticsMethod: dwellStats.method,
+      stitchedEntranceSessions: sessionAnalytics?.stats?.stitchedSessions,
+      currentOccupancy: 0,
+      currentOccupancySource: 'live_frame',
       avgTicket: erp.avgTicket,
       spi: crossKpis.spi,
       spiSource: crossKpis.spiSource,
     },
     fresco: { departments: frescoDepartments },
     aisles: { ...aisleMetrics, aisleConversionPct: aisleConversion },
-    checkout: { channels: checkoutChannels, avgWaitMin, frictionScore: crossKpis.checkoutFrictionScore },
+    checkout: {
+      channels: checkoutChannels,
+      avgWaitMin,
+      completed: checkoutCompleted,
+      frictionScore: dwellStats.reliable ? crossKpis.checkoutFrictionScore : null,
+    },
+    journeySignals,
     crossKpis,
     media: mediaKpis,
     erp: {
@@ -492,7 +874,7 @@ export function computeExecutiveJourney(db, venueId, startTs, endTs, variant = '
       headline: `Weekly executive brief · ${new Date(startTs).toLocaleDateString()} – ${new Date(endTs).toLocaleDateString()}`,
       topInsights: payload.insights,
       kpis: {
-        visitors: ingressUnique || ingressEpisodes,
+        visitors: totalVisitors,
         avgDwellMin: avgStoreDwellMin,
         avgTicket: erp.avgTicket,
         spi: crossKpis.spi,

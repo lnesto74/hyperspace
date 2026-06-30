@@ -17,6 +17,7 @@ import { PipelineMetrics } from './services/PipelineMetrics.js';
 import VisualTrackService from './services/VisualTrackService.js';
 import { TrajectoryStorageService } from './services/TrajectoryStorageService.js';
 import { KPICalculator } from './services/KPICalculator.js';
+import { EntrancePerimeterTracker } from './services/EntrancePerimeterTracker.js';
 
 import discoveryRoutes from './routes/discovery.js';
 import replayRoutes from './routes/replay.js';
@@ -161,6 +162,7 @@ const demoSessionService = new DemoSessionService(db);
 const _startupT2 = Date.now();
 trajectoryStorage.start();
 console.log(`⏱️ STARTUP: trajectoryStorage.start ${Date.now() - _startupT2}ms`);
+const entrancePerimeterTracker = new EntrancePerimeterTracker(db, trajectoryStorage);
 console.log('📊 KPI tracking services initialized');
 
 // Initialize Profit Radar services (additive — no impact on existing functionality)
@@ -330,6 +332,12 @@ trackAggregator.on('tracks', (data) => {
   } else {
     io.of('/tracking').to(`venue:${data.venueId}`).emit('tracks', data);
   }
+
+  // Live entrance footfall: perimeter-edge crossing on full ~10Hz trail (not 3s DB samples).
+  const liveForPerimeter = data.tracks.filter(t => t.trackKey && !t.trackKey.startsWith('replay-'));
+  if (data.venueId && liveForPerimeter.length > 0) {
+    entrancePerimeterTracker.processBatch(data.venueId, liveForPerimeter);
+  }
   
   // Throttle KPI recording: only process every 2s instead of every 50ms emission.
   // This reduces event loop load from ~20 heavy batches/s to ~0.5/s.
@@ -417,6 +425,7 @@ trackAggregator.on('track_removed', (data) => {
   }
 
   io.of('/tracking').emit('track_removed', data);
+  entrancePerimeterTracker.clearTrack(data.trackKey);
   trajectoryStorage.endTrackSessions(data.trackKey);
 });
 

@@ -1,13 +1,73 @@
 export type ExecutiveVariant = 'live' | 'hq';
 
-export type JourneyTab = 'overview' | 'fresco' | 'aisles' | 'checkout' | 'media';
+export interface MetricThresholds {
+  dwellSec: number;
+  engagementSec: number;
+  minVisitMs: number;
+  source: 'venue_default' | 'preview';
+}
+
+export interface TimelinePoint {
+  label: string;
+  value: number;
+}
+
+export interface ActivityTimeline {
+  grain: 'hour' | 'day';
+  visitors: TimelinePoint[];
+  dwells: TimelinePoint[];
+}
+
+export interface ActivityTimelineSet {
+  hourly: ActivityTimeline;
+  daily: ActivityTimeline;
+}
+
+export interface HeatmapCategoryRow {
+  category: string;
+  zoneCount: number;
+  roiIds?: string[];
+  totalVisits: number;
+  totalDwellMin?: number;
+  browsingRate: number;
+  engagementRate: number;
+  conversionRate: number;
+  avgBrowseTimeMin: number;
+}
+
+export interface JourneySignals {
+  reconciliationRequired: boolean;
+  ingress: {
+    visitors: number;
+    gateEstimated?: number;
+    recovered: number;
+  };
+  shopping: {
+    aisleZoneVisits: number;
+    dwellVisits: number;
+    stoppingPct: number;
+    bypassPct: number;
+  };
+  checkout: {
+    sessionsCompleted: number;
+    totalSessions: number;
+    avgWaitMin: number;
+    abandonPct: number;
+    laneCount: number;
+  };
+}
 
 export interface FrescoDepartment {
   id: string;
   label: string;
   visits: number;
+  dwellVisits?: number;
   uniqueVisitors: number;
   avgDwellMin: number;
+  avgDwellSec?: number;
+  stoppingPct?: number;
+  passThroughPct?: number;
+  hasQueueZones?: boolean;
   browsingPct: number;
   waitingPct: number;
   abandonPct: number;
@@ -19,6 +79,7 @@ export interface CheckoutChannel {
   id: string;
   label: string;
   sessions: number;
+  completed?: number;
   avgWaitMin: number;
   abandonPct: number;
   currentQueue: number;
@@ -57,6 +118,15 @@ export interface EsselungaJourneyPayload {
   venueId: string;
   range: { startTs: number; endTs: number };
   generatedAt: number;
+  metricThresholds?: MetricThresholds;
+  storeHours?: {
+    openingHour: number;
+    closingHour: number;
+    hoursLabel: string;
+  };
+  activityTimeline?: ActivityTimeline;
+  activityTimelines?: ActivityTimelineSet;
+  heatmapCategories?: HeatmapCategoryRow[];
   taxonomy: {
     totalRois: number;
     fresco: number;
@@ -66,17 +136,35 @@ export interface EsselungaJourneyPayload {
   };
   overview: {
     totalVisitors: number;
+    perimeterEntrants?: number;
+    perimeterUniqueTracks?: number;
+    perimeterMethod?: string;
     ingressEpisodes?: number;
     ingressUnique?: number;
+    ingressRecovered?: number;
+    ingressDirectEstimated?: number;
+    footfallRecoveryPct?: number;
+    footfallMethod?: string;
     avgStoreDwellMin: number;
+    medianStoreDwellMin?: number;
+    dwellP25Min?: number;
+    dwellP75Min?: number;
+    avgStoreDwellReliable?: boolean;
+    dwellSessionCount?: number;
+    sessionAnalyticsMethod?: string;
+    stitchedEntranceSessions?: number;
     currentOccupancy: number;
+    currentOccupancySource?: 'live_frame' | 'track_positions' | 'recent_visits';
     avgTicket: number | null;
     spi: number | null;
     spiSource: string;
   };
   fresco: { departments: FrescoDepartment[] };
   aisles: {
-    penetrationPct: number;
+    penetrationPct: number | null;
+    aisleDwellUnique?: number;
+    aisleReachReliable?: boolean;
+    dwellVisits?: number;
     stoppingPowerPct: number;
     bypassPct: number;
     totalAisleVisits: number;
@@ -87,8 +175,10 @@ export interface EsselungaJourneyPayload {
   checkout: {
     channels: CheckoutChannel[];
     avgWaitMin: number;
+    completed?: number;
     frictionScore: number | null;
   };
+  journeySignals?: JourneySignals;
   crossKpis: {
     spi: number | null;
     spiSource: string;

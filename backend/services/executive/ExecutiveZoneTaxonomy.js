@@ -47,7 +47,13 @@ function parseMeta(json) {
 
 function matchesAny(text, patterns) {
   const n = norm(text);
-  return patterns.some(p => n.includes(p));
+  return patterns.some(p => {
+    const pat = norm(p);
+    if (!pat) return false;
+    if (n === pat) return true;
+    const escaped = pat.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return new RegExp(`(^|[^a-z])${escaped}([^a-z]|$)`).test(n);
+  });
 }
 
 function resolveZoneType(meta, zoneSetting) {
@@ -93,8 +99,8 @@ function inferFrescoDept(text) {
 }
 
 function isFrescoCategory(text, objectType) {
-  if (objectType === 'banco') return true;
-  return matchesAny(text, FRESCO_PATTERNS);
+  if (matchesAny(text, FRESCO_PATTERNS)) return true;
+  return objectType === 'banco' && matchesAny(text, FRESCO_PATTERNS);
 }
 
 /**
@@ -127,6 +133,26 @@ export function classifyRoi(roi, zoneSetting = null, linked = {}) {
     return { group: 'ingress', subGroup: 'ingress', role: 'traffic', categoryLabel };
   }
 
+  const frescoLabel = categoryLabel || category || linkedCat || '';
+  const isFrescoZone = name.includes('banco')
+    || name.includes('muretto')
+    || section === 'fresco'
+    || isFrescoCategory(frescoLabel, linked.objectType)
+    || isFrescoCategory(name, linked.objectType)
+    || (linked.objectType === 'banco' && isFrescoCategory(frescoLabel, null));
+
+  if (isFrescoZone) {
+    const dept = mapCategoryToFrescoDept(frescoLabel || name);
+    const displayLabel = frescoLabel || FRESCO_DEPT_LABELS[dept] || dept;
+    if (zoneType === 'queue' || name.includes('queue')) {
+      return { group: 'fresco', subGroup: dept, role: 'queue', categoryLabel: displayLabel };
+    }
+    if (zoneType === 'service' || name.includes('service')) {
+      return { group: 'fresco', subGroup: dept, role: 'service', categoryLabel: displayLabel };
+    }
+    return { group: 'fresco', subGroup: dept, role: 'browse', categoryLabel: displayLabel };
+  }
+
   const isShelfZone = meta.template === 'shelf-engagement'
     || name.includes('engagement')
     || name.includes('shelf')
@@ -142,22 +168,6 @@ export function classifyRoi(roi, zoneSetting = null, linked = {}) {
       role: 'shelf',
       categoryLabel: categoryLabel || category || 'Uncategorized',
     };
-  }
-
-  const isFrescoCounter = linked.objectType === 'banco'
-    || name.includes('banco')
-    || name.includes('muretto')
-    || section === 'fresco';
-
-  if (isFrescoCounter) {
-    const dept = mapCategoryToFrescoDept(categoryLabel || category || name);
-    if (zoneType === 'queue' || name.includes('queue')) {
-      return { group: 'fresco', subGroup: dept, role: 'queue', categoryLabel: categoryLabel || dept };
-    }
-    if (zoneType === 'service' || name.includes('service')) {
-      return { group: 'fresco', subGroup: dept, role: 'service', categoryLabel: categoryLabel || dept };
-    }
-    return { group: 'fresco', subGroup: dept, role: 'browse', categoryLabel: categoryLabel || dept };
   }
 
   if (checkoutChannel) {

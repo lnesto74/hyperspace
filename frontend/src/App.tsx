@@ -38,7 +38,7 @@ import { LaunchPadPanel, isLaunchPadEnabled, loadSession } from './launchpad'
 
 import { BarChart3, Bell, Thermometer, Zap, ShoppingCart, Monitor, Activity, PieChart, Clapperboard, Crosshair, Building2, LogOut, User, Rocket, FlaskConical, Settings, CalendarCheck, Film } from 'lucide-react'
 import { CanvasToolbarButton, CanvasToolbarDivider, CanvasToolbarFlyout } from './components/layout/CanvasToolbar'
-import { useState, useEffect, useRef, createContext, useContext } from 'react'
+import { useState, useEffect, useRef, createContext, useContext, type ReactNode } from 'react'
 import { Routes, Route, useNavigate } from 'react-router-dom'
 import { useAuth } from './context/AuthContext'
 import { useVenue } from './context/VenueContext'
@@ -48,7 +48,7 @@ import CompaniesPage from './components/admin/CompaniesPage'
 import StoryMode from './components/storymode/StoryMode'
 import StoryNarrativeLayout from './components/storymode/StoryNarrativeLayout'
 import MobileTaskPage from './features/opsDispatch/MobileTaskPage'
-import { isDemo, getDemoVenueId, isDemoActivated, getPendingDemoToken, activateDemoFromToken } from './config/demo'
+import { isDemo, isDashboardDemo, getDemoVenueId, isDemoActivated, getPendingDemoToken, activateDemoFromToken, hasDemoIntent, getDemoLinkType } from './config/demo'
 import DemoLinksModal from './components/admin/DemoLinksModal'
 
 // App view mode context
@@ -435,8 +435,10 @@ function KPIOverlayToggle() {
 function MainApp() {
   const { venue, loadVenue } = useVenue()
   const { applyLiveTrackDelivery, setInterpolation } = useTrackingActions()
-  const [viewMode, setViewModeInternal] = useState<ViewMode>('main')
-  const [showLanding, setShowLanding] = useState(true)
+  const [viewMode, setViewModeInternal] = useState<ViewMode>(() =>
+    isDashboardDemo() ? 'businessReporting' : 'main',
+  )
+  const [showLanding, setShowLanding] = useState(() => !isDemo())
   const [launchPadOpen, setLaunchPadOpen] = useState(false)
   const [neuralDashboardEnabled, setNeuralDashboardEnabled] = useState(false)
 
@@ -462,6 +464,18 @@ function MainApp() {
     if (!isDemo() || demoBootstrappedRef.current) return
     demoBootstrappedRef.current = true
     setShowLanding(false)
+
+    if (isDashboardDemo()) {
+      ;(async () => {
+        const venueId = getDemoVenueId()
+        if (venueId) {
+          await loadVenue(venueId).catch(() => {})
+        }
+        setViewMode('businessReporting')
+      })()
+      return
+    }
+
     ;(async () => {
       let venueId = getDemoVenueId()
       if (!venueId) {
@@ -480,9 +494,9 @@ function MainApp() {
     })()
   }, [loadVenue])
 
-  // Auto-start Story Mode for the demo once the venue is loaded into the scene.
+  // Auto-start Story Mode for story demo links once the venue is loaded.
   useEffect(() => {
-    if (!isDemo() || demoStoryStartedRef.current || !venue?.id) return
+    if (!isDemo() || isDashboardDemo() || demoStoryStartedRef.current || !venue?.id) return
     demoStoryStartedRef.current = true
     // Keep the DWG wireframe in sync (same as a FloorplanPanel selection) so the
     // Store Awakening intro renders on the real floorplan.
@@ -666,7 +680,10 @@ function MainApp() {
         )}
         {/* Business Reporting View (feature-flagged: FEATURE_BUSINESS_REPORTING) */}
         {viewMode === 'businessReporting' && (
-          <BusinessReportingPage onClose={() => setViewMode('main')} />
+          <BusinessReportingPage
+            onClose={() => setViewMode('main')}
+            publicDashboard={isDashboardDemo()}
+          />
         )}
         {/* Profit Radar View */}
         {viewMode === 'profitRadar' && (
@@ -720,13 +737,15 @@ function MainApp() {
 
         </StoryNarrativeLayout>
 
-        {/* Demo storytelling overlay — opt-in, additive; restores state on exit */}
-        <StoryMode
-          viewMode={viewMode}
-          setViewMode={setViewMode}
-          neuralEnabled={neuralDashboardEnabled}
-          setNeuralEnabled={setNeuralDashboardEnabled}
-        />
+        {/* Demo storytelling overlay — story links only; never on public dashboard */}
+        {!isDashboardDemo() && (
+          <StoryMode
+            viewMode={viewMode}
+            setViewMode={setViewMode}
+            neuralEnabled={neuralDashboardEnabled}
+            setNeuralEnabled={setNeuralDashboardEnabled}
+          />
+        )}
       </PlanogramProvider>
     </ViewModeContext.Provider>
   )
@@ -830,17 +849,120 @@ const AUTH_ENABLED = !!(import.meta.env.VITE_GOOGLE_CLIENT_ID)
 // auth gate and all app providers so the team can open it on any phone.
 const IS_MOBILE_TASK = typeof window !== 'undefined' && window.location.pathname.startsWith('/m/task/')
 
+/** Customer-facing executive dashboard — no Google login, minimal shell. */
+function PublicDashboardApp() {
+  const { loadVenue } = useVenue()
+  const [ready, setReady] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      const venueId = getDemoVenueId()
+      if (venueId) {
+        await loadVenue(venueId, undefined, { silent: true }).catch(() => {})
+      }
+      if (!cancelled) setReady(true)
+    })()
+    return () => { cancelled = true }
+  }, [loadVenue])
+
+  if (!ready) return <LoadingScreen />
+
+  return (
+    <>
+      <GlobalHeatmapModal />
+      <BusinessReportingPage onClose={() => {}} publicDashboard />
+    </>
+  )
+}
+
+function PublicDashboardProviders({ children }: { children: ReactNode }) {
+  return (
+    <ToastProvider>
+      <VenueProvider>
+        <RoiProvider>
+          <HeatmapProvider>
+            {children}
+          </HeatmapProvider>
+        </RoiProvider>
+      </VenueProvider>
+    </ToastProvider>
+  )
+}
+
+function InvalidDemoLinkPage() {
+  return (
+    <div className="fixed inset-0 bg-gray-950 flex items-center justify-center px-6">
+      <div className="max-w-md text-center">
+        <img
+          src="/hyperspace-logo.png"
+          alt=""
+          className="w-16 h-16 object-contain mx-auto mb-6 opacity-80"
+          onError={(e) => { (e.target as HTMLImageElement).src = '/hyperspace.svg' }}
+        />
+        <h1 className="text-xl font-semibold text-white mb-2">This link is no longer available</h1>
+        <p className="text-sm text-gray-400 leading-relaxed">
+          The shared dashboard link may have expired or been revoked. Ask your Hyperspace contact for a new public link.
+        </p>
+      </div>
+    </div>
+  )
+}
+
+/** Validates `?demo=` before any auth UI; routes dashboard tokens to the public shell. */
+function DemoLinkGate() {
+  const [phase, setPhase] = useState<'checking' | 'invalid' | 'dashboard' | 'story'>('checking')
+
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      const ok = await activateDemoFromToken()
+      if (cancelled) return
+      if (!ok) {
+        setPhase('invalid')
+        return
+      }
+      setPhase(getDemoLinkType() === 'dashboard' ? 'dashboard' : 'story')
+    })()
+    return () => { cancelled = true }
+  }, [])
+
+  if (phase === 'checking') return <LoadingScreen />
+  if (phase === 'invalid') return <InvalidDemoLinkPage />
+  if (phase === 'dashboard') {
+    return (
+      <PublicDashboardProviders>
+        <PublicDashboardApp />
+      </PublicDashboardProviders>
+    )
+  }
+  return <AuthenticatedApp />
+}
+
 function App() {
   if (IS_MOBILE_TASK) {
     return <MobileTaskPage />
   }
+
+  // Public dashboard share — never mount the Google login gate.
+  if (getPendingDemoToken()) {
+    return <DemoLinkGate />
+  }
+  if (isDashboardDemo()) {
+    return (
+      <PublicDashboardProviders>
+        <PublicDashboardApp />
+      </PublicDashboardProviders>
+    )
+  }
+
   return <AppGated />
 }
 
 // Demo gate — resolves whether this tab is a shared demo session. If a ?demo
 // token is present it is validated against the backend (async); an
 // already-validated tab resolves synchronously.
-type DemoStatus = 'checking' | 'demo' | 'none'
+type DemoStatus = 'checking' | 'demo' | 'none' | 'rejected'
 function useDemoGate(): DemoStatus {
   const [status, setStatus] = useState<DemoStatus>(() => {
     if (isDemoActivated()) return 'demo'
@@ -849,9 +971,13 @@ function useDemoGate(): DemoStatus {
   })
   useEffect(() => {
     if (status !== 'checking') return
+    const hadToken = !!getPendingDemoToken()
     let cancelled = false
     activateDemoFromToken().then((ok) => {
-      if (!cancelled) setStatus(ok ? 'demo' : 'none')
+      if (cancelled) return
+      if (ok) setStatus('demo')
+      else if (hadToken) setStatus('rejected')
+      else setStatus('none')
     })
     return () => { cancelled = true }
   }, [status])
@@ -885,6 +1011,14 @@ function AppGated() {
   }
   if (demoStatus === 'checking') {
     return <LoadingScreen />
+  }
+  if (demoStatus === 'rejected') {
+    return <InvalidDemoLinkPage />
+  }
+
+  // Extra guard: never prompt login when a share session is active
+  if (hasDemoIntent() || isDashboardDemo()) {
+    return <AuthenticatedApp />
   }
 
   if (isLoading) {

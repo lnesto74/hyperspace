@@ -96,6 +96,10 @@ curl -X POST http://EDGE:8080/api/mqtt-bridge/harden
 
 Also establish a **Tailscale direct** path (not DERP-only) between edge and DO.
 
+**DERP is not intentional.** The MQTT bridge targets the edge's Tailscale IP; Tailscale
+uses DERP relay only when direct UDP (WireGuard port 41641) cannot be established —
+typically store NAT/firewall blocking inbound UDP. See `scripts/diagnose-tailscale-path.sh`.
+
 ## 7. Edge recording → DO sync (replay captures)
 
 Default `REPLAY_RECORD_SOURCE=edge`: Replay panel records on the slave (pre-bridge, full 10 Hz),

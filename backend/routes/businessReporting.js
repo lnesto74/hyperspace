@@ -25,6 +25,8 @@ import {
 import { INGRESS_VISIT_COUNT_SQL } from '../lib/ingressFootfall.js';
 import multer from 'multer';
 import { computeExecutiveJourney } from '../services/executive/ExecutiveJourneyService.js';
+import { countPerimeterEntrants } from '../lib/ingressPerimeterFootfall.js';
+import { resolveLiveShoppersInStore } from '../lib/liveStoreOccupancy.js';
 import {
   parseErpFile,
   upsertErpRows,
@@ -110,6 +112,59 @@ router.get('/erp-status', (req, res) => {
   } catch (err) {
     console.error('[BusinessReporting] ERP status error:', err);
     res.status(500).json({ error: 'Failed to fetch ERP status' });
+  }
+});
+
+/**
+ * GET /api/reporting/live-occupancy - Lightweight live in-store count (poll every ~10s)
+ */
+router.get('/live-occupancy', (req, res) => {
+  try {
+    const { venueId } = req.query;
+    if (!venueId) return res.status(400).json({ error: 'venueId is required' });
+    const live = resolveLiveShoppersInStore(
+      db,
+      venueId,
+      mqttService?.getFrameOccupancy?.(venueId),
+    );
+    res.json({ venueId, ...live, updatedAt: Date.now() });
+  } catch (err) {
+    console.error('[BusinessReporting] live-occupancy error:', err);
+    res.status(500).json({ error: 'Failed to fetch live occupancy' });
+  }
+});
+
+/**
+ * GET /api/reporting/live-perimeter-entrants - Gate 1121 perimeter crossings (poll ~10s)
+ * Query: venueId, startTs, endTs (defaults: last 24h)
+ */
+router.get('/live-perimeter-entrants', (req, res) => {
+  try {
+    const { venueId, startTs, endTs } = req.query;
+    if (!venueId) return res.status(400).json({ error: 'venueId is required' });
+    const start = startTs ? parseInt(startTs, 10) : Date.now() - 24 * 60 * 60 * 1000;
+    const end = endTs ? parseInt(endTs, 10) : Date.now();
+    const storeHours = resolveVenueStoreHours(db, venueId);
+    const trafficRoiIds = storeHours.trafficRoiIds;
+    const stats = countPerimeterEntrants(db, {
+      venueId,
+      trafficRoiIds,
+      startTs: start,
+      endTs: end,
+    });
+    res.json({
+      venueId,
+      startTs: start,
+      endTs: end,
+      count: stats.count,
+      uniqueTracks: stats.uniqueTracks,
+      method: stats.method,
+      gateLabel: storeHours.footfallZoneName || 'Entrance 1121',
+      updatedAt: Date.now(),
+    });
+  } catch (err) {
+    console.error('[BusinessReporting] live-perimeter-entrants error:', err);
+    res.status(500).json({ error: 'Failed to fetch perimeter entrants' });
   }
 });
 
@@ -237,7 +292,8 @@ router.get('/categories', async (req, res) => {
  */
 router.get('/summary', async (req, res) => {
   try {
-    const { personaId, venueId, startTs, endTs, categoryId, shelfId, campaignId, grain, variant } = req.query;
+    const { personaId, venueId, startTs, endTs, categoryId, shelfId, campaignId, grain, variant,
+      dwellThresholdSec, engagementThresholdSec } = req.query;
     
     // Debug logging
     console.log(`[BusinessReporting] Request: persona=${personaId}, venue=${venueId}, startTs=${startTs}, endTs=${endTs}`);
@@ -265,9 +321,16 @@ router.get('/summary', async (req, res) => {
     const validGrains = ['hour', 'day', 'week'];
     const resolvedGrain = validGrains.includes(grain) ? grain : 'hour';
 
-    // Check cache
+    const thresholdPreview = dwellThresholdSec != null || engagementThresholdSec != null;
+    const metricThresholdOpts = {
+      dwellThresholdSec,
+      engagementThresholdSec,
+      thresholdPreview,
+    };
+
+    // Check cache (skip when previewing metric thresholds — results depend on slider values)
     const cacheKey = getCacheKey(personaId, venueId, start, end, personaId === 'store-manager' ? resolvedGrain : null);
-    const cached = getCached(cacheKey);
+    const cached = !thresholdPreview ? getCached(cacheKey) : null;
     if (cached) {
       return res.json(cached);
     }
@@ -292,7 +355,9 @@ router.get('/summary', async (req, res) => {
         ({ kpis, supporting } = await computeExecutiveKpis(db, kpiCalculator, trajectoryStorage, venueId, start, end, campaignId));
         break;
       case 'esselunga-executive':
-        ({ kpis, supporting } = computeEsselungaExecutiveKpis(db, venueId, start, end, variant));
+        ({ kpis, supporting } = computeEsselungaExecutiveKpis(
+          db, venueId, start, end, variant, mqttService, metricThresholdOpts,
+        ));
         break;
     }
 
@@ -386,9 +451,9 @@ async function computeStoreManagerKpis(db, kpiCalculator, trajectoryStorage, tra
   } else {
     kpis.uniqueVisitors = null;
   }
-  kpis.totalInStore = fetchLiveShoppersInStore(
+  kpis.totalInStore = resolveLiveShoppersInStore(
     db, venueId, mqttService?.getFrameOccupancy?.(venueId),
-  );
+  ).count;
 
   const storeOccKpis = fetchStoreShopperKpis(
     db, venueId, startTs, endTs, storeHours.openingHour, storeHours.closingHour,
@@ -524,33 +589,6 @@ function resolveTrafficRoiIds(db, venueId, footfallRoiId) {
   return ids;
 }
 
-function fetchLiveShoppersInStore(db, venueId, liveFrameOccupancy) {
-  if (liveFrameOccupancy != null && liveFrameOccupancy > 0) {
-    return liveFrameOccupancy;
-  }
-
-  const latest = safeQuery(db, `
-    SELECT timestamp as ts FROM track_positions
-    WHERE venue_id = ? ORDER BY timestamp DESC LIMIT 1
-  `, [venueId]);
-  if (latest?.ts) {
-    const frame = safeQuery(db, `
-      SELECT COUNT(DISTINCT track_key) as c
-      FROM track_positions
-      WHERE venue_id = ? AND timestamp = ? AND track_key NOT LIKE '%cashier%'
-    `, [venueId, latest.ts]);
-    if ((frame?.c || 0) > 0) return frame.c;
-  }
-
-  const row = safeQuery(db, `
-    SELECT COUNT(DISTINCT track_key) as c
-    FROM zone_visits
-    WHERE venue_id = ?
-      AND start_time >= ?
-      AND track_key NOT LIKE '%cashier%'
-  `, [venueId, Date.now() - 300000]);
-  return row?.c || 0;
-}
 
 /** Ignore sparse/stale frames (single-ID heartbeats) when averaging. */
 const MIN_ACTIVE_FRAME_COUNT = 15;
@@ -1689,12 +1727,21 @@ async function computeRetailMediaKpis(db, venueId, startTs, endTs, campaignId) {
 /**
  * Esselunga Executive: customer journey composite (isolated from executive persona).
  */
-function computeEsselungaExecutiveKpis(db, venueId, startTs, endTs, variant) {
+function computeEsselungaExecutiveKpis(db, venueId, startTs, endTs, variant, mqttService, metricThresholdOpts = {}) {
   const resolvedVariant = variant === 'hq' ? 'hq' : 'live';
-  const journey = computeExecutiveJourney(db, venueId, startTs, endTs, resolvedVariant);
+  const journey = computeExecutiveJourney(db, venueId, startTs, endTs, resolvedVariant, metricThresholdOpts);
+
+  if (resolvedVariant === 'live') {
+    const live = resolveLiveShoppersInStore(
+      db, venueId, mqttService?.getFrameOccupancy?.(venueId),
+    );
+    journey.overview.currentOccupancy = live.count;
+    journey.overview.currentOccupancySource = live.source;
+  }
 
   const kpis = {
     totalVisitors: journey.overview.totalVisitors,
+    perimeterEntrants: journey.overview.perimeterEntrants ?? 0,
     avgStoreDwellMin: journey.overview.avgStoreDwellMin,
     currentOccupancy: journey.overview.currentOccupancy,
     avgTicket: journey.overview.avgTicket,

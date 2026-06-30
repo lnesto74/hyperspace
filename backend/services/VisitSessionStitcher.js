@@ -214,9 +214,10 @@ function mergeVisitsIntoSession(linkedKeys, allFragments, roiToCategory, checkou
 /**
  * Build entrance-anchored visit sessions from zone_visits.
  */
-export function buildVisitSessions(db, venueId, startTime, endTime, configInput, roiContext, roiToCategory) {
+export function buildVisitSessions(db, venueId, startTime, endTime, configInput, roiContext, roiToCategory, options = {}) {
   const config = normalizeVisitSessionConfig(configInput);
   const { entranceRoiIds, checkoutRoiIds, shelfRoiIds } = roiContext;
+  const recoveredTrackKeys = options.recoveredTrackKeys || [];
 
   const visits = db.prepare(`
     SELECT zv.id, zv.track_key, zv.roi_id, zv.start_time, zv.end_time, zv.duration_ms,
@@ -224,7 +225,7 @@ export function buildVisitSessions(db, venueId, startTime, endTime, configInput,
            zv.exit_position_x, zv.exit_position_z, zv.visitor_session_id
     FROM zone_visits zv
     WHERE zv.venue_id = ? AND zv.start_time >= ? AND zv.start_time < ?
-      AND (zv.is_dwell = 1 OR zv.duration_ms >= 3000)
+      AND (zv.duration_ms >= 300 OR zv.is_dwell = 1)
       AND zv.track_key NOT LIKE '%cashier%'
     ORDER BY zv.start_time ASC
   `).all(venueId, startTime, endTime);
@@ -261,7 +262,7 @@ export function buildVisitSessions(db, venueId, startTime, endTime, configInput,
 
   const entranceSeeds = visits.filter(v =>
     entranceRoiIds.has(v.roi_id)
-    && (v.duration_ms >= config.entranceMinDurationMs || v.is_dwell === 1)
+    && (v.duration_ms >= config.entranceMinDurationMs || v.is_dwell === 1 || v.duration_ms >= 300)
   );
 
   /** @type {VisitSession[]} */
@@ -287,6 +288,33 @@ export function buildVisitSessions(db, venueId, startTime, endTime, configInput,
       entranceTrackKey: seed.track_key,
       ...merged,
     });
+  }
+
+  // Proximity-recovered entrants (missed gate track_key but first shelf appearance near gate).
+  const assignedKeys = new Set();
+  for (const s of sessions) {
+    for (const k of s.trackKeys) assignedKeys.add(k);
+  }
+  for (const trackKey of recoveredTrackKeys) {
+    if (!trackKey || assignedKeys.has(trackKey)) continue;
+    const seedFrag = allFragments.get(trackKey);
+    if (!seedFrag) continue;
+    const windowEnd = seedFrag.firstTime + config.maxVisitDurationMs;
+    const linkedKeys = chainFragments(seedFrag, allFragments, config, windowEnd);
+    const overlap = [...linkedKeys].some(k => assignedKeys.has(k));
+    if (overlap) continue;
+    const merged = mergeVisitsIntoSession(
+      linkedKeys, allFragments, roiToCategory, checkoutRoiIds, shelfRoiIds,
+    );
+    if (merged.durationSec < (config.minInStoreDurationSec || 30)) continue;
+    sessions.push({
+      sessionId: `vs-rec-${trackKey}`,
+      trackKeys: [...linkedKeys],
+      entranceTrackKey: trackKey,
+      recoveredEntrant: true,
+      ...merged,
+    });
+    for (const k of linkedKeys) assignedKeys.add(k);
   }
 
   // Dedupe sessions that share track keys (pick earliest entrance).

@@ -78,6 +78,7 @@ export default function HeatmapEmbedPreview({
   const zoneGroupRef = useRef<THREE.Group | null>(null);
   const dwgGroupRef = useRef<THREE.Group | null>(null);
   const pulseLinesRef = useRef<THREE.Line[]>([]);
+  const zoneLinesRef = useRef<Map<string, THREE.Line>>(new Map());
   const tileEntriesRef = useRef<TileEntry[]>([]);
   const animRef = useRef<number | null>(null);
   const inViewRef = useRef(true);
@@ -121,11 +122,11 @@ export default function HeatmapEmbedPreview({
   const heightKpi = metric === 'visits' ? 'visits' : 'dwellSec';
   const colorKpi = metric === 'visits' ? 'visits' : 'dwellSec';
 
-  // Load venue for 3D scene (Business Reporting may use a venue different from main viewport)
+  // Load venue for 3D scene only when not already loaded in context
   useEffect(() => {
-    if (!venueId) return;
-    void loadVenue(venueId);
-  }, [venueId, loadVenue]);
+    if (!venueId || venue?.id === venueId) return;
+    void loadVenue(venueId, undefined, { silent: true });
+  }, [venueId, venue?.id, loadVenue]);
 
   // Fetch shelf ROIs locally — do NOT use RoiContext (MainViewport overwrites it with DWG-only ROIs)
   useEffect(() => {
@@ -268,6 +269,7 @@ export default function HeatmapEmbedPreview({
 
     tileEntriesRef.current = [];
     pulseLinesRef.current = [];
+    zoneLinesRef.current = new Map();
     setTileVersion(0);
     setSceneReady(true);
 
@@ -312,6 +314,7 @@ export default function HeatmapEmbedPreview({
       }
       tileEntriesRef.current = [];
       pulseLinesRef.current = [];
+      zoneLinesRef.current = new Map();
       heatmapGroupRef.current = null;
       zoneGroupRef.current = null;
       dwgGroupRef.current = null;
@@ -336,19 +339,18 @@ export default function HeatmapEmbedPreview({
     }
   }, [objects, sceneReady]);
 
-  // Zone outlines
+  // Zone outlines — build once per shelf region set
   useEffect(() => {
     const group = zoneGroupRef.current;
     if (!group || !sceneReady) return;
 
     disposeGroup(group);
     pulseLinesRef.current = [];
+    zoneLinesRef.current = new Map();
 
     shelfRegions.forEach(zone => {
       const cat = categoryByRoiId.get(zone.id) ?? 'Uncategorized';
       const visual = getCategoryVisual(cat);
-      const isHighlight = highlightRoiIds.has(zone.id);
-      const dimmed = highlightCategory && !isHighlight;
 
       const pts = zone.vertices.map(v => new THREE.Vector3(v.x, 0.04, v.z));
       pts.push(pts[0].clone());
@@ -357,15 +359,38 @@ export default function HeatmapEmbedPreview({
         new THREE.LineBasicMaterial({
           color: hexToThreeColor(visual.color),
           transparent: true,
-          opacity: dimmed ? 0.15 : isHighlight ? 1 : 0.65,
+          opacity: 0.55,
         }),
       );
       group.add(line);
+      zoneLinesRef.current.set(zone.id, line);
+    });
+  }, [shelfRegions, categoryByRoiId, sceneReady]);
+
+  // Highlight — update line + tile opacity only (no geometry rebuild)
+  useEffect(() => {
+    if (!sceneReady) return;
+
+    pulseLinesRef.current = [];
+    for (const [zoneId, line] of zoneLinesRef.current) {
+      const isHighlight = highlightRoiIds.has(zoneId);
+      const dimmed = !!highlightCategory && !isHighlight;
+      const mat = line.material as THREE.LineBasicMaterial;
+      mat.opacity = dimmed ? 0.12 : isHighlight ? 1 : 0.55;
+      mat.needsUpdate = true;
       if (isHighlight && highlightCategory) {
         pulseLinesRef.current.push(line);
       }
-    });
-  }, [shelfRegions, categoryByRoiId, highlightCategory, highlightRoiIds, sceneReady]);
+    }
+
+    for (const { mesh, tile } of tileEntriesRef.current) {
+      const inHighlight = !highlightCategory || tileInCategory(tile, highlightRoiIds);
+      const mat = mesh.material as THREE.MeshStandardMaterial;
+      mat.opacity = inHighlight ? 0.88 : 0.08;
+      mat.emissiveIntensity = inHighlight ? 0.28 : 0.04;
+      mat.needsUpdate = true;
+    }
+  }, [highlightCategory, highlightRoiIds, tileInCategory, sceneReady, tileVersion]);
 
   // Build heat tiles once — NOT on every hover (was melting laptops)
   useEffect(() => {
@@ -397,9 +422,9 @@ export default function HeatmapEmbedPreview({
       const mat = new THREE.MeshStandardMaterial({
         color,
         transparent: true,
-        opacity: 0.82,
+        opacity: 0.88,
         emissive: color,
-        emissiveIntensity: 0.22,
+        emissiveIntensity: 0.28,
       });
       const mesh = new THREE.Mesh(
         new THREE.BoxGeometry(tileSize * 0.82, barH, tileSize * 0.82),
@@ -411,18 +436,6 @@ export default function HeatmapEmbedPreview({
     }
     setTileVersion(v => v + 1);
   }, [heatmapData, shelfRegions, heightKpi, colorKpi, sceneReady]);
-
-  // Highlight: update material opacity only — cheap
-  useEffect(() => {
-    if (!tileVersion) return;
-    for (const { mesh, tile } of tileEntriesRef.current) {
-      const inHighlight = !highlightCategory || tileInCategory(tile, highlightRoiIds);
-      const mat = mesh.material as THREE.MeshStandardMaterial;
-      mat.opacity = inHighlight ? 0.82 : 0.1;
-      mat.emissiveIntensity = inHighlight ? 0.22 : 0.05;
-      mat.needsUpdate = true;
-    }
-  }, [highlightCategory, highlightRoiIds, tileInCategory, tileVersion]);
 
   const expectedShelfZones = useMemo(
     () => categories.reduce((n, c) => n + (c.roiIds?.length ?? 0), 0),

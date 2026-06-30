@@ -1,9 +1,10 @@
 import type { PerceptionLayer, ReconcilerConfigMetrics } from './types'
 
 export const RECONCILER_CONFIG_OPTIONS = [
-  { id: 'GROCERY_V3_MAP', label: 'Grocery — Map-aware v3', recommended: true },
+  { id: 'GROCERY_V2_TIGHT', label: 'Grocery — Map-aware v2 tight (29/06)', recommended: true },
+  { id: 'GROCERY_V3_MAP', label: 'Grocery — Map-aware v3' },
   { id: 'GROCERY_V2_MAP', label: 'Grocery — Map-aware v2' },
-  { id: 'GROCERY_BALANCED', label: 'Grocery — Balanced' },
+  { id: 'GROCERY_BALANCED', label: 'Grocery — Balanced (artifacts — avoid)' },
   { id: 'GROCERY_AGGRESSIVE', label: 'Grocery — Aggressive' },
   { id: 'GROCERY_CONSERVATIVE', label: 'Grocery — Conservative' },
   { id: 'RAJ_v1_BALANCED', label: 'Raj v1 — Balanced' },
