@@ -82,7 +82,7 @@ export default function DashboardPage() {
   };
 
   return (
-    <div className="mx-auto max-w-3xl px-4 py-8">
+    <div className="mx-auto max-w-3xl px-3 py-6 pb-safe sm:px-4 sm:py-8">
       <header className="mb-8 flex items-center justify-between">
         <h1 className="text-2xl font-bold text-gray-900">{t("appTitle")}</h1>
         <button

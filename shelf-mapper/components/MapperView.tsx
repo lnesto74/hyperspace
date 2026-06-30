@@ -11,6 +11,7 @@ import { useAutosave, useProjectPins } from "@/lib/hooks";
 import { createPin, submitProject } from "@/lib/supabase";
 import { nextPinNumber, renumberPins } from "@/lib/export";
 import { t } from "@/lib/i18n";
+import { useIsMobile } from "@/lib/useMedia";
 
 const HINT_KEY = "shelf-mapper:hint-dismissed:";
 
@@ -35,7 +36,8 @@ export function MapperView({ project, shareToken, isOwner }: MapperViewProps) {
   const [showHint, setShowHint] = useState(false);
   const [submitted, setSubmitted] = useState(Boolean(project.submitted_at));
   const [autoFocusInput, setAutoFocusInput] = useState(false);
-  const { listOpen, toggleList } = useMobileSheet();
+  const { listOpen, openList, closeList } = useMobileSheet();
+  const isMobile = useIsMobile();
   const searchParams = useSearchParams();
   const ownerMode = isOwner || searchParams.get("owner") === "1";
 
@@ -76,8 +78,9 @@ export function MapperView({ project, shareToken, isOwner }: MapperViewProps) {
       setAutoFocusInput(true);
       queueSave(pin);
       setTimeout(() => setAutoFocusInput(false), 100);
+      if (isMobile) openList();
     },
-    [readOnly, project.id, pins, setPins, queueSave],
+    [readOnly, project.id, pins, setPins, queueSave, isMobile, openList],
   );
 
   const handleMovePin = useCallback(
@@ -91,11 +94,15 @@ export function MapperView({ project, shareToken, isOwner }: MapperViewProps) {
     [pins, setPins, queueSave],
   );
 
-  const handleSelectPin = useCallback((id: string) => {
-    setSelectedId(id);
-    setCenterOnId(id);
-    setTimeout(() => setCenterOnId(null), 300);
-  }, []);
+  const handleSelectPin = useCallback(
+    (id: string) => {
+      setSelectedId(id);
+      setCenterOnId(id);
+      setTimeout(() => setCenterOnId(null), 300);
+      if (isMobile) openList();
+    },
+    [isMobile, openList],
+  );
 
   const handleDeletePin = useCallback(
     async (id: string) => {
@@ -120,11 +127,14 @@ export function MapperView({ project, shareToken, isOwner }: MapperViewProps) {
           }
         }
       }
-      if (e.key === "Escape") setSelectedId(null);
+      if (e.key === "Escape") {
+        setSelectedId(null);
+        closeList();
+      }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [readOnly, selectedId, pins, handleDeletePin]);
+  }, [readOnly, selectedId, pins, handleDeletePin, closeList]);
 
   const handleUndo = useCallback(() => {
     if (readOnly || pins.length === 0) return;
@@ -143,8 +153,6 @@ export function MapperView({ project, shareToken, isOwner }: MapperViewProps) {
     try {
       await submitProject(project.id, shareToken);
       setSubmitted(true);
-
-      // Webhook via API route
       await fetch("/api/submit", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -162,7 +170,7 @@ export function MapperView({ project, shareToken, isOwner }: MapperViewProps) {
 
   if (loading) {
     return (
-      <div className="flex h-screen items-center justify-center text-gray-500">
+      <div className="flex h-screen-safe items-center justify-center text-gray-500">
         …
       </div>
     );
@@ -192,61 +200,66 @@ export function MapperView({ project, shareToken, isOwner }: MapperViewProps) {
   );
 
   return (
-    <div className="flex h-screen flex-col">
-      {/* Top bar */}
-      <header className="flex shrink-0 items-center gap-3 border-b border-gray-200 bg-white px-4 py-2">
-        <h1 className="truncate text-lg font-semibold">{project.name}</h1>
-        <span className="text-sm text-gray-500">
-          {t("shelves", { count: pins.length })}
-        </span>
-        <div className="flex-1" />
+    <div className="flex h-screen-safe flex-col pt-safe">
+      <header className="flex shrink-0 flex-wrap items-center gap-2 border-b border-gray-200 bg-white px-3 py-2 md:gap-3 md:px-4">
+        <div className="min-w-0 flex-1">
+          <h1 className="truncate text-base font-semibold md:text-lg">{project.name}</h1>
+          <p className="text-xs text-gray-500 md:text-sm">
+            {t("shelves", { count: pins.length })}
+          </p>
+        </div>
+
         {saveStatus === "saving" && (
           <span className="text-xs text-gray-400">{t("saving")}</span>
         )}
         {saveStatus === "saved" && (
           <span className="text-xs text-green-600">{t("saved")}</span>
         )}
-        {readOnly && (
-          <span className="text-xs text-amber-600">{t("readOnly")}</span>
-        )}
-        {!readOnly && (
-          <button
-            type="button"
-            className="rounded-lg px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-100"
-            onClick={handleUndo}
-          >
-            {t("undo")}
-          </button>
-        )}
-        {ownerMode && !readOnly && (
-          <button
-            type="button"
-            className="rounded-lg px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-100"
-            onClick={handleRenumber}
-          >
-            {t("renumber")}
-          </button>
-        )}
-        {!readOnly && !submitted && (
-          <button
-            type="button"
-            className="rounded-lg bg-blue-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-blue-700"
-            onClick={handleSubmit}
-          >
-            {t("submit")}
-          </button>
-        )}
+
+        <div className="flex items-center gap-1 md:gap-2">
+          {readOnly && (
+            <span className="rounded bg-amber-100 px-2 py-1 text-xs text-amber-700">
+              {t("readOnly")}
+            </span>
+          )}
+          {!readOnly && (
+            <button
+              type="button"
+              className="min-h-[44px] rounded-lg px-3 py-2 text-sm text-gray-600 active:bg-gray-100"
+              onClick={handleUndo}
+            >
+              {t("undo")}
+            </button>
+          )}
+          {ownerMode && !readOnly && (
+            <button
+              type="button"
+              className="hidden min-h-[44px] rounded-lg px-3 py-2 text-sm text-gray-600 active:bg-gray-100 sm:inline"
+              onClick={handleRenumber}
+            >
+              {t("renumber")}
+            </button>
+          )}
+          {!readOnly && !submitted && (
+            <button
+              type="button"
+              className="min-h-[44px] rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white active:bg-blue-700"
+              onClick={handleSubmit}
+            >
+              {t("submit")}
+            </button>
+          )}
+        </div>
       </header>
 
       {submitted && (
-        <div className="bg-green-50 px-4 py-2 text-center text-sm text-green-800">
+        <div className="shrink-0 bg-green-50 px-3 py-2 text-center text-xs text-green-800 md:text-sm">
           <strong>{t("submittedThankYou")}</strong>{" "}
           <span className="text-green-700">{t("submittedNote")}</span>
         </div>
       )}
 
-      <div className="flex flex-1 overflow-hidden">
-        {/* Map */}
+      <div className="relative flex min-h-0 flex-1 overflow-hidden">
         <div className="relative h-full w-full md:w-[70%]">
           <FloorplanCanvas
             floorplanUrl={project.floorplan_url}
@@ -263,14 +276,17 @@ export function MapperView({ project, shareToken, isOwner }: MapperViewProps) {
           {showHint && <HintOverlay onDismiss={dismissHint} />}
         </div>
 
-        {/* Desktop list panel */}
         <aside className="hidden h-full w-[30%] flex-col border-l border-gray-200 bg-white md:flex">
           {listPanel}
         </aside>
       </div>
 
-      {/* Mobile bottom sheet */}
-      <MobileSheet open={listOpen} onToggle={toggleList}>
+      <MobileSheet
+        open={listOpen}
+        onOpen={openList}
+        onClose={closeList}
+        peek={pins.length > 0}
+      >
         {listPanel}
       </MobileSheet>
     </div>

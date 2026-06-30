@@ -2,6 +2,7 @@
 
 import type { Pin as PinType } from "@/lib/types";
 import { pinDisplaySize } from "@/lib/coords";
+import { useIsTouch } from "@/lib/useMedia";
 
 interface PinProps {
   pin: PinType;
@@ -21,8 +22,10 @@ export function Pin({
   readOnly,
 }: PinProps) {
   const assigned = pin.categories.length > 0;
-  const size = pinDisplaySize(28, zoomScale);
-  const fontSize = pinDisplaySize(11, zoomScale);
+  const isTouch = useIsTouch();
+  const baseSize = isTouch ? 36 : 28;
+  const size = Math.max(pinDisplaySize(baseSize, zoomScale), isTouch ? 32 : 20);
+  const fontSize = pinDisplaySize(isTouch ? 13 : 11, zoomScale);
 
   return (
     <div
@@ -35,7 +38,7 @@ export function Pin({
     >
       <button
         type="button"
-        className={`flex items-center justify-center rounded-full border-2 font-bold shadow-md transition-transform focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${
+        className={`flex items-center justify-center rounded-full border-2 font-bold shadow-md transition-transform focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 active:scale-110 ${
           selected ? "scale-125 ring-2 ring-blue-400 ring-offset-1" : ""
         } ${
           assigned

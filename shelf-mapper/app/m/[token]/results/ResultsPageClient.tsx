@@ -66,8 +66,8 @@ export function ResultsPageClient({ token }: { token: string }) {
   };
 
   return (
-    <div className="mx-auto max-w-5xl px-4 py-8">
-      <header className="mb-6 flex flex-wrap items-center gap-4">
+    <div className="mx-auto max-w-5xl px-3 py-4 pb-safe sm:px-4 sm:py-8">
+      <header className="mb-4 flex flex-col gap-3 sm:mb-6 sm:flex-row sm:flex-wrap sm:items-center">
         <h1 className="text-2xl font-bold">
           {t("resultsTitle")}: {project?.name}
         </h1>

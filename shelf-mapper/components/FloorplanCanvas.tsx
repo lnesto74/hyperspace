@@ -10,6 +10,7 @@ import {
 import type { Pin as PinType } from "@/lib/types";
 import { Pin } from "./Pin";
 import { pxToNorm } from "@/lib/coords";
+import { useIsTouch } from "@/lib/useMedia";
 
 interface FloorplanCanvasProps {
   floorplanUrl: string;
@@ -25,35 +26,27 @@ interface FloorplanCanvasProps {
 }
 
 const CLICK_THRESHOLD_PX = 8;
+const CLICK_THRESHOLD_TOUCH_PX = 14;
 const FIT_PADDING_PX = 32;
 
 function ZoomControls({ onFit }: { onFit: () => void }) {
   const { zoomIn, zoomOut } = useControls();
 
+  const btn =
+    "flex min-h-[44px] min-w-[44px] items-center justify-center rounded-xl bg-white/95 text-lg font-medium shadow-md active:bg-white md:min-h-0 md:min-w-0 md:rounded-lg md:px-3 md:py-2 md:text-sm";
+
   return (
-    <div className="absolute bottom-4 left-4 z-30 flex gap-1">
-      <button
-        type="button"
-        className="rounded-lg bg-white/90 px-3 py-2 text-sm font-medium shadow hover:bg-white"
-        onClick={() => zoomIn()}
-        aria-label="Zoom in"
-      >
+    <div
+      className="absolute bottom-4 left-4 z-30 flex gap-2 md:gap-1"
+      style={{ marginBottom: "max(0px, env(safe-area-inset-bottom))" }}
+    >
+      <button type="button" className={btn} onClick={() => zoomIn()} aria-label="Zoom in">
         +
       </button>
-      <button
-        type="button"
-        className="rounded-lg bg-white/90 px-3 py-2 text-sm font-medium shadow hover:bg-white"
-        onClick={() => zoomOut()}
-        aria-label="Zoom out"
-      >
+      <button type="button" className={btn} onClick={() => zoomOut()} aria-label="Zoom out">
         −
       </button>
-      <button
-        type="button"
-        className="rounded-lg bg-white/90 px-3 py-2 text-sm font-medium shadow hover:bg-white"
-        onClick={onFit}
-        aria-label="Fit"
-      >
+      <button type="button" className={btn} onClick={onFit} aria-label="Fit">
         ⊡
       </button>
     </div>
@@ -78,6 +71,8 @@ export function FloorplanCanvas({
   const [ready, setReady] = useState(false);
   const [naturalW, setNaturalW] = useState(imageW);
   const [naturalH, setNaturalH] = useState(imageH);
+  const isTouch = useIsTouch();
+  const clickThreshold = isTouch ? CLICK_THRESHOLD_TOUCH_PX : CLICK_THRESHOLD_PX;
 
   const pinDragRef = useRef<{
     pinId: string;
@@ -141,13 +136,13 @@ export function FloorplanCanvas({
 
       const dx = e.clientX - tap.x;
       const dy = e.clientY - tap.y;
-      if (Math.hypot(dx, dy) > CLICK_THRESHOLD_PX) return;
+      if (Math.hypot(dx, dy) > clickThreshold) return;
 
       const rect = getImageRect();
       const norm = pxToNorm({ x: e.clientX, y: e.clientY }, rect);
       onAddPin(norm.x, norm.y);
     },
-    [readOnly, getImageRect, onAddPin],
+    [readOnly, getImageRect, onAddPin, clickThreshold],
   );
 
   const handlePinDragStart = useCallback(
@@ -173,13 +168,13 @@ export function FloorplanCanvas({
 
       const dx = e.clientX - drag.startX;
       const dy = e.clientY - drag.startY;
-      if (Math.hypot(dx, dy) > CLICK_THRESHOLD_PX) drag.moved = true;
+      if (Math.hypot(dx, dy) > clickThreshold) drag.moved = true;
 
       const rect = getImageRect();
       const norm = pxToNorm({ x: e.clientX, y: e.clientY }, rect);
       onMovePin(drag.pinId, norm.x, norm.y);
     },
-    [getImageRect, onMovePin],
+    [getImageRect, onMovePin, clickThreshold],
   );
 
   const handlePinDragEnd = useCallback(() => {
