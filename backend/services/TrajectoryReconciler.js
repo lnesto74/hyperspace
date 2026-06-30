@@ -55,7 +55,8 @@ export const DEFAULT_CONFIG = Object.freeze({
   reid_aligned_distance_boost: 1.25,       // multiply reid_max_distance_m when aligned
   reid_isolation_radius_m: 2.5,            // occlusion merge only if no other track within (0=off)
   reid_occlusion_bypass_promotion: true,   // new ID can re-ID lost track before probation ends
-  reid_stale_active_ms: 1000,              // also match active tracks silent this long (before lost sweep)
+  reid_stale_active_ms: 200,               // active track quiet this long → eligible for re-ID
+  reid_churn_active_ms: 80,                // perception ID churn: match active after 1 frame gap
 
   // Smoothing
   smoothing_alpha: 0.6,                    // EMA blend (1 = use raw, 0 = no update)
@@ -94,7 +95,8 @@ export function normalizeReconcilerConfig(raw) {
   merged.reid_aligned_distance_boost = num(raw.reid_aligned_distance_boost, DEFAULT_CONFIG.reid_aligned_distance_boost);
   merged.reid_isolation_radius_m = num(raw.reid_isolation_radius_m, DEFAULT_CONFIG.reid_isolation_radius_m);
   merged.reid_occlusion_bypass_promotion = raw.reid_occlusion_bypass_promotion !== false;
-  merged.reid_stale_active_ms = num(raw.reid_stale_active_ms, DEFAULT_CONFIG.reid_stale_active_ms);
+  merged.reid_stale_active_ms = Math.min(500, num(raw.reid_stale_active_ms, DEFAULT_CONFIG.reid_stale_active_ms));
+  merged.reid_churn_active_ms = num(raw.reid_churn_active_ms, DEFAULT_CONFIG.reid_churn_active_ms);
   merged.smoothing_alpha = Math.max(0, Math.min(1, num(raw.smoothing_alpha, DEFAULT_CONFIG.smoothing_alpha)));
   merged.active_to_lost_timeout_ms = num(raw.active_to_lost_timeout_ms, DEFAULT_CONFIG.active_to_lost_timeout_ms);
   merged.trail_max_length = num(raw.trail_max_length, DEFAULT_CONFIG.trail_max_length);
@@ -291,6 +293,16 @@ export class TrajectoryReconciler {
     // ---------- Stage 3: candidate gating (don't promote until proven) ----------
     let candidate = state.candidatePerceptions.get(perceptionId);
     if (!candidate) {
+      // Raj-style perception often emits a brand-new ID for one frame — merge immediately.
+      const quick = this._tryReid(state, pos, vel, now, cfg);
+      if (quick) {
+        quick.perceptionIds.add(perceptionId);
+        this._claimReidTarget(state, quick);
+        state.perceptionToStable.set(perceptionId, quick.stableId);
+        this._updateTrackState(quick, pos, vel, now, cfg);
+        state.stats.reid_count++;
+        return this._emit(track, quick, perceptionId);
+      }
       candidate = {
         firstSeen: now,
         firstPos: { x: pos.x, z: pos.z },
@@ -299,7 +311,7 @@ export class TrajectoryReconciler {
         totalDisp: 0,
       };
       state.candidatePerceptions.set(perceptionId, candidate);
-      // First sighting — not enough info yet. Hold the frame (don't emit, don't count as ghost).
+      // First sighting with no re-ID match — hold (don't emit, don't count as ghost).
       return null;
     }
     candidate.totalDisp += Math.hypot(pos.x - candidate.lastPos.x, pos.z - candidate.lastPos.z);
@@ -491,15 +503,18 @@ export class TrajectoryReconciler {
     state.activeTracks.set(t.stableId, t);
   }
 
-  /** Lost tracks + active tracks that have gone quiet but not yet swept to lost. */
+  /** Lost tracks + active tracks quiet enough for re-ID (perception ID churn). */
   _reidTargets(state, now, cfg) {
-    const staleMs = cfg.reid_stale_active_ms ?? 1000;
-    const out = [];
-    for (const t of state.lostTracks.values()) out.push(t);
+    const minQuietMs = Math.min(
+      cfg.reid_churn_active_ms ?? 80,
+      cfg.reid_stale_active_ms ?? 200,
+    );
+    const byId = new Map();
+    for (const t of state.lostTracks.values()) byId.set(t.stableId, t);
     for (const t of state.activeTracks.values()) {
-      if (now - t.lastTs >= staleMs) out.push(t);
+      if (now - t.lastTs >= minQuietMs) byId.set(t.stableId, t);
     }
-    return out;
+    return [...byId.values()];
   }
 
   _countNearbyTracks(state, pos, excludeStableId, radiusM, now, cfg) {
@@ -563,7 +578,8 @@ export class TrajectoryReconciler {
 
       const impliedSpeed = dt > 0.05 ? rawDist / dt : 0;
       const impliedCap = slowMode ? staticImplied : cfg.reid_max_implied_speed_m_s;
-      if (impliedSpeed > impliedCap) continue;
+      // Short gaps between perception IDs make distance/dt look like a teleport.
+      if (dt >= 0.25 && impliedSpeed > impliedCap) continue;
 
       if (!slowMode && cos < cfg.reid_velocity_cosine_min) continue;
 

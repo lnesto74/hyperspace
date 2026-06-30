@@ -100,4 +100,33 @@ const staleActiveOk = runCase('stale-active re-ID (2.5s gap, before 6s lost)', (
 });
 
 if (!steadyOk || !decelOk || !staticOk || !staleActiveOk) process.exit(1);
+
+const churnOk = runCase('perception-id churn every 200ms (Raj-style)', (rec) => {
+  let t = 1e12;
+  let sid = null;
+  let sn = null;
+  const emit = (id, x) => {
+    const out = rec.process({
+      id, venueId: V, timestamp: t,
+      position: { x, y: 0, z: 40 },
+      velocity: { x: 1.2, y: 0, z: 0 },
+    });
+    t += 200;
+    return out;
+  };
+  emit('raj_0', 0);
+  const boot = emit('raj_0', 0);
+  sid = boot?.stableId;
+  sn = boot?.shopperNumber;
+  for (let i = 1; i < 25; i++) {
+    emit(`raj_${i}`, i * 0.24);
+  }
+  const last = emit('raj_final', 25 * 0.24);
+  return {
+    ok: last?.stableId === sid && last?.shopperNumber === sn,
+    detail: `want #${sn} got #${last?.shopperNumber} (reid must beat churn)`,
+  };
+});
+
+if (!churnOk) process.exit(1);
 console.log('\nAll occlusion re-ID smoke tests passed');
