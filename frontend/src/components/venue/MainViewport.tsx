@@ -53,6 +53,13 @@ const COLORS = {
 
 const MAX_RENDER_TRACKS_CAP = 220
 const RENDER_EMERGENCY_THRESHOLD = 200
+/** Drop graced orphan meshes near a live track (failed re-ID label stacks). */
+const GRACED_MESH_DEDUP_RADIUS_M = 5
+
+function hideTrackIdSprite(group: THREE.Group) {
+  const spr = group.children.find(c => c.userData?.isTrackIdSprite) as THREE.Sprite | undefined
+  if (spr) spr.visible = false
+}
 
 function capTracksForRender<T extends { timestamp?: number }>(
   source: Map<string, T>,
@@ -838,6 +845,22 @@ export default function MainViewport({
     trackGraceRef.current.delete(key)
     sezEntryTimesRef.current.delete(key)
   }, [])
+
+  const disposeGracedMeshesNear = useCallback((scene: THREE.Scene, x: number, z: number, radiusM = GRACED_MESH_DEDUP_RADIUS_M) => {
+    const r2 = radiusM * radiusM
+    for (const key of [...trackGraceRef.current.keys()]) {
+      const group = trackMeshesRef.current.get(key)
+      if (!group) {
+        trackGraceRef.current.delete(key)
+        continue
+      }
+      const dx = group.position.x - x
+      const dz = group.position.z - z
+      if (dx * dx + dz * dz <= r2) {
+        disposeTrackMesh(scene, key)
+      }
+    }
+  }, [disposeTrackMesh])
 
   useEffect(() => {
     const purgeReplayMeshes = () => {
@@ -4560,8 +4583,8 @@ export default function MainViewport({
       const currentTracking = trackingRef.current
       const now = Date.now()
       const SEZ_LABEL_DURATION_MS = 60 * 1000
-      const hideDelayMs = continuityMode ? 2500 : TRACK_HIDE_DELAY_MS
-      const graceMs = continuityMode ? 12000 : TRACK_GRACE_MS
+      const hideDelayMs = continuityMode ? 800 : TRACK_HIDE_DELAY_MS
+      const graceMs = continuityMode ? 3500 : TRACK_GRACE_MS
 
       diagSyncCount++
       const meshCount = trackMeshesRef.current.size
@@ -4616,6 +4639,7 @@ export default function MainViewport({
       // Phase 1: hide only when track is truly gone from server snapshot (not just render-capped)
       trackMeshesRef.current.forEach((group, key) => {
         if (!allTrackKeys.has(key)) {
+          hideTrackIdSprite(group)
           if (key.startsWith('replay-') || key.startsWith('story-')) {
             disposeTrackMesh(scene, key)
             return
@@ -4690,6 +4714,10 @@ export default function MainViewport({
         let group = trackMeshesRef.current.get(key)
 
         const personPos = { x: track.venuePosition.x, z: track.venuePosition.z }
+        if (continuityMode && !group) {
+          disposeGracedMeshesNear(scene, personPos.x, personPos.z)
+        }
+
         let isInSez = false
         for (const screen of currentDoohScreens) {
           if (screen.enabled && screen.sezPolygon && screen.sezPolygon.length >= 3) {
@@ -5049,7 +5077,7 @@ export default function MainViewport({
     }
     scheduleSync()
     return () => { if (timer) clearTimeout(timer) }
-  }, [disposeTrackMesh]) // Stable — reads everything via refs
+  }, [disposeTrackMesh, disposeGracedMeshesNear]) // Stable — reads everything via refs
 
   // Render ROIs (regions of interest) as polygons
   useEffect(() => {
