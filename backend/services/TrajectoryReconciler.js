@@ -54,6 +54,7 @@ export const DEFAULT_CONFIG = Object.freeze({
   reid_aligned_distance_boost: 1.25,       // multiply reid_max_distance_m when aligned
   reid_isolation_radius_m: 2.5,            // occlusion merge only if no other track within (0=off)
   reid_occlusion_bypass_promotion: true,   // new ID can re-ID lost track before probation ends
+  reid_stale_active_ms: 1000,              // also match active tracks silent this long (before lost sweep)
 
   // Smoothing
   smoothing_alpha: 0.6,                    // EMA blend (1 = use raw, 0 = no update)
@@ -92,6 +93,7 @@ export function normalizeReconcilerConfig(raw) {
   merged.reid_aligned_distance_boost = num(raw.reid_aligned_distance_boost, DEFAULT_CONFIG.reid_aligned_distance_boost);
   merged.reid_isolation_radius_m = num(raw.reid_isolation_radius_m, DEFAULT_CONFIG.reid_isolation_radius_m);
   merged.reid_occlusion_bypass_promotion = raw.reid_occlusion_bypass_promotion !== false;
+  merged.reid_stale_active_ms = num(raw.reid_stale_active_ms, DEFAULT_CONFIG.reid_stale_active_ms);
   merged.smoothing_alpha = Math.max(0, Math.min(1, num(raw.smoothing_alpha, DEFAULT_CONFIG.smoothing_alpha)));
   merged.active_to_lost_timeout_ms = num(raw.active_to_lost_timeout_ms, DEFAULT_CONFIG.active_to_lost_timeout_ms);
   merged.trail_max_length = num(raw.trail_max_length, DEFAULT_CONFIG.trail_max_length);
@@ -269,8 +271,7 @@ export class TrajectoryReconciler {
       if (matched) {
         stableState = matched;
         stableState.perceptionIds.add(perceptionId);
-        state.lostTracks.delete(stableState.stableId);
-        state.activeTracks.set(stableState.stableId, stableState);
+        this._claimReidTarget(state, stableState);
         state.perceptionToStable.set(perceptionId, stableState.stableId);
         this._updateTrackState(stableState, pos, vel, now, cfg);
         state.stats.reid_count++;
@@ -309,9 +310,8 @@ export class TrajectoryReconciler {
         const occlusion = this._tryReid(state, pos, vel, now, cfg, { occlusionOnly: true });
         if (occlusion) {
           state.candidatePerceptions.delete(perceptionId);
+          this._claimReidTarget(state, occlusion);
           occlusion.perceptionIds.add(perceptionId);
-          state.lostTracks.delete(occlusion.stableId);
-          state.activeTracks.set(occlusion.stableId, occlusion);
           state.perceptionToStable.set(perceptionId, occlusion.stableId);
           this._updateTrackState(occlusion, pos, vel, now, cfg);
           state.stats.reid_count++;
@@ -334,8 +334,7 @@ export class TrajectoryReconciler {
     if (matched) {
       stableState = matched;
       stableState.perceptionIds.add(perceptionId);
-      state.lostTracks.delete(stableState.stableId);
-      state.activeTracks.set(stableState.stableId, stableState);
+      this._claimReidTarget(state, stableState);
       state.perceptionToStable.set(perceptionId, stableState.stableId);
       this._updateTrackState(stableState, pos, vel, now, cfg);
       state.stats.reid_count++;
@@ -470,7 +469,23 @@ export class TrajectoryReconciler {
     if (t.trail.length > cfg.trail_max_length) t.trail.shift();
   }
 
-  _countNearbyTracks(state, pos, excludeStableId, radiusM) {
+  _claimReidTarget(state, t) {
+    state.lostTracks.delete(t.stableId);
+    state.activeTracks.set(t.stableId, t);
+  }
+
+  /** Lost tracks + active tracks that have gone quiet but not yet swept to lost. */
+  _reidTargets(state, now, cfg) {
+    const staleMs = cfg.reid_stale_active_ms ?? 1000;
+    const out = [];
+    for (const t of state.lostTracks.values()) out.push(t);
+    for (const t of state.activeTracks.values()) {
+      if (now - t.lastTs >= staleMs) out.push(t);
+    }
+    return out;
+  }
+
+  _countNearbyTracks(state, pos, excludeStableId, radiusM, now, cfg) {
     if (!radiusM || radiusM <= 0) return 0;
     const r2 = radiusM * radiusM;
     let n = 0;
@@ -487,7 +502,8 @@ export class TrajectoryReconciler {
 
   _tryReid(state, pos, vel, now, cfg, opts = {}) {
     const { occlusionOnly = false } = opts;
-    if (state.lostTracks.size === 0) return null;
+    const targets = this._reidTargets(state, now, cfg);
+    if (targets.length === 0) return null;
     const slowThresh = cfg.reid_slow_speed_m_s ?? 0.35;
     const alignedCosMin = cfg.reid_aligned_cosine_min ?? 0.45;
     const alignedBoost = cfg.reid_aligned_distance_boost ?? 1.25;
@@ -497,13 +513,15 @@ export class TrajectoryReconciler {
 
     let best = null;
     let bestCost = Infinity;
-    for (const t of state.lostTracks.values()) {
+    for (const t of targets) {
       const dt = (now - t.lastTs) / 1000;
       if (dt > cfg.reid_max_gap_s) continue;
 
       const speedLost = Math.hypot(t.smoothedVel.x || 0, t.smoothedVel.z || 0);
       const speedNew = Math.hypot(vel.x || 0, vel.z || 0);
-      const slowMode = speedLost < slowThresh || speedNew < slowThresh;
+      // Occlusion rules apply when the person was slow/static at dropout — not when the
+      // new perception blip reports noisy zero velocity on its first frames.
+      const slowMode = speedLost < slowThresh;
       if (occlusionOnly && !slowMode) continue;
 
       const rawDx = pos.x - t.position.x;
@@ -532,7 +550,7 @@ export class TrajectoryReconciler {
 
       if (!slowMode && cos < cfg.reid_velocity_cosine_min) continue;
 
-      if (slowMode && isoR > 0 && this._countNearbyTracks(state, pos, t.stableId, isoR) > 0) {
+      if (slowMode && isoR > 0 && this._countNearbyTracks(state, pos, t.stableId, isoR, now, cfg) > 0) {
         continue;
       }
 
