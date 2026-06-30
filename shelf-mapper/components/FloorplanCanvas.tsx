@@ -74,9 +74,10 @@ export function FloorplanCanvas({
 }: FloorplanCanvasProps) {
   const transformRef = useRef<ReactZoomPanPinchRef>(null);
   const imageRef = useRef<HTMLDivElement>(null);
-  const containerRef = useRef<HTMLDivElement>(null);
   const [zoomScale, setZoomScale] = useState(1);
   const [ready, setReady] = useState(false);
+  const [naturalW, setNaturalW] = useState(imageW);
+  const [naturalH, setNaturalH] = useState(imageH);
 
   const pinDragRef = useRef<{
     pinId: string;
@@ -98,21 +99,23 @@ export function FloorplanCanvas({
       if (ww === 0 || wh === 0) return;
 
       const scale = Math.min(
-        (ww - FIT_PADDING_PX * 2) / imageW,
-        (wh - FIT_PADDING_PX * 2) / imageH,
+        (ww - FIT_PADDING_PX * 2) / naturalW,
+        (wh - FIT_PADDING_PX * 2) / naturalH,
       );
-      const x = (ww - imageW * scale) / 2;
-      const y = (wh - imageH * scale) / 2;
+      const x = (ww - naturalW * scale) / 2;
+      const y = (wh - naturalH * scale) / 2;
       api.setTransform(x, y, scale, animate ? 250 : 0);
       setZoomScale(scale);
     },
-    [imageW, imageH],
+    [naturalW, naturalH],
   );
 
   useLayoutEffect(() => {
-    fitToView(false);
-    setReady(true);
-  }, [fitToView]);
+    if (naturalW > 0 && naturalH > 0) {
+      fitToView(false);
+      setReady(true);
+    }
+  }, [fitToView, naturalW, naturalH]);
 
   const getImageRect = useCallback(() => {
     const el = imageRef.current;
@@ -189,6 +192,19 @@ export function FloorplanCanvas({
     }
   }, []);
 
+  const handleImageLoad = useCallback(
+    (e: React.SyntheticEvent<HTMLImageElement>) => {
+      const img = e.currentTarget;
+      const w = img.naturalWidth || imageW;
+      const h = img.naturalHeight || imageH;
+      if (w > 0 && h > 0) {
+        setNaturalW(w);
+        setNaturalH(h);
+      }
+    },
+    [imageW, imageH],
+  );
+
   useEffect(() => {
     if (!centerOnPinId || !transformRef.current) return;
     const pin = pins.find((p) => p.id === centerOnPinId);
@@ -214,10 +230,7 @@ export function FloorplanCanvas({
   }, [centerOnPinId, pins]);
 
   return (
-    <div
-      ref={containerRef}
-      className="relative h-full w-full overflow-hidden bg-gray-200"
-    >
+    <div className="relative h-full w-full overflow-hidden bg-gray-200">
       <TransformWrapper
         ref={transformRef}
         initialScale={1}
@@ -236,49 +249,54 @@ export function FloorplanCanvas({
       >
         <TransformComponent
           wrapperClass="!h-full !w-full cursor-grab active:cursor-grabbing"
-          contentClass="!w-full !h-full"
+          contentClass="!inline-block !w-auto !h-auto"
           wrapperStyle={{ touchAction: "none" }}
         >
           <div
-            className="flex h-full w-full items-center justify-center"
-            style={{ visibility: ready ? "visible" : "hidden" }}
+            ref={imageRef}
+            className="relative inline-block select-none"
+            style={{
+              width: naturalW,
+              height: naturalH,
+              visibility: ready ? "visible" : "hidden",
+            }}
+            onPointerDown={handleMapPointerDown}
+            onPointerUp={handleMapPointerUp}
           >
-            <div
-              ref={imageRef}
-              className="relative shrink-0 select-none"
-              style={{ width: imageW, height: imageH }}
-              onPointerDown={handleMapPointerDown}
-              onPointerUp={handleMapPointerUp}
-            >
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
-                src={floorplanUrl}
-                alt="Planimetria"
-                width={imageW}
-                height={imageH}
-                className="pointer-events-none block h-full w-full"
-                draggable={false}
-                loading="lazy"
-              />
-              {pins.map((pin) => (
-                <div
-                  key={pin.id}
-                  data-pin
-                  onPointerMove={handlePinDragMove}
-                  onPointerUp={handlePinDragEnd}
-                  onPointerCancel={handlePinDragEnd}
-                >
-                  <Pin
-                    pin={pin}
-                    selected={pin.id === selectedId}
-                    zoomScale={zoomScale}
-                    onSelect={onSelectPin}
-                    onDragStart={handlePinDragStart}
-                    readOnly={readOnly}
-                  />
-                </div>
-              ))}
-            </div>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={floorplanUrl}
+              alt="Planimetria"
+              width={naturalW}
+              height={naturalH}
+              onLoad={handleImageLoad}
+              className="pointer-events-none block"
+              style={{
+                width: naturalW,
+                height: naturalH,
+                maxWidth: "none",
+              }}
+              draggable={false}
+              loading="eager"
+            />
+            {pins.map((pin) => (
+              <div
+                key={pin.id}
+                data-pin
+                onPointerMove={handlePinDragMove}
+                onPointerUp={handlePinDragEnd}
+                onPointerCancel={handlePinDragEnd}
+              >
+                <Pin
+                  pin={pin}
+                  selected={pin.id === selectedId}
+                  zoomScale={zoomScale}
+                  onSelect={onSelectPin}
+                  onDragStart={handlePinDragStart}
+                  readOnly={readOnly}
+                />
+              </div>
+            ))}
           </div>
         </TransformComponent>
         <ZoomControls onFit={() => fitToView(true)} />
