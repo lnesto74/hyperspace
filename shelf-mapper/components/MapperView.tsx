@@ -106,6 +106,26 @@ export function MapperView({ project, shareToken, isOwner }: MapperViewProps) {
     [setPins, selectedId, removePin],
   );
 
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (readOnly) return;
+      if (e.key === "Delete" || e.key === "Backspace") {
+        const target = e.target as HTMLElement;
+        if (target.tagName === "INPUT" || target.tagName === "TEXTAREA") return;
+        if (selectedId) {
+          e.preventDefault();
+          const pin = pins.find((p) => p.id === selectedId);
+          if (pin && confirm(t("deleteConfirm", { number: pin.number }))) {
+            handleDeletePin(selectedId);
+          }
+        }
+      }
+      if (e.key === "Escape") setSelectedId(null);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [readOnly, selectedId, pins, handleDeletePin]);
+
   const handleUndo = useCallback(() => {
     if (readOnly || pins.length === 0) return;
     const last = [...pins].sort((a, b) => b.number - a.number)[0];
