@@ -19,6 +19,7 @@
  *     stableId, position, velocity, timestamp,
  *     firstSeen, lastDisplacement, trail (Array of recent samples),
  *     perceptionIds (Set of perception IDs that bound to this stable ID),
+ *     shopperNumber (session display # for live canvas — stable across re-ID),
  *     smoothedPos, smoothedVel,
  *   }
  */
@@ -115,6 +116,8 @@ class VenueState {
     this.lostTracks = new Map();          // stableId -> TrackState
     this.perceptionToStable = new Map();  // perceptionId -> stableId
     this.candidatePerceptions = new Map();// perceptionId -> { firstSeen, firstPos, lastPos, lastTs, totalDisp }
+    this.nextShopperNumber = 1;
+    this.stableShopperNumbers = new Map(); // stableId -> display # (for resurrect / lookup)
     this.stats = {
       raw_total: 0,
       ghost_dropped: 0,
@@ -253,7 +256,7 @@ export class TrajectoryReconciler {
         // one raw id never fragments into many stable ids (the core defect that
         // made reconciled identity counts exceed raw). Reuse → stable_count is
         // bounded by the number of distinct perception ids.
-        const resurrected = this._createTrackState(pos, vel, now, cfg, existingStableId);
+        const resurrected = this._createTrackState(state, pos, vel, now, cfg, existingStableId);
         resurrected.perceptionIds.add(perceptionId);
         state.activeTracks.set(existingStableId, resurrected);
         state.stats.resurrected = (state.stats.resurrected || 0) + 1;
@@ -276,7 +279,7 @@ export class TrajectoryReconciler {
         this._updateTrackState(stableState, pos, vel, now, cfg);
         state.stats.reid_count++;
       } else {
-        stableState = this._createTrackState(pos, vel, now, cfg);
+        stableState = this._createTrackState(state, pos, vel, now, cfg);
         state.activeTracks.set(stableState.stableId, stableState);
         state.perceptionToStable.set(perceptionId, stableState.stableId);
         stableState.perceptionIds.add(perceptionId);
@@ -340,7 +343,7 @@ export class TrajectoryReconciler {
       state.stats.reid_count++;
     } else {
       // New stable identity
-      stableState = this._createTrackState(pos, vel, now, cfg);
+      stableState = this._createTrackState(state, pos, vel, now, cfg);
       state.activeTracks.set(stableState.stableId, stableState);
       state.perceptionToStable.set(perceptionId, stableState.stableId);
       stableState.perceptionIds.add(perceptionId);
@@ -371,6 +374,7 @@ export class TrajectoryReconciler {
             && t.totalDisplacement < cfg.ghost_static_displacement_m) {
           // Static "fixture" — drop and free the stable ID.
           state.activeTracks.delete(stableId);
+          state.stableShopperNumbers.delete(stableId);
           // In persist mode keep the binding so a reappearing id resurrects under
           // the SAME stable id (never mints a fresh one) — preserves the
           // stable_count <= perception_id_count invariant.
@@ -392,6 +396,7 @@ export class TrajectoryReconciler {
       for (const [stableId, t] of state.lostTracks) {
         if (now - t.lastTs > cfg.reid_max_gap_s * 1000) {
           state.lostTracks.delete(stableId);
+          state.stableShopperNumbers.delete(stableId);
           // Persist mode: keep perception->stable bindings past expiry so the
           // same id resurrects under the same stable id instead of fragmenting.
           if (!cfg.persist_perception_bindings) {
@@ -428,9 +433,21 @@ export class TrajectoryReconciler {
     state.stats.ghost_drop_reasons[reason] = (state.stats.ghost_drop_reasons[reason] || 0) + 1;
   }
 
-  _createTrackState(pos, vel, now, cfg, forcedId = null) {
+  _shopperNumberFor(state, stableId) {
+    let n = state.stableShopperNumbers.get(stableId);
+    if (n == null) {
+      n = state.nextShopperNumber++;
+      state.stableShopperNumbers.set(stableId, n);
+    }
+    return n;
+  }
+
+  _createTrackState(state, pos, vel, now, cfg, forcedId = null) {
+    const stableId = forcedId || randomUUID();
+    const shopperNumber = this._shopperNumberFor(state, stableId);
     return {
-      stableId: forcedId || randomUUID(),
+      stableId,
+      shopperNumber,
       position: { x: pos.x, y: pos.y || 0, z: pos.z },
       velocity: { x: vel.x || 0, y: vel.y || 0, z: vel.z || 0 },
       smoothedPos: { x: pos.x, y: pos.y || 0, z: pos.z },
@@ -576,6 +593,7 @@ export class TrajectoryReconciler {
       id: stableState.stableId,
       stableId: stableState.stableId,
       originalPerceptionId: perceptionId,
+      shopperNumber: stableState.shopperNumber,
       trackKey,
       // Live canvas uses raw perception motion; smoothed kept for analytics forensics.
       venuePosition: { ...stableState.position },

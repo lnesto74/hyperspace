@@ -81,6 +81,9 @@ export interface Track {
   /** Set by server when track belongs to the current perception frame. */
   inLiveFrame?: boolean;
   originalPerceptionId?: string;
+  /** Session display number from live reconciler — stable across re-ID. */
+  shopperNumber?: number;
+  stableId?: string;
 }
 
 export interface BoundingBox {

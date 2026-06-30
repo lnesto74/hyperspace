@@ -89,12 +89,14 @@ const staleActiveOk = runCase('stale-active re-ID (2.5s gap, before 6s lost)', (
     return out;
   };
   for (let i = 0; i < 20; i++) emit('p4', i * 0.25, 30, 1.0);
-  const sid = emit('p4', 5.0, 30, 1.0)?.stableId;
+  const lastP4 = emit('p4', 5.0, 30, 1.0);
+  const sid = lastP4?.stableId;
+  const sn = lastP4?.shopperNumber;
   t += 2500;
   rec.sweep(t);
   emit('p4b', 5.5, 30, 1.0);
   const o2 = emit('p4b', 5.75, 30, 1.0);
-  return { ok: o2?.stableId === sid, detail: `want ${sid?.slice(0, 8)} got ${o2?.stableId?.slice(0, 8)}` };
+  return { ok: o2?.stableId === sid && o2?.shopperNumber === sn, detail: `want #${sn} got #${o2?.shopperNumber}` };
 });
 
 if (!steadyOk || !decelOk || !staticOk || !staleActiveOk) process.exit(1);

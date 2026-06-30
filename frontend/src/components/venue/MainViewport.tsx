@@ -10,6 +10,7 @@ import { useVenue } from '../../context/VenueContext'
 import { useLidar } from '../../context/LidarContext'
 import { useTrackingActions, useTracking, useTracksRef, useVtlModeRef, useReconcileLiveRef } from '../../context/TrackingContext'
 import { sanitizeTrailPoints } from '../../lib/trackTrail'
+import { trackDisplayLabel } from '../../lib/trackDisplayLabel'
 import { useRoi } from '../../context/RoiContext'
 import { useReplayInsight } from '../../context/ReplayInsightContext'
 import { useProfitRadar } from '../../context/ProfitRadarContext'
@@ -4884,10 +4885,8 @@ export default function MainViewport({
         const targetY = cylinderHeight / 2
         group.position.set(track.venuePosition.x, targetY, track.venuePosition.z)
 
-        // Track-ID label — update text (when re-ID flips the perception id) and visibility.
-        const perceptionId = (track as unknown as { originalPerceptionId?: string }).originalPerceptionId || track.id || ''
-        const digits = String(perceptionId).replace(/\D/g, '')
-        const idText = digits.slice(-4) || '?'
+        // Shopper # (reconciler) or perception suffix when reconciler is off.
+        const idText = trackDisplayLabel(track)
         const idSpriteFound = group.children.find(c => c.userData?.isTrackIdSprite) as THREE.Sprite | undefined
         if (idSpriteFound) {
           idSpriteFound.visible = showTrackIdsRef.current && showTracksRef.current
@@ -6894,7 +6893,7 @@ export default function MainViewport({
                 />
                 <span className="text-xs text-gray-400 flex items-center gap-1.5">
                   {showTrackIdsLayer && showTracksLayer ? <Eye className="w-3 h-3" /> : <EyeOff className="w-3 h-3 text-gray-500" />}
-                  Track IDs (stable · perception)
+                  Shopper # (reconciled)
                 </span>
               </label>
               <label className="flex items-center gap-2 py-1.5 px-2 rounded hover:bg-gray-700 cursor-pointer">
