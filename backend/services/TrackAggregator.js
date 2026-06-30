@@ -1,7 +1,9 @@
 import { EventEmitter } from 'events';
 
 const EMIT_INTERVAL_MS = 100; // 10 fps — sufficient for smooth visualization, halves event loop load
-const TRACK_TTL_MS = 6000; // 6 seconds
+const TRACK_TTL_MS = 6000; // 6 seconds (raw bypass)
+/** Live reconciler: hold stable IDs through lost + re-ID gaps (active_to_lost + reid_max_gap). */
+const RECONCILER_TRACK_TTL_MS = 15000;
 const MAX_TRAIL_LENGTH = 100; // ~10 seconds of trail at 10Hz
 const MAX_AGGREGATOR_TRACKS = 250 // Grocery peak ~200; was 100 — evicting caused snapshot churn
 
@@ -14,6 +16,12 @@ export class TrackAggregator extends EventEmitter {
     this.venueId = null;
     /** When true, socket snapshots include only replay-* tracks (live edge still ingested). */
     this.replayIsolateLive = false;
+    /** Longer prune TTL while live reconciler is on (re-ID gaps). */
+    this.reconcilerLive = false;
+  }
+
+  setReconcilerLive(active) {
+    this.reconcilerLive = !!active;
   }
 
   setReplayIsolateLive(active) {
@@ -205,9 +213,10 @@ export class TrackAggregator extends EventEmitter {
   pruneStale() {
     const now = Date.now();
     const staleKeys = [];
+    const ttlMs = this.reconcilerLive ? RECONCILER_TRACK_TTL_MS : TRACK_TTL_MS;
 
     for (const [trackKey, entry] of this.tracks) {
-      if (now - entry.lastUpdate > TRACK_TTL_MS) {
+      if (now - entry.lastUpdate > ttlMs) {
         staleKeys.push(trackKey);
       }
     }

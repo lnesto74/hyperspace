@@ -8,7 +8,7 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import { Hand, Move3D, RotateCcw, Save, Download, Layers, Eye, EyeOff, Move, RotateCw } from 'lucide-react'
 import { useVenue } from '../../context/VenueContext'
 import { useLidar } from '../../context/LidarContext'
-import { useTrackingActions, useTracking, useTracksRef, useVtlModeRef } from '../../context/TrackingContext'
+import { useTrackingActions, useTracking, useTracksRef, useVtlModeRef, useReconcileLiveRef } from '../../context/TrackingContext'
 import { sanitizeTrailPoints } from '../../lib/trackTrail'
 import { useRoi } from '../../context/RoiContext'
 import { useReplayInsight } from '../../context/ReplayInsightContext'
@@ -786,6 +786,7 @@ export default function MainViewport({
   const storyPickModeRef = useRef(false)
   const [storyPickMode, setStoryPickMode] = useState(false)
   const vtlModeRef = useVtlModeRef()
+  const reconcileLiveRef = useReconcileLiveRef()
   const forcePurgeMeshesRef = useRef(false)
 
   useEffect(() => {
@@ -4493,6 +4494,8 @@ export default function MainViewport({
       if (!sceneRef.current) return
       const scene = sceneRef.current
       const vtlActive = vtlModeRef.current
+      const reconcileLive = reconcileLiveRef.current
+      const continuityMode = vtlActive || reconcileLive
 
       // Story intro: empty floor until settle, then cyan point-cloud shoppers.
       if (cinematicActiveRef.current && !cinematicShowTracksRef.current) {
@@ -4556,8 +4559,8 @@ export default function MainViewport({
       const currentTracking = trackingRef.current
       const now = Date.now()
       const SEZ_LABEL_DURATION_MS = 60 * 1000
-      const hideDelayMs = vtlActive ? 100 : TRACK_HIDE_DELAY_MS
-      const graceMs = vtlActive ? 400 : TRACK_GRACE_MS
+      const hideDelayMs = continuityMode ? 2500 : TRACK_HIDE_DELAY_MS
+      const graceMs = continuityMode ? 12000 : TRACK_GRACE_MS
 
       diagSyncCount++
       const meshCount = trackMeshesRef.current.size
@@ -4566,12 +4569,13 @@ export default function MainViewport({
         console.log(`[DIAG] meshSync  meshes=${meshCount}  refTracks=${refCount}  render=${renderCount}  grace=${trackGraceRef.current.size}  sync#=${diagSyncCount}  t=${now}`)
         diagLastMeshCount = meshCount
       }
+      const emptyClearMs = continuityMode ? 2500 : EMPTY_TRACKS_CLEAR_MS
       // Bulk clear: when all tracks vanish at once (simulator stopped), skip grace period
       if (refCount === 0 && meshCount > 0) {
         if (emptyTracksSinceRef.current == null) {
           emptyTracksSinceRef.current = now
         }
-        if (now - emptyTracksSinceRef.current < EMPTY_TRACKS_CLEAR_MS) {
+        if (now - emptyTracksSinceRef.current < emptyClearMs) {
           return
         }
         emptyTracksSinceRef.current = null

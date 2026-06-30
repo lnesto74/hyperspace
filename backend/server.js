@@ -462,6 +462,7 @@ trackingNamespace.on('connection', (socket) => {
     trackAggregator.start(venueId);
 
     const vtlOn = mqttService?.isReconcilerEnabled?.(venueId) ?? false;
+    trackAggregator.setReconcilerLive(vtlOn);
     socket.emit('visualization_mode', {
       venueId,
       mode: vtlOn ? 'vtl' : 'raw',

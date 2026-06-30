@@ -16,7 +16,8 @@ const CLEANUP_INTERVAL_MS = 1000 // Cleanup stale tracks every 1 second
 const INTERP_MAX_TRACKS = 220 // Match render cap — never drop tracks from interp state (see interp loop)
 const MAX_CLIENT_TRACKS = 220 // Emergency cap only — reconciler keeps count low
 const EMERGENCY_CAP_THRESHOLD = 200 // Only sticky-cap above this
-const INTERP_MISSING_GRACE_MS = 600 // Drop ghost targets faster when ID churns
+const INTERP_MISSING_GRACE_MS = 600 // Drop ghost targets faster when ID churns (raw bypass)
+const RECONCILE_INTERP_MISSING_GRACE_MS = 2500 // Hold through re-ID gaps when live reconciler on
 
 function isStoryTrackKey(key: string) {
   return key.startsWith('story-')
@@ -178,6 +179,7 @@ export interface LiveMetricsSnapshot {
 const LiveMetricsRefContext = createContext<React.MutableRefObject<LiveMetricsSnapshot> | null>(null)
 
 const VtlModeRefContext = createContext<React.MutableRefObject<boolean> | null>(null)
+const ReconcileLiveRefContext = createContext<React.MutableRefObject<boolean> | null>(null)
 
 interface VisualTrackEntityPayload extends Track {
   visualId?: string
@@ -232,7 +234,10 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
   const setInterpolationRef = useRef<(enabled: boolean) => void>(() => {})
   const liveMetricsRef = useRef<LiveMetricsSnapshot>({ frameOccupancy: 0, liveFrameTs: null })
   const vtlModeRef = useRef(false)
+  const reconcileLiveRef = useRef(false)
   const vtlPlaybackLagRef = useRef(10000)
+
+  const isReconcileLive = () => reconcileLiveRef.current || vtlModeRef.current
 
   const applyVisualizationMode = useCallback((
     mode: 'vtl' | 'raw',
@@ -274,8 +279,15 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
   const stableTracksRef = useRef(tracks)
   stableTracksRef.current = tracks
 
-  const maxTrailLength = () => (vtlModeRef.current ? RECONCILE_TRAIL_LENGTH : MAX_TRAIL_LENGTH)
-  const snapshotGraceMs = () => (vtlModeRef.current ? RECONCILE_GRACE_MS : SNAPSHOT_GRACE_MS)
+  const maxTrailLength = () => (isReconcileLive() ? RECONCILE_TRAIL_LENGTH : MAX_TRAIL_LENGTH)
+  const snapshotGraceMs = () => (isReconcileLive() ? RECONCILE_GRACE_MS : SNAPSHOT_GRACE_MS)
+  const interpMissingGraceMs = () => (isReconcileLive() ? RECONCILE_INTERP_MISSING_GRACE_MS : INTERP_MISSING_GRACE_MS)
+
+  const enableLiveSmoothing = useCallback(() => {
+    if (mqttReplayActiveRef.current || storyReplayActiveRef.current) return
+    if (insightReplayActiveRef.current || isReplayModeRef.current) return
+    setInterpolationRef.current(true)
+  }, [])
 
   const subscribe = useCallback((venueId: string, { force = false }: { force?: boolean } = {}) => {
     // Socket.io drops room membership on reconnect — must re-emit subscribe for the same venue.
@@ -294,13 +306,33 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
 
   subscribeRef.current = subscribe
 
-  // Live canvas is always raw — reconciler presets run offline in Replay panel.
+  // Detect live reconciler from saved venue config (before first tracks packet).
+  useEffect(() => {
+    if (!venue?.id) {
+      reconcileLiveRef.current = false
+      return
+    }
+    let cancelled = false
+    fetch(`${API_BASE}/api/venues/${venue.id}/reconciler-config`)
+      .then(r => (r.ok ? r.json() : null))
+      .then(data => {
+        if (cancelled) return
+        const on = data?.reconciler?.enabled === true
+        reconcileLiveRef.current = on
+        if (on) enableLiveSmoothing()
+      })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [venue?.id, enableLiveSmoothing])
+
   useEffect(() => {
     if (!venue?.id) return
-    applyVisualizationMode('raw')
+    if (!isExperimentalLiveReconciler()) {
+      applyVisualizationMode('raw')
+    }
   }, [venue?.id, applyVisualizationMode])
 
-  // Restore demo session + replay flag after page refresh (server-side replay survives reload).
+  // Restore demo session
   useEffect(() => {
     if (!venue?.id) return
     let cancelled = false
@@ -416,14 +448,22 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
       applyVisualizationMode(mode, playbackLagMs, { forceClear })
     }
 
-    socket.on('visualization_mode', (data: { venueId: string; mode: string; playbackLagMs?: number }) => {
+    socket.on('visualization_mode', (data: { venueId: string; mode: string; playbackLagMs?: number; reconcilerEnabled?: boolean }) => {
       if (data.venueId !== subscribedVenueRef.current) return
+      reconcileLiveRef.current = data.reconcilerEnabled === true
+      if (reconcileLiveRef.current) enableLiveSmoothing()
       if (!isExperimentalLiveReconciler()) return
       applyModeFromSocket(data.mode === 'vtl' ? 'vtl' : 'raw', data.playbackLagMs, true)
     })
 
     socket.on('venue:reconciler-updated', (data: { venueId: string; reconciler?: { enabled?: boolean } | null }) => {
       if (data.venueId !== subscribedVenueRef.current) return
+      reconcileLiveRef.current = data.reconciler?.enabled === true
+      if (reconcileLiveRef.current) {
+        enableLiveSmoothing()
+      } else {
+        reconcileLiveRef.current = false
+      }
       if (!isExperimentalLiveReconciler()) return
       applyModeFromSocket(data.reconciler?.enabled === true ? 'vtl' : 'raw', undefined, true)
     })
@@ -437,10 +477,16 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
       // Delayed VTL channel disabled — canvas uses live reconciled `tracks` instead.
     })
 
-    socket.on('tracks', (data: { venueId: string, tracks: Track[] }) => {
+    socket.on('tracks', (data: { venueId: string, tracks: Track[], visualization?: string }) => {
       if (data.venueId !== subscribedVenueRef.current) {
         if (isTrackingDiag()) console.warn(`[DIAG] tracks IGNORED  eventVenue=${data.venueId}  subscribed=${subscribedVenueRef.current}  n=${data.tracks.length}  t=${Date.now()}`)
         return
+      }
+      if (data.visualization === 'reconcile_live') {
+        if (!reconcileLiveRef.current) {
+          reconcileLiveRef.current = true
+          enableLiveSmoothing()
+        }
       }
       // While historical (insight/timeline) replay is active, ignore live MQTT so live shoppers
       // don't keep flowing underneath the episode replay (even if the clip is empty).
@@ -474,7 +520,7 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
           incomingKeys.add(track.trackKey)
         }
         // Remove targets missing from this full snapshot quickly under raw ID churn.
-        const INTERP_MISSING_GRACE_MS_LOCAL = INTERP_MISSING_GRACE_MS
+        const INTERP_MISSING_GRACE_MS_LOCAL = interpMissingGraceMs()
         for (const key of targetTracksRef.current.keys()) {
           if (!incomingKeys.has(key)) {
             const lastSeen = trackLastSeenRef.current.get(key) ?? 0
@@ -635,7 +681,7 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
       trackLastSeenRef.current.clear()
       pendingRemovalsRef.current.clear()
     }
-  }, [applyVisualizationMode])
+  }, [applyVisualizationMode, enableLiveSmoothing])
 
   useEffect(() => {
     if (venue?.id && isConnected) {
@@ -754,7 +800,7 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
       // Do NOT cap here — dropping tracks from React state caused cyclic vanish/reappear
       // and spoke artifacts when occupancy > INTERP_MAX_TRACKS. MainViewport caps meshes.
       const frameTargets = targets
-      const lerpSpeed = vtlModeRef.current ? LERP_SPEED : LERP_SPEED_RAW
+      const lerpSpeed = isReconcileLive() ? LERP_SPEED : LERP_SPEED_RAW
 
       if (isTrackingDiag()) {
         const countDiff = prev.size - diagLastTrackCount
@@ -775,7 +821,7 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
         const existing = prev.get(key)
 
         // Teleport / re-ID — snap instead of lerping across the store (spoke trails).
-        const jumpResetM = vtlModeRef.current ? TRAIL_JUMP_RESET_M : 2.5
+        const jumpResetM = isReconcileLive() ? TRAIL_JUMP_RESET_M : 2.5
         if (existing && isFiniteTrackPos(existing.venuePosition)) {
           const jump = Math.hypot(baseX - existing.venuePosition.x, baseZ - existing.venuePosition.z)
           if (jump > jumpResetM) {
@@ -791,7 +837,7 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
         // Raw bypass: no velocity extrap (MQTT positions are authoritative at 10 Hz).
         let tx = baseX
         let tz = baseZ
-        if (vtlModeRef.current) {
+        if (isReconcileLive()) {
           const { x: vx, z: vz } = clampPlanarVelocity(target.velocity)
           const receivedAt = interpTsRef.current.get(key) ?? now
           const extrapMs = Math.min(now - receivedAt, MAX_EXTRAP_MS)
@@ -1142,11 +1188,13 @@ export function TrackingProvider({ children }: { children: ReactNode }) {
     <TracksRefContext.Provider value={stableTracksRef}>
       <LiveMetricsRefContext.Provider value={liveMetricsRef}>
       <VtlModeRefContext.Provider value={vtlModeRef}>
+      <ReconcileLiveRefContext.Provider value={reconcileLiveRef}>
       <TrackingActionsContext.Provider value={actionsValue}>
         <TrackingContext.Provider value={contextValue}>
           {children}
         </TrackingContext.Provider>
       </TrackingActionsContext.Provider>
+      </ReconcileLiveRefContext.Provider>
       </VtlModeRefContext.Provider>
       </LiveMetricsRefContext.Provider>
     </TracksRefContext.Provider>
@@ -1202,6 +1250,15 @@ export function useVtlModeRef() {
   const ref = useContext(VtlModeRefContext)
   if (!ref) {
     throw new Error('useVtlModeRef must be used within a TrackingProvider')
+  }
+  return ref
+}
+
+/** True when live MQTT reconciler is enabled (smooth trails + longer re-ID grace). */
+export function useReconcileLiveRef() {
+  const ref = useContext(ReconcileLiveRefContext)
+  if (!ref) {
+    throw new Error('useReconcileLiveRef must be used within a TrackingProvider')
   }
   return ref
 }

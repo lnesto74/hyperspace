@@ -143,7 +143,14 @@ class MqttTrajectoryService {
     }
     this.reconciler.setVenueConfig(venueId, this.venueReconcilerConfigs.get(venueId) || RECONCILER_DEFAULT)
     this.syncVisualTrackLayer(venueId)
+    this._syncAggregatorReconcilerLive(venueId)
     console.log(`[Reconciler] Updated config for venue ${venueId}:`, this.venueReconcilerConfigs.get(venueId) || 'defaults')
+  }
+
+  _syncAggregatorReconcilerLive(venueId) {
+    if (this.trackAggregator?.setReconcilerLive) {
+      this.trackAggregator.setReconcilerLive(this.isReconcilerEnabled(venueId))
+    }
   }
 
   loadVenueReconcilerConfigs(entries) {
