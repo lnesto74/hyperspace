@@ -92,6 +92,10 @@ services:
       - NODE_ENV=production
       - NODE_OPTIONS=--max-old-space-size=4096
       - DB_PATH=/data/db/hyperspace.db
+      # Detail rows only (track_positions, zone_occupancy). The hourly and daily
+      # rollups they feed are never purged, so this trades disk for how far back
+      # heatmaps and trajectory forensics can reach — roughly 145 MB per day.
+      - DATA_RETENTION_DAYS=${DATA_RETENTION_DAYS:-30}
       - MOCK_LIDAR=${MOCK_LIDAR:-false}
       - MQTT_ENABLED=${MQTT_ENABLED:-true}
       - MQTT_BROKER_URL=mqtt://mosquitto:1883

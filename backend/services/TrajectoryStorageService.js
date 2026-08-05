@@ -51,7 +51,11 @@ export class TrajectoryStorageService extends EventEmitter {
     this.DEFAULT_ENGAGEMENT_THRESHOLD_MS = 120 * 1000; // 120 seconds default
     this.VISIT_END_GRACE_MS = 1000;       // 1 second grace period before ending visit
     this.MIN_VISIT_DURATION_MS = 300;     // Min 300ms — keep fast entrance-gate crossings (a ~2m gate is crossed in 1-2s)
-    this.DATA_RETENTION_MS = 7 * 24 * 60 * 60 * 1000; // Keep 7 days of detailed data for week heatmaps
+    // Detail rows (track_positions, zone_occupancy) are kept this long; the
+    // hourly and daily rollups they feed are kept indefinitely, so raising this
+    // only costs disk, it does not change any long-run KPI. Measured cost is
+    // roughly 145 MB per day of track_positions at Treviglio volumes.
+    this.DATA_RETENTION_MS = Number(process.env.DATA_RETENTION_DAYS || 30) * 24 * 60 * 60 * 1000;
     this.MAX_POSITIONS_PER_SESSION = 100; // Limit positions stored per visit session
     
     // Track last sample time per track to avoid over-sampling
@@ -103,6 +107,10 @@ export class TrajectoryStorageService extends EventEmitter {
       );
 
       -- Track positions (sampled at 1Hz for detailed analysis)
+      -- original_perception_id keeps the vendor's own track id alongside our
+      -- reconciled one. Without it there is no way, after the fact, to measure
+      -- how many vendor ids were stitched into one shopper — which is the whole
+      -- evidence base for what reconciliation contributes.
       CREATE TABLE IF NOT EXISTS track_positions (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         venue_id TEXT NOT NULL,
@@ -113,6 +121,7 @@ export class TrajectoryStorageService extends EventEmitter {
         velocity_x REAL DEFAULT 0,
         velocity_z REAL DEFAULT 0,
         roi_id TEXT,
+        original_perception_id TEXT,
         created_at TEXT NOT NULL DEFAULT (datetime('now')),
         FOREIGN KEY (venue_id) REFERENCES venues(id) ON DELETE CASCADE
       );
@@ -289,6 +298,17 @@ export class TrajectoryStorageService extends EventEmitter {
       CREATE INDEX IF NOT EXISTS idx_zone_visits_venue_end_start ON zone_visits(venue_id, end_time, start_time);
     `);
     
+    // Migration: keep the vendor's perception id on existing installs.
+    try {
+      const posCols = this.db.prepare("PRAGMA table_info(track_positions)").all().map(c => c.name);
+      if (!posCols.includes('original_perception_id')) {
+        this.db.exec(`ALTER TABLE track_positions ADD COLUMN original_perception_id TEXT`);
+        console.log('📊 Migration: added track_positions.original_perception_id');
+      }
+    } catch (err) {
+      console.error('Migration (track_positions.original_perception_id) failed:', err);
+    }
+
     // Migration: Add queue-specific columns to zone_settings if they don't exist
     try {
       const cols = this.db.prepare("PRAGMA table_info(zone_settings)").all();
@@ -1164,6 +1184,9 @@ export class TrajectoryStorageService extends EventEmitter {
       vx: track.velocity?.x || 0,
       vz: track.velocity?.z || 0,
       roiIds: currentRois.map(r => r.id),
+      // Null when the reconciler is off, in which case track_key already is the
+      // vendor id and there is nothing to correlate.
+      originalPerceptionId: track.originalPerceptionId || null,
     };
     
     this.buffer.get(venueId).push(positionData);
@@ -1479,12 +1502,12 @@ export class TrajectoryStorageService extends EventEmitter {
     if (batch.length === 0) return;
 
     const insertStmt = this.db.prepare(`
-      INSERT INTO track_positions (venue_id, track_key, timestamp, position_x, position_z, velocity_x, velocity_z, roi_id)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO track_positions (venue_id, track_key, timestamp, position_x, position_z, velocity_x, velocity_z, roi_id, original_perception_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     const insertChunk = this.db.transaction((positions, venueId) => {
       for (const pos of positions) {
-        insertStmt.run(venueId, pos.trackKey, pos.timestamp, pos.x, pos.z, pos.vx, pos.vz, pos.roiIds?.[0] || null);
+        insertStmt.run(venueId, pos.trackKey, pos.timestamp, pos.x, pos.z, pos.vx, pos.vz, pos.roiIds?.[0] || null, pos.originalPerceptionId || null);
       }
     });
 
@@ -1560,8 +1583,8 @@ export class TrajectoryStorageService extends EventEmitter {
     }
     
     const insertStmt = this.db.prepare(`
-      INSERT INTO track_positions (venue_id, track_key, timestamp, position_x, position_z, velocity_x, velocity_z, roi_id)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO track_positions (venue_id, track_key, timestamp, position_x, position_z, velocity_x, velocity_z, roi_id, original_perception_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     
     const insertMany = this.db.transaction((positions, venueId) => {
@@ -1574,7 +1597,8 @@ export class TrajectoryStorageService extends EventEmitter {
           pos.z,
           pos.vx,
           pos.vz,
-          pos.roiIds?.[0] || null
+          pos.roiIds?.[0] || null,
+          pos.originalPerceptionId || null
         );
       }
     });

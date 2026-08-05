@@ -1,0 +1,21 @@
+[Unit]
+Description=Archive the live Hyperspace trajectory feed to daily gzipped JSONL
+After=docker.service
+Requires=docker.service
+
+[Service]
+# mosquitto_sub is not installed on the host, so it runs inside the broker
+# container. The pipe is deliberate: if either end dies the unit fails and
+# systemd restarts the whole chain rather than leaving a half-open capture.
+ExecStart=/bin/bash -c '/usr/bin/docker exec hyperspace-mosquitto-1 \
+  mosquitto_sub -h 127.0.0.1 -p 1883 -t "hyperspace/trajectories/#" -q 0 \
+  | /usr/bin/python3 /usr/local/bin/raw-archive-writer.py'
+Restart=always
+RestartSec=15
+SyslogIdentifier=hs-raw-archive
+
+Environment=ARCHIVE_DIR=/data/hyperspace/raw
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target
