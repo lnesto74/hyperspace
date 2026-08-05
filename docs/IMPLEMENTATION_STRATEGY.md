@@ -122,6 +122,47 @@ dispute needs June or July evidence, it does not exist.
 
 ---
 
+## Decisions taken, with the evidence
+
+**`persist_perception_bindings` stays off.** It was listed below as a real
+trade-off. Measured on the 19 May capture with the exact production gates, it is
+not one — the flag moves nothing:
+
+| | stable ids | frag× | median lifetime | mean lifetime | teleports/1k |
+|---|---|---|---|---|---|
+| raw (control) | 4,382 | 1.00 | 4.2 s | 24.6 s | 9.07 |
+| LUCA `persist=false` | 3,300 | 1.33 | 9.0 s | 42.9 s | 4.49 |
+| LUCA `persist=true` | 3,306 | 1.33 | 9.1 s | 43.3 s | 4.48 |
+
+The difference between on and off is 0.2% on identity count and about 1% on
+lifetime — noise. The reason is that the `luca` gates already re-ID across a
+12-second, 12.7-metre window, so the binding almost never has anything left to
+resurrect; the ordinary re-ID path has already caught it. The benchmark
+invariant (`stable <= raw`) holds either way, which was the original reason for
+turning it on offline.
+
+So there is no benefit to weigh against the cost, and the cost is real: with the
+flag on, ids are never freed, and live occupancy counts what is currently
+tracked. Leave it off. Reproduce with
+`node analysis/11_persist_bindings_ab.mjs --file raw_tracks.jsonl`.
+
+**Index pruning is dropped.** The plan assumed three of the four
+`track_positions` indexes were redundant. They are not: `(venue_id, timestamp)`,
+`(venue_id, track_key, timestamp)`, `(roi_id, timestamp)` and
+`(track_key, timestamp)` are each the only usable index for a different live
+caller — live occupancy, DOOH attribution, the neural and KPI zone queries, and
+the shelf-analytics suffix match respectively. Dropping them would risk the
+executive dashboard timeouts that were only just fixed, to save space that
+compaction already reclaimed.
+
+**Compressing `/data/replay` is deferred.** `ReplayService` lists `.jsonl.gz`
+but has no gunzip anywhere in its read path, so compressing the 36 GB of
+captures would break replay silently. Worth doing — 19:1 compression measured,
+so roughly 34 GB back — but it needs the read path fixed and a replay tested
+first.
+
+---
+
 ## Open decisions — I need your answers before implementing
 
 1. **Timing of the reconciler re-enable**, given it visibly changes Esselunga's
