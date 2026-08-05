@@ -10,7 +10,8 @@ import {
   deriveEconomicsFromRows,
 } from '../services/profit-radar/VenueEconomicsConfig.js';
 import { normalizePerceptionTransform } from '../services/PerceptionTransform.js';
-import { normalizeReconcilerConfig, DEFAULT_CONFIG as RECONCILER_DEFAULT } from '../services/TrajectoryReconciler.js';
+import { normalizeReconcilerConfig } from '../services/TrajectoryReconciler.js';
+import { getDefaultLiveReconcilerConfig } from '../config/liveReconcilePresets.js';
 import {
   normalizeVisitSessionConfig,
   DEFAULT_VISIT_SESSION_CONFIG,
@@ -557,7 +558,9 @@ export default function venuesRoutes(db, { mqttService, io, visualTrackService }
       const saved = transformJson.reconciler || null;
       res.json({
         venueId: venue.id,
-        reconciler: saved ? normalizeReconcilerConfig(saved) : { ...RECONCILER_DEFAULT, _defaults: true },
+        reconciler: saved
+          ? normalizeReconcilerConfig(saved)
+          : { ...getDefaultLiveReconcilerConfig(), _defaults: true },
       });
     } catch (error) {
       console.error('Get reconciler config error:', error);
@@ -573,20 +576,35 @@ export default function venuesRoutes(db, { mqttService, io, visualTrackService }
 
       const incoming = req.body?.reconciler;
       const cleared = incoming === null;
-      const existing = parseDwgTransform(venue.dwg_transform_json);
-      const normalized = cleared
-        ? null
-        : normalizeReconcilerConfig({ ...(existing.reconciler || {}), ...incoming });
-      const nextJson = {
-        ...existing,
-        reconciler: normalized ? { ...normalized, updated_at: new Date().toISOString() } : null,
-      };
-      if (!normalized) delete nextJson.reconciler;
 
-      db.prepare(`
-        UPDATE venues SET dwg_transform_json = ?, updated_at = datetime('now')
-        WHERE id = ?
-      `).run(JSON.stringify(nextJson), venueId);
+      // A partial patch such as { enabled: true } must not silently reset the
+      // tuned gates. If the venue has no saved config, fall back to the locked
+      // live preset rather than to bare factory defaults — landing on defaults
+      // here has twice degraded Treviglio to raw perception quality.
+      //
+      // dwg_transform_json is a single JSON blob shared by several endpoints,
+      // so re-read it inside the write transaction: reading outside would let a
+      // concurrent perception-transform or visit-session patch be clobbered.
+      let normalized = null;
+      const applyPatch = db.transaction(() => {
+        const fresh = venueQueries.getById(db, venueId);
+        const existing = parseDwgTransform(fresh?.dwg_transform_json);
+        const base = existing.reconciler || getDefaultLiveReconcilerConfig();
+        normalized = cleared ? null : normalizeReconcilerConfig({ ...base, ...incoming });
+
+        const nextJson = { ...existing };
+        if (normalized) {
+          nextJson.reconciler = { ...normalized, updated_at: new Date().toISOString() };
+        } else {
+          delete nextJson.reconciler;
+        }
+
+        db.prepare(`
+          UPDATE venues SET dwg_transform_json = ?, updated_at = datetime('now')
+          WHERE id = ?
+        `).run(JSON.stringify(nextJson), venueId);
+      });
+      applyPatch();
 
       if (mqttService) mqttService.setVenueReconcilerConfig(venueId, normalized);
       if (mqttService) mqttService.syncVisualTrackLayer(venueId);

@@ -8,7 +8,8 @@ import {
   perceptionToFloor,
   clampPlanarVelocity,
 } from './PerceptionTransform.js'
-import { TrajectoryReconciler, normalizeReconcilerConfig, DEFAULT_CONFIG as RECONCILER_DEFAULT } from './TrajectoryReconciler.js'
+import { TrajectoryReconciler, normalizeReconcilerConfig } from './TrajectoryReconciler.js'
+import { getDefaultLiveReconcilerConfig } from '../config/liveReconcilePresets.js'
 import { FrameOccupancyTracker } from './FrameOccupancyTracker.js'
 
 // Color palette for different tracks
@@ -38,7 +39,7 @@ class MqttTrajectoryService {
 
     // Per-venue reconciler configs (ghost filter + re-ID).
     this.venueReconcilerConfigs = new Map() // venueId -> reconciler config
-    this.reconciler = new TrajectoryReconciler((vid) => this.venueReconcilerConfigs.get(vid) || RECONCILER_DEFAULT)
+    this.reconciler = new TrajectoryReconciler((vid) => this.venueReconcilerConfigs.get(vid) || getDefaultLiveReconcilerConfig())
     /** Per-frame occupancy (matches edge fast3dis object count). */
     this.frameOccupancy = new FrameOccupancyTracker()
     /** Visual Track Layer — only active when reconciler enabled per venue. */
@@ -142,7 +143,7 @@ class MqttTrajectoryService {
       this.venueReconcilerConfigs.set(venueId, normalizeReconcilerConfig(config))
     }
     this.reconciler.resetVenue(venueId)
-    this.reconciler.setVenueConfig(venueId, this.venueReconcilerConfigs.get(venueId) || RECONCILER_DEFAULT)
+    this.reconciler.setVenueConfig(venueId, this.venueReconcilerConfigs.get(venueId) || getDefaultLiveReconcilerConfig())
     this.syncVisualTrackLayer(venueId)
     this._syncAggregatorReconcilerLive(venueId)
     console.log(`[Reconciler] Updated config for venue ${venueId}:`, this.venueReconcilerConfigs.get(venueId) || 'defaults')
