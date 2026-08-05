@@ -1,5 +1,5 @@
 import Database from 'better-sqlite3';
-import { mkdirSync, existsSync } from 'fs';
+import { mkdirSync, existsSync, statSync } from 'fs';
 import { dirname } from 'path';
 
 const DB_PATH = process.env.DB_PATH || './database/hyperspace.db';
@@ -62,10 +62,32 @@ export function initDatabase() {
       console.warn('📦 SQLite: Initial checkpoint failed (OK if fresh DB):', e.message);
     }
     
-    // Periodic WAL checkpoint every 5 minutes to prevent WAL bloat
+    // Periodic WAL checkpoint every 5 minutes to prevent WAL bloat.
+    //
+    // A PASSIVE checkpoint copies pages back but never shrinks the file, and it
+    // gives up whenever a reader is mid-transaction. Under constant ingestion
+    // plus long analytics reads the WAL had grown to ~4 GB and stayed there,
+    // which slows every subsequent read. Only TRUNCATE resets the file, so fall
+    // back to it once the WAL is clearly oversized.
+    const WAL_TRUNCATE_THRESHOLD_BYTES = 512 * 1024 * 1024;
     setInterval(() => {
       try {
         db.pragma('wal_checkpoint(PASSIVE)');
+
+        let walBytes = 0;
+        try {
+          walBytes = statSync(`${DB_PATH}-wal`).size;
+        } catch {
+          return; // no WAL file — nothing to reclaim
+        }
+        if (walBytes < WAL_TRUNCATE_THRESHOLD_BYTES) return;
+
+        const t0 = Date.now();
+        const result = db.pragma('wal_checkpoint(TRUNCATE)');
+        console.warn(
+          `📦 SQLite: WAL was ${(walBytes / 1024 / 1024).toFixed(0)}MB — `
+          + `TRUNCATE checkpoint ${JSON.stringify(result)} in ${Date.now() - t0}ms`,
+        );
       } catch (e) {
         console.warn('📦 SQLite: Periodic checkpoint failed:', e.message);
       }

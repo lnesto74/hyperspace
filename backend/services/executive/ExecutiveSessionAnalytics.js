@@ -81,8 +81,25 @@ function shoppingDwellMsForSession(sessionVisits, shoppingRoiIds) {
 }
 
 /**
+ * Windows are cut on UTC-day boundaries, which fall around 02:00 in the venue's
+ * timezone — the store is shut, so no session straddles a cut and none is
+ * counted twice.
+ */
+function seedWindows(startTs, endTs) {
+  const DAY_MS = 24 * 60 * 60 * 1000;
+  const windows = [];
+  let wStart = startTs;
+  while (wStart < endTs) {
+    const wEnd = Math.min(Math.floor(wStart / DAY_MS) * DAY_MS + DAY_MS, endTs);
+    windows.push([wStart, wEnd]);
+    wStart = wEnd;
+  }
+  return windows;
+}
+
+/**
  * @returns {{
- *   sessions: object[],
+ *   sessionCount: number,
  *   storeDwell: object,
  *   categoryMetrics: Map<string, object>,
  *   aislePenetration: object,
@@ -105,80 +122,123 @@ export function computeExecutiveSessionAnalytics(
   const roiToCategory = buildRoiToCategoryMap(classifiedRois);
   const recoveredTrackKeys = footfall.recoveredTrackKeys || [];
 
-  const { sessions, stats } = buildVisitSessions(
-    db,
-    venueId,
-    startTs,
-    endTs,
-    config,
-    roiContext,
-    roiToCategory,
-    { recoveredTrackKeys },
-  );
-
-  const allVisits = loadSessionVisits(db, venueId, startTs, endTs);
   const aisleSet = new Set(aisleRoiIds);
-  const shopSet = new Set(shoppingRoiIds);
   const dwellMs = metricThresholds.dwellMs;
   const engageMs = metricThresholds.engagementMs;
 
   const storeDwellMinutes = [];
   let sessionsWithAisleStop = 0;
   let sessionsEnteredAisle = 0;
+  let totalSessions = 0;
 
   /** @type {Map<string, { sessionsEntering: number, sessionsStopped: number, maxDwellsMs: number[], episodeVisits: number, episodeDwells: number }>} */
   const categoryMetrics = new Map();
+  const mergedStats = {
+    entranceSessions: 0,
+    convertedSessions: 0,
+    unattributedCheckoutFragments: 0,
+    unattributedBrowseFragments: 0,
+    rawTrackKeys: 0,
+    stitchedTrackKeys: 0,
+    sessionModel: 'entrance_anchored',
+  };
 
-  for (const session of sessions) {
-    const sessionVisits = allVisits.filter(v =>
-      session.trackKeys.includes(v.track_key)
-      && v.start_time >= session.startTime - 2000
-      && v.start_time <= session.endTime + 2000,
+  // A session cannot outlive maxVisitDurationMs, so seeding one window at a time
+  // with a matching read-ahead produces the same sessions while holding only one
+  // window of visits in memory. Loading a 30d range in one go exhausted the heap.
+  for (const [wStart, wSeedEnd] of seedWindows(startTs, endTs)) {
+    const loadEnd = Math.min(wSeedEnd + config.maxVisitDurationMs, endTs);
+    const windowVisits = loadSessionVisits(db, venueId, wStart, loadEnd);
+    if (!windowVisits.length) continue;
+
+    const { sessions, stats } = buildVisitSessions(
+      db,
+      venueId,
+      wStart,
+      loadEnd,
+      config,
+      roiContext,
+      roiToCategory,
+      {
+        recoveredTrackKeys,
+        preloadedVisits: windowVisits,
+        seedStart: wStart,
+        seedEnd: wSeedEnd,
+      },
     );
 
-    const shopMs = shoppingDwellMsForSession(sessionVisits, shoppingRoiIds);
-    if (shopMs >= MIN_STORE_DWELL_MS && shopMs <= MAX_STORE_DWELL_MS) {
-      storeDwellMinutes.push(shopMs / 60000);
+    for (const key of Object.keys(mergedStats)) {
+      if (typeof mergedStats[key] === 'number') mergedStats[key] += stats[key] || 0;
     }
 
-    const perCatMax = new Map();
-    let sessionHasAisleStop = false;
-    let sessionEnteredAisle = false;
-
-    for (const v of sessionVisits) {
-      if (!aisleSet.has(v.roi_id)) continue;
-      sessionEnteredAisle = true;
-      const cat = roiToCategory.get(v.roi_id) || 'Uncategorized';
-      const dur = v.duration_ms ?? ((v.end_time || v.start_time) - v.start_time);
-
-      if (!categoryMetrics.has(cat)) {
-        categoryMetrics.set(cat, {
-          sessionsEntering: 0,
-          sessionsStopped: 0,
-          maxDwellsMs: [],
-          episodeVisits: 0,
-          episodeDwells: 0,
-          engagementEpisodes: 0,
-        });
+    const visitsByTrack = new Map();
+    for (const v of windowVisits) {
+      let bucket = visitsByTrack.get(v.track_key);
+      if (!bucket) {
+        bucket = [];
+        visitsByTrack.set(v.track_key, bucket);
       }
-      const agg = categoryMetrics.get(cat);
-      agg.episodeVisits++;
-      if (dur >= dwellMs) agg.episodeDwells++;
-      if (dur >= engageMs) agg.engagementEpisodes++;
-
-      perCatMax.set(cat, Math.max(perCatMax.get(cat) || 0, dur));
-      if (dur >= dwellMs) sessionHasAisleStop = true;
+      bucket.push(v);
     }
 
-    if (sessionHasAisleStop) sessionsWithAisleStop++;
-    if (sessionEnteredAisle) sessionsEnteredAisle++;
+    totalSessions += sessions.length;
 
-    for (const [cat, maxMs] of perCatMax) {
-      const agg = categoryMetrics.get(cat);
-      agg.sessionsEntering++;
-      if (maxMs >= dwellMs) {
-        agg.sessionsStopped++;
-        agg.maxDwellsMs.push(maxMs);
+    for (const session of sessions) {
+      const sessionVisits = [];
+      for (const trackKey of session.trackKeys) {
+        const bucket = visitsByTrack.get(trackKey);
+        if (!bucket) continue;
+        for (const v of bucket) {
+          if (v.start_time < session.startTime - 2000) continue;
+          if (v.start_time > session.endTime + 2000) continue;
+          sessionVisits.push(v);
+        }
+      }
+
+      const shopMs = shoppingDwellMsForSession(sessionVisits, shoppingRoiIds);
+      if (shopMs >= MIN_STORE_DWELL_MS && shopMs <= MAX_STORE_DWELL_MS) {
+        storeDwellMinutes.push(shopMs / 60000);
+      }
+
+      const perCatMax = new Map();
+      let sessionHasAisleStop = false;
+      let sessionEnteredAisle = false;
+
+      for (const v of sessionVisits) {
+        if (!aisleSet.has(v.roi_id)) continue;
+        sessionEnteredAisle = true;
+        const cat = roiToCategory.get(v.roi_id) || 'Uncategorized';
+        const dur = v.duration_ms ?? ((v.end_time || v.start_time) - v.start_time);
+
+        if (!categoryMetrics.has(cat)) {
+          categoryMetrics.set(cat, {
+            sessionsEntering: 0,
+            sessionsStopped: 0,
+            maxDwellsMs: [],
+            episodeVisits: 0,
+            episodeDwells: 0,
+            engagementEpisodes: 0,
+          });
+        }
+        const agg = categoryMetrics.get(cat);
+        agg.episodeVisits++;
+        if (dur >= dwellMs) agg.episodeDwells++;
+        if (dur >= engageMs) agg.engagementEpisodes++;
+
+        perCatMax.set(cat, Math.max(perCatMax.get(cat) || 0, dur));
+        if (dur >= dwellMs) sessionHasAisleStop = true;
+      }
+
+      if (sessionHasAisleStop) sessionsWithAisleStop++;
+      if (sessionEnteredAisle) sessionsEnteredAisle++;
+
+      for (const [cat, maxMs] of perCatMax) {
+        const agg = categoryMetrics.get(cat);
+        agg.sessionsEntering++;
+        if (maxMs >= dwellMs) {
+          agg.sessionsStopped++;
+          agg.maxDwellsMs.push(maxMs);
+        }
       }
     }
   }
@@ -204,13 +264,13 @@ export function computeExecutiveSessionAnalytics(
     maxSessionMin: MAX_STORE_DWELL_MS / 60000,
   };
 
-  const entranceSessions = sessions.length || 0;
+  const entranceSessions = totalSessions;
   const penetrationPct = entranceSessions > 0
     ? pct(sessionsEnteredAisle, entranceSessions)
     : null;
 
   return {
-    sessions,
+    sessionCount: totalSessions,
     storeDwell,
     categoryMetrics,
     aislePenetration: {
@@ -221,8 +281,8 @@ export function computeExecutiveSessionAnalytics(
       reliable: entranceSessions > 0,
     },
     stats: {
-      ...stats,
-      stitchedSessions: sessions.length,
+      ...mergedStats,
+      stitchedSessions: totalSessions,
       storeDwellSessions: storeDwellMinutes.length,
     },
   };

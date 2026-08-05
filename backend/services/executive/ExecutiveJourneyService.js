@@ -11,6 +11,7 @@ import {
   storeHourBucketIndices,
   aggregateByVenueLocalHour,
   venueLocalDateKey,
+  venueLocalHour,
   venueHourBucketsForToday,
   formatHourLabel,
   DEFAULT_VENUE_TIMEZONE,
@@ -166,86 +167,221 @@ function fetchIngressUniqueCount(db, venueId, roiIds, startTs, endTs) {
   return row?.c || 0;
 }
 
-function fetchZoneVisitStats(db, roiIds, startTs, endTs, metricThresholds) {
-  if (!roiIds.length) {
-    return { visits: 0, dwellVisits: 0, engagementVisits: 0, uniqueVisitors: 0, totalDurationMs: 0, abandonCount: 0, avgDwellMs: 0 };
-  }
-  const ph = roiIds.map(() => '?').join(',');
-  const dwellMs = metricThresholds.dwellMs;
-  const engagementMs = metricThresholds.engagementMs;
-  const row = safeQuery(db, `
-    SELECT
-      COUNT(*) as visits,
-      COUNT(CASE WHEN duration_ms >= ? THEN 1 END) as dwellVisits,
-      COUNT(CASE WHEN duration_ms >= ? THEN 1 END) as engagementVisits,
-      COUNT(DISTINCT track_key) as uniqueVisitors,
-      SUM(duration_ms) as totalDurationMs,
-      AVG(CASE WHEN duration_ms >= ? THEN duration_ms END) as avgDwellMs
+const EMPTY_ROI_STATS = Object.freeze({
+  visits: 0,
+  dwellVisits: 0,
+  engagementVisits: 0,
+  uniqueVisitors: 0,
+  totalDurationMs: 0,
+  avgDwellMs: 0,
+});
+
+/**
+ * Bucket the whole window by ROI in one pass so every zone group (fresco
+ * departments, aisle categories, the aisle total) can be summed in memory.
+ * Previously each group issued its own range scans, which on a 7d window meant
+ * well over a hundred scans of a multi-million-row table per request.
+ */
+function buildRoiStatsIndex(db, venueId, startTs, endTs, metricThresholds) {
+  const { dwellMs, engagementMs } = metricThresholds;
+
+  const byRoi = new Map();
+  for (const r of safeQueryAll(db, `
+    SELECT roi_id,
+      COUNT(*) AS visits,
+      COUNT(CASE WHEN duration_ms >= ? THEN 1 END) AS dwellVisits,
+      COUNT(CASE WHEN duration_ms >= ? THEN 1 END) AS engagementVisits,
+      COUNT(DISTINCT track_key) AS uniqueVisitors,
+      SUM(duration_ms) AS totalDurationMs,
+      SUM(CASE WHEN duration_ms >= ? THEN duration_ms ELSE 0 END) AS dwellDurationMs
     FROM zone_visits
-    WHERE roi_id IN (${ph}) AND start_time >= ? AND start_time < ?
+    WHERE venue_id = ? AND start_time >= ? AND start_time < ?
       AND track_key NOT LIKE '%cashier%'
-  `, [dwellMs, engagementMs, dwellMs, ...roiIds, startTs, endTs]) || {};
+    GROUP BY roi_id
+  `, [dwellMs, engagementMs, dwellMs, venueId, startTs, endTs])) {
+    byRoi.set(r.roi_id, {
+      visits: r.visits || 0,
+      dwellVisits: r.dwellVisits || 0,
+      engagementVisits: r.engagementVisits || 0,
+      uniqueVisitors: r.uniqueVisitors || 0,
+      totalDurationMs: r.totalDurationMs || 0,
+      dwellDurationMs: r.dwellDurationMs || 0,
+    });
+  }
 
-  // Fragmented live tracks often emit 10s zone_visit slices — sum per track×ROI
-  // so a 20s+ stop split across episodes still counts as one dwell.
-  const trackDwellStops = safeQuery(db, `
-    SELECT COUNT(*) as c FROM (
-      SELECT track_key, roi_id
+  // Fragmented live tracks emit repeated short episodes in the same zone, so a
+  // real 20s stop can be split across several rows. Counting track x ROI pairs
+  // whose summed duration clears each threshold recovers those stops; both
+  // thresholds come out of one grouping pass.
+  const dwellStopPairs = new Map();
+  const engagementStopPairs = new Map();
+  for (const r of safeQueryAll(db, `
+    SELECT roi_id,
+      SUM(CASE WHEN total >= ? THEN 1 ELSE 0 END) AS dwellPairs,
+      SUM(CASE WHEN total >= ? THEN 1 ELSE 0 END) AS engagementPairs
+    FROM (
+      SELECT roi_id, track_key, SUM(duration_ms) AS total
       FROM zone_visits
-      WHERE roi_id IN (${ph}) AND start_time >= ? AND start_time < ?
+      WHERE venue_id = ? AND start_time >= ? AND start_time < ?
         AND track_key NOT LIKE '%cashier%'
-      GROUP BY track_key, roi_id
-      HAVING SUM(duration_ms) >= ?
+      GROUP BY roi_id, track_key
     )
-  `, [...roiIds, startTs, endTs, dwellMs])?.c || 0;
-
-  const trackEngagementStops = safeQuery(db, `
-    SELECT COUNT(*) as c FROM (
-      SELECT track_key, roi_id
-      FROM zone_visits
-      WHERE roi_id IN (${ph}) AND start_time >= ? AND start_time < ?
-        AND track_key NOT LIKE '%cashier%'
-      GROUP BY track_key, roi_id
-      HAVING SUM(duration_ms) >= ?
-    )
-  `, [...roiIds, startTs, endTs, engagementMs])?.c || 0;
+    GROUP BY roi_id
+  `, [dwellMs, engagementMs, venueId, startTs, endTs])) {
+    dwellStopPairs.set(r.roi_id, r.dwellPairs || 0);
+    engagementStopPairs.set(r.roi_id, r.engagementPairs || 0);
+  }
 
   return {
-    visits: row.visits || 0,
-    dwellVisits: Math.max(row.dwellVisits || 0, trackDwellStops),
-    engagementVisits: Math.max(row.engagementVisits || 0, trackEngagementStops),
-    uniqueVisitors: row.uniqueVisitors || 0,
-    totalDurationMs: row.totalDurationMs || 0,
-    avgDwellMs: row.avgDwellMs || 0,
+    statsFor(roiIds) {
+      if (!roiIds?.length) return { ...EMPTY_ROI_STATS };
+      let visits = 0;
+      let dwellVisits = 0;
+      let engagementVisits = 0;
+      let uniqueVisitors = 0;
+      let totalDurationMs = 0;
+      let dwellDurationMs = 0;
+      let dwellStops = 0;
+      let engagementStops = 0;
+      for (const id of roiIds) {
+        const s = byRoi.get(id);
+        if (s) {
+          visits += s.visits;
+          dwellVisits += s.dwellVisits;
+          engagementVisits += s.engagementVisits;
+          uniqueVisitors += s.uniqueVisitors;
+          totalDurationMs += s.totalDurationMs;
+          dwellDurationMs += s.dwellDurationMs;
+        }
+        dwellStops += dwellStopPairs.get(id) || 0;
+        engagementStops += engagementStopPairs.get(id) || 0;
+      }
+      return {
+        visits,
+        dwellVisits: Math.max(dwellVisits, dwellStops),
+        engagementVisits: Math.max(engagementVisits, engagementStops),
+        uniqueVisitors,
+        totalDurationMs,
+        avgDwellMs: dwellVisits > 0 ? dwellDurationMs / dwellVisits : 0,
+      };
+    },
   };
 }
 
-function fetchQueueStats(db, roiIds, startTs, endTs) {
-  if (!roiIds.length) return { sessions: 0, avgWaitMin: 0, abandonPct: 0, completed: 0 };
-  const ph = roiIds.map(() => '?').join(',');
-  const row = safeQuery(db, `
-    SELECT
-      COUNT(*) as sessions,
-      ROUND(AVG(CASE WHEN is_abandoned = 0 THEN waiting_time_ms END) / 60000.0, 2) as avgWaitMin,
-      ROUND(SUM(CASE WHEN is_abandoned = 1 THEN 1.0 ELSE 0 END) * 100.0 / NULLIF(COUNT(*), 0), 1) as abandonPct,
-      SUM(CASE WHEN is_abandoned = 0 THEN 1 ELSE 0 END) as completed
-    FROM queue_sessions
-    WHERE queue_zone_id IN (${ph})
-      AND queue_entry_time >= ? AND queue_entry_time < ?
-      AND waiting_time_ms >= 5000
-  `, [...roiIds, startTs, endTs]) || {};
+/**
+ * Exact distinct-visitor counts for several ROI groups in a single scan.
+ * Summing per-ROI distinct counts would double-count a shopper who visits two
+ * zones of the same group, so the grouping is pushed into SQL.
+ */
+function fetchUniqueVisitorsByGroup(db, venueId, startTs, endTs, groups) {
+  const usable = groups.filter(g => g.roiIds?.length);
+  if (!usable.length) return new Map();
+
+  const branches = [];
+  const branchParams = [];
+  const allIds = [];
+  usable.forEach((group, i) => {
+    branches.push(`WHEN roi_id IN (${group.roiIds.map(() => '?').join(',')}) THEN ?`);
+    branchParams.push(...group.roiIds, String(i));
+    allIds.push(...group.roiIds);
+  });
+
+  const rows = safeQueryAll(db, `
+    SELECT CASE ${branches.join(' ')} END AS gkey,
+           COUNT(DISTINCT track_key) AS uniqueVisitors
+    FROM zone_visits
+    WHERE venue_id = ? AND start_time >= ? AND start_time < ?
+      AND track_key NOT LIKE '%cashier%'
+      AND roi_id IN (${allIds.map(() => '?').join(',')})
+    GROUP BY gkey
+  `, [...branchParams, venueId, startTs, endTs, ...allIds]);
+
+  const out = new Map();
+  for (const r of rows) {
+    if (r.gkey == null) continue;
+    const group = usable[Number(r.gkey)];
+    if (group) out.set(group.key, r.uniqueVisitors || 0);
+  }
+  return out;
+}
+
+/**
+ * Per-request analysis context: the shared indexes plus everything the zone
+ * rollups need, so each aggregate is computed once no matter how many callers
+ * ask for it.
+ */
+function createJourneyContext(db, venueId, startTs, endTs, metricThresholds) {
+  const uniqueCache = new Map();
   return {
-    sessions: row.sessions || 0,
-    avgWaitMin: row.avgWaitMin || 0,
-    abandonPct: row.abandonPct || 0,
-    completed: row.completed || 0,
+    db,
+    venueId,
+    startTs,
+    endTs,
+    metricThresholds,
+    roiStats: buildRoiStatsIndex(db, venueId, startTs, endTs, metricThresholds),
+    queueStats: buildQueueStatsIndex(db, venueId, startTs, endTs),
+    uniqueVisitorsFor(groups) {
+      const signature = groups
+        .map(g => `${g.key}=${[...(g.roiIds || [])].sort().join('.')}`)
+        .join('|');
+      let out = uniqueCache.get(signature);
+      if (!out) {
+        out = fetchUniqueVisitorsByGroup(db, venueId, startTs, endTs, groups);
+        uniqueCache.set(signature, out);
+      }
+      return out;
+    },
   };
 }
 
-function fetchFrescoBrowsingSplit(db, serviceRoiIds, queueRoiIds, browseRoiIds, startTs, endTs, metricThresholds) {
-  const serviceStats = fetchZoneVisitStats(db, serviceRoiIds, startTs, endTs, metricThresholds);
-  const queueStats = fetchZoneVisitStats(db, queueRoiIds, startTs, endTs, metricThresholds);
-  const browseStats = fetchZoneVisitStats(db, browseRoiIds, startTs, endTs, metricThresholds);
+/** Queue stats for every queue zone in the venue, in one scan. */
+function buildQueueStatsIndex(db, venueId, startTs, endTs) {
+  const byZone = new Map();
+  for (const r of safeQueryAll(db, `
+    SELECT qs.queue_zone_id AS zone,
+      COUNT(*) AS sessions,
+      SUM(CASE WHEN qs.is_abandoned = 0 THEN qs.waiting_time_ms ELSE 0 END) AS waitMsSum,
+      SUM(CASE WHEN qs.is_abandoned = 0 THEN 1 ELSE 0 END) AS completed,
+      SUM(CASE WHEN qs.is_abandoned = 1 THEN 1 ELSE 0 END) AS abandoned
+    FROM queue_sessions qs
+    JOIN regions_of_interest r ON r.id = qs.queue_zone_id
+    WHERE r.venue_id = ?
+      AND qs.queue_entry_time >= ? AND qs.queue_entry_time < ?
+      AND qs.waiting_time_ms >= 5000
+    GROUP BY qs.queue_zone_id
+  `, [venueId, startTs, endTs])) {
+    byZone.set(r.zone, r);
+  }
+
+  return {
+    statsFor(roiIds) {
+      if (!roiIds?.length) return { sessions: 0, avgWaitMin: 0, abandonPct: 0, completed: 0 };
+      let sessions = 0;
+      let waitMsSum = 0;
+      let completed = 0;
+      let abandoned = 0;
+      for (const id of roiIds) {
+        const r = byZone.get(id);
+        if (!r) continue;
+        sessions += r.sessions || 0;
+        waitMsSum += r.waitMsSum || 0;
+        completed += r.completed || 0;
+        abandoned += r.abandoned || 0;
+      }
+      return {
+        sessions,
+        avgWaitMin: completed > 0 ? Math.round((waitMsSum / completed / 60000) * 100) / 100 : 0,
+        abandonPct: sessions > 0 ? Math.round((abandoned / sessions) * 1000) / 10 : 0,
+        completed,
+      };
+    },
+  };
+}
+
+function fetchFrescoBrowsingSplit(roiStats, serviceRoiIds, queueRoiIds, browseRoiIds) {
+  const serviceStats = roiStats.statsFor(serviceRoiIds);
+  const queueStats = roiStats.statsFor(queueRoiIds);
+  const browseStats = roiStats.statsFor(browseRoiIds);
 
   const queueVisits = queueStats.visits;
   const browsingVisits = serviceStats.visits + browseStats.visits;
@@ -273,7 +409,8 @@ function fetchFrescoBrowsingSplit(db, serviceRoiIds, queueRoiIds, browseRoiIds, 
   };
 }
 
-function buildFrescoDepartments(classifiedRois, db, startTs, endTs, metricThresholds) {
+function buildFrescoDepartments(classifiedRois, ctx) {
+  const { roiStats, queueStats } = ctx;
   const frescoRois = classifiedRois.filter(r => r.classification.group === 'fresco');
   const byDept = new Map();
 
@@ -291,13 +428,17 @@ function buildFrescoDepartments(classifiedRois, db, startTs, endTs, metricThresh
     else bucket.browseIds.push(roi.id);
   }
 
-  return [...byDept.entries()].map(([dept, ids]) => {
+  const deptEntries = [...byDept.entries()];
+  const uniqueByDept = ctx.uniqueVisitorsFor(deptEntries.map(([dept, ids]) => ({
+    key: dept,
+    roiIds: [...ids.serviceIds, ...ids.queueIds, ...ids.browseIds],
+  })));
+
+  return deptEntries.map(([dept, ids]) => {
     const allIds = [...ids.serviceIds, ...ids.queueIds, ...ids.browseIds];
-    const stats = fetchZoneVisitStats(db, allIds, startTs, endTs, metricThresholds);
-    const split = fetchFrescoBrowsingSplit(
-      db, ids.serviceIds, ids.queueIds, ids.browseIds, startTs, endTs, metricThresholds,
-    );
-    const queueStats = fetchQueueStats(db, ids.queueIds, startTs, endTs);
+    const stats = roiStats.statsFor(allIds);
+    const split = fetchFrescoBrowsingSplit(roiStats, ids.serviceIds, ids.queueIds, ids.browseIds);
+    const deptQueueStats = queueStats.statsFor(ids.queueIds);
     const hasQueueZones = ids.queueIds.length > 0;
     const stoppingPct = stats.visits > 0 ? pct(stats.dwellVisits, stats.visits) : 0;
     const passThroughPct = Math.max(0, Math.round((100 - stoppingPct) * 10) / 10);
@@ -312,7 +453,7 @@ function buildFrescoDepartments(classifiedRois, db, startTs, endTs, metricThresh
       visits: stats.visits,
       dwellVisits: stats.dwellVisits,
       engagementVisits: stats.engagementVisits,
-      uniqueVisitors: stats.uniqueVisitors,
+      uniqueVisitors: uniqueByDept.get(dept) ?? stats.uniqueVisitors,
       avgDwellMin,
       avgDwellSec,
       stoppingPct,
@@ -320,16 +461,17 @@ function buildFrescoDepartments(classifiedRois, db, startTs, endTs, metricThresh
       hasQueueZones,
       browsingPct: stoppingPct,
       waitingPct: split.waitingPct,
-      abandonPct: queueStats.abandonPct,
-      serviceEfficiency: queueStats.completed > 0
-        ? Math.round((queueStats.completed / Math.max(queueStats.sessions, 1)) * 1000) / 10
+      abandonPct: deptQueueStats.abandonPct,
+      serviceEfficiency: deptQueueStats.completed > 0
+        ? Math.round((deptQueueStats.completed / Math.max(deptQueueStats.sessions, 1)) * 1000) / 10
         : null,
       roiIds: allIds,
     };
   }).sort((a, b) => b.visits - a.visits);
 }
 
-function buildCheckoutChannels(classifiedRois, db, startTs, endTs) {
+function buildCheckoutChannels(classifiedRois, ctx) {
+  const { db, endTs, queueStats } = ctx;
   const checkoutRois = classifiedRois.filter(r => r.classification.group === 'checkout');
   const byChannel = new Map();
 
@@ -346,12 +488,20 @@ function buildCheckoutChannels(classifiedRois, db, startTs, endTs) {
     if (fallback.length) byChannel.set('traditional', fallback.map(r => r.id));
   }
 
+  // Loop-invariant, and scoped to the checkout ROIs so it rides
+  // idx_zone_occupancy_roi_time. Filtering by venue_id instead has no index and
+  // cost a full scan of millions of occupancy rows on every request.
+  const allCheckoutRoiIds = [...byChannel.values()].flat();
+  const latestTs = allCheckoutRoiIds.length
+    ? safeQuery(db, `
+      SELECT MAX(timestamp) as ts FROM zone_occupancy
+      WHERE roi_id IN (${allCheckoutRoiIds.map(() => '?').join(',')}) AND timestamp <= ?
+    `, [...allCheckoutRoiIds, endTs])?.ts
+    : null;
+
   return [...byChannel.entries()].map(([channel, roiIds]) => {
-    const q = fetchQueueStats(db, roiIds, startTs, endTs);
+    const q = queueStats.statsFor(roiIds);
     let currentQueue = 0;
-    const latestTs = safeQuery(db, 'SELECT MAX(timestamp) as ts FROM zone_occupancy WHERE venue_id = ?', [
-      classifiedRois[0]?.venue_id,
-    ])?.ts;
     if (latestTs && roiIds.length) {
       const ph = roiIds.map(() => '?').join(',');
       const occ = safeQuery(db, `
@@ -441,6 +591,30 @@ function emptyHourlyTimeline(openingHour = 8, closingHour = 20) {
   return { grain: 'hour', visitors: mk(), dwells: mk() };
 }
 
+/**
+ * Bucket a zone_visits range into UTC hours. Venue-local hour/day mapping then
+ * runs over one row per hour instead of every episode — the offsets involved are
+ * whole hours, so a UTC hour never straddles two local hours or dates.
+ */
+function fetchVisitCountsByUtcHour(db, venueId, roiIds, startTs, endTs, minDurationMs = null) {
+  if (!roiIds.length) return [];
+  const ph = roiIds.map(() => '?').join(',');
+  const params = [venueId, ...roiIds, startTs, endTs];
+  let durationClause = '';
+  if (minDurationMs != null) {
+    durationClause = ' AND duration_ms >= ?';
+    params.push(minDurationMs);
+  }
+  return safeQueryAll(db, `
+    SELECT CAST(start_time / 3600000 AS INTEGER) AS utcHour, COUNT(*) AS c
+    FROM zone_visits
+    WHERE venue_id = ? AND roi_id IN (${ph})
+      AND start_time >= ? AND start_time < ?
+      AND track_key NOT LIKE '%cashier%'${durationClause}
+    GROUP BY utcHour
+  `, params).map(r => ({ ts: r.utcHour * 3600000, count: r.c || 0 }));
+}
+
 function mapHourlyBuckets(hours, rowMap) {
   return hours.map(h => ({
     label: `${String(h).padStart(2, '0')}:00`,
@@ -475,26 +649,15 @@ function fetchHourlyTimeline(
     : [];
   const vMap = new Map(perimeterRows.map(r => [Number(r.hour), Number(r.value) || 0]));
 
-  let dMap = new Map();
-  if (shoppingRoiIds.length) {
-    const shopPh = shoppingRoiIds.map(() => '?').join(',');
-    const dwellRaw = safeQueryAll(db, `
-      SELECT start_time, duration_ms
-      FROM zone_visits
-      WHERE venue_id = ? AND roi_id IN (${shopPh})
-        AND start_time >= ? AND start_time < ?
-        AND track_key NOT LIKE '%cashier%'
-    `, [venueId, ...shoppingRoiIds, queryStart, endTs]);
-    dMap = aggregateByVenueLocalHour(
-      dwellRaw,
-      r => r.start_time,
-      r => (r.duration_ms >= dwellMs ? 1 : 0),
-      openingHour,
-      closingHour,
-      timeZone,
-      todayKey,
-    );
-  }
+  const dMap = aggregateByVenueLocalHour(
+    fetchVisitCountsByUtcHour(db, venueId, shoppingRoiIds, queryStart, endTs, dwellMs),
+    r => r.ts,
+    r => r.count,
+    openingHour,
+    closingHour,
+    timeZone,
+    todayKey,
+  );
 
   const throughHour = hours[hours.length - 1] ?? null;
   return {
@@ -513,34 +676,15 @@ function fetchDailyTimeline(
   timeZone = DEFAULT_VENUE_TIMEZONE,
 ) {
   const visitorMap = new Map();
-  if (trafficRoiIds.length) {
-    const rows = safeQueryAll(db, `
-      SELECT start_time
-      FROM zone_visits
-      WHERE venue_id = ? AND roi_id IN (${trafficRoiIds.map(() => '?').join(',')})
-        AND start_time >= ? AND start_time < ?
-        AND track_key NOT LIKE '%cashier%'
-    `, [venueId, ...trafficRoiIds, startTs, endTs]);
-    for (const row of rows) {
-      const key = venueLocalDateKey(row.start_time, timeZone);
-      visitorMap.set(key, (visitorMap.get(key) || 0) + 1);
-    }
+  for (const bucket of fetchVisitCountsByUtcHour(db, venueId, trafficRoiIds, startTs, endTs)) {
+    const key = venueLocalDateKey(bucket.ts, timeZone);
+    visitorMap.set(key, (visitorMap.get(key) || 0) + bucket.count);
   }
 
   const dwellMap = new Map();
-  if (shoppingRoiIds.length) {
-    const rows = safeQueryAll(db, `
-      SELECT start_time, duration_ms
-      FROM zone_visits
-      WHERE venue_id = ? AND roi_id IN (${shoppingRoiIds.map(() => '?').join(',')})
-        AND start_time >= ? AND start_time < ?
-        AND track_key NOT LIKE '%cashier%'
-    `, [venueId, ...shoppingRoiIds, startTs, endTs]);
-    for (const row of rows) {
-      if (row.duration_ms < dwellMs) continue;
-      const key = venueLocalDateKey(row.start_time, timeZone);
-      dwellMap.set(key, (dwellMap.get(key) || 0) + 1);
-    }
+  for (const bucket of fetchVisitCountsByUtcHour(db, venueId, shoppingRoiIds, startTs, endTs, dwellMs)) {
+    const key = venueLocalDateKey(bucket.ts, timeZone);
+    dwellMap.set(key, (dwellMap.get(key) || 0) + bucket.count);
   }
 
   const daySet = new Set([
@@ -564,6 +708,42 @@ function fetchDailyTimeline(
   };
 }
 
+/**
+ * Every hour of the requested window, regardless of store hours. Used when the
+ * store-hours view for "today" is empty — outside opening hours that produced a
+ * blank chart even though the window itself held a full trading day.
+ */
+function fetchTrailingHourlyTimeline(
+  db, venueId, startTs, endTs, trafficRoiIds, shoppingRoiIds, dwellMs,
+  timeZone = DEFAULT_VENUE_TIMEZONE,
+) {
+  const HOUR_MS = 3600000;
+  const toHour = ts => Math.floor(ts / HOUR_MS);
+  const vMap = new Map();
+  for (const b of fetchVisitCountsByUtcHour(db, venueId, trafficRoiIds, startTs, endTs)) {
+    vMap.set(toHour(b.ts), b.count);
+  }
+  const dMap = new Map();
+  for (const b of fetchVisitCountsByUtcHour(db, venueId, shoppingRoiIds, startTs, endTs, dwellMs)) {
+    dMap.set(toHour(b.ts), b.count);
+  }
+
+  const spansDays = venueLocalDateKey(startTs, timeZone) !== venueLocalDateKey(endTs, timeZone);
+  const visitors = [];
+  const dwells = [];
+  for (let h = toHour(startTs); h <= toHour(endTs - 1); h++) {
+    const ts = h * HOUR_MS;
+    const hourLabel = `${String(venueLocalHour(ts, timeZone)).padStart(2, '0')}:00`;
+    const label = spansDays
+      ? `${formatDayLabel(venueLocalDateKey(ts, timeZone))} ${hourLabel}`
+      : hourLabel;
+    visitors.push({ label, value: vMap.get(h) || 0 });
+    dwells.push({ label, value: dMap.get(h) || 0 });
+  }
+
+  return { grain: 'hour', visitors, dwells, timeZone, trailing: true };
+}
+
 function fetchActivityTimelines(
   db, venueId, startTs, endTs, trafficRoiIds, shoppingRoiIds, dwellMs,
   openingHour, closingHour, timeZone = DEFAULT_VENUE_TIMEZONE,
@@ -575,12 +755,22 @@ function fetchActivityTimelines(
   const daily = fetchDailyTimeline(
     db, venueId, startTs, endTs, trafficRoiIds, shoppingRoiIds, dwellMs, timeZone,
   );
+
   const spanMs = endTs - startTs;
-  const activityTimeline = spanMs <= 36 * 3600000 ? hourly : daily;
-  return { hourly, daily, activityTimeline };
+  let activityTimeline = spanMs <= 36 * 3600000 ? hourly : daily;
+  let trailingHourly = null;
+  if (activityTimeline === hourly && hourly.visitors.length === 0) {
+    trailingHourly = fetchTrailingHourlyTimeline(
+      db, venueId, startTs, endTs, trafficRoiIds, shoppingRoiIds, dwellMs, timeZone,
+    );
+    activityTimeline = trailingHourly;
+  }
+
+  return { hourly, daily, trailingHourly, activityTimeline };
 }
 
-function buildAisleCategoryGroups(classifiedRois, db, startTs, endTs, metricThresholds) {
+function buildAisleCategoryGroups(classifiedRois, ctx) {
+  const { roiStats } = ctx;
   const aisleRois = classifiedRois.filter(r => r.classification.group === 'aisles');
   const byCat = new Map();
 
@@ -591,16 +781,22 @@ function buildAisleCategoryGroups(classifiedRois, db, startTs, endTs, metricThre
     byCat.get(cat).push(roi.id);
   }
 
-  return [...byCat.entries()].map(([category, roiIds]) => {
-    const stats = fetchZoneVisitStats(db, roiIds, startTs, endTs, metricThresholds);
+  const catEntries = [...byCat.entries()];
+  const uniqueByCat = ctx.uniqueVisitorsFor(
+    catEntries.map(([category, roiIds]) => ({ key: category, roiIds })),
+  );
+
+  return catEntries.map(([category, roiIds]) => {
+    const stats = roiStats.statsFor(roiIds);
+    const uniqueVisitors = uniqueByCat.get(category) ?? stats.uniqueVisitors;
     return {
       category,
       visits: stats.visits,
-      uniqueVisitors: stats.uniqueVisitors,
+      uniqueVisitors,
       stoppingPowerPct: stats.visits > 0 ? pct(stats.dwellVisits, stats.visits) : 0,
       engagementPct: stats.visits > 0 ? pct(stats.engagementVisits, stats.visits) : 0,
-      avgDwellMin: stats.uniqueVisitors > 0
-        ? Math.round((stats.totalDurationMs / stats.uniqueVisitors) / 60000 * 10) / 10
+      avgDwellMin: uniqueVisitors > 0
+        ? Math.round((stats.totalDurationMs / uniqueVisitors) / 60000 * 10) / 10
         : 0,
       roiCount: roiIds.length,
       roiIds,
@@ -608,10 +804,11 @@ function buildAisleCategoryGroups(classifiedRois, db, startTs, endTs, metricThre
   }).sort((a, b) => b.visits - a.visits);
 }
 
-function buildAisleMetrics(classifiedRois, db, totalVisitors, startTs, endTs, metricThresholds, sessionAnalytics) {
+function buildAisleMetrics(classifiedRois, ctx, totalVisitors, sessionAnalytics) {
+  const { db, startTs, endTs, metricThresholds, roiStats } = ctx;
   const aisleRois = classifiedRois.filter(r => r.classification.group === 'aisles');
   const roiIds = aisleRois.map(r => r.id);
-  const stats = fetchZoneVisitStats(db, roiIds, startTs, endTs, metricThresholds);
+  const stats = roiStats.statsFor(roiIds);
 
   const roiIdsByCategory = new Map();
   for (const roi of aisleRois) {
@@ -634,7 +831,7 @@ function buildAisleMetrics(classifiedRois, db, totalVisitors, startTs, endTs, me
       )
       : [];
     if (sessionGroups.length > 0) return sessionGroups;
-    return buildAisleCategoryGroups(classifiedRois, db, startTs, endTs, metricThresholds)
+    return buildAisleCategoryGroups(classifiedRois, ctx)
       .filter(g => g.category && !/^(uncategorized|no content available)$/i.test(g.category));
   })();
 
@@ -648,9 +845,11 @@ function buildAisleMetrics(classifiedRois, db, totalVisitors, startTs, endTs, me
   const stoppingPowerPct = stats.visits > 0 ? pct(stats.dwellVisits, stats.visits) : 0;
   const bypassPct = Math.max(0, Math.round((100 - stoppingPowerPct) * 10) / 10);
 
+  // Reading from the shared index makes ranking every aisle as cheap as the
+  // arbitrary first-20 slice this used to settle for.
   const topAisles = [];
-  for (const roi of aisleRois.slice(0, 20)) {
-    const s = fetchZoneVisitStats(db, [roi.id], startTs, endTs, metricThresholds);
+  for (const roi of aisleRois) {
+    const s = roiStats.statsFor([roi.id]);
     if (s.visits === 0) continue;
     topAisles.push({
       id: roi.id,
@@ -665,6 +864,7 @@ function buildAisleMetrics(classifiedRois, db, totalVisitors, startTs, endTs, me
     });
   }
   topAisles.sort((a, b) => b.visits - a.visits);
+  topAisles.splice(20);
 
   return {
     penetrationPct,
@@ -863,14 +1063,22 @@ export function computeExecutiveJourney(db, venueId, startTs, endTs, variant = '
 
   const erp = fetchErpForRange(db, venueId, startTs, endTs);
   const mediaKpis = fetchMediaKpis(db, venueId, startTs, endTs);
-  const frescoDepartments = buildFrescoDepartments(classifiedRois, db, startTs, endTs, metricThresholds);
-  const checkoutChannels = buildCheckoutChannels(classifiedRois, db, startTs, endTs);
-  const aisleMetrics = buildAisleMetrics(
-    classifiedRois, db, totalVisitors, startTs, endTs, metricThresholds, sessionAnalytics,
-  );
-  const rawAisleCategoryGroups = buildAisleCategoryGroups(classifiedRois, db, startTs, endTs, metricThresholds)
+
+  // Shared indexes replace the per-zone-group range scans that used to dominate
+  // this request.
+  const ctx = createJourneyContext(db, venueId, startTs, endTs, metricThresholds);
+
+  const frescoDepartments = buildFrescoDepartments(classifiedRois, ctx);
+  const checkoutChannels = buildCheckoutChannels(classifiedRois, ctx);
+  const aisleMetrics = buildAisleMetrics(classifiedRois, ctx, totalVisitors, sessionAnalytics);
+  const rawAisleCategoryGroups = buildAisleCategoryGroups(classifiedRois, ctx)
     .filter(g => g.category && !/^(uncategorized|no content available)$/i.test(g.category));
-  const { hourly: activityTimelineHourly, daily: activityTimelineDaily, activityTimeline } = fetchActivityTimelines(
+  const {
+    hourly: activityTimelineHourly,
+    daily: activityTimelineDaily,
+    trailingHourly: activityTimelineTrailing,
+    activityTimeline,
+  } = fetchActivityTimelines(
     db, venueId, startTs, endTs, trafficRoiIds, shoppingRoiIds, metricThresholds.dwellMs,
     storeHours.openingHour, storeHours.closingHour, storeHours.timeZone,
   );
@@ -926,6 +1134,7 @@ export function computeExecutiveJourney(db, venueId, startTs, endTs, variant = '
     activityTimelines: {
       hourly: activityTimelineHourly,
       daily: activityTimelineDaily,
+      trailingHourly: activityTimelineTrailing,
     },
     heatmapCategories,
     taxonomy: taxonomySummary,

@@ -10,6 +10,18 @@ import {
 } from '../config/visitSessionConfig.js';
 import { isTrafficZoneName } from '../lib/storeHours.js';
 
+/** Slack allowed on a negative gap when linking two fragments (see canLinkFragments). */
+const LINK_BACKDATE_TOLERANCE_MS = 2000;
+
+/**
+ * Upper bound on fragments chained into a single session. Guards against a
+ * dense crowd collapsing into one runaway chain on long ranges.
+ */
+const MAX_SESSION_FRAGMENTS = 400;
+
+/** Minimum episodes a visit needs to enter the stitching pool. */
+const MIN_POOL_DURATION_MS = 300;
+
 /**
  * @typedef {object} TrackFragment
  * @property {string} trackKey
@@ -132,22 +144,49 @@ function buildFragments(visits) {
   return byKey;
 }
 
-function chainFragments(seedFrag, allFragments, config, windowEnd) {
+/**
+ * Time-ordered view of the fragment pool. Chaining only ever links fragments
+ * that start inside a re-ID gap window, so keeping starts sorted lets us
+ * binary-search that window instead of rescanning the whole pool per seed.
+ */
+function buildFragmentIndex(allFragments) {
+  const sorted = [...allFragments.values()].sort((a, b) => a.firstTime - b.firstTime);
+  const starts = new Float64Array(sorted.length);
+  for (let i = 0; i < sorted.length; i++) starts[i] = sorted[i].firstTime;
+  return { sorted, starts };
+}
+
+function firstIndexAtOrAfter(starts, t) {
+  let lo = 0;
+  let hi = starts.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (starts[mid] < t) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo;
+}
+
+function chainFragments(seedFrag, allFragments, config, windowEnd, index, maxFragments = MAX_SESSION_FRAGMENTS) {
   const linked = new Set([seedFrag.trackKey]);
-  let changed = true;
-  while (changed) {
-    changed = false;
-    for (const frag of allFragments.values()) {
+  if (!index) return linked;
+
+  // Breadth-first over the same "can link" relation the pairwise scan used,
+  // expanding only forward in time from each newly linked fragment.
+  const frontier = [seedFrag];
+  while (frontier.length) {
+    const prev = frontier.pop();
+    const gapLimit = prev.lastTime + config.reidMaxGapMs;
+    const upperBound = Math.min(gapLimit, windowEnd);
+    for (let i = firstIndexAtOrAfter(index.starts, prev.lastTime - LINK_BACKDATE_TOLERANCE_MS); i < index.sorted.length; i++) {
+      const frag = index.sorted[i];
+      if (frag.firstTime > upperBound) break;
+      if (frag.firstTime < seedFrag.firstTime) continue;
       if (linked.has(frag.trackKey)) continue;
-      if (frag.firstTime < seedFrag.firstTime || frag.firstTime > windowEnd) continue;
-      for (const key of linked) {
-        const prev = allFragments.get(key);
-        if (canLinkFragments(prev, frag, config)) {
-          linked.add(frag.trackKey);
-          changed = true;
-          break;
-        }
-      }
+      if (!canLinkFragments(prev, frag, config)) continue;
+      linked.add(frag.trackKey);
+      frontier.push(frag);
+      if (linked.size >= maxFragments) return linked;
     }
   }
   return linked;
@@ -211,24 +250,55 @@ function mergeVisitsIntoSession(linkedKeys, allFragments, roiToCategory, checkou
   };
 }
 
-/**
- * Build entrance-anchored visit sessions from zone_visits.
- */
-export function buildVisitSessions(db, venueId, startTime, endTime, configInput, roiContext, roiToCategory, options = {}) {
-  const config = normalizeVisitSessionConfig(configInput);
-  const { entranceRoiIds, checkoutRoiIds, shelfRoiIds } = roiContext;
-  const recoveredTrackKeys = options.recoveredTrackKeys || [];
-
-  const visits = db.prepare(`
+function loadStitchingVisits(db, venueId, startTime, endTime, entranceRoiIds) {
+  const entranceIds = [...entranceRoiIds];
+  const entranceClause = entranceIds.length
+    ? ` OR (zv.duration_ms = 0 AND zv.roi_id IN (${entranceIds.map(() => '?').join(',')}))`
+    : '';
+  return db.prepare(`
     SELECT zv.id, zv.track_key, zv.roi_id, zv.start_time, zv.end_time, zv.duration_ms,
            zv.is_dwell, zv.entry_position_x, zv.entry_position_z,
            zv.exit_position_x, zv.exit_position_z, zv.visitor_session_id
     FROM zone_visits zv
     WHERE zv.venue_id = ? AND zv.start_time >= ? AND zv.start_time < ?
-      AND (zv.duration_ms >= 300 OR zv.is_dwell = 1)
+      AND (zv.duration_ms >= ${MIN_POOL_DURATION_MS} OR zv.is_dwell = 1${entranceClause})
       AND zv.track_key NOT LIKE '%cashier%'
     ORDER BY zv.start_time ASC
-  `).all(venueId, startTime, endTime);
+  `).all(venueId, startTime, endTime, ...entranceIds);
+}
+
+/**
+ * Build entrance-anchored visit sessions from zone_visits.
+ *
+ * @param {object} [options]
+ * @param {object[]} [options.preloadedVisits] Reuse an already-fetched visit set
+ *   (ordered by start_time) instead of issuing a second range scan.
+ * @param {number} [options.seedStart] Only seed sessions from entrances at or after
+ *   this time. Lets a caller process a long range in windows while still reading
+ *   ahead far enough for sessions near the window edge to complete.
+ * @param {number} [options.seedEnd] Only seed sessions from entrances before this time.
+ */
+export function buildVisitSessions(db, venueId, startTime, endTime, configInput, roiContext, roiToCategory, options = {}) {
+  const config = normalizeVisitSessionConfig(configInput);
+  const { entranceRoiIds, checkoutRoiIds, shelfRoiIds } = roiContext;
+  const recoveredTrackKeys = options.recoveredTrackKeys || [];
+  const seedStart = options.seedStart ?? startTime;
+  const seedEnd = options.seedEnd ?? endTime;
+  const inSeedWindow = ts => ts >= seedStart && ts < seedEnd;
+
+  // Gate crossings are persisted with an exact zero duration (see
+  // TrajectoryStorageService.recordPerimeterCrossing), so they cannot be held to
+  // the same minimum-duration bar as dwell episodes or no session ever seeds.
+  const isPoolCandidate = (v) => {
+    if (!v.track_key || v.track_key.includes('cashier')) return false;
+    const dur = v.duration_ms ?? 0;
+    if (dur >= MIN_POOL_DURATION_MS || v.is_dwell === 1) return true;
+    return dur === 0 && entranceRoiIds.has(v.roi_id);
+  };
+
+  const visits = options.preloadedVisits
+    ? options.preloadedVisits.filter(isPoolCandidate)
+    : loadStitchingVisits(db, venueId, startTime, endTime, entranceRoiIds);
 
   if (!visits.length) {
     return {
@@ -242,7 +312,7 @@ export function buildVisitSessions(db, venueId, startTime, endTime, configInput,
   const withSession = visits.filter(v => v.visitor_session_id).length;
   if (withSession > visits.length * 0.15) {
     return buildSessionsFromPersistedIds(
-      visits, roiToCategory, checkoutRoiIds, shelfRoiIds, config
+      visits, roiToCategory, checkoutRoiIds, shelfRoiIds, config, inSeedWindow,
     );
   }
 
@@ -260,24 +330,31 @@ export function buildVisitSessions(db, venueId, startTime, endTime, configInput,
     }
   }
 
-  const entranceSeeds = visits.filter(v =>
-    entranceRoiIds.has(v.roi_id)
-    && (v.duration_ms >= config.entranceMinDurationMs || v.is_dwell === 1 || v.duration_ms >= 300)
-  );
+  const entranceSeeds = visits.filter((v) => {
+    if (!entranceRoiIds.has(v.roi_id)) return false;
+    if (!inSeedWindow(v.start_time)) return false;
+    const dur = v.duration_ms ?? 0;
+    // A zero-duration row in a gate ROI is a perimeter crossing, not noise.
+    if (dur === 0) return true;
+    return dur >= config.entranceMinDurationMs || v.is_dwell === 1 || dur >= MIN_POOL_DURATION_MS;
+  });
+
+  const fragmentIndex = buildFragmentIndex(allFragments);
 
   /** @type {VisitSession[]} */
   const sessions = [];
-  const usedEntranceVisitIds = new Set();
+  const assignedKeys = new Set();
 
   for (const seed of entranceSeeds) {
-    if (usedEntranceVisitIds.has(seed.id)) continue;
-    usedEntranceVisitIds.add(seed.id);
+    // Seeds arrive in start_time order, so the first crossing to claim a track
+    // wins and later crossings of the same visit need no work at all.
+    if (assignedKeys.has(seed.track_key)) continue;
 
     const seedFrag = allFragments.get(seed.track_key);
     if (!seedFrag) continue;
 
     const windowEnd = seed.start_time + config.maxVisitDurationMs;
-    const linkedKeys = chainFragments(seedFrag, allFragments, config, windowEnd);
+    const linkedKeys = chainFragments(seedFrag, allFragments, config, windowEnd, fragmentIndex);
     const merged = mergeVisitsIntoSession(
       linkedKeys, allFragments, roiToCategory, checkoutRoiIds, shelfRoiIds
     );
@@ -288,19 +365,17 @@ export function buildVisitSessions(db, venueId, startTime, endTime, configInput,
       entranceTrackKey: seed.track_key,
       ...merged,
     });
+    for (const k of linkedKeys) assignedKeys.add(k);
   }
 
   // Proximity-recovered entrants (missed gate track_key but first shelf appearance near gate).
-  const assignedKeys = new Set();
-  for (const s of sessions) {
-    for (const k of s.trackKeys) assignedKeys.add(k);
-  }
   for (const trackKey of recoveredTrackKeys) {
     if (!trackKey || assignedKeys.has(trackKey)) continue;
     const seedFrag = allFragments.get(trackKey);
     if (!seedFrag) continue;
+    if (!inSeedWindow(seedFrag.firstTime)) continue;
     const windowEnd = seedFrag.firstTime + config.maxVisitDurationMs;
-    const linkedKeys = chainFragments(seedFrag, allFragments, config, windowEnd);
+    const linkedKeys = chainFragments(seedFrag, allFragments, config, windowEnd, fragmentIndex);
     const overlap = [...linkedKeys].some(k => assignedKeys.has(k));
     if (overlap) continue;
     const merged = mergeVisitsIntoSession(
@@ -325,7 +400,9 @@ export function buildVisitSessions(db, venueId, startTime, endTime, configInput,
   return { sessions: sessionsDeduped, stats, config };
 }
 
-function buildSessionsFromPersistedIds(visits, roiToCategory, checkoutRoiIds, shelfRoiIds, config) {
+function buildSessionsFromPersistedIds(
+  visits, roiToCategory, checkoutRoiIds, shelfRoiIds, config, inSeedWindow = () => true,
+) {
   /** @type {Map<string, object[]>} */
   const bySession = new Map();
   for (const v of visits) {
@@ -339,6 +416,9 @@ function buildSessionsFromPersistedIds(visits, roiToCategory, checkoutRoiIds, sh
   const sessions = [];
   for (const [sessionId, sessionVisits] of bySession) {
     sessionVisits.sort((a, b) => a.start_time - b.start_time);
+    // Attribute each session to the window holding its first visit so a
+    // windowed caller counts it exactly once.
+    if (!inSeedWindow(sessionVisits[0].start_time)) continue;
     const trackKeys = [...new Set(sessionVisits.map(v => v.track_key))];
     const allFragments = buildFragments(sessionVisits);
     const merged = mergeVisitsIntoSession(

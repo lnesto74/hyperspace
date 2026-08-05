@@ -46,10 +46,23 @@ const shelfKPIEnricher = new ShelfKPIEnricher(db);
 
 // Simple in-memory cache with TTL
 const cache = new Map();
-const CACHE_TTL_MS = 30000; // 30 seconds
+
+/**
+ * A trailing range ("last 7 days") shifts every millisecond, so keying the cache
+ * on exact timestamps meant it never hit. Quantising both ends to a bucket lets
+ * repeat loads share a result, and wider ranges — which cost far more to compute
+ * and change far more slowly — get a coarser bucket and a longer TTL.
+ */
+function cacheProfileFor(spanMs) {
+  if (spanMs <= 2 * 60 * 60 * 1000) return { bucketMs: 30_000, ttlMs: 30_000 };
+  if (spanMs <= 36 * 60 * 60 * 1000) return { bucketMs: 60_000, ttlMs: 60_000 };
+  return { bucketMs: 5 * 60_000, ttlMs: 5 * 60_000 };
+}
 
 function getCacheKey(personaId, venueId, startTs, endTs, grain) {
-  return `${personaId}:${venueId}:${startTs}:${endTs}:${grain || 'default'}`;
+  const { bucketMs } = cacheProfileFor(endTs - startTs);
+  const bucket = ts => Math.floor(ts / bucketMs);
+  return `${personaId}:${venueId}:${bucket(startTs)}:${bucket(endTs)}:${grain || 'default'}`;
 }
 
 function getCached(key) {
@@ -62,8 +75,14 @@ function getCached(key) {
   return entry.data;
 }
 
-function setCache(key, data) {
-  cache.set(key, { data, expiresAt: Date.now() + CACHE_TTL_MS });
+function setCache(key, data, ttlMs) {
+  cache.set(key, { data, expiresAt: Date.now() + ttlMs });
+  // Bounded so a long-lived process can't accumulate stale range keys.
+  if (cache.size > 200) {
+    for (const [k, v] of cache) {
+      if (Date.now() > v.expiresAt) cache.delete(k);
+    }
+  }
 }
 
 // Feature flag check middleware
@@ -370,9 +389,9 @@ router.get('/summary', async (req, res) => {
       generatedAt: Date.now(),
     };
 
-    // Cache only default-threshold responses — preview must not poison the 30s cache
+    // Cache only default-threshold responses — preview must not poison the cache
     if (!thresholdPreview) {
-      setCache(cacheKey, response);
+      setCache(cacheKey, response, cacheProfileFor(end - start).ttlMs);
     }
 
     res.json(response);

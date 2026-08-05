@@ -4,23 +4,42 @@
 
 export const DEFAULT_VENUE_TIMEZONE = 'Europe/Rome';
 
+// Constructing an Intl.DateTimeFormat is orders of magnitude more expensive than
+// formatting with one, and these run per row over large ranges.
+const hourFormatters = new Map();
+const dateFormatters = new Map();
+
+function hourFormatter(timeZone) {
+  let fmt = hourFormatters.get(timeZone);
+  if (!fmt) {
+    fmt = new Intl.DateTimeFormat('en-GB', { timeZone, hour: 'numeric', hour12: false });
+    hourFormatters.set(timeZone, fmt);
+  }
+  return fmt;
+}
+
+function dateFormatter(timeZone) {
+  let fmt = dateFormatters.get(timeZone);
+  if (!fmt) {
+    fmt = new Intl.DateTimeFormat('en-CA', {
+      timeZone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    });
+    dateFormatters.set(timeZone, fmt);
+  }
+  return fmt;
+}
+
 /** Local hour (0–23) for a UTC epoch-ms timestamp in the venue timezone. */
 export function venueLocalHour(tsMs, timeZone = DEFAULT_VENUE_TIMEZONE) {
-  return Number(new Intl.DateTimeFormat('en-GB', {
-    timeZone,
-    hour: 'numeric',
-    hour12: false,
-  }).format(new Date(tsMs)));
+  return Number(hourFormatter(timeZone).format(new Date(tsMs)));
 }
 
 /** YYYY-MM-DD in the venue timezone (for daily buckets). */
 export function venueLocalDateKey(tsMs, timeZone = DEFAULT_VENUE_TIMEZONE) {
-  return new Intl.DateTimeFormat('en-CA', {
-    timeZone,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  }).format(new Date(tsMs));
+  return dateFormatter(timeZone).format(new Date(tsMs));
 }
 
 export function isTsWithinStoreHours(tsMs, openingHour, closingHour, timeZone = DEFAULT_VENUE_TIMEZONE) {

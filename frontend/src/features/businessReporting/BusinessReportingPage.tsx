@@ -32,7 +32,7 @@ import type { EsselungaJourneyPayload, ExecutiveVariant } from './esselunga/type
 import type { DoohScreenMarker } from '../../components/shared/FloorPlanMiniMap';
 import { getDemoVenueId } from '../../config/demo';
 
-type TimeRange = '1h' | '24h' | '7d' | 'custom';
+type TimeRange = '1h' | '24h' | '7d' | '30d' | 'custom';
 
 interface TimeRangeOption {
   id: TimeRange;
@@ -40,32 +40,36 @@ interface TimeRangeOption {
   getRange: () => { startTs: number; endTs: number };
 }
 
+const HOUR_MS = 60 * 60 * 1000;
+const DAY_MS = 24 * HOUR_MS;
+
+/**
+ * A single `now` per range keeps the span exactly the advertised duration; two
+ * `Date.now()` calls can straddle a millisecond and push 30d past the server's
+ * 30-day ceiling.
+ */
+function trailingRange(durationMs: number) {
+  return () => {
+    const endTs = Date.now();
+    return { startTs: endTs - durationMs, endTs };
+  };
+}
+
 const TIME_RANGES: TimeRangeOption[] = [
-  {
-    id: '1h',
-    label: '1h',
-    getRange: () => ({
-      startTs: Date.now() - 60 * 60 * 1000,
-      endTs: Date.now(),
-    }),
-  },
-  {
-    id: '24h',
-    label: '24h',
-    getRange: () => ({
-      startTs: Date.now() - 24 * 60 * 60 * 1000,
-      endTs: Date.now(),
-    }),
-  },
-  {
-    id: '7d',
-    label: '7d',
-    getRange: () => ({
-      startTs: Date.now() - 7 * 24 * 60 * 60 * 1000,
-      endTs: Date.now(),
-    }),
-  },
+  { id: '1h', label: '1h', getRange: trailingRange(HOUR_MS) },
+  { id: '24h', label: '24h', getRange: trailingRange(DAY_MS) },
+  { id: '7d', label: '7d', getRange: trailingRange(7 * DAY_MS) },
+  { id: '30d', label: '30d', getRange: trailingRange(30 * DAY_MS) },
 ];
+
+/** Ranges whose timelines are more readable bucketed by day than by hour. */
+const DAY_GRAIN_RANGES = new Set<TimeRange>(['7d', '30d']);
+
+/**
+ * Generous enough to absorb a cold cache on the widest range, while still
+ * failing with a clear message rather than hanging forever.
+ */
+const REQUEST_TIMEOUT_MS = 120000;
 
 const ZONE_MAP_PERSONAS = new Set(['merchandising']);
 const PEBLE_MAP_PERSONAS = new Set(['retail-media']);
@@ -240,7 +244,7 @@ export default function BusinessReportingPage({ onClose, publicDashboard = false
       const controller = isPreview ? previewAbortRef.current! : new AbortController();
       const timeoutId = isPreview
         ? undefined
-        : window.setTimeout(() => controller.abort(), 90000);
+        : window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 
       let response: Response;
       try {
@@ -307,7 +311,10 @@ export default function BusinessReportingPage({ onClose, publicDashboard = false
       }
       console.error('Failed to fetch reporting data:', err);
       if (err instanceof DOMException && err.name === 'AbortError') {
-        setError('Request timed out — 7d reports can take up to 90s on a busy server. Try again or use 24h.');
+        setError(
+          `Request timed out after ${Math.round(REQUEST_TIMEOUT_MS / 1000)}s. `
+          + 'The server may be busy ingesting — retry, or narrow the range.',
+        );
       } else {
         setError(err instanceof Error ? err.message : 'Failed to load data');
       }
@@ -326,12 +333,16 @@ export default function BusinessReportingPage({ onClose, publicDashboard = false
   const handleTimeRangeChange = (rangeId: TimeRange) => {
     setSelectedTimeRange(rangeId);
     if (selectedPersonaId === 'store-manager') {
-      setOpsGrain(rangeId === '7d' ? 'day' : 'hour');
+      setOpsGrain(DAY_GRAIN_RANGES.has(rangeId) ? 'day' : 'hour');
     }
   };
 
   useEffect(() => {
-    if (selectedPersonaId === ESSELUNGA_PERSONA && esselungaVariant === 'hq' && selectedTimeRange !== '7d') {
+    if (
+      selectedPersonaId === ESSELUNGA_PERSONA
+      && esselungaVariant === 'hq'
+      && !DAY_GRAIN_RANGES.has(selectedTimeRange)
+    ) {
       setSelectedTimeRange('7d');
     }
   }, [selectedPersonaId, esselungaVariant]);
@@ -354,7 +365,7 @@ export default function BusinessReportingPage({ onClose, publicDashboard = false
 
   const topCategories = supporting.topCategories as CategoryRankingRow[] | undefined;
 
-  const heatmapTimeframe = selectedTimeRange === '7d' ? 'week' as const : 'day' as const;
+  const heatmapTimeframe = DAY_GRAIN_RANGES.has(selectedTimeRange) ? 'week' as const : 'day' as const;
 
   const handleCategoryHeatmap = (row: CategoryRankingRow) => {
     if (!row.roiIds?.length || !selectedVenueId) return;

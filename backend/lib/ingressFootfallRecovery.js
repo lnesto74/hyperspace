@@ -5,7 +5,7 @@
  * track fragments whose first in-store appearance is near the gate without a gate crossing.
  */
 
-import { isHourWithinStoreHours } from './storeHours.js';
+import { isHourWithinStoreHours, venueLocalHour } from './storeHours.js';
 
 export const DEFAULT_RECOVERY_CONFIG = {
   gateDedupWindowMs: 3000,
@@ -18,14 +18,7 @@ export const DEFAULT_RECOVERY_CONFIG = {
 };
 
 export function hourInVenueLocal(ts, openingHour, closingHour, timeZone = 'Europe/Rome') {
-  const h = Number(
-    new Intl.DateTimeFormat('en-GB', {
-      timeZone,
-      hour: 'numeric',
-      hour12: false,
-    }).format(new Date(ts)),
-  );
-  return isHourWithinStoreHours(h, openingHour, closingHour);
+  return isHourWithinStoreHours(venueLocalHour(ts, timeZone), openingHour, closingHour);
 }
 
 export function roiCentroid(verticesJson) {
@@ -178,28 +171,46 @@ export function computeIngressFootfallWithRecovery(
   const gateZ = gate.z;
   const radiusSq = cfg.recoveryRadiusM * cfg.recoveryRadiusM;
 
+  // First in-store appearance per track, ranked in a single pass. The previous
+  // self-join left its outer scan unbounded in time, so a 1h request cost the
+  // same as scanning every shopping-zone visit ever recorded.
   const orphanFirst = safeQueryAll(db, `
-    SELECT zv.track_key, zv.start_time, zv.entry_position_x, zv.entry_position_z
-    FROM zone_visits zv
-    INNER JOIN (
-      SELECT track_key, MIN(start_time) AS first_ts
+    SELECT track_key, start_time, entry_position_x, entry_position_z
+    FROM (
+      SELECT track_key, start_time, entry_position_x, entry_position_z,
+             ROW_NUMBER() OVER (PARTITION BY track_key ORDER BY start_time) AS rn
       FROM zone_visits
       WHERE venue_id = ? AND roi_id IN (${phShop})
         AND start_time >= ? AND start_time < ?
         AND track_key NOT LIKE '%cashier%'
-      GROUP BY track_key
-    ) f ON f.track_key = zv.track_key AND f.first_ts = zv.start_time
-    WHERE zv.venue_id = ? AND zv.roi_id IN (${phShop})
-      AND ((zv.entry_position_x - ?) * (zv.entry_position_x - ?)
-         + (zv.entry_position_z - ?) * (zv.entry_position_z - ?)) <= ?
+    )
+    WHERE rn = 1
+      AND ((entry_position_x - ?) * (entry_position_x - ?)
+         + (entry_position_z - ?) * (entry_position_z - ?)) <= ?
   `, [
-    venueId, ...shoppingRoiIds, startTs, endTs, venueId, ...shoppingRoiIds,
+    venueId, ...shoppingRoiIds, startTs, endTs,
     gateX, gateX, gateZ, gateZ, radiusSq,
   ]);
 
+  // Time-ordered gate events so each orphan only compares against the handful
+  // of crossings inside its window, not every crossing in the range.
+  const gateEvents = [...directEvents].sort((a, b) => a.t - b.t);
+  const gateTimes = new Float64Array(gateEvents.length);
+  for (let i = 0; i < gateEvents.length; i++) gateTimes[i] = gateEvents[i].t;
+
   function hasNearbyGateEvent(ts, x, z) {
-    for (const e of directEvents) {
-      if (Math.abs(ts - e.t) > cfg.recoveryAfterGateMs) continue;
+    const from = ts - cfg.recoveryAfterGateMs;
+    const until = ts + cfg.recoveryAfterGateMs;
+    let lo = 0;
+    let hi = gateTimes.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (gateTimes[mid] < from) lo = mid + 1;
+      else hi = mid;
+    }
+    for (let i = lo; i < gateEvents.length; i++) {
+      const e = gateEvents[i];
+      if (e.t > until) break;
       if (distM(x, z, e.x, e.z) <= cfg.recoveryRadiusM) return true;
     }
     return false;
