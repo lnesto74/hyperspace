@@ -1,4 +1,8 @@
 import { TrajectoryReconciler, normalizeReconcilerConfig, DEFAULT_CONFIG } from '../../backend/services/TrajectoryReconciler.js';
+// Namespace copy of the same module, so a caller can substitute a different
+// build of the engine (e.g. the one actually deployed) and compare it against
+// this checkout over an identical capture.
+import * as repoEngine from '../../backend/services/TrajectoryReconciler.js';
 import { reconcileV2Pipeline } from '../../backend/services/offline/reconcileV2/reconcileV2.js';
 import { reconcileV3Pipeline } from '../../backend/services/offline/reconcileV3/reconcileV3.js';
 import { IDENTITY_TRANSFORM } from '../../backend/services/PerceptionTransform.js';
@@ -152,9 +156,13 @@ export function buildReconcilerSpatial(rollups, metrics, configName, firstTs, la
 }
 
 /** Stream file once through reconciler — RAM-safe for multi-GB captures. */
-export async function runReconcilerStream(filePath, overrides, { venueId, afterMs, beforeMs, label, onProgress } = {}) {
-  const cfg = normalizeReconcilerConfig({ ...DEFAULT_CONFIG, ...overrides });
-  const reconciler = new TrajectoryReconciler(() => cfg);
+export async function runReconcilerStream(filePath, overrides, { venueId, afterMs, beforeMs, label, onProgress, engine } = {}) {
+  // Each engine build must normalise the config with its OWN normaliser and its
+  // OWN defaults, or the comparison silently tests one engine's gates against
+  // the other's clamping.
+  const E = engine || repoEngine;
+  const cfg = E.normalizeReconcilerConfig({ ...E.DEFAULT_CONFIG, ...overrides });
+  const reconciler = new E.TrajectoryReconciler(() => cfg);
   const rollups = new Map();
   const perceptionIds = new Set();
   const timelineBuckets = new Map();

@@ -146,6 +146,44 @@ flag on, ids are never freed, and live occupancy counts what is currently
 tracked. Leave it off. Reproduce with
 `node analysis/11_persist_bindings_ab.mjs --file raw_tracks.jsonl`.
 
+**The committed reconciler engine beats the deployed one, and should go out
+after a supervised deploy.** The engine at Treviglio was last written 30 June
+12:07; later re-ID work from the same day was committed but never copied to the
+server. Since the deployed build is the one behind the only good week, "newer"
+was not sufficient reason to ship it, so both were run over the 19 May capture
+under identical `luca` gates (`analysis/12_engine_ab.mjs`).
+
+Two of the four differences cancel out: `reid_stale_active_ms` and
+`reid_churn_active_ms` are supplied explicitly by the preset and normalise to
+the same values in both builds. What is actually under test is the candidate
+de-duplication in `_reidTargets` and the sub-250 ms exemption on the
+implied-speed teleport gate.
+
+| | identities | journeys ≥30 m | median displacement | p95 displacement | metres/sec per track |
+|---|---|---|---|---|---|
+| raw (control) | 4,382 | 129 | 0.9 m | 20.1 m | 0.234 |
+| deployed (30 Jun) | 3,339 | 152 | 1.4 m | 29.4 m | 0.133 |
+| committed | 3,289 | **213** | **1.8 m** | **37.2 m** | 0.217 |
+
+The committed build reconstructs **40% more complete shopper journeys** (213 vs
+152) from the same data, with fewer identities and longer median and tail
+displacement. Teleports and ghost rate are unchanged.
+
+The one metric where the deployed build leads — mean lifetime 60.9 s against
+43.4 s, p95 308.8 s against 140.0 s — is not an advantage. Its tracks live twice
+as long while covering *less* ground, averaging 0.133 m/s against 0.217 m/s;
+raw is 0.234 m/s. Tracks that persist five minutes at a sixth of walking pace
+are static objects being held alive, and the missing de-duplication is a
+plausible mechanism: the same stable track can appear twice in the candidate
+list and absorb detections it should not.
+
+That matters beyond track quality, because it inflates the customer KPI: zone
+dwell accumulated by a phantom is dwell nobody spent. It should be deployed, but
+supervised — deploy, then compare a full trading day against the weekly
+continuity report before and after, and roll back if journeys per day do not
+rise. One 34-minute capture is enough to justify the attempt, not to conclude
+it.
+
 **Index pruning is dropped.** The plan assumed three of the four
 `track_positions` indexes were redundant. They are not: `(venue_id, timestamp)`,
 `(venue_id, track_key, timestamp)`, `(roi_id, timestamp)` and
