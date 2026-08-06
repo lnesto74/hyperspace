@@ -23,6 +23,14 @@ WEEKS="${WEEKS:-10}"
 SCRIPT=/usr/local/lib/hyperspace/weekly-continuity-report.cjs
 docker cp "$SCRIPT" hyperspace-backend-1:/tmp/weekly-continuity-report.cjs >/dev/null 2>&1
 
+# The daily re-ID samples land on the host; the report runs in the container.
+REID_HISTORY="${REID_HISTORY:-/data/hyperspace/reid-audit/history.jsonl}"
+if [ -r "$REID_HISTORY" ]; then
+  docker cp "$REID_HISTORY" hyperspace-backend-1:/tmp/reid-history.jsonl >/dev/null 2>&1
+else
+  docker exec hyperspace-backend-1 rm -f /tmp/reid-history.jsonl >/dev/null 2>&1
+fi
+
 BODY=$(docker exec -e NODE_PATH=/app/node_modules hyperspace-backend-1 \
   node /tmp/weekly-continuity-report.cjs --weeks "$WEEKS" 2>&1)
 STATUS=$?

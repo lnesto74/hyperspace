@@ -122,6 +122,87 @@ if (rows.length >= 2) {
   out.push(`  usable>60s   ${((a.usable / Math.max(a.visits, 1)) * 100).toFixed(1)}% → ${((b.usable / Math.max(b.visits, 1)) * 100).toFixed(1)}%`);
 }
 
+// ---------------------------------------------------------- re-ID diagnostics
+// The table above says how much continuity we got. This says which gate is
+// rejecting the merges we did not get, sampled live once a day. A single run is
+// noise; a gate that climbs week over week is a sensor drifting or a vendor
+// build change, and it shows up here well before it moves dwell.
+const REID_HISTORY = argVal('--reid-history', '/tmp/reid-history.jsonl');
+try {
+  const fs = require('fs');
+  if (fs.existsSync(REID_HISTORY)) {
+    const parsed = fs.readFileSync(REID_HISTORY, 'utf8')
+      .split('\n')
+      .filter(Boolean)
+      .map((l) => { try { return JSON.parse(l); } catch { return null; } })
+      .filter((s) => s && s.venue_id === VENUE);
+    // Thin runs are excluded from the averages, but counted: a week of nothing
+    // but thin samples means either a very quiet store or that ingestion has
+    // stopped, and rendering nothing at all would hide both.
+    const samples = parsed.filter((s) => !s.thin);
+
+    const DAY = 24 * 3600 * 1000;
+    const now = Date.now();
+    const bucket = (fromDaysAgo, toDaysAgo) => samples.filter((s) => {
+      const age = now - Date.parse(s.ts);
+      return age >= toDaysAgo * DAY && age < fromDaysAgo * DAY;
+    });
+    const recent = bucket(7, 0);
+    const prior = bucket(14, 7);
+
+    if (recent.length) {
+      const avg = (arr, f) => (arr.length ? arr.reduce((a, s) => a + f(s), 0) / arr.length : 0);
+      const row = (label, arr) => arr.length
+        ? `${label.padEnd(13)} ${String(arr.length).padStart(7)}  ` +
+          `${avg(arr, (s) => s.emitted).toFixed(0).padStart(11)}  ` +
+          `${avg(arr, (s) => s.reid_rate_pct).toFixed(1).padStart(9)}%  ` +
+          `${avg(arr, (s) => s.misses.total).toFixed(1).padStart(10)}  ` +
+          `${avg(arr, (s) => s.misses.interrupt_resume).toFixed(1).padStart(6)}  ` +
+          `${avg(arr, (s) => s.misses.lost_nearby).toFixed(1).padStart(4)}  ` +
+          `${avg(arr, (s) => s.misses.nn_would_match).toFixed(1).padStart(4)}`
+        : null;
+
+      out.push('');
+      out.push('re-ID gate diagnostics (daily live samples, thin runs excluded)');
+      out.push('');
+      out.push('window        samples  emitted/run  re-ID rate  misses/run  resume  lost    nn');
+      out.push('───────────── ───────  ───────────  ──────────  ──────────  ──────  ────  ────');
+      for (const line of [row('last 7 days', recent), row('prior 7 days', prior)]) {
+        if (line) out.push(line);
+      }
+
+      const gates = {};
+      for (const s of recent) {
+        for (const [k, v] of Object.entries(s.failure_reasons || {})) gates[k] = (gates[k] || 0) + v;
+      }
+      const top = Object.entries(gates).sort((a, b) => b[1] - a[1]).slice(0, 6);
+      if (top.length) {
+        const priorGates = {};
+        for (const s of prior) {
+          for (const [k, v] of Object.entries(s.failure_reasons || {})) priorGates[k] = (priorGates[k] || 0) + v;
+        }
+        out.push('');
+        out.push('  top rejecting gates, last 7 days (vs prior 7):');
+        for (const [k, n] of top) {
+          const was = priorGates[k];
+          const trend = was ? ` (was ${was})` : '';
+          out.push(`    ${String(n).padStart(6)}x  ${k}${trend}`);
+        }
+      }
+    } else if (parsed.length) {
+      const thinRecent = parsed.filter((s) => now - Date.parse(s.ts) < 7 * DAY).length;
+      out.push('');
+      out.push(thinRecent
+        ? `re-ID gate diagnostics: ${thinRecent} sample(s) in the last 7 days, all too thin to`
+          + ' use. Either the store was very quiet or the live feed stopped — worth checking.'
+        : 're-ID gate diagnostics: no samples in the last 7 days. The daily audit may not be running.');
+    }
+  }
+} catch (err) {
+  out.push('');
+  out.push(`re-ID gate diagnostics unavailable: ${err.message}`);
+}
+
 out.push('');
 out.push('A collapse in mean dwell alongside a jump in identities per day is the');
 out.push('signature of the reconciler being off or mis-gated, not of a quiet week.');
