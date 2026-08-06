@@ -146,12 +146,29 @@ flag on, ids are never freed, and live occupancy counts what is currently
 tracked. Leave it off. Reproduce with
 `node analysis/11_persist_bindings_ab.mjs --file raw_tracks.jsonl`.
 
-**The committed reconciler engine beats the deployed one, and should go out
-after a supervised deploy.** The engine at Treviglio was last written 30 June
-12:07; later re-ID work from the same day was committed but never copied to the
-server. Since the deployed build is the one behind the only good week, "newer"
-was not sufficient reason to ship it, so both were run over the 19 May capture
-under identical `luca` gates (`analysis/12_engine_ab.mjs`).
+**The deployed reconciler engine stays. Do not ship the committed one.**
+
+First, what production actually runs, because a file timestamp misled me here.
+The engine on the droplet is byte-for-byte commit **`adde0d7`, 30 June 14:10
+CEST, "Fix Treviglio live reconciler trails and restore Luca tuning preset"** —
+verified by hashing the deployed file and finding the matching blob in history.
+Its 12:07 UTC mtime is when the file was last edited on the laptop, not when it
+shipped: the deploy used rsync, which preserves source timestamps. This is a
+deliberate, owner-validated build, not something left behind by accident.
+
+The database agrees, to the day. Per-day KPIs step change exactly on 30 June —
+identities fall from 43,660 to 4,276, mean dwell rises from 3.7 s to 11.0 s, and
+complete tracks from 1.7% to 19.3%, with 30 June itself reading as a part-day
+blend before settling at 13–17 s from 1 July until the edge died on 9 July.
+
+What is *not* deployed is **`2d6e2a1`, 90 minutes later at 15:41 CEST: "Merge
+origin/main: resolve TrajectoryReconciler conflict keeping remote re-ID fixes."**
+That merge resolved a conflict in this exact file by keeping the remote re-ID
+work over the tuning that had just been validated against the live track view.
+It never reached production, and on this evidence that was fortunate.
+
+Both builds were run over two captures under identical `luca` gates
+(`analysis/12_engine_ab.mjs`).
 
 Two of the four differences cancel out: `reid_stale_active_ms` and
 `reid_churn_active_ms` are supplied explicitly by the preset and normalise to
@@ -165,24 +182,37 @@ implied-speed teleport gate.
 | deployed (30 Jun) | 3,339 | 152 | 1.4 m | 29.4 m | 0.133 |
 | committed | 3,289 | **213** | **1.8 m** | **37.2 m** | 0.217 |
 
-The committed build reconstructs **40% more complete shopper journeys** (213 vs
-152) from the same data, with fewer identities and longer median and tail
-displacement. Teleports and ghost rate are unchanged.
+On this capture the committed build looks better: 213 complete shopper journeys
+against 152, fewer identities, longer median and tail displacement, and — the
+part that matters — **teleports unchanged at 4.49 against 4.46 per 1,000**.
 
-The one metric where the deployed build leads — mean lifetime 60.9 s against
-43.4 s, p95 308.8 s against 140.0 s — is not an advantage. Its tracks live twice
-as long while covering *less* ground, averaging 0.133 m/s against 0.217 m/s;
-raw is 0.234 m/s. Tracks that persist five minutes at a sixth of walking pace
-are static objects being held alive, and the missing de-duplication is a
-plausible mechanism: the same stable track can appear twice in the candidate
-list and absorb detections it should not.
+Then the same test on the 27 May capture (vendor build Raj 1.0.3) inverted it:
 
-That matters beyond track quality, because it inflates the customer KPI: zone
-dwell accumulated by a phantom is dwell nobody spent. It should be deployed, but
-supervised — deploy, then compare a full trading day against the weekly
-continuity report before and after, and roll back if journeys per day do not
-rise. One 34-minute capture is enough to justify the attempt, not to conclude
-it.
+| 27 May | identities | mean displacement | **teleports/1k** |
+|---|---|---|---|
+| raw (control) | 9,490 | 4.6 m | 5.94 |
+| deployed (`adde0d7`) | 5,297 | 10.5 m | **3.39** |
+| committed (post-merge) | 5,008 | 28.3 m | **15.86** |
+
+The committed build produces **4.7× more teleports than production, and 2.7×
+more than the raw vendor feed it is supposed to be cleaning up**. Its 28.3 m
+mean displacement is not longer journeys, it is the distance accumulated by
+impossible jumps — the sub-250 ms exemption on the implied-speed gate letting it
+stitch tracks that are metres apart. A reconciler that teleports more than its
+own input is worse than no reconciler.
+
+So the 19 May result was not wrong, it was not general. One capture justified
+the attempt; the second one settled it the other way. **Production keeps
+`adde0d7`.**
+
+> **Operational warning.** Because production runs `adde0d7` rather than the tip
+> of `main`, deploying this repository with a plain `git pull` or a full rsync
+> **will silently regress the live reconciler** to the post-merge build measured
+> above. Anyone deploying the backend must preserve
+> `backend/services/TrajectoryReconciler.js` at `adde0d7`, or the fix is to land
+> a commit that reverts that file to `adde0d7` on `main` so the two agree. The
+> exact deployed build is archived at
+> `analysis/engines/TrajectoryReconciler.deployed-2026-06-30.mjs`.
 
 **Index pruning is dropped.** The plan assumed three of the four
 `track_positions` indexes were redundant. They are not: `(venue_id, timestamp)`,

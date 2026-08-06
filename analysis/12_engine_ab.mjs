@@ -36,7 +36,15 @@ import { runReconcilerStream } from './lib/reconciler_metrics.mjs';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 function parseArgs(argv) {
-  const out = { file: null, outDir: path.join(__dirname, 'out'), venueId: null, after: null, before: null, runs: 1 };
+  const out = {
+    file: null, outDir: path.join(__dirname, 'out'), venueId: null, after: null, before: null,
+    // Both engines are addressable so this can run wherever the captures are —
+    // on the droplet the checked-out backend IS the deployed engine, so the
+    // committed one has to be supplied as a file.
+    engineDeployed: path.join(__dirname, 'engines', 'TrajectoryReconciler.deployed-2026-06-30.mjs'),
+    engineCommitted: null,
+    tag: null,
+  };
   for (let i = 2; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--file' || a === '-f') out.file = argv[++i];
@@ -44,6 +52,9 @@ function parseArgs(argv) {
     else if (a === '--venue-id') out.venueId = argv[++i];
     else if (a === '--after') out.after = argv[++i];
     else if (a === '--before') out.before = argv[++i];
+    else if (a === '--engine-deployed') out.engineDeployed = argv[++i];
+    else if (a === '--engine-committed') out.engineCommitted = argv[++i];
+    else if (a === '--tag') out.tag = argv[++i];
   }
   if (!out.file) { console.error('Missing --file'); process.exit(1); }
   return out;
@@ -55,7 +66,7 @@ const beforeMs = parseWhen(args.before);
 const outDir = path.resolve(args.outDir);
 fs.mkdirSync(outDir, { recursive: true });
 
-const PROD_ENGINE_PATH = path.join(__dirname, 'engines', 'TrajectoryReconciler.deployed-2026-06-30.mjs');
+const PROD_ENGINE_PATH = path.resolve(args.engineDeployed);
 
 const main = async () => {
   if (!fs.existsSync(PROD_ENGINE_PATH)) {
@@ -65,7 +76,9 @@ const main = async () => {
   }
 
   const prodEngine = await import(PROD_ENGINE_PATH);
-  const repoEngine = await import('../backend/services/TrajectoryReconciler.js');
+  const repoEngine = args.engineCommitted
+    ? await import(path.resolve(args.engineCommitted))
+    : await import('../backend/services/TrajectoryReconciler.js');
 
   const filePath = path.resolve(args.file);
   const venueId = args.venueId || await detectPrimaryVenue(filePath, { afterMs, beforeMs });
@@ -127,7 +140,7 @@ const main = async () => {
   console.log(`  teleports/1k        ${dep.teleports_per_1k.toFixed(2)} → ${com.teleports_per_1k.toFixed(2)}  (${pct(com.teleports_per_1k, dep.teleports_per_1k)}; fewer is better)`);
   console.log(`  invariant vs raw    deployed ${dep.n_stable <= raw.n_stable ? 'holds' : 'VIOLATED'}, committed ${com.n_stable <= raw.n_stable ? 'holds' : 'VIOLATED'}`);
 
-  const outPath = path.join(outDir, '12_engine_ab.json');
+  const outPath = path.join(outDir, `12_engine_ab${args.tag ? `_${args.tag}` : ''}.json`);
   fs.writeFileSync(outPath, JSON.stringify({ venueId, file: filePath, results }, null, 2));
   console.log(`\n→ ${outPath}`);
 };
