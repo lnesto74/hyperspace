@@ -28,7 +28,11 @@ export class TrajectoryStorageService extends EventEmitter {
     super();
     this.db = db;
     this.buffer = new Map(); // venueId -> Map<trackKey, positions[]>
-    this.visitSessions = new Map(); // trackKey -> { startTime, lastSeen, roiId, positions[] }
+    this.visitSessions = new Map(); // `${trackKey}:${roiId}` -> { startTime, lastSeen, roiId, positions[] }
+    // trackKey -> Set of its session keys. Zone entry/exit is evaluated on
+    // every frame now, and the old scan of every open session per track was
+    // affordable only at one call per 10 s.
+    this.sessionKeysByTrack = new Map();
     this.queueSessions = new Map(); // trackKey -> { queueZoneId, queueEntryTime, ... }
     this.zoneLinks = new Map(); // queueZoneId -> serviceZoneId (loaded from DB)
     this.zoneThresholds = new Map(); // roiId -> { dwellMs, engagementMs } (cached from DB)
@@ -1125,8 +1129,8 @@ export class TrajectoryStorageService extends EventEmitter {
           // Step 4: Clean up in-memory maps (fast, no DB)
           const sessionCutoff = Date.now() - 60 * 60 * 1000;
           let staleSessions = 0, staleQueues = 0;
-          for (const [key, session] of this.visitSessions.entries()) {
-            if (session.lastSeen < sessionCutoff) { this.visitSessions.delete(key); staleSessions++; }
+          for (const [key, session] of Array.from(this.visitSessions.entries())) {
+            if (session.lastSeen < sessionCutoff) { this._dropSession(key); staleSessions++; }
           }
           for (const [key, session] of this.queueSessions.entries()) {
             const lastActivity = session.lastSeenInService || session.lastSeenInQueue || session.queueEntryTime;
@@ -1255,33 +1259,121 @@ export class TrajectoryStorageService extends EventEmitter {
     });
   }
 
+  /** Add a session to the per-track index. */
+  _indexSession(trackKey, sessionKey) {
+    let keys = this.sessionKeysByTrack.get(trackKey);
+    if (!keys) {
+      keys = new Set();
+      this.sessionKeysByTrack.set(trackKey, keys);
+    }
+    keys.add(sessionKey);
+  }
+
+  /** Remove a session and keep the per-track index consistent with it. */
+  _dropSession(sessionKey) {
+    const session = this.visitSessions.get(sessionKey);
+    this.visitSessions.delete(sessionKey);
+    if (!session) return;
+    const keys = this.sessionKeysByTrack.get(session.trackKey);
+    if (!keys) return;
+    keys.delete(sessionKey);
+    if (keys.size === 0) this.sessionKeysByTrack.delete(session.trackKey);
+  }
+
   /**
-   * Update visit session for a track in an ROI
+   * Mark a track as present in an ROI right now.
+   *
+   * Called on every frame, so it does no allocation beyond the session itself
+   * and never touches the positions array — that stays on the sampled path,
+   * because a stored position costs a database row while a timestamp does not.
    */
-  updateVisitSession(venueId, trackKey, roiId, positionData, stableId = null) {
+  touchVisitSession(venueId, trackKey, roiId, pos, stableId = null) {
     const sessionKey = `${trackKey}:${roiId}`;
     const now = Date.now();
-    
-    if (!this.visitSessions.has(sessionKey)) {
-      // New visit session
-      this.visitSessions.set(sessionKey, {
+    let session = this.visitSessions.get(sessionKey);
+
+    if (!session) {
+      session = {
         venueId,
         trackKey,
         stableId,
         roiId,
         startTime: now,
         lastSeen: now,
-        entryPosition: { x: positionData.x, z: positionData.z },
-        positions: [positionData],
-      });
-    } else {
-      // Update existing session (limit positions to prevent memory leak)
-      const session = this.visitSessions.get(sessionKey);
-      session.lastSeen = now;
-      if (stableId) session.stableId = stableId;
-      if (session.positions.length < this.MAX_POSITIONS_PER_SESSION) {
-        session.positions.push(positionData);
+        entryPosition: { x: pos.x, z: pos.z },
+        lastPosition: { x: pos.x, z: pos.z },
+        positions: [],
+      };
+      this.visitSessions.set(sessionKey, session);
+      this._indexSession(trackKey, sessionKey);
+      return session;
+    }
+
+    session.lastSeen = now;
+    session.lastPosition.x = pos.x;
+    session.lastPosition.z = pos.z;
+    if (stableId) session.stableId = stableId;
+    return session;
+  }
+
+  /**
+   * Zone entry and exit for one venue's tracks, evaluated at full frame rate.
+   *
+   * This used to ride on the KPI batch, which throttles itself by load and,
+   * with 86 zones at Treviglio, settles at 10 s. Dwell was therefore quantised
+   * to that tick: a visit shorter than one tick recorded 0 ms, and everything
+   * else landed on a multiple of it. Roughly a third of all visits came out as
+   * exactly zero. Zone dwell is a headline KPI and heatmap sample density is
+   * not, so they no longer share a budget.
+   *
+   * The polygon test is cheap — a bounding-box reject, then a ray cast over a
+   * handful of vertices. Writing rows is the expensive part, and that is still
+   * throttled in recordTrackPosition.
+   */
+  updateZonePresenceBatch(venueId, tracks, rois) {
+    if (!tracks?.length || !rois?.length) return;
+    const vsCtx = this.getVisitSessionContext(venueId);
+    const now = Date.now();
+
+    for (const track of tracks) {
+      const pos = track.venuePosition;
+      if (!pos || !track.trackKey) continue;
+
+      const currentRois = this.findContainingRois(pos, rois);
+      let roiIds = null;
+
+      for (const roi of currentRois) {
+        // Entrance zones are counted by perimeter crossing, not by presence.
+        if (vsCtx.entranceRoiIds.has(roi.id)) continue;
+        this.touchVisitSession(venueId, track.trackKey, roi.id, pos, track.stableId || null);
+        if (this.zoneLinks.has(roi.id)) {
+          if (roiIds === null) roiIds = currentRois.map(r => r.id);
+          this.updateQueueSession(venueId, track.trackKey, roi.id, roiIds, now);
+        }
       }
+
+      this.checkVisitEnds(venueId, track.trackKey, currentRois);
+
+      if (this.hasActiveQueueSessions(track.trackKey)) {
+        if (roiIds === null) roiIds = currentRois.map(r => r.id);
+        this.checkQueueSessionEnds(track.trackKey, roiIds, now);
+      }
+    }
+  }
+
+  /**
+   * Update visit session for a track in an ROI
+   */
+  updateVisitSession(venueId, trackKey, roiId, positionData, stableId = null) {
+    const session = this.touchVisitSession(
+      venueId, trackKey, roiId,
+      { x: positionData.x, z: positionData.z },
+      stableId,
+    );
+    // Sampled positions only, which keeps isCompleteTrack counting the same
+    // things it counted before entry/exit moved to full rate.
+    if (session.positions.length < this.MAX_POSITIONS_PER_SESSION) {
+      session.positions.push(positionData);
     }
   }
 
@@ -1289,34 +1381,32 @@ export class TrajectoryStorageService extends EventEmitter {
    * Check if any visits have ended (track left ROI or timed out)
    */
   checkVisitEnds(venueId, trackKey, currentRois) {
+    const keys = this.sessionKeysByTrack.get(trackKey);
+    if (!keys || keys.size === 0) return;
+
     const currentRoiIds = new Set(currentRois.map(r => r.id));
     const now = Date.now();
-    
-    // Check all sessions for this track
-    for (const [sessionKey, session] of this.visitSessions.entries()) {
-      if (!sessionKey.startsWith(trackKey + ':')) continue;
-      
-      const roiId = sessionKey.split(':')[1];
-      const timeSinceLastSeen = now - session.lastSeen;
-      const visitDuration = session.lastSeen - session.startTime;
-      
-      // Track is still in this ROI - update lastSeen and continue
-      if (currentRoiIds.has(roiId)) {
+
+    // Snapshot: finalising mutates the set we are walking.
+    for (const sessionKey of Array.from(keys)) {
+      const session = this.visitSessions.get(sessionKey);
+      if (!session) { keys.delete(sessionKey); continue; }
+
+      // Still inside — refresh presence. Reads roiId off the session rather
+      // than splitting the key, which was wrong for any track id containing
+      // a colon.
+      if (currentRoiIds.has(session.roiId)) {
         session.lastSeen = now;
         continue;
       }
-      
-      // Track left ROI - check if grace period has passed
-      if (timeSinceLastSeen < this.VISIT_END_GRACE_MS) {
-        // Still within grace period, don't end yet
-        continue;
-      }
-      
-      // Grace period passed - finalize if visit was long enough
-      if (visitDuration >= this.MIN_VISIT_DURATION_MS) {
+
+      // Left the ROI: hold briefly in case this is a boundary flicker.
+      if (now - session.lastSeen < this.VISIT_END_GRACE_MS) continue;
+
+      if (session.lastSeen - session.startTime >= this.MIN_VISIT_DURATION_MS) {
         this.finalizeVisit(session);
       }
-      this.visitSessions.delete(sessionKey);
+      this._dropSession(sessionKey);
     }
   }
 
@@ -1325,7 +1415,13 @@ export class TrajectoryStorageService extends EventEmitter {
    */
   finalizeVisit(session) {
     const duration = session.lastSeen - session.startTime;
-    const lastPos = session.positions[session.positions.length - 1];
+    // Tracked at full rate, so it is the true exit point rather than the last
+    // sampled one — and it is always set, which the positions array is not now
+    // that a visit can end before it is ever sampled.
+    const lastPos = session.lastPosition
+      || session.positions[session.positions.length - 1]
+      || session.entryPosition
+      || { x: 0, z: 0 };
     
     // Get thresholds from zone/venue settings (cached)
     const thresholds = this.getThresholdsForROI(session.roiId, session.venueId);
@@ -2031,11 +2127,12 @@ export class TrajectoryStorageService extends EventEmitter {
    * Force end all active sessions (e.g., when track disappears)
    */
   endTrackSessions(trackKey) {
-    for (const [sessionKey, session] of this.visitSessions.entries()) {
-      if (sessionKey.startsWith(trackKey + ':')) {
-        this.finalizeVisit(session);
-        this.visitSessions.delete(sessionKey);
-      }
+    const keys = this.sessionKeysByTrack.get(trackKey);
+    if (!keys) return;
+    for (const sessionKey of Array.from(keys)) {
+      const session = this.visitSessions.get(sessionKey);
+      if (session) this.finalizeVisit(session);
+      this._dropSession(sessionKey);
     }
   }
 }

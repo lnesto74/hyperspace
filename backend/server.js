@@ -287,8 +287,20 @@ function getCachedRois(venueId) {
     }
     return { ...r, vertices, metadata, bbox: roiBBox(vertices) };
   });
-  roiCache.set(venueId, { rois: parsedRois, timestamp: now });
+  roiCache.set(venueId, {
+    rois: parsedRois,
+    // The LiDAR coverage polygon spans the whole venue, so every track is
+    // inside it and testing it every frame buys nothing.
+    presence: parsedRois.filter(r => !(r.name || '').includes('LiDAR Coverage')),
+    timestamp: now,
+  });
   return parsedRois;
+}
+
+/** ROIs worth testing for presence on every frame. */
+function getPresenceRois(venueId) {
+  getCachedRois(venueId);
+  return roiCache.get(venueId)?.presence || [];
 }
 
 function shouldRecordKpiForRoi(roi, heavyLoad) {
@@ -350,6 +362,18 @@ trackAggregator.on('tracks', (data) => {
   if (liveTracksPreview.length === 0 && !(demoStoragePreview && replayTracksPreview.length > 0)) return;
 
   const parsedRoisPreview = getCachedRois(data.venueId);
+
+  // Zone entry/exit runs on every frame, deliberately above the KPI throttle
+  // below. While it sat under that throttle, dwell inherited the throttle's
+  // cadence — 10 s at this venue's track×ROI cost — so any visit shorter than
+  // one tick was stored as 0 ms and the rest were rounded to a multiple of it.
+  // Only the polygon test moved up here; position rows stay throttled.
+  if (liveTracksPreview.length > 0) {
+    trajectoryStorage.updateZonePresenceBatch(
+      data.venueId, liveTracksPreview, getPresenceRois(data.venueId),
+    );
+  }
+
   const kpiInterval = getKpiIntervalMs(liveTracksPreview.length || data.tracks.length, parsedRoisPreview.length);
   const lastKpi = lastKpiRecordTime.get(data.venueId) || 0;
   if (now - lastKpi < kpiInterval) return;
