@@ -116,6 +116,38 @@ PY
   [ -n "$RECON_CHECK" ] && add "$RECON_CHECK"
 fi
 
+# ------------------------------------------------------------ ingest liveness
+# Every zone KPI is written from the track aggregator's emit loop, and that loop
+# used to be started only when a browser subscribed over the tracking socket. A
+# restart with nobody watching therefore stopped all recording silently, while
+# the broker, the MQTT connection, the reconciler config and the container
+# health check all still looked perfectly fine (2026-08-06, ~40 min lost).
+# Ingest starts the loop itself now, but no other check here would notice if
+# writing stopped for some different reason, so test the only thing that
+# ultimately matters: are rows still landing?
+INGEST_MAX_AGE_MIN="${INGEST_MAX_AGE_MIN:-20}"
+if [ -r "$DB_PATH" ] && command -v sqlite3 >/dev/null; then
+  HOUR_LOCAL=$(TZ=Europe/Rome date +%-H)
+  OPEN_H=$(sqlite3 "$DB_PATH" \
+    "SELECT COALESCE(opening_hour, 8) FROM venues WHERE id='$VENUE_ID';" 2>/dev/null)
+  CLOSE_H=$(sqlite3 "$DB_PATH" \
+    "SELECT COALESCE(closing_hour, 21) FROM venues WHERE id='$VENUE_ID';" 2>/dev/null)
+  # Only meaningful while the store is trading; an empty aisle at 03:00 is not a fault.
+  if [ -n "$OPEN_H" ] && [ -n "$CLOSE_H" ] \
+     && [ "$HOUR_LOCAL" -ge "$OPEN_H" ] && [ "$HOUR_LOCAL" -lt "$CLOSE_H" ]; then
+    LAST_TS=$(sqlite3 "$DB_PATH" \
+      "SELECT COALESCE(MAX(timestamp), 0) FROM track_positions WHERE venue_id='$VENUE_ID';" 2>/dev/null)
+    if [ -n "$LAST_TS" ] && [ "$LAST_TS" -gt 0 ]; then
+      AGE_MIN=$(( ( $(date +%s) * 1000 - LAST_TS ) / 60000 ))
+      if [ "$AGE_MIN" -gt "$INGEST_MAX_AGE_MIN" ]; then
+        add "No track positions written for ${AGE_MIN} min while the store is open (${OPEN_H}:00-${CLOSE_H}:00). Every zone KPI is stalled. Check that the track aggregator is emitting: docker logs hyperspace-backend-1 | grep 'Live pipeline started'."
+      fi
+    else
+      add "track_positions has no rows for this venue at all — ingest has never written."
+    fi
+  fi
+fi
+
 # ---------------------------------------------------------------------- disk
 DISK_PCT=$(df --output=pcent / | tail -1 | tr -dc '0-9')
 if [ -n "$DISK_PCT" ] && [ "$DISK_PCT" -ge "$DISK_PCT_MAX" ]; then
