@@ -101,6 +101,64 @@ Today there is no scheduled capture at all. Every claim in the vendor dossier
 rests on one 34.6-minute file from 19 May that happened to be recorded. If the
 dispute needs June or July evidence, it does not exist.
 
+#### What was actually built, and a correction (2026-08-06)
+
+3.1 shipped in two stages rather than one, and for a while only the first
+stage existed — worth recording, because the gap was not visible from any
+dashboard.
+
+The recorder writes **gzipped JSONL**, not Parquet, and that part is not a
+compromise: Parquet writes whole row groups and a footer, so it cannot be
+appended to from a live MQTT pipe without risking an unreadable file on every
+crash. Gzipped JSONL is the landing zone. A nightly job at 04:00 UTC then
+converts each finished day to Parquet, verifies the row count by re-opening
+the file, and only then deletes the JSONL.
+
+**The conversion stage was missed on the first pass.** For a day the archive
+was recording correctly but accumulating in a format that
+`analysis/01_explore.py` cannot read at all — it expects `mosquitto_sub -v`
+output where every line is `topic {json}`, and skips any line without a space,
+while the recorder stores bare compact payloads containing none. An archive no
+tool can open is not evidence, and nothing would have reported it, which is
+why `hyperspace-health-check.sh` now alarms on any JSONL day older than
+yesterday.
+
+The size argument turned out to be much weaker than the plan assumed, and the
+plan should not be trusted on this point. Measured on the live feed:
+
+| | per day | 30 days |
+|---|---|---|
+| planned: gzip JSONL | 0.68 GB | 20 GB |
+| planned: Parquet | 0.31 GB | 9.3 GB |
+| **actual: gzip JSONL** | **0.27 GB** | **8 GB** |
+| **actual: Parquet** | ~0.21 GB | ~6 GB |
+
+Parquet is only about **1.26× smaller than gzip** here, not the 2.2× the plan
+projected, because the estimate was extrapolated from the much denser 19 May
+capture. The real justification is that a converted day is a drop-in for the
+entire `analysis/` toolchain and can be queried a column at a time, not that
+it saves disk. Disk was never the binding constraint: 8 GB per 30 days already
+fit the budget written for Parquet.
+
+Provenance is carried in the Parquet key–value metadata — the source file's
+SHA-256, its row count, the converter version, and the axis relabeling
+(`x=position.x, z=position.y, y=position.z`) that matches `01_explore.py`. A
+`seq` column preserves the original arrival order. That chain is what lets a
+converted day be tied back to the exact bytes the vendor sent, verified end to
+end on the 5 August file.
+
+Retention differs by format, deliberately. Parquet is kept **90 days rolling
+plus the oldest file of each month indefinitely**; JSONL is deleted as soon as
+its Parquet verifies, with the pre-existing 30-day JSONL retention left in
+place purely as a backstop for days that fail to convert.
+
+| Piece | Where |
+|---|---|
+| Converter | `scripts/raw-archive-to-parquet.py`, image `hyperspace-parquet:1` |
+| Nightly job | `scripts/hyperspace-parquet-archive.sh`, cron 04:00 UTC |
+| Failure alarm | `scripts/hyperspace-health-check.sh`, unconverted day older than yesterday |
+| Verification | `scripts/verify-pipeline.sh` §6 |
+
 ### Phase 4 — Monitoring
 
 | # | Action | Effect | Effort |

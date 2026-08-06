@@ -182,7 +182,28 @@ if [ -n "$TODAY" ]; then
   if gzip -t "$TODAY" 2>/dev/null; then ok "archive decompresses cleanly"
   else warn "archive tail incomplete (expected while the current member is open)"; fi
 else bad "no raw archive files found"; fi
-echo "  $(ls /data/hyperspace/raw/*.jsonl.gz 2>/dev/null | wc -l) archive days, $(du -sh /data/hyperspace/raw 2>/dev/null | cut -f1) total"
+
+# Finished days should be Parquet, not JSONL. A JSONL older than yesterday
+# means the nightly conversion is failing and the archive is reverting to a
+# format none of the analysis tooling can open.
+docker image inspect hyperspace-parquet:1 >/dev/null 2>&1 \
+  && ok "parquet converter image present" || bad "parquet converter image MISSING"
+CUTOFF=$(date -u -d '2 days ago' +%Y-%m-%d)
+STALE=$(ls -1 /data/hyperspace/raw/hyperspace-raw-*.jsonl.gz 2>/dev/null \
+  | sed -e 's|.*/hyperspace-raw-||' -e 's|\.jsonl\.gz$||' \
+  | awk -v c="$CUTOFF" '$0 <= c' | tr '\n' ' ')
+if [ -n "$STALE" ]; then bad "days not converted to Parquet: ${STALE% }"
+else ok "all finished days converted to Parquet"; fi
+NPQ=$(ls -1 /data/hyperspace/raw/*.parquet 2>/dev/null | wc -l)
+if [ "$NPQ" -gt 0 ]; then
+  NEWPQ=$(ls -1t /data/hyperspace/raw/*.parquet 2>/dev/null | head -1)
+  PQROWS=$(docker run --rm -v /data/hyperspace/raw:/raw --entrypoint python3 hyperspace-parquet:1 -c \
+    "import pyarrow.parquet as pq; print(pq.ParquetFile('/raw/$(basename "$NEWPQ")').metadata.num_rows)" 2>/dev/null)
+  if [ -n "$PQROWS" ] && [ "$PQROWS" -gt 0 ]; then
+    ok "newest parquet readable — $(basename "$NEWPQ"), $(printf "%'d" "$PQROWS") frames"
+  else bad "newest parquet is unreadable: $(basename "$NEWPQ")"; fi
+else warn "no parquet days yet (expected until the first 04:00 run)"; fi
+echo "  $(ls /data/hyperspace/raw/*.jsonl.gz 2>/dev/null | wc -l) open JSONL, $NPQ parquet days, $(du -sh /data/hyperspace/raw 2>/dev/null | cut -f1) total"
 
 # ---------------------------------------------------------------- 7. backups
 hdr "7. Backups"
@@ -197,7 +218,7 @@ echo "  $(ls /data/hyperspace/backups/*.gz 2>/dev/null | wc -l) retained"
 
 # ------------------------------------------------------- 8. schedules & alerts
 hdr "8. Schedules and alerting"
-for job in hyperspace-health-check hyperspace-backup hyperspace-weekly-report hyperspace-raw-retention hyperspace-reid-audit; do
+for job in hyperspace-health-check hyperspace-backup hyperspace-weekly-report hyperspace-raw-retention hyperspace-reid-audit hyperspace-parquet-archive; do
   crontab -l 2>/dev/null | grep -q "$job" && ok "cron: $job" || bad "cron MISSING: $job"
 done
 systemctl is-active --quiet hyperspace-edge-heartbeat.timer \

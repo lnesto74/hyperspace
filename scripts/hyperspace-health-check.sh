@@ -133,6 +133,24 @@ else
   fi
 fi
 
+# ------------------------------------------------------- raw archive conversion
+# The recorder can only write gzipped JSONL, and a nightly job converts each
+# finished day to Parquet and deletes the JSONL. If that job fails the archive
+# keeps growing in a format none of the analysis tooling can actually open —
+# which looks fine from the outside, exactly like the reconciler being off did.
+# Days older than yesterday are given no benefit of the doubt; yesterday is,
+# because the conversion runs at 04:00.
+RAW_DIR="${RAW_ARCHIVE_DIR:-/data/hyperspace/raw}"
+if [ -d "$RAW_DIR" ]; then
+  CUTOFF=$(date -u -d '2 days ago' +%Y-%m-%d)
+  STALE=$(ls -1 "$RAW_DIR"/hyperspace-raw-*.jsonl.gz 2>/dev/null \
+    | sed -e 's|.*/hyperspace-raw-||' -e 's|\.jsonl\.gz$||' \
+    | awk -v c="$CUTOFF" '$0 <= c' | tr '\n' ' ')
+  if [ -n "$STALE" ]; then
+    add "Raw archive not converted to Parquet for: ${STALE% }. See /var/log/hyperspace-parquet-archive.log."
+  fi
+fi
+
 # ------------------------------------------------------------------ db bloat
 if [ -r "$DB_PATH" ] && command -v sqlite3 >/dev/null; then
   PAGES=$(sqlite3 "$DB_PATH" "PRAGMA page_count;" 2>/dev/null)
