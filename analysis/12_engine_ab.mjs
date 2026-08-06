@@ -1,11 +1,22 @@
-// Is the committed reconciler engine actually better than the deployed one?
+// Compare two builds of the reconciler engine over one capture.
 //
-// The engine running at Treviglio was last written on 30 June at 12:07 and has
-// never been updated. This checkout contains later re-ID work that was
-// committed the same day but never reached the server. "Newer" is not an
-// argument: the deployed build is the one that produced the only good week in
-// three months (29 Jun – 9 Jul), and the committed build has never processed a
-// real shopper. So measure it.
+// Written to settle whether the post-merge engine should replace the one
+// running at Treviglio. It should not, and `main` was reverted to the deployed
+// build (adde0d7) as a result — so by default this now compares that build
+// against itself. To reproduce the original question:
+//
+//   node analysis/12_engine_ab.mjs --file raw_tracks.jsonl \
+//     --engine-committed analysis/engines/TrajectoryReconciler.postmerge-2d6e2a1.mjs
+//
+// Both builds are archived under analysis/engines/ so the comparison does not
+// depend on what happens to be checked out.
+//
+// The answer, for the record: on the 19 May capture the post-merge build looks
+// better (213 journeys over 30 m against 152) with teleports unchanged. On the
+// 27 May capture it produces 15.86 teleports per 1,000 against 3.39 for the
+// deployed build and 5.94 for the raw vendor feed — it teleports more than the
+// input it is meant to be cleaning up, and its larger displacement is that jump
+// distance rather than longer journeys. One capture is not a result.
 //
 // Under the production `luca` gates, two of the four differences cancel out —
 // reid_stale_active_ms and reid_churn_active_ms are both supplied explicitly
@@ -18,11 +29,9 @@
 // Usage:
 //   node analysis/12_engine_ab.mjs --file raw_tracks.jsonl
 //
-// analysis/engines/TrajectoryReconciler.deployed-2026-06-30.mjs is a verbatim
-// snapshot of what Treviglio was running, kept because it is the build behind
-// the only good week and the droplet's copy would be lost by any redeploy. The
-// .mjs extension matters: that directory sits outside the backend package, so a
-// .js copy loads as CommonJS and fails. Refresh it with:
+// The .mjs extension matters: analysis/engines sits outside the backend
+// package, so a .js copy loads as CommonJS and fails. Re-snapshot production
+// with:
 //   ssh root@100.76.196.2 'cat /opt/hyperspace/backend/services/TrajectoryReconciler.js' \
 //     > analysis/engines/TrajectoryReconciler.deployed-2026-06-30.mjs
 

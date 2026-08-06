@@ -205,14 +205,29 @@ So the 19 May result was not wrong, it was not general. One capture justified
 the attempt; the second one settled it the other way. **Production keeps
 `adde0d7`.**
 
-> **Operational warning.** Because production runs `adde0d7` rather than the tip
-> of `main`, deploying this repository with a plain `git pull` or a full rsync
-> **will silently regress the live reconciler** to the post-merge build measured
-> above. Anyone deploying the backend must preserve
-> `backend/services/TrajectoryReconciler.js` at `adde0d7`, or the fix is to land
-> a commit that reverts that file to `adde0d7` on `main` so the two agree. The
-> exact deployed build is archived at
-> `analysis/engines/TrajectoryReconciler.deployed-2026-06-30.mjs`.
+**`main` has been reverted to match production, and that trap is now closed.**
+Until 6 August, `backend/services/TrajectoryReconciler.js` on `main` held the
+post-merge build while production ran `adde0d7`. Any deploy by `git pull` or
+full rsync would have silently regressed the live reconciler — no error, no
+warning, just dwell degrading again, which is the same failure mode as the
+reconciler flag being left off in July. The file on `main` is now byte-identical
+to the running container (`md5 ac530863014ea16e1e47a01b40647d6c`), so a normal
+deploy is safe by default.
+
+Nothing is lost: the merge remains in history at `2d6e2a1`, and both builds are
+archived under `analysis/engines/` so the comparison stays reproducible
+regardless of what is checked out. Re-run it with:
+
+```bash
+node analysis/12_engine_ab.mjs --file raw_tracks.jsonl \
+  --engine-committed analysis/engines/TrajectoryReconciler.postmerge-2d6e2a1.mjs
+```
+
+The remote re-ID work discarded by this revert may still contain something
+worth having — `5edbdb2` was fixing a real defect, `reid_count` never leaving
+zero. Recovering it means redoing the merge deliberately, keeping the validated
+Luca tuning underneath, and benchmarking across several captures before it goes
+anywhere near Treviglio. That is its own task, not a deploy.
 
 **Index pruning is dropped.** The plan assumed three of the four
 `track_positions` indexes were redundant. They are not: `(venue_id, timestamp)`,
