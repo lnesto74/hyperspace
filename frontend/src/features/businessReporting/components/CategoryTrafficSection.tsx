@@ -54,9 +54,9 @@ export default function CategoryTrafficSection({
       <div className="px-3 py-2 border-b border-gray-700/60 flex items-center justify-between gap-2">
         <div>
           <span className="text-xs font-medium text-white">Category Traffic</span>
-          <span className="text-[10px] text-gray-500 ml-2">Surgelati · Frutta · Verdura · …</span>
+          <span className="text-xs text-gray-400 ml-2">Surgelati · Frutta · Verdura · …</span>
         </div>
-        <span className="text-[10px] text-gray-500 shrink-0 hidden sm:inline">
+        <span className="text-xs text-gray-400 shrink-0 hidden sm:inline">
           hover row → highlight · click → lock · expand → full heatmap
         </span>
       </div>

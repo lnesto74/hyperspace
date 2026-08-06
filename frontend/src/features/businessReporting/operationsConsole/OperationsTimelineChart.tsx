@@ -77,11 +77,11 @@ export default function OperationsTimelineChart({
     const altHasData = altPoints.some(p => p.value > 0);
     return (
       <div className="rounded-lg border border-gray-700/80 bg-gray-800/40 p-4 min-h-[200px] flex flex-col items-center justify-center gap-1">
-        <span className="text-xs text-gray-500">No store activity data for this range</span>
+        <span className="text-xs text-gray-400">No store activity data for this range</span>
         {altHasData && !forcedMode && (
           <button
             type="button"
-            className="text-[10px] text-gray-400 hover:text-white"
+            className="text-xs text-gray-400 hover:text-white"
             onClick={() => setMode(activeMode === 'occupancy' ? 'footfall' : 'occupancy')}
           >
             Switch to {activeMode === 'occupancy' ? 'footfall' : 'ingress visits'} →
@@ -96,7 +96,7 @@ export default function OperationsTimelineChart({
       <div className="flex items-center justify-between mb-2 gap-2">
         <div>
           <h3 className="text-xs font-semibold text-white">Store Activity</h3>
-          <p className="text-[10px] text-gray-500">
+          <p className="text-xs text-gray-400">
             {grainLabel} · {activeMode === 'occupancy' ? 'peak IDs per frame (same as MQTT live)' : 'ingress crossings (entry + exit)'}
             {showCategoryBadges && ' · top categories on bars when zoomed in'}
           </p>
@@ -107,8 +107,8 @@ export default function OperationsTimelineChart({
               <button
                 type="button"
                 onClick={() => setMode('occupancy')}
-                className={`px-2 py-0.5 text-[10px] rounded ${
-                  activeMode === 'occupancy' ? 'bg-white/10 text-white' : 'text-gray-500 hover:text-gray-300'
+                className={`px-2 py-0.5 text-xs rounded ${
+                  activeMode === 'occupancy' ? 'bg-white/10 text-white' : 'text-gray-400 hover:text-gray-300'
                 }`}
               >
                 Shoppers
@@ -116,8 +116,8 @@ export default function OperationsTimelineChart({
               <button
                 type="button"
                 onClick={() => setMode('footfall')}
-                className={`px-2 py-0.5 text-[10px] rounded ${
-                  activeMode === 'footfall' ? 'bg-white/10 text-white' : 'text-gray-500 hover:text-gray-300'
+                className={`px-2 py-0.5 text-xs rounded ${
+                  activeMode === 'footfall' ? 'bg-white/10 text-white' : 'text-gray-400 hover:text-gray-300'
                 }`}
               >
                 Footfall
@@ -133,7 +133,7 @@ export default function OperationsTimelineChart({
           onMouseLeave={() => setHoveredIdx(null)}
         >
           <div
-            className="flex flex-col justify-between shrink-0 text-[9px] text-gray-500 tabular-nums py-0.5"
+            className="flex flex-col justify-between shrink-0 text-[11px] text-gray-400 tabular-nums py-0.5"
             style={{ height: chartPlotH, minWidth: 24 }}
             aria-hidden
           >
@@ -160,7 +160,7 @@ export default function OperationsTimelineChart({
                   onMouseEnter={() => setHoveredIdx(i)}
                 >
                   {isHovered && (
-                    <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1 z-50 bg-gray-900 border border-gray-600 rounded px-2 py-1 text-[10px] text-white whitespace-nowrap pointer-events-none shadow-lg">
+                    <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1 z-50 bg-gray-900 border border-gray-600 rounded px-2 py-1 text-xs text-white whitespace-nowrap pointer-events-none shadow-lg">
                       <div className="font-medium">{p.label}</div>
                       <div>{valueLabel}: <b>{p.value}</b></div>
                       {activeMode === 'occupancy' && p.avgVal != null && p.avgVal !== p.value && (
@@ -191,7 +191,7 @@ export default function OperationsTimelineChart({
           </div>
         </div>
 
-        <div className="flex justify-between text-[9px] text-gray-500 mt-2 pl-7 pr-0.5">
+        <div className="flex justify-between text-[11px] text-gray-400 mt-2 pl-7 pr-0.5">
           <span className="truncate max-w-[30%]">{visiblePoints[0]?.label}</span>
           {visiblePoints.length > 2 && (
             <span className="truncate max-w-[30%] text-center">

@@ -50,7 +50,7 @@ export function KpiTooltip({ text, children }: { text: string; children?: ReactN
         onMouseLeave={hide}
         onFocus={show}
         onBlur={hide}
-        className="ml-1 p-0.5 rounded-full text-gray-500 hover:text-gray-300 focus:text-cyan-400 transition-colors"
+        className="ml-1 p-0.5 rounded-full text-gray-400 hover:text-gray-300 focus:text-cyan-400 transition-colors"
       >
         <HelpCircle className="w-3 h-3" />
       </button>
@@ -58,7 +58,7 @@ export function KpiTooltip({ text, children }: { text: string; children?: ReactN
         <span
           id={id}
           role="tooltip"
-          className="fixed w-56 max-w-[min(16rem,calc(100vw-1.5rem))] px-2.5 py-2 text-[10px] leading-snug text-gray-200 bg-gray-950 border border-gray-600 rounded-lg shadow-2xl pointer-events-none"
+          className="fixed w-56 max-w-[min(16rem,calc(100vw-1.5rem))] px-2.5 py-2 text-xs leading-snug text-gray-200 bg-gray-950 border border-gray-600 rounded-lg shadow-2xl pointer-events-none"
           style={{
             zIndex: 100000,
             top: pos.top,
@@ -180,7 +180,15 @@ export function ActivityTimelineChart({
   className?: string;
 }) {
   const dailyHasData = timelines.daily.visitors.some(p => p.value > 0) || timelines.daily.dwells.some(p => p.value > 0);
-  const [view, setView] = useState<'hourly' | 'daily'>(dailyHasData ? 'daily' : 'hourly');
+  // One bar is not a rhythm. On a short window the daily series collapses to a
+  // single pair of bars filling the panel, which reads as a rendering fault
+  // rather than as a day of trade, so the hourly shape is shown instead.
+  const dailyIsUseful = timelines.daily.visitors.filter(p => p.value > 0).length > 1;
+  const [view, setView] = useState<'hourly' | 'daily'>(dailyIsUseful ? 'daily' : 'hourly');
+
+  useEffect(() => {
+    setView(dailyIsUseful ? 'daily' : 'hourly');
+  }, [dailyIsUseful]);
   const [hover, setHover] = useState<{ index: number; x: number; y: number } | null>(null);
 
   const timeline = view === 'hourly' ? timelines.hourly : timelines.daily;
@@ -191,7 +199,7 @@ export function ActivityTimelineChart({
 
   if (!hasData && !dailyHasData) {
     return (
-      <div className={`flex items-center justify-center h-28 text-[10px] text-gray-500 ${className}`}>
+      <div className={`flex items-center justify-center h-28 text-xs text-gray-400 ${className}`}>
         No activity timeline for this range
       </div>
     );
@@ -217,7 +225,7 @@ export function ActivityTimelineChart({
   return (
     <div className={className}>
       <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
-        <span className="text-[10px] text-gray-400 uppercase tracking-wider flex items-center">
+        <span className="text-xs text-gray-400 uppercase tracking-wider flex items-center">
           Store rhythm
           <KpiTooltip text={PULSE_TOOLTIPS.storeRhythm} />
         </span>
@@ -225,25 +233,27 @@ export function ActivityTimelineChart({
           <button
             type="button"
             onClick={() => { setView('hourly'); hideTooltip(); }}
-            className={`px-2 py-0.5 text-[10px] rounded transition-colors ${
+            className={`px-2 py-0.5 text-xs rounded transition-colors ${
               view === 'hourly' ? 'bg-cyan-600 text-white' : 'text-gray-400 hover:text-white'
             }`}
           >
             Today · hourly
           </button>
-          <button
-            type="button"
-            onClick={() => { setView('daily'); hideTooltip(); }}
-            className={`px-2 py-0.5 text-[10px] rounded transition-colors ${
-              view === 'daily' ? 'bg-cyan-600 text-white' : 'text-gray-400 hover:text-white'
-            }`}
-          >
-            Week · daily
-          </button>
+          {dailyIsUseful && (
+            <button
+              type="button"
+              onClick={() => { setView('daily'); hideTooltip(); }}
+              className={`px-2 py-0.5 text-xs rounded transition-colors ${
+                view === 'daily' ? 'bg-cyan-600 text-white' : 'text-gray-400 hover:text-white'
+              }`}
+            >
+              Week · daily
+            </button>
+          )}
         </div>
       </div>
 
-      <p className="text-[9px] text-gray-500 mb-2">
+      <p className="text-[11px] text-gray-400 mb-2">
         {view === 'hourly'
           ? (() => {
             const hourly = timelines.hourly;
@@ -257,7 +267,7 @@ export function ActivityTimelineChart({
           : 'Selected period — one bar pair per day'}
       </p>
 
-      <div className="flex gap-3 text-[9px] text-gray-500 mb-2">
+      <div className="flex gap-3 text-[11px] text-gray-400 mb-2">
         <span className="flex items-center gap-1.5">
           <span className="w-2.5 h-2.5 rounded-sm bg-cyan-500/90" />
           Entrants
@@ -312,7 +322,7 @@ export function ActivityTimelineChart({
             return (
               <span
                 key={i}
-                className="flex-1 min-w-0 text-center text-[8px] text-gray-500 truncate leading-tight"
+                className="flex-1 min-w-0 text-center text-[10px] text-gray-400 truncate leading-tight"
                 title={label}
               >
                 {label.replace(':00', '')}
@@ -324,7 +334,7 @@ export function ActivityTimelineChart({
 
       {hover != null && createPortal(
         <div
-          className="fixed pointer-events-none z-[100000] px-2.5 py-2 rounded-lg border border-gray-600 bg-gray-950 shadow-2xl text-[10px] text-gray-200 min-w-[9rem]"
+          className="fixed pointer-events-none z-[100000] px-2.5 py-2 rounded-lg border border-gray-600 bg-gray-950 shadow-2xl text-xs text-gray-200 min-w-[9rem]"
           style={{
             left: hover.x,
             top: hover.y,
@@ -398,15 +408,15 @@ export function ExecutivePulseBand({
               <span className="relative inline-flex rounded-full h-2 w-2 bg-cyan-500" />
             </span>
             <h2 className="text-sm font-semibold text-white">{venueName}</h2>
-            <span className="text-[10px] text-cyan-400/90 font-medium">Live store intelligence</span>
+            <span className="text-xs text-cyan-400/90 font-medium">Live store intelligence</span>
           </div>
-          <p className="text-[10px] text-gray-500 mt-0.5 max-w-xl">
+          <p className="text-xs text-gray-400 mt-0.5 max-w-xl">
             {SECTION_TOOLTIPS.heatmap} {SECTION_TOOLTIPS.timeline}
           </p>
         </div>
         <div className="flex items-center gap-3 px-3 py-2 rounded-xl bg-gray-900/60 border border-gray-700/50">
           <div className="text-right">
-            <div className="text-[9px] text-gray-500 uppercase tracking-wider flex items-center justify-end">
+            <div className="text-[11px] text-gray-400 uppercase tracking-wider flex items-center justify-end">
               In store now
               <KpiTooltip text={PULSE_TOOLTIPS.inStoreNow} />
             </div>
@@ -420,7 +430,7 @@ export function ExecutivePulseBand({
           <ActivityTimelineChart timelines={timelines} storeHoursLabel={storeHoursLabel} />
           {topCats.length > 0 && (
             <div className="space-y-1 pt-1">
-              <div className="text-[9px] text-gray-500 uppercase tracking-wider mb-1 flex items-center">
+              <div className="text-[11px] text-gray-400 uppercase tracking-wider mb-1 flex items-center">
                 Top categories
                 <KpiTooltip text={PULSE_TOOLTIPS.topCategories} />
               </div>
@@ -448,9 +458,9 @@ export function ExecutivePulseBand({
                       active ? 'bg-cyan-500/10 ring-1 ring-cyan-500/25' : 'hover:bg-gray-800/50'
                     }`}
                   >
-                    <div className="flex justify-between text-[10px] mb-0.5">
+                    <div className="flex justify-between text-xs mb-0.5">
                       <span className={`truncate ${active ? 'text-white' : 'text-gray-300'}`}>{row.category}</span>
-                      <span className="text-gray-500 tabular-nums shrink-0 ml-2">{row.totalVisits.toLocaleString()}</span>
+                      <span className="text-gray-400 tabular-nums shrink-0 ml-2">{row.totalVisits.toLocaleString()}</span>
                     </div>
                     <div className="h-1 rounded-full bg-gray-800 overflow-hidden">
                       <div
@@ -480,14 +490,14 @@ export function ExecutivePulseBand({
                 <button
                   type="button"
                   onClick={onExpandHeatmap}
-                  className="absolute top-3 right-3 flex items-center gap-1 px-2 py-1 text-[10px] rounded-md bg-gray-900/80 border border-gray-600 text-gray-300 hover:text-white hover:border-cyan-500/50 transition-colors"
+                  className="absolute top-3 right-3 flex items-center gap-1 px-2 py-1 text-xs rounded-md bg-gray-900/80 border border-gray-600 text-gray-300 hover:text-white hover:border-cyan-500/50 transition-colors"
                 >
                   <Maximize2 className="w-3 h-3" /> Full heatmap
                 </button>
               )}
             </>
           ) : (
-            <div className="flex items-center justify-center h-full min-h-[200px] text-xs text-gray-500 p-6 text-center">
+            <div className="flex items-center justify-center h-full min-h-[200px] text-xs text-gray-400 p-6 text-center">
               Map shelf categories to enable the 3D traffic heatmap
             </div>
           )}

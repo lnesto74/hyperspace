@@ -128,7 +128,7 @@ export default function PebleEffectivenessViewport({
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-40 text-gray-500 text-sm">
+      <div className="flex items-center justify-center h-40 text-gray-400 text-sm">
         Loading screen map…
       </div>
     )
@@ -136,7 +136,7 @@ export default function PebleEffectivenessViewport({
 
   if (!hasMapData && activeCampaigns.length === 0) {
     return (
-      <div className="flex items-center justify-center h-40 text-gray-500 text-sm">
+      <div className="flex items-center justify-center h-40 text-gray-400 text-sm">
         No DOOH screens or campaign data for this venue.
       </div>
     )
@@ -152,7 +152,7 @@ export default function PebleEffectivenessViewport({
           <div className="min-w-0">
             <span className="text-xs font-medium text-gray-300">Screen & Campaign Map</span>
             {windowLabel && (
-              <p className="text-[10px] text-gray-500 truncate">Data window: {windowLabel}</p>
+              <p className="text-xs text-gray-400 truncate">Data window: {windowLabel}</p>
             )}
           </div>
         </div>
@@ -164,7 +164,7 @@ export default function PebleEffectivenessViewport({
             className={`px-2.5 py-1 text-[11px] rounded transition-colors ${
               !isUnder
                 ? 'bg-green-500/20 text-green-300 border border-green-500/40'
-                : 'text-gray-500 hover:text-gray-300 disabled:opacity-40'
+                : 'text-gray-400 hover:text-gray-300 disabled:opacity-40'
             }`}
           >
             Top campaigns ({topCampaigns.length})
@@ -176,13 +176,13 @@ export default function PebleEffectivenessViewport({
             className={`px-2.5 py-1 text-[11px] rounded transition-colors ${
               isUnder
                 ? 'bg-red-500/20 text-red-300 border border-red-500/40'
-                : 'text-gray-500 hover:text-gray-300 disabled:opacity-40'
+                : 'text-gray-400 hover:text-gray-300 disabled:opacity-40'
             }`}
           >
             Needs attention ({underperformingCampaigns.length})
           </button>
         </div>
-        <span className="text-[10px] text-gray-500 w-full sm:w-auto text-right">
+        <span className="text-xs text-gray-400 w-full sm:w-auto text-right">
           {doohScreens.length} screens · {activeCampaigns.length} campaigns
         </span>
       </div>
@@ -208,7 +208,7 @@ export default function PebleEffectivenessViewport({
                   height={mapHeight}
                 />
               </div>
-              <div className="flex items-center gap-3 mt-2 px-1 text-[10px] text-gray-500">
+              <div className="flex items-center gap-3 mt-2 px-1 text-xs text-gray-400">
                 <span className="flex items-center gap-1">
                   <span className="w-2.5 h-2.5 border border-cyan-400/50 bg-cyan-400/10 rounded-sm" />
                   DWG fixtures
@@ -230,7 +230,7 @@ export default function PebleEffectivenessViewport({
               </div>
             </>
           ) : (
-            <div className="flex items-center justify-center h-40 text-gray-500 text-xs rounded-md border border-gray-700/60">
+            <div className="flex items-center justify-center h-40 text-gray-400 text-xs rounded-md border border-gray-700/60">
               No screen positions configured — campaign list still available →
             </div>
           )}
@@ -262,7 +262,7 @@ export default function PebleEffectivenessViewport({
                   <div className="flex justify-between items-start gap-2">
                     <div className="min-w-0 flex-1">
                       <div className="truncate leading-snug font-medium">{campaign.name}</div>
-                      <div className="flex flex-wrap gap-1.5 mt-1 text-[10px] text-gray-500">
+                      <div className="flex flex-wrap gap-1.5 mt-1 text-xs text-gray-400">
                         <span>{scoreLabel} {primaryScore.toFixed(1)}{scoreLabel === 'EAL' ? '%' : ''}</span>
                         <span>·</span>
                         <span>{campaign.exposures.toLocaleString()} exp</span>
@@ -270,7 +270,7 @@ export default function PebleEffectivenessViewport({
                         <span>{campaign.confidence.toFixed(0)}% conf</span>
                       </div>
                     </div>
-                    <span className="text-[10px] text-gray-500 shrink-0 tabular-nums">
+                    <span className="text-xs text-gray-400 shrink-0 tabular-nums">
                       AAR {campaign.aar.toFixed(1)}%
                     </span>
                   </div>
@@ -278,7 +278,7 @@ export default function PebleEffectivenessViewport({
               )
             })}
             {activeCampaigns.length === 0 && (
-              <p className="text-gray-500 text-xs px-1">
+              <p className="text-gray-400 text-xs px-1">
                 {isUnder ? 'No underperforming campaigns in this period.' : 'No top campaigns in this period.'}
               </p>
             )}

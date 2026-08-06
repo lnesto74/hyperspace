@@ -21,21 +21,21 @@ export default function OperationsCheckoutPanel({
       <div className="flex items-center justify-between mb-2">
         <h3 className="text-xs font-semibold text-white">Checkout</h3>
         {lanes.length > 0 && (
-          <span className="text-[10px] text-gray-500">{lanes.length} lanes</span>
+          <span className="text-xs text-gray-400">{lanes.length} lanes</span>
         )}
       </div>
 
       <div className="grid grid-cols-3 gap-2 mb-2">
         <div className="rounded-md bg-gray-900/60 px-2 py-1.5 border border-gray-700/50">
-          <div className="text-[9px] text-gray-500">Queue now</div>
+          <div className="text-[11px] text-gray-400">Queue now</div>
           <div className="text-lg font-bold text-white tabular-nums">{totalQueueLength}</div>
         </div>
         <div className="rounded-md bg-gray-900/60 px-2 py-1.5 border border-gray-700/50">
-          <div className="text-[9px] text-gray-500 flex items-center gap-0.5"><Clock className="w-2.5 h-2.5" /> Avg wait</div>
+          <div className="text-[11px] text-gray-400 flex items-center gap-0.5"><Clock className="w-2.5 h-2.5" /> Avg wait</div>
           <div className={`text-lg font-bold tabular-nums ${avgWaitMin > 5 ? 'text-red-400' : 'text-white'}`}>{avgWaitMin.toFixed(1)}m</div>
         </div>
         <div className="rounded-md bg-gray-900/60 px-2 py-1.5 border border-gray-700/50">
-          <div className="text-[9px] text-gray-500">Abandon</div>
+          <div className="text-[11px] text-gray-400">Abandon</div>
           <div className={`text-lg font-bold tabular-nums ${abandonRate > 15 ? 'text-red-400' : 'text-white'}`}>
             {abandonRate.toFixed(1)}%
           </div>
@@ -43,7 +43,7 @@ export default function OperationsCheckoutPanel({
       </div>
 
       {busiest && (
-        <div className="text-[10px] text-gray-400 mb-2">
+        <div className="text-xs text-gray-400 mb-2">
           Busiest: <span className="text-gray-200">{busiest.name}</span>
           {' '}· {busiest.sessions} sessions · {busiest.avgWaitMin.toFixed(1)}m avg
         </div>
@@ -56,7 +56,7 @@ export default function OperationsCheckoutPanel({
               key={lane.id}
               className="rounded-md border border-gray-700/60 bg-gray-900/40 px-2.5 py-2"
             >
-              <div className="text-[10px] text-white truncate mb-1.5">{lane.name.replace(' - Queue', '')}</div>
+              <div className="text-xs text-white truncate mb-1.5">{lane.name.replace(' - Queue', '')}</div>
               <div className="grid grid-cols-3 sm:grid-cols-6 gap-1.5 text-center">
                 <LaneStat label="Sessions" value={String(lane.sessions)} />
                 <LaneStat label="Completed" value={String(lane.completed)} />
@@ -69,7 +69,7 @@ export default function OperationsCheckoutPanel({
           ))}
         </div>
       ) : (
-        <p className="text-[10px] text-gray-500 text-center py-2">No queue sessions in this period</p>
+        <p className="text-xs text-gray-400 text-center py-2">No queue sessions in this period</p>
       )}
     </div>
   );
@@ -78,8 +78,8 @@ export default function OperationsCheckoutPanel({
 function LaneStat({ label, value }: { label: string; value: string }) {
   return (
     <div>
-      <div className="text-[8px] text-gray-500">{label}</div>
-      <div className="text-[10px] text-white tabular-nums">{value}</div>
+      <div className="text-[10px] text-gray-400">{label}</div>
+      <div className="text-xs text-white tabular-nums">{value}</div>
     </div>
   );
 }

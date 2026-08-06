@@ -170,11 +170,24 @@ class VenueState {
  * Main reconciler. Multi-venue.
  */
 export class TrajectoryReconciler {
-  constructor(getVenueConfig = () => DEFAULT_CONFIG) {
+  /**
+   * @param getVenueConfig function(venueId) => config object
+   * @param options.now    source of the reconciler's internal clock.
+   *
+   * Live ingest must age tracks by wall time, because an MQTT timestamp can lag
+   * by minutes and a track judged on it would be retired the moment it arrived.
+   * Replaying an archive is the opposite case: the frames are hours old and
+   * arrive far faster than real time, so wall time makes every gap look
+   * instantaneous and nothing ever expires — the track pool then grows for the
+   * whole capture and each sweep walks all of it. Offline callers pass a clock
+   * driven by the frames themselves; live callers get Date.now unchanged.
+   */
+  constructor(getVenueConfig = () => DEFAULT_CONFIG, { now = Date.now } = {}) {
     /** venueId -> VenueState */
     this.venues = new Map();
     /** function(venueId) => config object */
     this.getVenueConfig = getVenueConfig;
+    this.now = now;
   }
 
   setVenueConfig(venueId, config) {
@@ -210,7 +223,7 @@ export class TrajectoryReconciler {
     const state = this.getOrCreateState(venueId);
     const cfg = state.config;
     state.stats.raw_total++;
-    state.stats.last_track_ts = Date.now();
+    state.stats.last_track_ts = this.now();
     if (!state.stats.first_track_ts) state.stats.first_track_ts = state.stats.last_track_ts;
 
     if (!cfg.enabled) {
@@ -219,9 +232,10 @@ export class TrajectoryReconciler {
     }
 
     const perceptionId = track.id;
-    // Internal clocks must use wall time — sweep() uses Date.now(). MQTT
-    // track.timestamp can lag minutes and triggers instant static_fixture drops.
-    const now = Date.now();
+    // Internal clocks must agree with sweep(). Live that means wall time, since
+    // an MQTT timestamp can lag minutes and would trigger instant
+    // static_fixture drops; offline it means the archive's own clock.
+    const now = this.now();
     const pos = track.venuePosition || track.position;
     const vel = track.velocity || { x: 0, y: 0, z: 0 };
     if (!pos || !Number.isFinite(pos.x) || !Number.isFinite(pos.z)) {
@@ -379,7 +393,7 @@ export class TrajectoryReconciler {
    *
    * Returns: Array<{ venueId, stableId, trackKey, reason: 'newly_lost'|'expired'|'static_fixture' }>
    */
-  sweep(now = Date.now()) {
+  sweep(now = this.now()) {
     const events = [];
     for (const state of this.venues.values()) {
       const cfg = state.config;

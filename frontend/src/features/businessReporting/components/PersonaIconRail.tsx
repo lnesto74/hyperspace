@@ -1,4 +1,4 @@
-import { Store, ShoppingBag, Monitor, TrendingUp, Landmark } from 'lucide-react';
+import { Store, ShoppingBag, Monitor, TrendingUp, Landmark, Microscope } from 'lucide-react';
 import { PERSONAS } from '../personas';
 
 function getPersonaIcon(iconName: string) {
@@ -8,6 +8,7 @@ function getPersonaIcon(iconName: string) {
     case 'Monitor': return Monitor;
     case 'TrendingUp': return TrendingUp;
     case 'Landmark': return Landmark;
+    case 'Microscope': return Microscope;
     default: return Store;
   }
 }

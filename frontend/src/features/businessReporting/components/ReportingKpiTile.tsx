@@ -112,7 +112,7 @@ export default function ReportingKpiTile({ definition, value, previousValue }: R
             onMouseEnter={handleMouseEnter}
             onMouseLeave={() => setShowTooltip(false)}
             onClick={(e) => { e.stopPropagation(); setShowTooltip(!showTooltip); }}
-            className="text-gray-500 hover:text-gray-300 transition-colors p-1"
+            className="text-gray-400 hover:text-gray-300 transition-colors p-1"
           >
             <HelpCircle className="w-4 h-4" />
           </button>
@@ -141,7 +141,7 @@ export default function ReportingKpiTile({ definition, value, previousValue }: R
         </span>
         {definition.unit && value !== null && value !== undefined && 
          !['percent', 'seconds', 'minutes', 'currency'].includes(definition.format) && (
-          <span className="text-sm text-gray-500">{definition.unit}</span>
+          <span className="text-sm text-gray-400">{definition.unit}</span>
         )}
         
         {/* Trend Indicator */}
@@ -160,7 +160,7 @@ export default function ReportingKpiTile({ definition, value, previousValue }: R
           </span>
         )}
         {trendDirection === 'flat' && (
-          <span className="flex items-center text-xs text-gray-500">
+          <span className="flex items-center text-xs text-gray-400">
             <Minus className="w-3 h-3" />
           </span>
         )}

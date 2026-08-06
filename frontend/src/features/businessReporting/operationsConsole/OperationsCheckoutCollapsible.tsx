@@ -22,13 +22,13 @@ export default function OperationsCheckoutCollapsible(props: OperationsCheckoutC
         className="w-full flex items-center justify-between px-3 py-2 hover:bg-gray-800/60 transition-colors"
       >
         <div className="flex items-center gap-2 text-left">
-          {open ? <ChevronDown className="w-3.5 h-3.5 text-gray-500" /> : <ChevronRight className="w-3.5 h-3.5 text-gray-500" />}
+          {open ? <ChevronDown className="w-3.5 h-3.5 text-gray-400" /> : <ChevronRight className="w-3.5 h-3.5 text-gray-400" />}
           <span className="text-xs font-medium text-white">Checkout Performance</span>
-          <span className="text-[10px] text-gray-500">
+          <span className="text-xs text-gray-400">
             wait {avgWaitMin.toFixed(1)}m · queue {totalQueueLength} · abandon {abandonRate.toFixed(1)}%
           </span>
         </div>
-        <span className="text-[10px] text-gray-500">{lanes.length} lanes</span>
+        <span className="text-xs text-gray-400">{lanes.length} lanes</span>
       </button>
       {open && (
         <div className="px-3 pb-3 border-t border-gray-700/60 pt-2">

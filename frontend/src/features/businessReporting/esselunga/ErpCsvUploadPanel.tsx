@@ -55,13 +55,13 @@ export default function ErpCsvUploadPanel({
             {hasData && <CheckCircle className="w-3 h-3 text-green-400" />}
           </div>
           {!compact && (
-            <p className="text-[10px] text-gray-400 mt-1">
+            <p className="text-xs text-gray-400 mt-1">
               Upload CSV or Excel with columns: date, category (optional), revenue, transactions, avg_ticket.
               Powers SPI, aisle conversion, and shopping efficiency.
             </p>
           )}
           {lastUpload && (
-            <p className="text-[10px] text-gray-500 mt-0.5">
+            <p className="text-xs text-gray-400 mt-0.5">
               Last upload: {new Date(lastUpload).toLocaleString()}
             </p>
           )}
@@ -87,9 +87,9 @@ export default function ErpCsvUploadPanel({
           }}
         />
       </div>
-      {message && <p className="text-[10px] text-green-400 mt-1.5">{message}</p>}
+      {message && <p className="text-xs text-green-400 mt-1.5">{message}</p>}
       {error && (
-        <p className="text-[10px] text-red-400 mt-1.5 flex items-center gap-1">
+        <p className="text-xs text-red-400 mt-1.5 flex items-center gap-1">
           <AlertCircle className="w-3 h-3" /> {error}
         </p>
       )}

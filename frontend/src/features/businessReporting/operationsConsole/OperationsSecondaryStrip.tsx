@@ -30,7 +30,7 @@ export default function OperationsSecondaryStrip({
               title={`${def.meaning}\n${def.tooltip}`}
               className="flex flex-col justify-center px-3 py-2 rounded-lg border border-gray-700/60 bg-gray-900/40 min-w-[96px] flex-shrink-0"
             >
-              <span className="text-[9px] text-gray-500 truncate">{def.title}</span>
+              <span className="text-[11px] text-gray-400 truncate">{def.title}</span>
               <span className={`text-sm font-semibold tabular-nums ${STATE_TEXT[state]}`}>
                 {formatKpiValue(value, def.format)}
               </span>

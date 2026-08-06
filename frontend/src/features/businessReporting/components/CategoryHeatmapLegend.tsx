@@ -26,7 +26,7 @@ export default function CategoryHeatmapLegend({
         return (
           <div
             key={row.category}
-            className={`inline-flex items-center gap-1.5 text-[9px] transition-opacity ${
+            className={`inline-flex items-center gap-1.5 text-[11px] transition-opacity ${
               highlightCategory && !active ? 'opacity-40' : 'opacity-100'
             } ${active ? 'ring-1 ring-white/30 rounded-full px-1.5 py-0.5 bg-white/5' : ''}`}
           >

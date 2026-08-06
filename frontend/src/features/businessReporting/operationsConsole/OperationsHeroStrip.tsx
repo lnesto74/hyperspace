@@ -49,7 +49,7 @@ export default function OperationsHeroStrip({
             key={def.id}
             className={`rounded-lg border p-3 ${STATE_BG[state]}`}
           >
-            <div className="text-[10px] text-gray-500 uppercase tracking-wide">{def.title}</div>
+            <div className="text-xs text-gray-400 uppercase tracking-wide">{def.title}</div>
             <div className="flex items-baseline gap-2 mt-1">
               <span className={`text-2xl font-bold tabular-nums ${
                 state === 'bad' ? 'text-red-400' : state === 'good' ? 'text-green-400' : 'text-white'
@@ -57,15 +57,15 @@ export default function OperationsHeroStrip({
                 {formatKpiValue(value, def.format)}
               </span>
               {delta != null && (
-                <span className={`flex items-center text-[10px] ${
-                  deltaBad ? 'text-red-400' : deltaGood ? 'text-green-400' : 'text-gray-500'
+                <span className={`flex items-center text-xs ${
+                  deltaBad ? 'text-red-400' : deltaGood ? 'text-green-400' : 'text-gray-400'
                 }`}>
                   {deltaUp ? <TrendingUp className="w-3 h-3 mr-0.5" /> : <TrendingDown className="w-3 h-3 mr-0.5" />}
                   {Math.abs(delta).toFixed(1)}%
                 </span>
               )}
             </div>
-            <p className="text-[10px] text-gray-500 mt-1 line-clamp-2">{def.meaning}</p>
+            <p className="text-xs text-gray-400 mt-1 line-clamp-2">{def.meaning}</p>
           </div>
         );
       })}

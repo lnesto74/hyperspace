@@ -121,10 +121,10 @@ export default function TimelineRangeBrush({
   return (
     <div className="mt-2 pt-2 border-t border-gray-700/40 select-none">
       <div className="flex items-center justify-between mb-1">
-        <span className="text-[9px] text-gray-500">Drag handles to zoom · drag center to pan</span>
+        <span className="text-[11px] text-gray-400">Drag handles to zoom · drag center to pan</span>
         <button
           type="button"
-          className="text-[9px] text-gray-500 hover:text-white"
+          className="text-[11px] text-gray-400 hover:text-white"
           onClick={() => {
             const window = Math.min(24, count);
             onRangeChange(Math.max(0, count - window), count);
@@ -214,9 +214,9 @@ export default function TimelineRangeBrush({
         </div>
       </div>
 
-      <div className="flex justify-between text-[8px] text-gray-600 mt-1 px-0.5">
+      <div className="flex justify-between text-[10px] text-gray-400 mt-1 px-0.5">
         <span className="truncate max-w-[30%]">{points[0]?.label}</span>
-        <span className="truncate max-w-[35%] text-center text-gray-500">
+        <span className="truncate max-w-[35%] text-center text-gray-400">
           {points[rangeStart]?.label} – {points[rangeEnd - 1]?.label}
         </span>
         <span className="truncate max-w-[30%] text-right">{points[count - 1]?.label}</span>

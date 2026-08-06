@@ -37,7 +37,7 @@ export default function CategoryRankingPanel({
 }: CategoryRankingPanelProps) {
   if (!categories.length) {
     return (
-      <div className="text-sm text-gray-500 py-4">
+      <div className="text-sm text-gray-400 py-4">
         No category performance data yet. Map product categories to shelves in DWG or Smart KPI.
       </div>
     )
@@ -47,7 +47,7 @@ export default function CategoryRankingPanel({
     <div className="overflow-x-auto">
       <table className="w-full text-sm">
         <thead>
-          <tr className="text-left text-xs text-gray-500 border-b border-gray-700">
+          <tr className="text-left text-xs text-gray-400 border-b border-gray-700">
             <th className="pb-2 pr-3 font-medium">#</th>
             <th className="pb-2 pr-3 font-medium">Category</th>
             <th className="pb-2 pr-3 font-medium text-right">Zones</th>
@@ -69,7 +69,7 @@ export default function CategoryRankingPanel({
                   onSelectCategory ? 'cursor-pointer hover:bg-gray-700/40' : ''
                 } ${isSelected ? 'bg-amber-500/10' : ''}`}
               >
-                <td className="py-2.5 pr-3 text-gray-500">{index + 1}</td>
+                <td className="py-2.5 pr-3 text-gray-400">{index + 1}</td>
                 <td className="py-2.5 pr-3">
                   <span
                     className="inline-block rounded-full px-2.5 py-1 text-xs font-semibold truncate max-w-[220px]"

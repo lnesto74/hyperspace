@@ -62,7 +62,7 @@ export default function ReportingKpiStrip({
               title={`${def.meaning}\n${def.tooltip}`}
               className="flex flex-col justify-center px-3 py-2 rounded-lg border border-gray-700/80 bg-gray-800/60 min-w-[108px] max-w-[140px] flex-shrink-0"
             >
-              <span className="text-[10px] text-gray-500 truncate leading-tight">{def.title}</span>
+              <span className="text-xs text-gray-400 truncate leading-tight">{def.title}</span>
               <span className={`text-lg font-semibold tabular-nums leading-tight mt-0.5 ${STATE_TEXT[state]}`}>
                 {formatValue(value, def.format)}
               </span>

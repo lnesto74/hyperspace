@@ -63,15 +63,15 @@ export default function OperationsPulseConsole({
       )}
 
       <div className="flex items-center justify-between gap-2">
-        <span className="text-[10px] text-gray-500 uppercase tracking-wide">Activity grain</span>
+        <span className="text-xs text-gray-400 uppercase tracking-wide">Activity grain</span>
         <div className="flex bg-gray-800 rounded-md p-0.5 border border-gray-700/60">
           {GRAINS.map(g => (
             <button
               key={g.id}
               type="button"
               onClick={() => onGrainChange(g.id)}
-              className={`px-2.5 py-0.5 text-[10px] rounded transition-colors ${
-                grain === g.id ? 'bg-white/10 text-white' : 'text-gray-500 hover:text-gray-300'
+              className={`px-2.5 py-0.5 text-xs rounded transition-colors ${
+                grain === g.id ? 'bg-white/10 text-white' : 'text-gray-400 hover:text-gray-300'
               }`}
             >
               {g.label}

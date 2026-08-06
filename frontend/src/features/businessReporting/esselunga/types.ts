@@ -51,7 +51,10 @@ export interface JourneySignals {
     aisleZoneVisits: number;
     dwellVisits: number;
     stoppingPct: number;
-    bypassPct: number;
+    /** Of the crossings that happened, the share that did not stop. */
+    passThroughPct?: number;
+    /** Esselunga's definition: 100 - penetration. Null when penetration is unmeasurable. */
+    bypassPct: number | null;
   };
   checkout: {
     sessionsCompleted: number;
@@ -97,6 +100,7 @@ export interface AisleCategoryGroup {
   uniqueVisitors: number;
   stoppingPowerPct: number;
   avgDwellMin: number;
+  avgDwellSec?: number;
   roiCount: number;
 }
 
@@ -107,6 +111,7 @@ export interface AisleRow {
   visits: number;
   stoppingPowerPct: number;
   avgDwellMin: number;
+  avgDwellSec?: number;
 }
 
 export interface ExecutiveInsight {
@@ -116,6 +121,50 @@ export interface ExecutiveInsight {
   message: string;
   action: string;
   section: string;
+}
+
+/** The same window one week earlier, so headline numbers can carry a direction. */
+export interface ExecutiveComparison {
+  label: string;
+  range: { startTs: number; endTs: number };
+  /** False when the comparison window predates a change in how the data is measured. */
+  comparable: boolean;
+  caveat: string;
+  entrants: number;
+  totalVisitors: number;
+  shoppingDwellMin: number;
+  shoppingDwellReliable: boolean;
+  stoppingPowerPct: number;
+  penetrationPct: number | null;
+  checkoutCompleted: number;
+  avgWaitMin: number;
+  avgTicket: number | null;
+  spi: number | null;
+}
+
+/**
+ * Resolved on the server, including the deltas, so the tab and the PDF render
+ * the same numbers rather than each deriving their own.
+ */
+export interface HeadlineKpi {
+  id: string;
+  label: string;
+  value: number | null;
+  display: string;
+  hint: string;
+  previous: number | null;
+  higherIsBetter: boolean;
+  deltaPct: number | null;
+  /** Set when the delta was withheld rather than simply unavailable. */
+  noCompareReason?: string | null;
+  direction: 'up' | 'down' | 'flat';
+  /** Whether the movement is good news — a longer queue is a bigger number and a worse store. */
+  good: boolean | null;
+}
+
+export interface ExecutiveHeadline {
+  tone: 'good' | 'warn' | 'bad' | 'info';
+  text: string;
 }
 
 export interface EsselungaJourneyPayload {
@@ -171,8 +220,14 @@ export interface EsselungaJourneyPayload {
     aisleReachReliable?: boolean;
     dwellVisits?: number;
     stoppingPowerPct: number;
-    bypassPct: number;
+    /** Of the crossings that happened, the share that did not stop. */
+    passThroughPct?: number;
+    /** Esselunga's definition: 100 - penetration. Null when penetration is unmeasurable. */
+    bypassPct: number | null;
     totalAisleVisits: number;
+  /** Shelf zones with no category in the mapper, so the split understates them. */
+  untaggedZones?: number;
+  taggedZones?: number;
     aisleConversionPct: number | null;
     categoryGroups?: AisleCategoryGroup[];
     topAisles: AisleRow[];
@@ -202,6 +257,9 @@ export interface EsselungaJourneyPayload {
     byCategory: Array<{ category: string; revenue: number; transactions: number }>;
   };
   insights: ExecutiveInsight[];
+  comparison?: ExecutiveComparison | null;
+  headlineKpis?: HeadlineKpi[];
+  headline?: ExecutiveHeadline;
   hqSummary?: {
     headline: string;
     topInsights: ExecutiveInsight[];

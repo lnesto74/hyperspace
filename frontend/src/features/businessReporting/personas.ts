@@ -524,6 +524,17 @@ export const PERSONAS: PersonaConfig[] = [
     maxKpis: MAX_KPIS_PER_PERSONA,
     kpis: esselungaExecutiveKpis,
   },
+  {
+    id: 'measurement-audit',
+    name: 'Measurement Audit',
+    description: 'Raw supplier feed vs reconciled tracking, per zone — evidence, not KPIs.',
+    icon: 'Microscope',
+    color: '#f43f5e',
+    maxKpis: MAX_KPIS_PER_PERSONA,
+    // This view renders its own diagnostics rather than the shared KPI strip,
+    // because nothing it reports is a business metric.
+    kpis: [],
+  },
 ];
 
 /**

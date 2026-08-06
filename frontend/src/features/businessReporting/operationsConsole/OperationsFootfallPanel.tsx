@@ -30,24 +30,24 @@ export default function OperationsFootfallPanel({
           <h3 className="text-xs font-semibold text-white">
             {useFootfall ? 'Footfall by Open Hour' : 'Store Activity by Hour'}
           </h3>
-          <p className="text-[10px] text-gray-500">
+          <p className="text-xs text-gray-400">
             {useFootfall
               ? `${footfall.footfallZoneName || 'Ingress'} · ${footfall.hoursLabel}`
               : 'Peak concurrent shoppers by hour (until ingress zone records visits)'}
           </p>
           {!useFootfall && footfall.warning && (
-            <p className="text-[10px] text-gray-400 mt-1 line-clamp-2">{footfall.warning}</p>
+            <p className="text-xs text-gray-400 mt-1 line-clamp-2">{footfall.warning}</p>
           )}
         </div>
         {useFootfall ? (
           <div className="text-right">
             <div className="text-lg font-bold text-white tabular-nums">{footfall.totalVisitsOpenHours}</div>
-            <div className="text-[9px] text-gray-500">open-hour visits</div>
+            <div className="text-[11px] text-gray-400">open-hour visits</div>
           </div>
         ) : peakRow && peakRow.value > 0 ? (
           <div className="text-right">
             <div className="text-lg font-bold text-white tabular-nums">{Math.round(peakRow.value * 10) / 10}</div>
-            <div className="text-[9px] text-gray-500">peak at {peakRow.hour}:00</div>
+            <div className="text-[11px] text-gray-400">peak at {peakRow.hour}:00</div>
           </div>
         ) : null}
       </div>
@@ -57,7 +57,7 @@ export default function OperationsFootfallPanel({
         onMouseLeave={() => setHoveredHour(null)}
       >
         <div
-          className="flex flex-col justify-between shrink-0 text-[8px] text-gray-500 tabular-nums py-0.5"
+          className="flex flex-col justify-between shrink-0 text-[10px] text-gray-400 tabular-nums py-0.5"
           style={{ height: CHART_H, minWidth: 20 }}
           aria-hidden
         >
@@ -77,7 +77,7 @@ export default function OperationsFootfallPanel({
                 onMouseEnter={() => setHoveredHour(row.hour)}
               >
                 {isHovered && (
-                  <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1 z-50 bg-gray-900 border border-gray-600 rounded px-1.5 py-0.5 text-[9px] text-white whitespace-nowrap pointer-events-none shadow-lg">
+                  <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1 z-50 bg-gray-900 border border-gray-600 rounded px-1.5 py-0.5 text-[11px] text-white whitespace-nowrap pointer-events-none shadow-lg">
                     {row.hour}:00 · {useFootfall ? `${row.value} visits` : `${row.value} peak`}
                     {!row.isOpen && ' (closed)'}
                   </div>
@@ -96,7 +96,7 @@ export default function OperationsFootfallPanel({
         </div>
         </div>
       </div>
-      <div className="flex justify-between text-[8px] text-gray-600 mt-1 pl-6">
+      <div className="flex justify-between text-[10px] text-gray-400 mt-1 pl-6">
         <span>00</span>
         <span>12</span>
         <span>23</span>

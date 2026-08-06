@@ -125,6 +125,7 @@ services:
       - REPLAY_DB_PATH=/data/db/replay_insight.db
       - REPLAY_DIR=/data/replay
       - BENCHMARK_RUNS_DIR=/data/benchmark/runs
+      - RAW_TRUTH_DIR=/data/reports
       - HYPERSPACE_ROOT=/opt/hyperspace
     volumes:
       # Persistent data volumes (survive container rebuilds)
@@ -138,6 +139,8 @@ services:
       # Benchmark runner scripts + backend imports for reconciler replay
       - /opt/hyperspace/analysis:/opt/hyperspace/analysis:ro
       - /opt/hyperspace/backend:/opt/hyperspace/backend:ro
+      # Raw-feed forensics (output of analysis/raw_path_truth.mjs, written nightly)
+      - /data/hyperspace/reports:/data/reports:ro
       # Mount host's Tailscale socket so backend can run `tailscale status`
       - /var/run/tailscale:/var/run/tailscale:ro
     # Access host's Tailscale for device discovery (tailscale status --json)

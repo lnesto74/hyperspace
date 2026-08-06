@@ -68,7 +68,7 @@ export default function CategoryVisitsPanel({
 
   if (!sorted.length) {
     return (
-      <div className="text-sm text-gray-500 py-4">
+      <div className="text-sm text-gray-400 py-4">
         No category traffic yet. Map shelf categories in DWG import or Smart KPI.
       </div>
     )
@@ -89,13 +89,13 @@ export default function CategoryVisitsPanel({
   return (
     <div className="space-y-3">
       {showUncategorizedWarning && (
-        <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-2.5 py-2 text-[10px] text-amber-200/90 leading-relaxed">
+        <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-2.5 py-2 text-xs text-amber-200/90 leading-relaxed">
           <b>{uncategorizedPct}%</b> of shelf visits are Uncategorized ({uncategorized?.zoneCount ?? 0} zones lack
           category mapping). Map shelves in DWG import or Smart KPI to split traffic by Latticini, Frutta, Surgelati, etc.
         </div>
       )}
       <div className="flex items-center justify-between gap-2">
-        <p className="text-[10px] text-gray-500">
+        <p className="text-xs text-gray-400">
           {embedded
             ? 'Hover to preview on map · click to lock'
             : 'Visits and dwell by product category · click a row to open zone heatmap'}
@@ -104,14 +104,14 @@ export default function CategoryVisitsPanel({
           <button
             type="button"
             onClick={() => setMetric('visits')}
-            className={`px-2 py-0.5 text-[10px] rounded ${metric === 'visits' ? 'bg-white/10 text-white' : 'text-gray-500'}`}
+            className={`px-2 py-0.5 text-xs rounded ${metric === 'visits' ? 'bg-white/10 text-white' : 'text-gray-400'}`}
           >
             Visits
           </button>
           <button
             type="button"
             onClick={() => setMetric('dwell')}
-            className={`px-2 py-0.5 text-[10px] rounded ${metric === 'dwell' ? 'bg-white/10 text-white' : 'text-gray-500'}`}
+            className={`px-2 py-0.5 text-xs rounded ${metric === 'dwell' ? 'bg-white/10 text-white' : 'text-gray-400'}`}
           >
             Dwell
           </button>
@@ -152,10 +152,10 @@ export default function CategoryVisitsPanel({
                   <Icon className="w-3.5 h-3.5 shrink-0" style={{ color }} strokeWidth={2.25} />
                   {row.category}
                   {isLocked && (
-                    <span className="text-[8px] uppercase tracking-wide text-gray-500 font-normal">locked</span>
+                    <span className="text-[10px] uppercase tracking-wide text-gray-400 font-normal">locked</span>
                   )}
                 </span>
-                <div className="flex items-center gap-3 shrink-0 text-[10px] tabular-nums">
+                <div className="flex items-center gap-3 shrink-0 text-xs tabular-nums">
                   <span className="text-white">{row.totalVisits.toLocaleString()} visits</span>
                   <span className="text-gray-400">{formatDwell(row.totalDwellMin ?? 0)} dwell</span>
                   {canOpen && isActive && !embedded && (
@@ -179,7 +179,7 @@ export default function CategoryVisitsPanel({
                   }}
                 />
               </div>
-              <div className="flex justify-between mt-0.5 text-[9px] text-gray-600">
+              <div className="flex justify-between mt-0.5 text-[11px] text-gray-400">
                 <span>{row.zoneCount} zone{row.zoneCount !== 1 ? 's' : ''}</span>
                 <span>{row.avgBrowseTimeMin.toFixed(1)}m avg browse · {row.engagementRate}% engage</span>
               </div>

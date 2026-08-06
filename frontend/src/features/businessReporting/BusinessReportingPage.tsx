@@ -28,6 +28,7 @@ import ExecutiveSummaryViewport, {
   type PeriodDeltas,
 } from './components/ExecutiveSummaryViewport';
 import EsselungaExecutiveViewport from './esselunga/EsselungaExecutiveViewport';
+import ZoneAuditViewport from './components/ZoneAuditViewport';
 import type { EsselungaJourneyPayload, ExecutiveVariant } from './esselunga/types';
 import type { DoohScreenMarker } from '../../components/shared/FloorPlanMiniMap';
 import { getDemoVenueId } from '../../config/demo';
@@ -75,6 +76,7 @@ const ZONE_MAP_PERSONAS = new Set(['merchandising']);
 const PEBLE_MAP_PERSONAS = new Set(['retail-media']);
 const EXECUTIVE_PERSONAS = new Set(['executive']);
 const ESSELUNGA_PERSONA = 'esselunga-executive';
+const AUDIT_PERSONA = 'measurement-audit';
 
 interface BusinessReportingPageProps {
   onClose: () => void;
@@ -167,6 +169,16 @@ export default function BusinessReportingPage({ onClose, publicDashboard = false
   );
 
   const showEsselungaExecutive = selectedPersonaId === ESSELUNGA_PERSONA && !!selectedVenueId;
+
+  const showMeasurementAudit = selectedPersonaId === AUDIT_PERSONA && !!selectedVenueId;
+
+  // The audit reads raw sample counts rather than rollups, so it is capped at a
+  // week; longer selections fall back to the last 24 hours instead of erroring.
+  const auditRange = useMemo(() => {
+    const option = TIME_RANGES.find((t) => t.id === selectedTimeRange) || TIME_RANGES[1];
+    const range = option.getRange();
+    return range.endTs - range.startTs > 7 * DAY_MS ? TIME_RANGES[1].getRange() : range;
+  }, [selectedTimeRange]);
 
   const topCampaigns = useMemo(
     () => (supporting.topCampaigns as CampaignPerformanceItem[]) || [],
@@ -405,7 +417,7 @@ export default function BusinessReportingPage({ onClose, publicDashboard = false
         <div className="flex items-center gap-2 flex-shrink-0">
           {!publicDashboard && (
             <>
-              <Building2 className="w-3.5 h-3.5 text-gray-500 hidden sm:block" />
+              <Building2 className="w-3.5 h-3.5 text-gray-400 hidden sm:block" />
               <select
                 value={selectedVenueId || ''}
                 onChange={(e) => setSelectedVenueId(e.target.value)}
@@ -458,7 +470,7 @@ export default function BusinessReportingPage({ onClose, publicDashboard = false
           </button>
 
           {lastUpdated && (
-            <span className="text-[10px] text-gray-500 hidden lg:inline">
+            <span className="text-xs text-gray-400 hidden lg:inline">
               {lastUpdated.toLocaleTimeString()}
             </span>
           )}
@@ -488,7 +500,13 @@ export default function BusinessReportingPage({ onClose, publicDashboard = false
 
           {!loading && !error && (
             <>
-              {showEsselungaExecutive ? (
+              {showMeasurementAudit ? (
+                <ZoneAuditViewport
+                  venueId={selectedVenueId!}
+                  startTs={auditRange.startTs}
+                  endTs={auditRange.endTs}
+                />
+              ) : showEsselungaExecutive ? (
                 esselungaJourney ? (
                 <EsselungaExecutiveViewport
                   journey={esselungaJourney}
@@ -508,7 +526,7 @@ export default function BusinessReportingPage({ onClose, publicDashboard = false
                   publicShare={publicDashboard}
                 />
                 ) : (
-                  <div className="text-center py-8 text-gray-500 text-xs">No journey data for this period.</div>
+                  <div className="text-center py-8 text-gray-400 text-xs">No journey data for this period.</div>
                 )
               ) : (
                 <>
@@ -549,7 +567,7 @@ export default function BusinessReportingPage({ onClose, publicDashboard = false
                 <div className="rounded-lg border border-gray-700/80 bg-gray-800/40 overflow-hidden">
                   <div className="px-3 py-2 border-b border-gray-700/60">
                     <span className="text-xs font-medium text-white">Category Traffic</span>
-                    <span className="text-[10px] text-gray-500 ml-2">Latticini · Frutta · Surgelati · …</span>
+                    <span className="text-xs text-gray-400 ml-2">Latticini · Frutta · Surgelati · …</span>
                   </div>
                   <div className="p-3">
                     <CategoryVisitsPanel
@@ -600,11 +618,11 @@ export default function BusinessReportingPage({ onClose, publicDashboard = false
                   >
                     <div className="flex items-center gap-2 text-left">
                       {campaignsExpanded
-                        ? <ChevronDown className="w-3.5 h-3.5 text-gray-500" />
-                        : <ChevronRight className="w-3.5 h-3.5 text-gray-500" />}
+                        ? <ChevronDown className="w-3.5 h-3.5 text-gray-400" />
+                        : <ChevronRight className="w-3.5 h-3.5 text-gray-400" />}
                       <MonitorPlay className="w-3.5 h-3.5 text-purple-400" />
                       <span className="text-xs font-medium text-white">Campaign Performance Ranking</span>
-                      <span className="text-[10px] text-gray-500">({campaignRanking.length})</span>
+                      <span className="text-xs text-gray-400">({campaignRanking.length})</span>
                     </div>
                   </button>
                   {campaignsExpanded && (
@@ -628,11 +646,11 @@ export default function BusinessReportingPage({ onClose, publicDashboard = false
                   >
                     <div className="flex items-center gap-2 text-left">
                       {categoriesExpanded
-                        ? <ChevronDown className="w-3.5 h-3.5 text-gray-500" />
-                        : <ChevronRight className="w-3.5 h-3.5 text-gray-500" />}
+                        ? <ChevronDown className="w-3.5 h-3.5 text-gray-400" />
+                        : <ChevronRight className="w-3.5 h-3.5 text-gray-400" />}
                       <ShoppingBag className="w-3.5 h-3.5 text-amber-400" />
                       <span className="text-xs font-medium text-white">Category Performance Ranking</span>
-                      <span className="text-[10px] text-gray-500">({topCategories.length})</span>
+                      <span className="text-xs text-gray-400">({topCategories.length})</span>
                     </div>
                     {selectedPersonaId === 'merchandising' && selectedCategoryId !== 'all' && (
                       <button
@@ -641,7 +659,7 @@ export default function BusinessReportingPage({ onClose, publicDashboard = false
                           e.stopPropagation();
                           setSelectedCategoryId('all');
                         }}
-                        className="text-[10px] text-amber-400 hover:text-amber-300"
+                        className="text-xs text-amber-400 hover:text-amber-300"
                       >
                         Clear filter
                       </button>

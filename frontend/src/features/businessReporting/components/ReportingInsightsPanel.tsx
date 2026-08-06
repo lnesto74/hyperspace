@@ -193,7 +193,7 @@ export default function ReportingInsightsPanel({
           </span>
         </div>
         {successAlerts.length > 0 && (
-          <span className="text-[10px] text-green-400">{successAlerts.length} healthy</span>
+          <span className="text-xs text-green-400">{successAlerts.length} healthy</span>
         )}
       </button>
     );
@@ -209,7 +209,7 @@ export default function ReportingInsightsPanel({
         <button
           type="button"
           onClick={() => setExpanded(false)}
-          className="flex items-center gap-1 text-[10px] text-gray-500 hover:text-gray-300 mb-2"
+          className="flex items-center gap-1 text-xs text-gray-400 hover:text-gray-300 mb-2"
         >
           <ChevronDown className="w-3 h-3" />
           Collapse insights
@@ -232,7 +232,7 @@ export default function ReportingInsightsPanel({
             ))}
           </ul>
         ) : (
-          <p className="text-sm text-gray-500">No insights available for current data.</p>
+          <p className="text-sm text-gray-400">No insights available for current data.</p>
         )}
       </div>
       
@@ -262,7 +262,7 @@ export default function ReportingInsightsPanel({
             </div>
           ))}
           {alerts.length === 0 && (
-            <p className="text-sm text-gray-500">No alerts at this time.</p>
+            <p className="text-sm text-gray-400">No alerts at this time.</p>
           )}
         </div>
       </div>
