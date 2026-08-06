@@ -364,6 +364,10 @@ class MqttTrajectoryService {
         this._recordPipelineSample(frameTs, data.publishedAt)
 
         if (this.trackAggregator) {
+          // The aggregator's emit loop is what drives every downstream KPI, and
+          // it only ran once a browser subscribed. Frames arriving with no
+          // client attached were added here and never emitted.
+          if (!isReplayMsg && this.venueLiveHook) this.venueLiveHook(venueId)
           this.trackAggregator.addTrack(processedTrack)
         } else {
           // Direct emit to clients
@@ -457,6 +461,15 @@ class MqttTrajectoryService {
   
   setTrackAggregator(aggregator) {
     this.trackAggregator = aggregator
+  }
+
+  /**
+   * Called with a venue id the first time live frames arrive for it, so the
+   * owner can bring that venue's pipeline up. Ingest must not depend on a
+   * dashboard being open — see ensureVenueLive in server.js.
+   */
+  setVenueLiveHook(fn) {
+    this.venueLiveHook = fn
   }
 
   /**

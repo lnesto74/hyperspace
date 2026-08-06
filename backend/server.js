@@ -463,6 +463,40 @@ trackAggregator.on('tracks_cleared', () => {
   io.of('/tracking').emit('tracks_cleared');
 });
 
+/**
+ * Bring a venue's live pipeline up: queue links, ROI cache, and — the part
+ * that matters — the track aggregator's emit loop.
+ *
+ * That loop is what drives every downstream KPI, and it was started only from
+ * the tracking socket's subscribe handler. Recording track_positions,
+ * zone_visits and occupancy was therefore conditional on somebody having the
+ * dashboard open: after a backend restart with no client attached, MQTT frames
+ * kept arriving and piling into the aggregator while nothing emitted them, so
+ * nothing was written and no alarm fired. Ingest now brings the venue up
+ * itself; the socket handler is left as it was and simply gets there first
+ * when a client is present.
+ */
+const liveVenues = new Set();
+function ensureVenueLive(venueId) {
+  if (!venueId || liveVenues.has(venueId)) return;
+  liveVenues.add(venueId);
+  try {
+    trajectoryStorage.loadZoneLinks(venueId);
+    trajectoryStorage.loadOpenLanes(venueId);
+    const rois = db.prepare(
+      'SELECT id, name, vertices FROM regions_of_interest WHERE venue_id = ?'
+    ).all(venueId);
+    trackAggregator.setRois(rois);
+    trackAggregator.start(venueId);
+    trackAggregator.setReconcilerLive(mqttService?.isReconcilerEnabled?.(venueId) ?? false);
+    console.log(`📊 Live pipeline started from ingest for venue ${venueId} (${rois.length} ROIs)`);
+  } catch (err) {
+    liveVenues.delete(venueId);
+    console.error(`[Live] Failed to start pipeline for venue ${venueId}:`, err.message);
+  }
+}
+if (mqttService?.setVenueLiveHook) mqttService.setVenueLiveHook(ensureVenueLive);
+
 // Socket.IO tracking namespace
 const trackingNamespace = io.of('/tracking');
 
