@@ -80,6 +80,16 @@ print("[reid-audit] emitted=%d reid_rate=%.1f%% misses=%d (resume=%d lost=%d nn=
 top = sorted(d["failure_reasons"].items(), key=lambda kv: -kv[1])[:3]
 if top:
     print("[reid-audit] top gates: " + ", ".join("%s=%d" % (k, v) for k, v in top))
+sys.exit(3 if d.get("errors") else 0)
 '
+ERRS=$?
+
 echo "[reid-audit] $(date -u +%FT%TZ) done — $(wc -l < "$HIST") samples retained"
+
+# A run that threw on every frame still prints a tidy zero, which is
+# indistinguishable from a quiet store unless it is called out here.
+if [ $ERRS -eq 3 ]; then
+  echo "[reid-audit] WARNING: frames threw during this run — sample recorded but marked unusable"
+  exit 1
+fi
 exit 0

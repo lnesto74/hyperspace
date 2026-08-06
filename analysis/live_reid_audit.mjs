@@ -64,7 +64,10 @@ for (let i = 0; i < argv.length; i++) {
 const VENUE_ID = positional[0] || '55fdd53b-3298-4355-97c0-b4e789b11d06';
 const DURATION_SEC = Number(positional[1] || 90);
 const MIN_TRACKS = Number(positional[2] || 20);
-const MQTT_URL = process.env.MQTT_URL || 'mqtt://127.0.0.1:1883';
+// MQTT_BROKER_URL is what the backend container itself is configured with; the
+// broker is a sibling container, so localhost is only right when running on the
+// host with a port mapping.
+const MQTT_URL = process.env.MQTT_URL || process.env.MQTT_BROKER_URL || 'mqtt://127.0.0.1:1883';
 const DB_PATH = process.env.DB_PATH || '/data/db/hyperspace.db';
 
 const say = (...a) => { if (!QUIET) console.log(...a); };
@@ -101,6 +104,121 @@ function toIncoming(deviceId, venueId, data, transform) {
   };
 }
 
+/**
+ * Why would re-ID not match this observation to anything?
+ *
+ * This mirrors TrajectoryReconciler._tryReid gate for gate, recording which one
+ * rejected each candidate instead of just returning the winner. It deliberately
+ * lives here rather than on the reconciler: production runs adde0d7 and the
+ * whole point of this tool is to observe that build, not to require changes to
+ * it. Read-only — it never mutates reconciler state.
+ *
+ * Kept in the same order as the engine, because the *first* gate to reject is
+ * the one worth reporting; a candidate rejected on distance would often also
+ * fail on speed, and counting both would exaggerate whichever is listed later.
+ */
+function cosine(a, b) {
+  const ax = a?.x || 0, az = a?.z || 0;
+  const bx = b?.x || 0, bz = b?.z || 0;
+  const la = Math.hypot(ax, az);
+  const lb = Math.hypot(bx, bz);
+  if (la < 1e-3 || lb < 1e-3) return 1;
+  return (ax * bx + az * bz) / (la * lb);
+}
+
+function countNearby(state, pos, excludeStableId, radiusM) {
+  if (!radiusM || radiusM <= 0) return 0;
+  const r2 = radiusM * radiusM;
+  let n = 0;
+  for (const pool of [state.activeTracks, state.lostTracks]) {
+    for (const [sid, t] of pool) {
+      if (sid === excludeStableId) continue;
+      const dx = pos.x - t.position.x;
+      const dz = pos.z - t.position.z;
+      if (dx * dx + dz * dz <= r2) n++;
+    }
+  }
+  return n;
+}
+
+export function diagnoseReidMiss(state, pos, vel, now, cfg) {
+  const slowThresh = cfg.reid_slow_speed_m_s ?? 0.35;
+  const alignedCosMin = cfg.reid_aligned_cosine_min ?? 0.45;
+  const alignedBoost = cfg.reid_aligned_distance_boost ?? 1.25;
+  const staticDMax = cfg.reid_static_max_distance_m ?? 3.5;
+  const staticImplied = cfg.reid_static_max_implied_speed_m_s ?? 1.2;
+  const isoR = cfg.reid_isolation_radius_m ?? 0;
+  const minQuietMs = Math.min(cfg.reid_churn_active_ms ?? 80, cfg.reid_stale_active_ms ?? 200);
+
+  const candidates = [];
+  const consider = (t, pool) => {
+    const quietMs = now - t.lastTs;
+    const failures = [];
+
+    // Eligibility: active tracks still receiving frames are not re-ID targets.
+    if (pool === 'active' && quietMs < minQuietMs) {
+      failures.push(`active_not_quiet(${quietMs}ms<${minQuietMs}ms)`);
+    }
+
+    const dt = quietMs / 1000;
+    if (dt > cfg.reid_max_gap_s) failures.push(`gap_expired(${dt.toFixed(1)}s>${cfg.reid_max_gap_s}s)`);
+
+    const speedLost = Math.hypot(t.smoothedVel?.x || 0, t.smoothedVel?.z || 0);
+    const slowMode = speedLost < slowThresh;
+
+    const rawDist = Math.hypot(pos.x - t.position.x, pos.z - t.position.z);
+    const px = t.position.x + (t.smoothedVel?.x || 0) * dt;
+    const pz = t.position.z + (t.smoothedVel?.z || 0) * dt;
+    const predDist = Math.hypot(pos.x - px, pos.z - pz);
+    const dist = slowMode ? rawDist : Math.min(rawDist, predDist);
+
+    const cos = cosine(vel, t.smoothedVel);
+    let dMax = cfg.reid_max_distance_m;
+    if (slowMode) dMax = staticDMax;
+    else if (cos >= alignedCosMin) dMax *= alignedBoost;
+    if (dist > dMax) failures.push(`distance(${dist.toFixed(1)}m>${dMax.toFixed(1)}m)`);
+
+    const impliedSpeed = dt > 0.05 ? rawDist / dt : 0;
+    const impliedCap = slowMode ? staticImplied : cfg.reid_max_implied_speed_m_s;
+    if (impliedSpeed > impliedCap) {
+      failures.push(`implied_speed(${impliedSpeed.toFixed(1)}>${impliedCap})`);
+    }
+
+    if (!slowMode && cos < cfg.reid_velocity_cosine_min) {
+      failures.push(`velocity_cosine(${cos.toFixed(2)}<${cfg.reid_velocity_cosine_min})`);
+    }
+
+    if (slowMode && isoR > 0) {
+      const n = countNearby(state, pos, t.stableId, isoR);
+      if (n > 0) failures.push(`isolation(${n}within${isoR}m)`);
+    }
+
+    candidates.push({
+      pool,
+      stableId: t.stableId?.slice(0, 8),
+      rawDistM: +rawDist.toFixed(2),
+      predDistM: +predDist.toFixed(2),
+      gapMs: quietMs,
+      cos: +cos.toFixed(2),
+      slowMode,
+      failures,
+      // No gate rejected it, so the engine would have merged here. When this is
+      // true alongside a freshly minted stable id, the miss is real rather than
+      // a first sighting.
+      wouldCostReid: failures.length === 0,
+    });
+  };
+
+  for (const t of state.lostTracks.values()) consider(t, 'lost');
+  for (const t of state.activeTracks.values()) consider(t, 'active');
+
+  candidates.sort((a, b) => a.rawDistM - b.rawDistM);
+  return {
+    closest: candidates.slice(0, 5),
+    nnVerdict: cfg.reid_nn_enabled ? 'enabled_not_mirrored' : 'disabled',
+  };
+}
+
 function summarizeFailures(misses) {
   const counts = {};
   for (const m of misses) {
@@ -110,8 +228,11 @@ function summarizeFailures(misses) {
         counts[key] = (counts[key] || 0) + 1;
       }
     }
-    if (m.preDiag.nnVerdict && m.preDiag.nnVerdict !== 'would_match') {
-      counts[`nn:${m.preDiag.nnVerdict.split('_')[0]}`] = (counts[`nn:${m.preDiag.nnVerdict.split('_')[0]}`] || 0) + 1;
+    // "nn:disabled" is a configuration state, not a gate that rejected
+    // anything, and counting it once per miss buries the gates that did.
+    const v = m.preDiag.nnVerdict;
+    if (v && v !== 'would_match' && v !== 'disabled') {
+      counts[`nn:${v.split('_')[0]}`] = (counts[`nn:${v.split('_')[0]}`] || 0) + 1;
     }
   }
   return Object.entries(counts).sort((a, b) => b[1] - a[1]);
@@ -132,6 +253,8 @@ async function main() {
     newStable: 0,
     uniquePerceptionIds: new Set(),
     uniqueStableIds: new Set(),
+    errors: 0,
+    firstError: null,
   };
   const misses = [];
   const episodes = new Map(); // stableId -> episode
@@ -163,7 +286,10 @@ async function main() {
         stats.uniquePerceptionIds.add(incoming.id);
 
         const now = Date.now();
-        const msgTs = incoming.timestamp || now;
+        // The reconciler runs its internal clock on Date.now(), deliberately:
+        // MQTT timestamps can lag minutes and would fire the static sweep
+        // instantly. The diagnosis has to use the same clock or it reports gaps
+        // the engine never saw.
         if (now - lastSweep >= 250) {
           const events = rec.sweep(now);
           for (const ev of events) {
@@ -202,7 +328,7 @@ async function main() {
           nn: state.stats.reid_nn_count || 0,
           newStable: state.stats.new_stable_ids,
         };
-        const preDiag = rec.diagnoseReidMiss(VENUE_ID, incoming.venuePosition, incoming.velocity, msgTs);
+        const preDiag = diagnoseReidMiss(state, incoming.venuePosition, incoming.velocity, now, venue.reconciler);
 
         const out = rec.process(incoming);
         if (!out) {
@@ -283,7 +409,7 @@ async function main() {
                 newPerceptionId: incoming.id,
                 gapMs,
                 distM: +dist.toFixed(2),
-                preDiag: rec.diagnoseReidMiss(VENUE_ID, pos, incoming.velocity, now),
+                preDiag: diagnoseReidMiss(state, pos, incoming.velocity, now, venue.reconciler),
               });
             } else {
               pendingLost.delete(lostSid);
@@ -306,7 +432,12 @@ async function main() {
           ep.lastPos = { ...out.venuePosition };
         }
       } catch (e) {
-        console.error('[audit] parse error', e.message);
+        // A bug in here used to fail on every single frame while the summary
+        // still printed a tidy zero, which reads exactly like a quiet store.
+        // Count them and report the first one so that cannot happen twice.
+        stats.errors++;
+        if (!stats.firstError) stats.firstError = e.message;
+        if (stats.errors <= 3) console.error('[audit] frame error:', e.message);
       }
     });
     client.on('close', () => clearTimeout(timer));
@@ -326,6 +457,10 @@ async function main() {
   console.log(`Window: ${DURATION_SEC}s`);
   console.log(`Raw MQTT person frames: ${stats.rawMsgs}`);
   console.log(`Emitted (reconciler): ${stats.emitted}  dropped: ${stats.dropped}`);
+  if (stats.errors) {
+    console.log(`*** FRAME ERRORS: ${stats.errors} of ${stats.rawMsgs} — results are not trustworthy`);
+    console.log(`***   first: ${stats.firstError}`);
+  }
   console.log(`Unique perception IDs: ${stats.uniquePerceptionIds.size}`);
   console.log(`Unique stable IDs minted: ${stats.uniqueStableIds.size}`);
   console.log(`Re-ID merges: ${stats.reid} (NN: ${stats.reidNn})  new stable: ${stats.newStable}`);
@@ -394,9 +529,12 @@ async function main() {
       },
       post_lost_resumes: postLostResumes.length,
       failure_reasons: Object.fromEntries(failureReasons),
-      // A run with almost no traffic says nothing about re-ID quality; the
-      // consumer needs to be able to drop those rather than average them in.
-      thin: stats.emitted < MIN_TRACKS,
+      errors: stats.errors,
+      first_error: stats.firstError,
+      // A run with almost no traffic says nothing about re-ID quality, and one
+      // that threw says less than nothing; the consumer needs to drop both
+      // rather than average them in.
+      thin: stats.emitted < MIN_TRACKS || stats.errors > 0,
     };
     try {
       fs.mkdirSync(dirname(JSON_OUT), { recursive: true });
@@ -437,7 +575,11 @@ async function main() {
   process.exit(obvious.length > 0 || postLostResumes.length > 0 ? 2 : 0);
 }
 
-main().catch((e) => {
-  console.error(e);
-  process.exit(1);
-});
+// Only run when invoked directly, so the diagnosis above can be imported and
+// tested against the real reconciler rather than only verified in production.
+if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+  main().catch((e) => {
+    console.error(e);
+    process.exit(1);
+  });
+}
