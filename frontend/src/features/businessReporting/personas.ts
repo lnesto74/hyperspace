@@ -36,6 +36,8 @@ export interface PersonaConfig {
   color: string;
   maxKpis: number;
   kpis: KpiTileDefinition[];
+  /** Hidden from anyone but a superadmin. The matching API routes enforce it too. */
+  superadminOnly?: boolean;
 }
 
 // ============================================
@@ -534,6 +536,10 @@ export const PERSONAS: PersonaConfig[] = [
     // This view renders its own diagnostics rather than the shared KPI strip,
     // because nothing it reports is a business metric.
     kpis: [],
+    // Internal evidence, not a customer deliverable: it names the perception
+    // supplier's failures and states the limits of our own pipeline, neither of
+    // which should reach a customer without someone deciding to send it.
+    superadminOnly: true,
   },
 ];
 
@@ -542,6 +548,11 @@ export const PERSONAS: PersonaConfig[] = [
  */
 export function getPersonaById(id: string): PersonaConfig | undefined {
   return PERSONAS.find(p => p.id === id);
+}
+
+/** The personas this viewer may select. */
+export function visiblePersonas(isSuperadmin: boolean): PersonaConfig[] {
+  return isSuperadmin ? PERSONAS : PERSONAS.filter(p => !p.superadminOnly);
 }
 
 /**

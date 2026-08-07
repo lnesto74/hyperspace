@@ -1,5 +1,6 @@
 import { Store, ShoppingBag, Monitor, TrendingUp, Landmark, Microscope } from 'lucide-react';
-import { PERSONAS } from '../personas';
+import { useAuth } from '../../../context/AuthContext';
+import { visiblePersonas } from '../personas';
 
 function getPersonaIcon(iconName: string) {
   switch (iconName) {
@@ -19,9 +20,11 @@ interface PersonaIconRailProps {
 }
 
 export default function PersonaIconRail({ selectedPersonaId, onSelect }: PersonaIconRailProps) {
+  const { isSuperadmin } = useAuth();
+
   return (
     <div className="flex items-center gap-2">
-      {PERSONAS.map(persona => {
+      {visiblePersonas(isSuperadmin).map(persona => {
         const Icon = getPersonaIcon(persona.icon);
         const isSelected = persona.id === selectedPersonaId;
         return (

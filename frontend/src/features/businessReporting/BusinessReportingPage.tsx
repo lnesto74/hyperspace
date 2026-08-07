@@ -10,6 +10,7 @@ import {
   MonitorPlay,
 } from 'lucide-react';
 import { useVenue } from '../../context/VenueContext';
+import { useAuth } from '../../context/AuthContext';
 import { useHeatmap } from '../../context/HeatmapContext';
 import { PERSONAS, getPersonaById, enforceKpiCap } from './personas';
 import ReportingKpiStrip from './components/ReportingKpiStrip';
@@ -86,6 +87,7 @@ interface BusinessReportingPageProps {
 
 export default function BusinessReportingPage({ onClose, publicDashboard = false }: BusinessReportingPageProps) {
   const { venue, venueList } = useVenue();
+  const { isSuperadmin } = useAuth();
   const { openHeatmapForCategory } = useHeatmap();
   const pinnedVenueId = publicDashboard ? getDemoVenueId() : null;
   const [selectedVenueId, setSelectedVenueId] = useState<string | null>(pinnedVenueId || venue?.id || null);
@@ -170,7 +172,17 @@ export default function BusinessReportingPage({ onClose, publicDashboard = false
 
   const showEsselungaExecutive = selectedPersonaId === ESSELUNGA_PERSONA && !!selectedVenueId;
 
-  const showMeasurementAudit = selectedPersonaId === AUDIT_PERSONA && !!selectedVenueId;
+  // Gated in three places on purpose: the rail hides it, this refuses to render
+  // it, and the API routes reject the request. A hidden button is not access
+  // control, and the effect below covers a persona left selected in state when
+  // a different account signs in.
+  const showMeasurementAudit = selectedPersonaId === AUDIT_PERSONA && !!selectedVenueId && isSuperadmin;
+
+  useEffect(() => {
+    if (!isSuperadmin && selectedPersonaId === AUDIT_PERSONA) {
+      setSelectedPersonaId(PERSONAS[0].id);
+    }
+  }, [isSuperadmin, selectedPersonaId]);
 
   // The audit reads raw sample counts rather than rollups, so it is capped at a
   // week; longer selections fall back to the last 24 hours instead of erroring.

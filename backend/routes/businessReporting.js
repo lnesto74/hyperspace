@@ -32,6 +32,11 @@ import {
   executivePdfFileName,
 } from '../services/executive/EsselungaExecutivePdf.js';
 import { computeZoneAudit } from '../services/executive/ZoneAuditService.js';
+import {
+  renderMeasurementAuditPdf,
+  measurementAuditPdfFileName,
+} from '../services/executive/MeasurementAuditPdf.js';
+import { requireAuth, requireSuperadmin } from '../middleware/auth.js';
 import { countPerimeterEntrants } from '../lib/ingressPerimeterFootfall.js';
 import { resolveLiveShoppersInStore } from '../lib/liveStoreOccupancy.js';
 import {
@@ -107,6 +112,11 @@ const VALID_PERSONAS = ['store-manager', 'merchandising', 'retail-media', 'execu
 
 // Max time range: 30 days
 const MAX_RANGE_MS = 30 * 24 * 60 * 60 * 1000;
+
+// The measurement audit walks every stored position sample in its window, so it
+// is linear in a table growing by roughly a third of a million rows a day. Seven
+// days is the point past which it stops feeling interactive.
+const AUDIT_MAX_RANGE_MS = 7 * 24 * 60 * 60 * 1000;
 
 /**
  * GET /api/reporting/personas - List available personas
@@ -463,8 +473,12 @@ router.get('/esselunga-executive/pdf', (req, res) => {
  * the store, our processing, or the perception vendor. Deliberately separate
  * from the persona summaries: nothing here is a business KPI, and it is meant
  * to be readable by someone arguing with a supplier.
+ *
+ * Superadmin only, unlike the rest of this router. It names the supplier's
+ * failure rates and our own sampling losses, which is evidence for a commercial
+ * conversation rather than something a customer account should be able to pull.
  */
-router.get('/zone-audit', (req, res) => {
+router.get('/zone-audit', requireAuth, requireSuperadmin, (req, res) => {
   try {
     const { venueId, startTs, endTs } = req.query;
 
@@ -477,10 +491,7 @@ router.get('/zone-audit', (req, res) => {
     if (Number.isNaN(start) || Number.isNaN(end) || end <= start) {
       return res.status(400).json({ error: 'Invalid time range' });
     }
-    // The audit walks every stored position sample in the window, so it is
-    // linear in a table that grows by roughly a third of a million rows a day.
-    // Seven days is the point past which it stops feeling interactive.
-    if (end - start > 7 * 24 * 60 * 60 * 1000) {
+    if (end - start > AUDIT_MAX_RANGE_MS) {
       return res.status(400).json({ error: 'Zone audit is limited to 7 days' });
     }
 
@@ -502,49 +513,103 @@ router.get('/zone-audit', (req, res) => {
  *
  * Without ?date it returns the most recent run, which is what the audit tab
  * asks for on load.
+ *
+ * Superadmin only, for the same reason as /zone-audit.
  */
-router.get('/raw-path-truth', (req, res) => {
-  try {
-    const dir = process.env.RAW_TRUTH_DIR || '/data/reports';
-    const { date, venueId } = req.query;
+function loadRawPathTruth({ date, venueId }) {
+  const dir = process.env.RAW_TRUTH_DIR || '/data/reports';
 
-    if (!fs.existsSync(dir)) {
-      return res.json({ available: false, reason: 'No raw-feed forensic runs on this server yet.', runs: [] });
-    }
+  if (!fs.existsSync(dir)) {
+    return { available: false, reason: 'No raw-feed forensic runs on this server yet.', runs: [] };
+  }
 
-    const runs = fs
-      .readdirSync(dir)
-      .filter((f) => /^raw_path_truth_\d{4}-\d{2}-\d{2}\.json$/.test(f))
-      .sort()
-      .reverse();
+  const runs = fs
+    .readdirSync(dir)
+    .filter((f) => /^raw_path_truth_\d{4}-\d{2}-\d{2}\.json$/.test(f))
+    .sort()
+    .reverse();
 
-    if (!runs.length) {
-      return res.json({ available: false, reason: 'No raw-feed forensic runs have completed yet.', runs: [] });
-    }
+  if (!runs.length) {
+    return { available: false, reason: 'No raw-feed forensic runs have completed yet.', runs: [] };
+  }
 
-    const wanted = date ? `raw_path_truth_${date}.json` : runs[0];
-    if (!runs.includes(wanted)) {
-      return res.status(404).json({ error: `No raw-feed run for ${date}`, runs });
-    }
+  const wanted = date ? `raw_path_truth_${date}.json` : runs[0];
+  if (!runs.includes(wanted)) {
+    return { available: false, notFound: true, reason: `No raw-feed run for ${date}`, runs: runs.map((f) => f.slice(15, 25)) };
+  }
 
-    const payload = JSON.parse(fs.readFileSync(path.join(dir, wanted), 'utf8'));
-    if (venueId && payload.venueId && payload.venueId !== venueId) {
-      return res.json({
-        available: false,
-        reason: 'The latest raw-feed run is for a different venue.',
-        runs: runs.map((f) => f.slice(15, 25)),
-      });
-    }
-
-    res.json({
-      available: true,
-      date: wanted.slice(15, 25),
+  const payload = JSON.parse(fs.readFileSync(path.join(dir, wanted), 'utf8'));
+  if (venueId && payload.venueId && payload.venueId !== venueId) {
+    return {
+      available: false,
+      reason: 'The latest raw-feed run is for a different venue.',
       runs: runs.map((f) => f.slice(15, 25)),
-      ...payload,
-    });
+    };
+  }
+
+  return {
+    available: true,
+    date: wanted.slice(15, 25),
+    runs: runs.map((f) => f.slice(15, 25)),
+    ...payload,
+  };
+}
+
+router.get('/raw-path-truth', requireAuth, requireSuperadmin, (req, res) => {
+  try {
+    const result = loadRawPathTruth(req.query);
+    if (result.notFound) {
+      return res.status(404).json({ error: result.reason, runs: result.runs });
+    }
+    res.json(result);
   } catch (err) {
     console.error('❌ Failed to read raw path truth run:', err.message);
     res.status(500).json({ error: 'Failed to read raw-feed forensic run', message: err.message });
+  }
+});
+
+/**
+ * GET /api/reporting/measurement-audit/pdf
+ *
+ * The audit as a document that can leave the building — which is the point,
+ * since its audience is a supplier conversation rather than a dashboard. Built
+ * from the same two payloads the tab renders, so the paper cannot say something
+ * the screen does not.
+ */
+router.get('/measurement-audit/pdf', requireAuth, requireSuperadmin, (req, res) => {
+  try {
+    const { venueId, startTs, endTs, date } = req.query;
+
+    if (!venueId || !startTs || !endTs) {
+      return res.status(400).json({ error: 'venueId, startTs and endTs are required' });
+    }
+
+    const start = parseInt(startTs, 10);
+    const end = parseInt(endTs, 10);
+    if (Number.isNaN(start) || Number.isNaN(end) || end <= start) {
+      return res.status(400).json({ error: 'Invalid time range' });
+    }
+    if (end - start > AUDIT_MAX_RANGE_MS) {
+      return res.status(400).json({ error: 'Audit range exceeds maximum of 7 days' });
+    }
+
+    const truth = loadRawPathTruth({ date, venueId });
+    const stored = computeZoneAudit(db, venueId, start, end);
+    const venueName = safeQuery(db, 'SELECT name FROM venues WHERE id = ?', [venueId])?.name || 'Venue';
+
+    const doc = renderMeasurementAuditPdf({ truth, stored, venueName, startTs: start, endTs: end });
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="${measurementAuditPdfFileName(venueName, end)}"`,
+    );
+    doc.pipe(res);
+    doc.end();
+  } catch (err) {
+    console.error('❌ Failed to render measurement audit PDF:', err.message);
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'Failed to render PDF', message: err.message });
+    }
   }
 });
 

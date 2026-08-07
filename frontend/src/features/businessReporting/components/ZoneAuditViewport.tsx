@@ -18,8 +18,9 @@
  *                 window you like, computed on request.
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { AlertTriangle, ChevronDown, ChevronUp, Info, RefreshCw, Search } from 'lucide-react';
+import { AlertTriangle, ChevronDown, ChevronUp, Download, Info, RefreshCw, Search } from 'lucide-react';
 import { API_BASE } from '../../../config/api';
+import { useAuth } from '../../../context/AuthContext';
 
 interface IdentitySummary {
   tracks: number;
@@ -154,21 +155,33 @@ function Card({
 }
 
 export default function ZoneAuditViewport({ venueId, startTs, endTs }: Props) {
+  const { token } = useAuth();
   const [truth, setTruth] = useState<RawTruthPayload | null>(null);
   const [stored, setStored] = useState<StoredAuditPayload | null>(null);
   const [loading, setLoading] = useState(true);
+  const [downloading, setDownloading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState('');
   const [showMethod, setShowMethod] = useState(false);
+
+  // These endpoints are superadmin-only, so unlike the rest of the reporting
+  // API they need the session token attached.
+  const authHeaders = useMemo(
+    () => (token ? { Authorization: `Bearer ${token}` } : undefined),
+    [token],
+  );
 
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
       const [truthRes, storedRes] = await Promise.all([
-        fetch(`${API_BASE}/api/reporting/raw-path-truth?venueId=${encodeURIComponent(venueId)}`),
+        fetch(`${API_BASE}/api/reporting/raw-path-truth?venueId=${encodeURIComponent(venueId)}`, {
+          headers: authHeaders,
+        }),
         fetch(
           `${API_BASE}/api/reporting/zone-audit?venueId=${encodeURIComponent(venueId)}&startTs=${startTs}&endTs=${endTs}`,
+          { headers: authHeaders },
         ),
       ]);
       setTruth(truthRes.ok ? await truthRes.json() : { available: false, reason: 'Raw-feed run unavailable.' });
@@ -179,7 +192,38 @@ export default function ZoneAuditViewport({ venueId, startTs, endTs }: Props) {
     } finally {
       setLoading(false);
     }
-  }, [venueId, startTs, endTs]);
+  }, [venueId, startTs, endTs, authHeaders]);
+
+  /**
+   * Fetched rather than opened in a tab: the route needs an Authorization
+   * header, which a plain window.open cannot carry.
+   */
+  const downloadPdf = useCallback(async () => {
+    setDownloading(true);
+    setError(null);
+    try {
+      const params = new URLSearchParams({ venueId, startTs: String(startTs), endTs: String(endTs) });
+      const res = await fetch(`${API_BASE}/api/reporting/measurement-audit/pdf?${params}`, {
+        headers: authHeaders,
+      });
+      if (!res.ok) throw new Error((await res.json())?.error || 'Report could not be generated');
+
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = res.headers.get('Content-Disposition')?.match(/filename="([^"]+)"/)?.[1]
+        || 'measurement-audit.pdf';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Download failed');
+    } finally {
+      setDownloading(false);
+    }
+  }, [venueId, startTs, endTs, authHeaders]);
 
   useEffect(() => {
     void load();
@@ -218,14 +262,25 @@ export default function ZoneAuditViewport({ venueId, startTs, endTs }: Props) {
               afterwards — so the effect of each stage is visible on its own.
             </p>
           </div>
-          <button
-            onClick={() => void load()}
-            disabled={loading}
-            className="shrink-0 rounded-md bg-gray-700 p-2 text-gray-300 hover:bg-gray-600 disabled:opacity-50"
-            title="Refresh"
-          >
-            <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
-          </button>
+          <div className="flex shrink-0 items-center gap-2">
+            <button
+              onClick={() => void downloadPdf()}
+              disabled={downloading || loading}
+              className="flex items-center gap-1.5 rounded-md bg-gray-700 px-3 py-2 text-xs text-white hover:bg-gray-600 disabled:opacity-50"
+              title="Download this audit as a PDF"
+            >
+              <Download className="h-3.5 w-3.5" />
+              {downloading ? 'Preparing…' : 'Download audit'}
+            </button>
+            <button
+              onClick={() => void load()}
+              disabled={loading}
+              className="rounded-md bg-gray-700 p-2 text-gray-300 hover:bg-gray-600 disabled:opacity-50"
+              title="Refresh"
+            >
+              <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+            </button>
+          </div>
         </div>
       </div>
 
