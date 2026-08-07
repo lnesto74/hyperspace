@@ -105,6 +105,9 @@ export function normalizeReconcilerConfig(raw) {
   // into multiple stable ids (which made reconciled worse than raw). Default
   // OFF for the live reconciler, where freeing ids for occupancy matters.
   merged.persist_perception_bindings = raw.persist_perception_bindings === true;
+  // One stable id, one publishing perception id. Off by default so the deployed
+  // behaviour is unchanged until the venue opts in. See _claimReidTarget.
+  merged.reid_exclusive_bindings = raw.reid_exclusive_bindings === true;
   return merged;
 }
 
@@ -295,7 +298,7 @@ export class TrajectoryReconciler {
       if (matched) {
         stableState = matched;
         stableState.perceptionIds.add(perceptionId);
-        this._claimReidTarget(state, stableState);
+        this._claimReidTarget(state, stableState, perceptionId, cfg);
         state.perceptionToStable.set(perceptionId, stableState.stableId);
         this._updateTrackState(stableState, pos, vel, now, cfg);
         state.stats.reid_count++;
@@ -315,7 +318,7 @@ export class TrajectoryReconciler {
       const quick = this._tryReid(state, pos, vel, now, cfg);
       if (quick) {
         quick.perceptionIds.add(perceptionId);
-        this._claimReidTarget(state, quick);
+        this._claimReidTarget(state, quick, perceptionId, cfg);
         state.perceptionToStable.set(perceptionId, quick.stableId);
         this._updateTrackState(quick, pos, vel, now, cfg);
         state.stats.reid_count++;
@@ -343,7 +346,7 @@ export class TrajectoryReconciler {
         const occlusion = this._tryReid(state, pos, vel, now, cfg, { occlusionOnly: true });
         if (occlusion) {
           state.candidatePerceptions.delete(perceptionId);
-          this._claimReidTarget(state, occlusion);
+          this._claimReidTarget(state, occlusion, perceptionId, cfg);
           occlusion.perceptionIds.add(perceptionId);
           state.perceptionToStable.set(perceptionId, occlusion.stableId);
           this._updateTrackState(occlusion, pos, vel, now, cfg);
@@ -367,7 +370,7 @@ export class TrajectoryReconciler {
     if (matched) {
       stableState = matched;
       stableState.perceptionIds.add(perceptionId);
-      this._claimReidTarget(state, stableState);
+      this._claimReidTarget(state, stableState, perceptionId, cfg);
       state.perceptionToStable.set(perceptionId, stableState.stableId);
       this._updateTrackState(stableState, pos, vel, now, cfg);
       state.stats.reid_count++;
@@ -516,9 +519,32 @@ export class TrajectoryReconciler {
     if (t.trail.length > cfg.trail_max_length) t.trail.shift();
   }
 
-  _claimReidTarget(state, t) {
+  /**
+   * @param claimingPerceptionId the id that just won this track, if known.
+   *
+   * Re-ID asserts that the incoming perception id IS the person this track was
+   * following, which means whatever id was feeding it before is finished. When
+   * that old id keeps publishing — routine with a supplier that fragments an id
+   * mid-walk and resumes it — both ids stay bound to the one stable id and the
+   * emitted position alternates between two people standing metres apart. On the
+   * canvas that is the zig-zag; in the data it is teleports and walked distance
+   * the supplier never published. Evicting the previous bindings forces the old
+   * id to re-qualify, so at worst it becomes a second identity, which is the
+   * honest answer when there are two people.
+   */
+  _claimReidTarget(state, t, claimingPerceptionId = null, cfg = null) {
     state.lostTracks.delete(t.stableId);
     state.activeTracks.set(t.stableId, t);
+
+    if (cfg?.reid_exclusive_bindings && claimingPerceptionId != null) {
+      for (const pid of t.perceptionIds) {
+        if (pid !== claimingPerceptionId) state.perceptionToStable.delete(pid);
+      }
+      // The set is what sweep() walks to release bindings, so it has to end up
+      // holding exactly the id that now owns this track.
+      t.perceptionIds.clear();
+      t.perceptionIds.add(claimingPerceptionId);
+    }
   }
 
   /** Lost tracks + active tracks quiet enough for re-ID (Raj ID churn). */
