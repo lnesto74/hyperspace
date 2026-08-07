@@ -264,9 +264,10 @@ function drawSupplier(doc, truth, y) {
       // than failing.
       value: `${nf(t.conservationErrorPct, 3)}%`,
       tone: INK,
-      body: `Total walked distance before and after reconciliation agrees to this: ${int(t.raw?.totalPathM)} m `
-        + `against ${int(t.reconciled?.totalPathM)} m. A person's distance is the sum of their own fragments, `
-        + 'so reconciliation cannot invent a metre.',
+      body: `${int(t.raw?.totalPathM)} m walked before reconciliation, against ${int(t.reconciled?.totalPathM)} m `
+        + `credited to people plus ${int(t.droppedGhostPathM)} m in fragments the ghost filter discarded — `
+        + 'balancing to the figure above. A person\'s distance is the sum of their own fragments, so '
+        + 'reconciliation cannot invent a metre, only stop crediting one shopper\'s to strangers.',
     },
   ], next);
 }

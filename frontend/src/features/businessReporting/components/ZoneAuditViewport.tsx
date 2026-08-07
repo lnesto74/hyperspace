@@ -76,6 +76,7 @@ interface RawTruthPayload {
     meanBridgedDistanceM: number | null;
     meanBridgedSec: number | null;
     fragmentsDroppedAsGhosts: number;
+    droppedGhostPathM: number | null;
     conservationErrorPct: number | null;
     pathRetainedBySamplingPct: number | null;
   };
@@ -367,11 +368,12 @@ export default function ZoneAuditViewport({ venueId, startTs, endTs }: Props) {
               <div className="rounded-lg border border-gray-700/60 bg-gray-900/40 p-4">
                 <div className="text-[11px] uppercase tracking-wide text-gray-400">Distance is conserved</div>
                 <div className="mt-1.5 text-xl font-semibold tabular-nums text-gray-200">
-                  {nf(t?.raw.totalPathM, 0)} m → {nf(t?.reconciled.totalPathM, 0)} m
+                  {nf(t?.conservationErrorPct, 3)}% off
                 </div>
                 <p className="mt-1.5 text-[11px] leading-snug text-gray-400">
-                  Total walked distance before and after reconciliation, agreeing to{' '}
-                  {nf(t?.conservationErrorPct, 3)}%. A person's distance is the sum of their own fragments, so
+                  {nf(t?.raw.totalPathM, 0)} m walked before reconciliation, against{' '}
+                  {nf(t?.reconciled.totalPathM, 0)} m credited to people plus {nf(t?.droppedGhostPathM, 0)} m in
+                  fragments the ghost filter discarded. A person's distance is the sum of their own fragments, so
                   reconciliation cannot invent a metre — it only stops crediting one shopper's metres to strangers.
                 </p>
               </div>
