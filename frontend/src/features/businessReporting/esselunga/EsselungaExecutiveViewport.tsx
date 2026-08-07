@@ -17,6 +17,7 @@ import type {
   ActivityTimeline,
   ActivityTimelineSet,
   HeadlineKpi,
+  MetricThresholdSettings,
 } from './types';
 import ErpCsvUploadPanel from './ErpCsvUploadPanel';
 import {
@@ -41,8 +42,8 @@ interface EsselungaExecutiveViewportProps {
   onVariantChange: (v: ExecutiveVariant) => void;
   onRefresh: () => void;
   /** Debounced preview — recomputes stopping % from visit durations at new thresholds */
-  onMetricThresholdPreview?: (dwellSec: number, engagementSec: number) => void;
-  onMetricThresholdsChange?: (dwellSec: number, engagementSec: number) => void;
+  onMetricThresholdPreview?: (settings: MetricThresholdSettings) => void;
+  onMetricThresholdsChange?: (settings: MetricThresholdSettings) => void;
   metricPreviewLoading?: boolean;
   /** Hide admin-only controls (ERP upload, threshold calibration) on customer share links */
   publicShare?: boolean;
@@ -66,9 +67,90 @@ const LIVE_OCCUPANCY_POLL_MS = 10_000;
 /** Esselunga's KPI specification fixes Stopping Power at a pause over 5 seconds. */
 const DEFAULT_DWELL_SEC = 5;
 const DEFAULT_ENGAGE_SEC = 60;
+/** See ExecutiveJourneyService for why the ranking bar sits at 15 and not higher. */
+const DEFAULT_RANK_SEC = 15;
+const DEFAULT_QUEUE_FLOOR_SEC = 10;
+const DEFAULT_BAND_EDGES = [5, 10, 20, 60];
+
+const BAND_TONES = [
+  'bg-gray-600',
+  'bg-sky-700/70',
+  'bg-sky-500/70',
+  'bg-emerald-500/70',
+  'bg-emerald-400',
+];
+
+function bandLabels(edges: number[]): string[] {
+  const [a, b, c, d] = edges;
+  return [`under ${a}s`, `${a}–${b}s`, `${b}–${c}s`, `${c}–${d}s`, `over ${d}s`];
+}
 
 function clampThreshold(value: number, fallback: number) {
   return Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
+const SLIDER_ACCENT: Record<string, string> = {
+  amber: 'accent-amber-500 text-amber-400/90',
+  emerald: 'accent-emerald-500 text-emerald-400/90',
+  sky: 'accent-sky-500 text-sky-400/90',
+  violet: 'accent-violet-500 text-violet-400/90',
+};
+
+function ThresholdSlider({
+  label, accent, min, max, step, value, onChange, hint,
+}: {
+  label: string;
+  accent: keyof typeof SLIDER_ACCENT;
+  min: number;
+  max: number;
+  step: number;
+  value: number;
+  onChange: (value: number) => void;
+  hint: string;
+}) {
+  const [accentClass, labelClass] = SLIDER_ACCENT[accent].split(' ');
+  return (
+    <label className="block space-y-1.5">
+      <span className={`text-xs uppercase tracking-wider ${labelClass}`}>{label}</span>
+      <div className="flex items-center gap-2">
+        <input
+          type="range"
+          min={min}
+          max={max}
+          step={step}
+          value={value}
+          onChange={(e) => onChange(parseInt(e.target.value, 10))}
+          className={`flex-1 h-1.5 bg-gray-700 rounded-lg ${accentClass}`}
+        />
+        <span className="text-xs text-white tabular-nums w-10 text-right">{value}s</span>
+      </div>
+      <span className="text-[11px] text-gray-400">{hint}</span>
+    </label>
+  );
+}
+
+/**
+ * The distribution as a single bar. A mean says how long the average visit
+ * lasted; this says whether the zone is losing people at the first second or
+ * holding them and then losing them, which is a different fix.
+ */
+function BandBar({ bands, edges, className = '' }: { bands?: number[] | null; edges: number[]; className?: string }) {
+  if (!bands?.length) return null;
+  const labels = bandLabels(edges);
+  return (
+    <div className={`flex h-1.5 w-full overflow-hidden rounded-full bg-gray-800 ${className}`}>
+      {bands.map((share, i) => (
+        share > 0 ? (
+          <div
+            key={labels[i]}
+            className={BAND_TONES[i]}
+            style={{ width: `${share}%` }}
+            title={`${labels[i]} · ${share}% of crossings`}
+          />
+        ) : null
+      ))}
+    </div>
+  );
 }
 
 /**
@@ -141,55 +223,44 @@ export default function EsselungaExecutiveViewport({
     activityTimeline, activityTimelines, heatmapCategories, storeHours, range: journeyRange } = journey;
   const { openHeatmapModal, openHeatmapForCategory } = useHeatmap();
 
-  const [dwellSec, setDwellSec] = useState(
-    clampThreshold(metricThresholds?.dwellSec ?? DEFAULT_DWELL_SEC, DEFAULT_DWELL_SEC),
-  );
-  const [engagementSec, setEngagementSec] = useState(
-    clampThreshold(metricThresholds?.engagementSec ?? DEFAULT_ENGAGE_SEC, DEFAULT_ENGAGE_SEC),
-  );
+  const [settings, setSettings] = useState<MetricThresholdSettings>(() => ({
+    dwellSec: clampThreshold(metricThresholds?.dwellSec ?? DEFAULT_DWELL_SEC, DEFAULT_DWELL_SEC),
+    engagementSec: clampThreshold(metricThresholds?.engagementSec ?? DEFAULT_ENGAGE_SEC, DEFAULT_ENGAGE_SEC),
+    engagementRankSec: clampThreshold(metricThresholds?.engagementRankSec ?? DEFAULT_RANK_SEC, DEFAULT_RANK_SEC),
+    queueFloorSec: clampThreshold(metricThresholds?.queueFloorSec ?? DEFAULT_QUEUE_FLOOR_SEC, DEFAULT_QUEUE_FLOOR_SEC),
+    bandEdgesSec: metricThresholds?.bandEdgesSec?.length === 4 ? metricThresholds.bandEdgesSec : DEFAULT_BAND_EDGES,
+  }));
+  const { dwellSec, engagementSec, engagementRankSec, queueFloorSec, bandEdgesSec } = settings;
   const previewTimerRef = useRef<number>();
   const sliderTouchedRef = useRef(false);
 
   useEffect(() => {
     if (sliderTouchedRef.current) return;
-    if (Number.isFinite(metricThresholds?.dwellSec)) {
-      setDwellSec(clampThreshold(metricThresholds!.dwellSec, DEFAULT_DWELL_SEC));
-    }
-    if (Number.isFinite(metricThresholds?.engagementSec)) {
-      setEngagementSec(clampThreshold(metricThresholds!.engagementSec, DEFAULT_ENGAGE_SEC));
-    }
-  }, [metricThresholds?.dwellSec, metricThresholds?.engagementSec, journey.generatedAt]);
+    if (!metricThresholds) return;
+    setSettings(prev => ({
+      dwellSec: clampThreshold(metricThresholds.dwellSec, prev.dwellSec),
+      engagementSec: clampThreshold(metricThresholds.engagementSec, prev.engagementSec),
+      engagementRankSec: clampThreshold(metricThresholds.engagementRankSec ?? NaN, prev.engagementRankSec),
+      queueFloorSec: clampThreshold(metricThresholds.queueFloorSec ?? NaN, prev.queueFloorSec),
+      bandEdgesSec: metricThresholds.bandEdgesSec?.length === 4 ? metricThresholds.bandEdgesSec : prev.bandEdgesSec,
+    }));
+  }, [metricThresholds, journey.generatedAt]);
 
-  const queueMetricPreview = (dwell: number, engage: number) => {
-    if (!onMetricThresholdPreview) return;
-    window.clearTimeout(previewTimerRef.current);
-    previewTimerRef.current = window.setTimeout(() => {
-      onMetricThresholdPreview(
-        clampThreshold(dwell, DEFAULT_DWELL_SEC),
-        clampThreshold(engage, DEFAULT_ENGAGE_SEC),
-      );
-    }, 450);
-  };
-
-  const handleDwellChange = (value: number) => {
+  const applySetting = (patch: Partial<MetricThresholdSettings>) => {
     sliderTouchedRef.current = true;
-    const v = clampThreshold(value, DEFAULT_DWELL_SEC);
-    setDwellSec(v);
-    queueMetricPreview(v, engagementSec);
-  };
-
-  const handleEngagementChange = (value: number) => {
-    sliderTouchedRef.current = true;
-    const v = clampThreshold(value, DEFAULT_ENGAGE_SEC);
-    setEngagementSec(v);
-    queueMetricPreview(dwellSec, v);
+    setSettings(prev => {
+      const next = { ...prev, ...patch };
+      window.clearTimeout(previewTimerRef.current);
+      previewTimerRef.current = window.setTimeout(() => onMetricThresholdPreview?.(next), 450);
+      return next;
+    });
   };
 
   useEffect(() => () => window.clearTimeout(previewTimerRef.current), []);
 
   useEffect(() => {
-    onMetricThresholdsChange?.(dwellSec, engagementSec);
-  }, [dwellSec, engagementSec, onMetricThresholdsChange]);
+    onMetricThresholdsChange?.(settings);
+  }, [settings, onMetricThresholdsChange]);
 
   const [livePerimeter, setLivePerimeter] = useState({
     count: overview.perimeterEntrants ?? 0,
@@ -418,6 +489,8 @@ export default function EsselungaExecutiveViewport({
       variant,
       dwellThresholdSec: String(dwellSec),
       engagementThresholdSec: String(engagementSec),
+      engagementRankSec: String(engagementRankSec),
+      queueFloorSec: String(queueFloorSec),
     });
     window.open(`${API_BASE}/api/reporting/esselunga-executive/pdf?${params}`, '_blank', 'noopener');
   };
@@ -569,9 +642,17 @@ export default function EsselungaExecutiveViewport({
               <AisleStat
                 value={`${aisles.stoppingPowerPct}%`}
                 label="Stopping power"
-                caption="of aisle crossings became a stop at the shelf"
+                caption={`of aisle crossings paused ${metricThresholds?.dwellSec ?? dwellSec}s or more`}
                 color="#60a5fa"
               />
+              {aisles.engagementRatePct != null && (
+                <AisleStat
+                  value={`${aisles.engagementRatePct}%`}
+                  label="Engagement rate"
+                  caption={`held past ${metricThresholds?.engagementRankSec ?? engagementRankSec}s — the bar that ranks fixtures`}
+                  color="#34d399"
+                />
+              )}
               <AisleStat
                 value={`${passThroughPct}%`}
                 label="Pass-through"
@@ -598,6 +679,12 @@ export default function EsselungaExecutiveViewport({
                 <span className="text-gray-400">Pass-through</span> and <span className="text-gray-400">bypass</span> answer
                 different questions. Pass-through is the share of crossings that did not stop; bypass is the share of store
                 visitors who never entered the category at all.
+              </p>
+              <p>
+                Rank fixtures by <span className="text-gray-400">engagement rate</span> rather than stopping power. At
+                5 seconds most zones land within a few points of one another; at{' '}
+                {metricThresholds?.engagementRankSec ?? engagementRankSec} seconds the same zones spread roughly five
+                times wider, because holding a shopper that long is a deliberate act rather than a slow walk.
               </p>
             </div>
           </div>
@@ -626,7 +713,9 @@ export default function EsselungaExecutiveViewport({
                         <th className="text-left px-4 py-3 font-medium">Zone</th>
                         <th className="text-right px-4 py-3 font-medium">Visits</th>
                         <th className="text-right px-4 py-3 font-medium">Stop</th>
+                        <th className="text-right px-4 py-3 font-medium">Held</th>
                         <th className="text-right px-4 py-3 font-medium">Dwell</th>
+                        <th className="text-left px-4 py-3 font-medium w-32">How long they stayed</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -636,7 +725,11 @@ export default function EsselungaExecutiveViewport({
                           <td className="px-4 py-3.5 text-gray-300">{zoneDisplayName(row.name)}</td>
                           <td className="px-4 py-3.5 text-right text-white tabular-nums font-medium">{row.visits.toLocaleString()}</td>
                           <td className="px-4 py-3.5 text-right text-gray-200 tabular-nums">{row.stoppingPowerPct}%</td>
+                          <td className="px-4 py-3.5 text-right text-emerald-300 tabular-nums font-medium">
+                            {row.engagementRatePct != null ? `${row.engagementRatePct}%` : '—'}
+                          </td>
                           <td className="px-4 py-3.5 text-right text-gray-200 tabular-nums">{formatDwellDuration(row.avgDwellSec, row.avgDwellMin)}</td>
+                          <td className="px-4 py-3.5"><BandBar bands={row.bands} edges={bandEdgesSec} /></td>
                         </tr>
                       ))}
                     </tbody>
@@ -743,8 +836,32 @@ export default function EsselungaExecutiveViewport({
                 </dd>
               </div>
               <div>
+                <dt className="inline text-gray-400 font-medium">Engagement rate · </dt>
+                <dd className="inline">
+                  share of crossings held past {metricThresholds?.engagementRankSec ?? engagementRankSec}s. This is
+                  the number to rank fixtures by: measured across the shelf zones it spreads about five times wider
+                  than stopping power, which at 5s puts most zones within a few points of each other.
+                </dd>
+              </div>
+              <div>
+                <dt className="inline text-gray-400 font-medium">Mean dwell · </dt>
+                <dd className="inline">
+                  total time in the zone divided by distinct shoppers, with no minimum. Filtering to long visits
+                  first makes the figure larger but less able to tell two zones apart, because it pulls every zone
+                  up toward the threshold.
+                </dd>
+              </div>
+              <div>
                 <dt className="inline text-gray-400 font-medium">Bypass · </dt>
                 <dd className="inline">share of store visitors who never entered the category, i.e. 100 − penetration.</dd>
+              </div>
+              <div>
+                <dt className="inline text-gray-400 font-medium">Checkout wait · </dt>
+                <dd className="inline">
+                  measured over queue visits of {metricThresholds?.queueFloorSec ?? queueFloorSec}s or more. Most
+                  crossings of a queue zone are shoppers walking past it, and counting those reports a wait of a
+                  few seconds.
+                </dd>
               </div>
               <div>
                 <dt className="inline text-gray-400 font-medium">Shopping dwell · </dt>
@@ -756,39 +873,84 @@ export default function EsselungaExecutiveViewport({
             {publicShare ? (
               <p className="text-xs text-gray-400">Thresholds shown are those configured for this store.</p>
             ) : (
-              <div className="grid sm:grid-cols-2 gap-4 pt-1 border-t border-gray-700/30">
-                <label className="block space-y-1.5">
-                  <span className="text-xs uppercase tracking-wider text-amber-400/90">Stopping threshold</span>
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="range"
-                      min={1}
-                      max={120}
-                      step={1}
-                      value={dwellSec}
-                      onChange={(e) => handleDwellChange(parseInt(e.target.value, 10))}
-                      className="flex-1 h-1.5 bg-gray-700 rounded-lg accent-amber-500"
-                    />
-                    <span className="text-xs text-white tabular-nums w-10 text-right">{dwellSec}s</span>
+              <div className="space-y-4 pt-1 border-t border-gray-700/30">
+                <div className="grid sm:grid-cols-2 gap-4">
+                  <ThresholdSlider
+                    label="Stopping threshold"
+                    accent="amber"
+                    min={1}
+                    max={120}
+                    step={1}
+                    value={dwellSec}
+                    onChange={(v) => applySetting({ dwellSec: v })}
+                    hint="Explore only — the report ships at Esselunga's 5s"
+                  />
+                  <ThresholdSlider
+                    label="Ranking bar"
+                    accent="emerald"
+                    min={5}
+                    max={60}
+                    step={1}
+                    value={engagementRankSec}
+                    onChange={(v) => applySetting({ engagementRankSec: v })}
+                    hint="Higher separates zones more sharply but reports on fewer of them"
+                  />
+                  <ThresholdSlider
+                    label="Queue floor"
+                    accent="sky"
+                    min={1}
+                    max={60}
+                    step={1}
+                    value={queueFloorSec}
+                    onChange={(v) => applySetting({ queueFloorSec: v })}
+                    hint="Below this, a queue-zone crossing is a shopper walking past"
+                  />
+                  <ThresholdSlider
+                    label="Engaged threshold"
+                    accent="violet"
+                    min={15}
+                    max={300}
+                    step={5}
+                    value={engagementSec}
+                    onChange={(v) => applySetting({ engagementSec: v })}
+                    hint="Separates a long browse from a pause"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <span className="text-xs uppercase tracking-wider text-gray-400">Dwell bands</span>
+                  <div className="flex flex-wrap items-center gap-2">
+                    {bandEdgesSec.map((edge, i) => (
+                      <input
+                        key={`edge-${i}`}
+                        type="number"
+                        min={1}
+                        max={600}
+                        value={edge}
+                        onChange={(e) => {
+                          const next = [...bandEdgesSec];
+                          next[i] = Math.max(1, parseInt(e.target.value, 10) || 1);
+                          applySetting({ bandEdgesSec: next });
+                        }}
+                        className="w-16 rounded border border-gray-700 bg-gray-900/60 px-2 py-1 text-xs text-white tabular-nums"
+                      />
+                    ))}
+                    <span className="text-[11px] text-gray-400">
+                      seconds — the four cuts behind every distribution bar on this page
+                    </span>
                   </div>
-                  <span className="text-[11px] text-gray-400">Explore only — the report ships at 5s</span>
-                </label>
-                <label className="block space-y-1.5">
-                  <span className="text-xs uppercase tracking-wider text-emerald-400/90">Engaged threshold</span>
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="range"
-                      min={15}
-                      max={300}
-                      step={5}
-                      value={engagementSec}
-                      onChange={(e) => handleEngagementChange(parseInt(e.target.value, 10))}
-                      className="flex-1 h-1.5 bg-gray-700 rounded-lg accent-emerald-500"
-                    />
-                    <span className="text-xs text-white tabular-nums w-10 text-right">{engagementSec}s</span>
+                  <BandBar bands={aisles.bands} edges={bandEdgesSec} />
+                  <div className="flex flex-wrap gap-x-4 gap-y-1">
+                    {bandLabels(bandEdgesSec).map((label, i) => (
+                      <span key={label} className="flex items-center gap-1.5 text-[11px] text-gray-400">
+                        <span className={`w-2 h-2 rounded-sm ${BAND_TONES[i]}`} />
+                        {label}
+                        {aisles.bands?.[i] != null && (
+                          <span className="text-gray-500 tabular-nums">{aisles.bands[i]}%</span>
+                        )}
+                      </span>
+                    ))}
                   </div>
-                  <span className="text-[11px] text-gray-400">Separates a long browse from a pause</span>
-                </label>
+                </div>
               </div>
             )}
           </div>

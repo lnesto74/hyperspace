@@ -71,10 +71,19 @@ function cacheProfileFor(spanMs) {
   return { bucketMs: 5 * 60_000, ttlMs: 5 * 60_000 };
 }
 
-function getCacheKey(personaId, venueId, startTs, endTs, grain) {
+/**
+ * Thresholds belong in the key. They change every dwell figure in the payload,
+ * so a key without them hands a request for one definition the answer to
+ * another — silently, and only for the ~30s the entry lives, which is the
+ * hardest kind of wrong number to catch.
+ */
+function getCacheKey(personaId, venueId, startTs, endTs, grain, thresholds) {
   const { bucketMs } = cacheProfileFor(endTs - startTs);
   const bucket = ts => Math.floor(ts / bucketMs);
-  return `${personaId}:${venueId}:${bucket(startTs)}:${bucket(endTs)}:${grain || 'default'}`;
+  const t = thresholds || {};
+  const thr = [t.dwellThresholdSec, t.engagementThresholdSec, t.engagementRankSec, t.queueFloorSec]
+    .map(v => (v == null || v === '' ? '_' : v)).join(',');
+  return `${personaId}:${venueId}:${bucket(startTs)}:${bucket(endTs)}:${grain || 'default'}:${thr}`;
 }
 
 function getCached(key) {
@@ -329,7 +338,7 @@ router.get('/categories', async (req, res) => {
 router.get('/summary', async (req, res) => {
   try {
     const { personaId, venueId, startTs, endTs, categoryId, shelfId, campaignId, grain, variant,
-      dwellThresholdSec, engagementThresholdSec } = req.query;
+      dwellThresholdSec, engagementThresholdSec, engagementRankSec, queueFloorSec } = req.query;
     
     // Debug logging
     console.log(`[BusinessReporting] Request: persona=${personaId}, venue=${venueId}, startTs=${startTs}, endTs=${endTs}`);
@@ -361,11 +370,17 @@ router.get('/summary', async (req, res) => {
     const metricThresholdOpts = {
       dwellThresholdSec,
       engagementThresholdSec,
+      engagementRankSec,
+      queueFloorSec,
       thresholdPreview,
     };
 
     // Check cache (skip when previewing metric thresholds — results depend on slider values)
-    const cacheKey = getCacheKey(personaId, venueId, start, end, personaId === 'store-manager' ? resolvedGrain : null);
+    const cacheKey = getCacheKey(
+      personaId, venueId, start, end,
+      personaId === 'store-manager' ? resolvedGrain : null,
+      metricThresholdOpts,
+    );
     const cached = !thresholdPreview ? getCached(cacheKey) : null;
     if (cached) {
       return res.json(cached);
@@ -428,7 +443,8 @@ router.get('/summary', async (req, res) => {
  */
 router.get('/esselunga-executive/pdf', (req, res) => {
   try {
-    const { venueId, startTs, endTs, variant, dwellThresholdSec, engagementThresholdSec } = req.query;
+    const { venueId, startTs, endTs, variant, dwellThresholdSec, engagementThresholdSec,
+      engagementRankSec, queueFloorSec } = req.query;
 
     if (!venueId || !startTs || !endTs) {
       return res.status(400).json({ error: 'venueId, startTs and endTs are required' });
@@ -445,7 +461,7 @@ router.get('/esselunga-executive/pdf', (req, res) => {
 
     const { supporting } = computeEsselungaExecutiveKpis(
       db, venueId, start, end, variant, mqttService,
-      { dwellThresholdSec, engagementThresholdSec, thresholdPreview: false },
+      { dwellThresholdSec, engagementThresholdSec, engagementRankSec, queueFloorSec, thresholdPreview: false },
     );
     const journey = supporting.esselungaJourney;
     const venueName = safeQuery(db, 'SELECT name FROM venues WHERE id = ?', [venueId])?.name || 'Venue';

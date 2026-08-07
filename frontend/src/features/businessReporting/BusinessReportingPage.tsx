@@ -30,7 +30,7 @@ import ExecutiveSummaryViewport, {
 } from './components/ExecutiveSummaryViewport';
 import EsselungaExecutiveViewport from './esselunga/EsselungaExecutiveViewport';
 import ZoneAuditViewport from './components/ZoneAuditViewport';
-import type { EsselungaJourneyPayload, ExecutiveVariant } from './esselunga/types';
+import type { EsselungaJourneyPayload, ExecutiveVariant, MetricThresholdSettings } from './esselunga/types';
 import type { DoohScreenMarker } from '../../components/shared/FloorPlanMiniMap';
 import { getDemoVenueId } from '../../config/demo';
 
@@ -109,7 +109,7 @@ export default function BusinessReportingPage({ onClose, publicDashboard = false
   const [metricPreviewLoading, setMetricPreviewLoading] = useState(false);
   const previewAbortRef = useRef<AbortController | null>(null);
   const previewSeqRef = useRef(0);
-  const esselungaMetricsRef = useRef<{ dwellSec: number; engagementSec: number } | null>(null);
+  const esselungaMetricsRef = useRef<MetricThresholdSettings | null>(null);
 
   useEffect(() => {
     if (!publicDashboard) return;
@@ -216,7 +216,7 @@ export default function BusinessReportingPage({ onClose, publicDashboard = false
   const zoneUtilThresholdPct = (supporting.zoneUtilThresholdPct as number | undefined) ?? 5;
 
   const fetchData = async (
-    metricOpts?: { dwellSec: number; engagementSec: number },
+    metricOpts?: MetricThresholdSettings,
     opts?: { silent?: boolean },
   ) => {
     if (!selectedVenueId) return;
@@ -268,6 +268,8 @@ export default function BusinessReportingPage({ onClose, publicDashboard = false
         if (th) {
           params.set('dwellThresholdSec', String(th.dwellSec));
           params.set('engagementThresholdSec', String(th.engagementSec));
+          params.set('engagementRankSec', String(th.engagementRankSec));
+          params.set('queueFloorSec', String(th.queueFloorSec));
         }
         if (isPreview) {
           params.set('metricPreview', 'true');
@@ -482,7 +484,7 @@ export default function BusinessReportingPage({ onClose, publicDashboard = false
           )}
 
           <button
-            onClick={fetchData}
+            onClick={() => fetchData()}
             disabled={loading}
             className="p-1.5 bg-gray-700 hover:bg-gray-600 rounded-md text-gray-300 disabled:opacity-50"
             title="Refresh"
@@ -536,12 +538,12 @@ export default function BusinessReportingPage({ onClose, publicDashboard = false
                   variant={esselungaVariant}
                   onVariantChange={setEsselungaVariant}
                   onRefresh={() => fetchData()}
-                  onMetricThresholdPreview={(dwellSec, engagementSec) => {
-                    esselungaMetricsRef.current = { dwellSec, engagementSec };
-                    void fetchData({ dwellSec, engagementSec }, { silent: true });
+                  onMetricThresholdPreview={(settings) => {
+                    esselungaMetricsRef.current = settings;
+                    void fetchData(settings, { silent: true });
                   }}
-                  onMetricThresholdsChange={(dwellSec, engagementSec) => {
-                    esselungaMetricsRef.current = { dwellSec, engagementSec };
+                  onMetricThresholdsChange={(settings) => {
+                    esselungaMetricsRef.current = settings;
                   }}
                   metricPreviewLoading={metricPreviewLoading}
                   publicShare={publicDashboard}

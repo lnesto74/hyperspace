@@ -327,16 +327,21 @@ function drawFresco(doc, journey, y) {
 function drawAisles(doc, journey, y) {
   const a = journey.aisles || {};
   const thresholdSec = journey.metricThresholds?.dwellSec ?? 5;
+  const rankSec = journey.metricThresholds?.engagementRankSec ?? 15;
 
   let next = sectionTitle(
     doc,
     'Aisles and categories',
     y,
-    `Stopping power counts a pause of ${thresholdSec}s or more, per Esselunga's KPI specification`,
+    `Stopping power counts a pause of ${thresholdSec}s per Esselunga's specification; `
+    + `engagement counts ${rankSec}s, which is what ranks one fixture against another`,
   );
 
   const stats = [
     ['Stopping power', `${a.stoppingPowerPct ?? 0}%`, 'of aisle crossings became a stop'],
+    a.engagementRatePct != null
+      ? ['Engagement', `${a.engagementRatePct}%`, `held past ${rankSec}s`]
+      : null,
     ['Pass-through', `${a.passThroughPct ?? Math.max(0, 100 - (a.stoppingPowerPct ?? 0))}%`, 'crossed without stopping'],
     a.penetrationPct != null
       ? ['Penetration', `${a.penetrationPct}%`, 'of visitors reached an aisle']
@@ -364,14 +369,15 @@ function drawAisles(doc, journey, y) {
   if (cats.length) {
     next = table(doc, {
       y: next,
-      headers: ['Category', 'Zones', 'Crossings', 'Stopping', 'Avg dwell'],
-      widths: [0.36, 0.14, 0.18, 0.16, 0.16],
-      align: ['left', 'right', 'right', 'right', 'right'],
+      headers: ['Category', 'Zones', 'Crossings', 'Stopping', `Held ${rankSec}s`, 'Avg dwell'],
+      widths: [0.3, 0.12, 0.16, 0.14, 0.14, 0.14],
+      align: ['left', 'right', 'right', 'right', 'right', 'right'],
       rows: cats.map((c) => [
         c.category,
         num(c.roiCount ?? 0),
         num(c.visits),
         `${c.stoppingPowerPct}%`,
+        c.engagementRatePct != null ? `${c.engagementRatePct}%` : '—',
         dur(c.avgDwellSec ? c.avgDwellSec / 60 : c.avgDwellMin),
       ]),
     });
@@ -468,15 +474,25 @@ function drawInsights(doc, journey, y) {
 }
 
 function drawDefinitions(doc, journey, y) {
-  const t = journey.metricThresholds?.dwellSec ?? 5;
+  const th = journey.metricThresholds || {};
+  const t = th.dwellSec ?? 5;
+  const rank = th.engagementRankSec ?? 15;
+  const queueFloor = th.queueFloorSec ?? 10;
   const next = sectionTitle(doc, 'How these numbers are defined', y);
 
   const defs = [
     ['Entrants', 'People crossing the entrance line, counted from LiDAR trajectories.'],
     ['Crossing', 'Any entry into a zone lasting at least 300 milliseconds.'],
     ['Stopping power', `Share of zone crossings where the shopper paused for ${t} seconds or more.`],
+    ['Engagement rate', `Share of crossings held past ${rank} seconds. This is the figure to rank fixtures by: `
+      + 'at 5 seconds most zones sit within a few points of each other, where at this bar they spread about '
+      + 'five times wider.'],
+    ['Mean dwell', 'Total time in the zone divided by distinct shoppers, with no minimum. Restricting the average '
+      + 'to long visits raises the number but makes it less able to separate one zone from another.'],
     ['Pass-through', 'Share of crossings that did not become a stop.'],
     ['Bypass', 'Share of store visitors who never entered the category, that is 100 minus penetration.'],
+    ['Checkout wait', `Measured over queue visits of ${queueFloor} seconds or more, since most crossings of a `
+      + 'queue zone are shoppers walking past it.'],
     ['Shopping dwell', 'Median time a visit spends inside tracked zones. Not entrance-to-exit time in store.'],
     ['Comparison', 'The same window seven days earlier, chosen because supermarket traffic is weekday-shaped.'],
   ];

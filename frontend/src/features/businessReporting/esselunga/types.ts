@@ -3,9 +3,31 @@ export type ExecutiveVariant = 'live' | 'hq';
 export interface MetricThresholds {
   dwellSec: number;
   engagementSec: number;
+  /** The bar for ranking one fixture against another. Higher separates zones better. */
+  engagementRankSec?: number;
+  /** Below this, a visit to a queue zone is someone walking past, not queueing. */
+  queueFloorSec?: number;
+  /** Four edges cutting the dwell distribution into five bands. */
+  bandEdgesSec?: number[];
   minVisitMs: number;
   source: 'venue_default' | 'preview';
 }
+
+/** The subset a reader can move from the definitions drawer. */
+export interface MetricThresholdSettings {
+  dwellSec: number;
+  engagementSec: number;
+  engagementRankSec: number;
+  queueFloorSec: number;
+  bandEdgesSec: number[];
+}
+
+/**
+ * Share of visits in each dwell band, in the order the edges define them.
+ * Two zones can average the same and be nothing alike, and this is where the
+ * difference shows.
+ */
+export type DwellBands = number[];
 
 export interface TimelinePoint {
   label: string;
@@ -74,6 +96,8 @@ export interface FrescoDepartment {
   uniqueVisitors: number;
   avgDwellMin: number;
   avgDwellSec?: number;
+  engagementRatePct?: number;
+  bands?: DwellBands | null;
   stoppingPct?: number;
   passThroughPct?: number;
   hasQueueZones?: boolean;
@@ -117,6 +141,8 @@ export interface AisleCategoryGroup {
   stoppingPowerPct: number;
   avgDwellMin: number;
   avgDwellSec?: number;
+  engagementRatePct?: number;
+  bands?: DwellBands | null;
   roiCount: number;
 }
 
@@ -128,6 +154,8 @@ export interface AisleRow {
   stoppingPowerPct: number;
   avgDwellMin: number;
   avgDwellSec?: number;
+  engagementRatePct?: number;
+  bands?: DwellBands | null;
 }
 
 export interface ExecutiveInsight {
@@ -236,6 +264,9 @@ export interface EsselungaJourneyPayload {
     aisleReachReliable?: boolean;
     dwellVisits?: number;
     stoppingPowerPct: number;
+    /** Share of crossings held past the ranking bar. Spreads far wider than stopping power. */
+    engagementRatePct?: number;
+    bands?: DwellBands | null;
     /** Of the crossings that happened, the share that did not stop. */
     passThroughPct?: number;
     /** Esselunga's definition: 100 - penetration. Null when penetration is unmeasurable. */
