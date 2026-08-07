@@ -114,9 +114,15 @@ export function FrescoDepartmentCard({
   label,
   visits,
   dwellVisits = 0,
-  avgDwellSec = 0,
-  stoppingPct = 0,
-  passThroughPct = 0,
+  episodes = 0,
+  fragmentsPerEpisode = 0,
+  medianDwellSec = null,
+  p75DwellSec = null,
+  dwellReliable = false,
+  dwellUnavailableReason = null,
+  reportable = true,
+  stoppingPct = null,
+  passThroughPct = null,
   hasQueueZones = false,
   waitingPct = 0,
   abandonPct = 0,
@@ -127,9 +133,15 @@ export function FrescoDepartmentCard({
   label: string;
   visits: number;
   dwellVisits?: number;
-  avgDwellSec?: number;
-  stoppingPct?: number;
-  passThroughPct?: number;
+  episodes?: number;
+  fragmentsPerEpisode?: number;
+  medianDwellSec?: number | null;
+  p75DwellSec?: number | null;
+  dwellReliable?: boolean;
+  dwellUnavailableReason?: string | null;
+  reportable?: boolean;
+  stoppingPct?: number | null;
+  passThroughPct?: number | null;
   hasQueueZones?: boolean;
   waitingPct?: number;
   abandonPct?: number;
@@ -137,8 +149,16 @@ export function FrescoDepartmentCard({
   bg: string;
   Icon: ComponentType<{ className?: string; style?: CSSProperties }>;
 }) {
-  const dwellLabel = formatDwellDuration(avgDwellSec);
-  const stopPct = Math.min(100, stoppingPct);
+  // Typical-to-long rather than a single figure: the spread is the honest part.
+  // A lone number here reads as a measurement when it is an estimate rebuilt
+  // from fragments, and four counters printing the same one is what made the
+  // old card look precise and be wrong.
+  const dwellLabel = dwellReliable && medianDwellSec != null
+    ? (p75DwellSec != null && p75DwellSec > medianDwellSec
+      ? `${formatDwellDuration(medianDwellSec)}–${formatDwellDuration(p75DwellSec)}`
+      : formatDwellDuration(medianDwellSec))
+    : '—';
+  const stopPct = stoppingPct == null ? null : Math.min(100, stoppingPct);
 
   return (
     <div className="rounded-xl border border-gray-700/60 bg-gray-800/40 p-5 flex flex-col gap-3">
@@ -157,7 +177,9 @@ export function FrescoDepartmentCard({
           </div>
         </div>
         <div className="text-right shrink-0">
-          <div className="text-lg font-bold text-white tabular-nums">{stopPct}%</div>
+          <div className="text-lg font-bold text-white tabular-nums">
+            {stopPct == null ? '—' : `${stopPct}%`}
+          </div>
           <div className="text-[11px] text-gray-400 flex items-center justify-end">
             stopping
             <KpiTooltip text={FRESCO_TOOLTIPS.stopping} />
@@ -165,18 +187,34 @@ export function FrescoDepartmentCard({
         </div>
       </div>
 
+      {!reportable && (
+        <p className="text-[11px] text-amber-400/90 leading-snug">
+          Too few crossings to report. Either the counter is not mapped to a zone or the
+          sensors do not cover it — not a counter nobody visits.
+        </p>
+      )}
+      {reportable && !dwellReliable && dwellUnavailableReason === 'quantised_durations' && (
+        <p className="text-[11px] text-amber-400/90 leading-snug">
+          Dwell not shown: this period reaches back before 6 Aug 2026, when zone durations
+          were recorded in whole 5-second steps. Every counter would read the same 15s.
+          Stopping rate is unaffected.
+        </p>
+      )}
+
       <div className="grid grid-cols-2 gap-x-3 gap-y-2 text-xs">
         <div className="rounded-md bg-gray-900/50 px-2.5 py-2">
-          <div className="text-base font-bold text-white tabular-nums">{dwellVisits.toLocaleString()}</div>
+          <div className="text-base font-bold text-white tabular-nums">
+            {reportable ? dwellVisits.toLocaleString() : '—'}
+          </div>
           <div className="text-[11px] text-gray-400 leading-tight flex items-center">
-            dwell visits
+            stops
             <KpiTooltip text={FRESCO_TOOLTIPS.dwellVisits} />
           </div>
         </div>
         <div className="rounded-md bg-gray-900/50 px-2.5 py-2">
           <div className="text-base font-bold text-white tabular-nums">{dwellLabel}</div>
           <div className="text-[11px] text-gray-400 leading-tight flex items-center">
-            avg dwell
+            typical dwell
             <KpiTooltip text={FRESCO_TOOLTIPS.avgDwell} />
           </div>
         </div>
@@ -204,7 +242,9 @@ export function FrescoDepartmentCard({
         ) : (
           <div className="col-span-2 rounded-md bg-gray-900/50 px-2.5 py-2 flex items-center justify-between">
             <div>
-              <div className="text-base font-bold text-gray-300 tabular-nums">{passThroughPct}%</div>
+              <div className="text-base font-bold text-gray-300 tabular-nums">
+                {passThroughPct == null ? '—' : `${passThroughPct}%`}
+              </div>
               <div className="text-[11px] text-gray-400 flex items-center">
                 pass-through
                 <KpiTooltip text={FRESCO_TOOLTIPS.passThrough} />
@@ -213,6 +253,14 @@ export function FrescoDepartmentCard({
           </div>
         )}
       </div>
+
+      {reportable && episodes > 0 && (
+        <p className="text-[10px] text-gray-500 leading-snug flex items-center">
+          {episodes.toLocaleString()} visits rebuilt from {fragmentsPerEpisode.toFixed(1)} tracker
+          fragments each
+          <KpiTooltip text={FRESCO_TOOLTIPS.episodes} />
+        </p>
+      )}
     </div>
   );
 }

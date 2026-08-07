@@ -96,12 +96,27 @@ export interface FrescoDepartment {
   uniqueVisitors: number;
   avgDwellMin: number;
   avgDwellSec?: number;
+  /**
+   * Tracker fragments rejoined into one visit per shopper. Durations and
+   * stopping are read off these; a raw fragment measures how long the perception
+   * feed held an ID (median ~13s), not how long anyone stood at the counter.
+   */
+  episodes?: number;
+  /** How much rejoining it took. Near 1 means the tracker held; 2 means it lost the shopper once per visit. */
+  fragmentsPerEpisode?: number;
+  medianDwellSec?: number | null;
+  p75DwellSec?: number | null;
+  /** False when there are too few episodes for a duration to mean anything. */
+  dwellReliable?: boolean;
+  dwellUnavailableReason?: 'quantised_durations' | 'too_few_episodes' | 'too_few_crossings' | 'no_data' | null;
+  /** False when the counter has too few crossings to report rates at all. */
+  reportable?: boolean;
   engagementRatePct?: number;
   bands?: DwellBands | null;
-  stoppingPct?: number;
-  passThroughPct?: number;
+  stoppingPct?: number | null;
+  passThroughPct?: number | null;
   hasQueueZones?: boolean;
-  browsingPct: number;
+  browsingPct: number | null;
   waitingPct: number;
   abandonPct: number;
   serviceEfficiency: number | null;
@@ -257,7 +272,17 @@ export interface EsselungaJourneyPayload {
     spi: number | null;
     spiSource: string;
   };
-  fresco: { departments: FrescoDepartment[] };
+  fresco: {
+    departments: FrescoDepartment[];
+    episodeModel?: {
+      available: boolean;
+      reidGapSec: number;
+      reidMaxDistanceM: number;
+      /** True when the window reaches back into the pre-6-Aug-2026 five-second duration steps. */
+      durationsQuantised: boolean;
+      onTickPct: number | null;
+    };
+  };
   aisles: {
     penetrationPct: number | null;
     aisleDwellUnique?: number;

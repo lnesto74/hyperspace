@@ -13,11 +13,12 @@ export const HERO_KPI_TOOLTIPS: Record<string, string> = {
 };
 
 export const FRESCO_TOOLTIPS = {
-  stopping: 'Percentage of zone crossings where the shopper stayed at least the stopping threshold (e.g. 20s) inside this counter zone.',
-  crossings: 'How many times a LiDAR track entered this department zone. One person walking the counter may generate multiple crossings.',
-  dwellVisits: 'Crossings that exceeded the stopping threshold — counted as a stop at this counter.',
-  avgDwell: 'Average time spent in the zone among dwell visits only (not pass-throughs).',
-  passThrough: 'Crossed the zone but left before reaching the stopping threshold — walked past without stopping.',
+  stopping: 'Of the rebuilt visits to this counter, the share that were a pause rather than a walk-past. A pause means staying at least the stopping threshold.',
+  crossings: 'Raw LiDAR track entries into this department. The tracker loses and re-acquires a shopper roughly once per visit, so this is well above the number of actual visits.',
+  dwellVisits: 'Rebuilt visits that lasted at least the stopping threshold — the shopper paused at this counter rather than walking past.',
+  avgDwell: 'Typical length of a stop at this counter, shown as median to 75th percentile. It is an estimate rebuilt from tracker fragments and is a lower bound: a visit still running when the tracker loses the shopper for good is cut short.',
+  passThrough: 'Rebuilt visits that ended before the stopping threshold — crossed the counter without stopping.',
+  episodes: 'The perception feed holds an identity for about 13 seconds on average, so one visit arrives as several fragments. Fragments in the same zone are rejoined when the gap and the re-entry distance say it is the same shopper. A figure near 1 means the tracker held on; near 2 means it lost the shopper once per visit.',
   queue: 'Share of visits detected in the queue zone vs browsing at the service counter.',
   abandon: 'Queue sessions where the shopper left before being served.',
 };

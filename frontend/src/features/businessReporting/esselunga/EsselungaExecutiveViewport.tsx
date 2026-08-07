@@ -596,7 +596,7 @@ export default function EsselungaExecutiveViewport({
       <SectionCard
         id="fresco"
         title="2 · Piazza del Fresco"
-        subtitle="The service counters, where a crossing that turns into a pause is the signal worth watching. Stopping is the share of crossings that paused; dwell is how long those pauses lasted."
+        subtitle="The service counters, where a crossing that turns into a pause is the signal worth watching. The tracker holds a shopper's identity for about 13 seconds, so visits are rebuilt by rejoining fragments before anything is measured. Dwell is the typical length of a pause and is a lower bound; compare counters on stopping rate, which is the sturdier of the two."
       >
         {fresco.departments.length === 0 ? (
           <p className="text-xs text-gray-400 py-4 text-center">
@@ -615,9 +615,15 @@ export default function EsselungaExecutiveViewport({
                   label={dept.label}
                   visits={dept.visits}
                   dwellVisits={dept.dwellVisits}
-                  avgDwellSec={dept.avgDwellSec}
+                  episodes={dept.episodes}
+                  fragmentsPerEpisode={dept.fragmentsPerEpisode}
+                  medianDwellSec={dept.medianDwellSec}
+                  p75DwellSec={dept.p75DwellSec}
+                  dwellReliable={dept.dwellReliable}
+                  dwellUnavailableReason={dept.dwellUnavailableReason}
+                  reportable={dept.reportable}
                   stoppingPct={dept.stoppingPct ?? dept.browsingPct}
-                  passThroughPct={dept.passThroughPct ?? Math.round((100 - dept.browsingPct) * 10) / 10}
+                  passThroughPct={dept.passThroughPct}
                   hasQueueZones={dept.hasQueueZones}
                   waitingPct={dept.waitingPct}
                   abandonPct={dept.abandonPct}

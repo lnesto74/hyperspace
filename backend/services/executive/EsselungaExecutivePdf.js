@@ -305,20 +305,31 @@ function drawFresco(doc, journey, y) {
     doc,
     'Piazza del Fresco',
     y,
-    'Counter zones — how many crossings became a stop, and for how long',
+    'Counter zones — how many crossings became a stop, and for how long. Visits are '
+    + 'rebuilt by rejoining tracker fragments, so dwell is a lower bound; stopping rate '
+    + 'is the sturdier comparison between counters.',
   );
+
+  const dwellCell = (d) => {
+    if (!d.dwellReliable || d.medianDwellSec == null) return '—';
+    if (d.p75DwellSec != null && d.p75DwellSec > d.medianDwellSec) {
+      return `${d.medianDwellSec}-${d.p75DwellSec}s`;
+    }
+    return `${d.medianDwellSec}s`;
+  };
 
   return table(doc, {
     y: next,
-    headers: ['Department', 'Crossings', 'Stops', 'Stopping', 'Avg dwell', 'In queue'],
-    widths: [0.30, 0.14, 0.13, 0.14, 0.15, 0.14],
-    align: ['left', 'right', 'right', 'right', 'right', 'right'],
+    headers: ['Department', 'Crossings', 'Visits', 'Stops', 'Stopping', 'Typical dwell', 'In queue'],
+    widths: [0.26, 0.12, 0.11, 0.11, 0.12, 0.16, 0.12],
+    align: ['left', 'right', 'right', 'right', 'right', 'right', 'right'],
     rows: depts.map((d) => [
       d.label,
       num(d.visits),
-      num(d.dwellVisits ?? 0),
-      `${d.stoppingPct ?? d.browsingPct}%`,
-      dur(d.avgDwellSec ? d.avgDwellSec / 60 : d.avgDwellMin),
+      num(d.episodes ?? 0),
+      d.reportable ? num(d.dwellVisits ?? 0) : '—',
+      d.reportable ? `${d.stoppingPct ?? d.browsingPct}%` : '—',
+      dwellCell(d),
       d.hasQueueZones ? `${d.waitingPct}%` : '—',
     ]),
   });

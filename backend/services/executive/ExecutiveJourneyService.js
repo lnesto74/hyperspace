@@ -27,6 +27,7 @@ import {
   computeExecutiveSessionAnalytics,
   buildSessionCategoryGroups,
 } from './ExecutiveSessionAnalytics.js';
+import { buildZoneEpisodeIndex } from './ZoneEpisodeIndex.js';
 
 function safeQuery(db, sql, params = []) {
   try {
@@ -420,8 +421,20 @@ function fetchUniqueVisitorsByGroup(db, venueId, startTs, endTs, groups) {
  * rollups need, so each aggregate is computed once no matter how many callers
  * ask for it.
  */
-function createJourneyContext(db, venueId, startTs, endTs, metricThresholds) {
+function createJourneyContext(db, venueId, startTs, endTs, metricThresholds, episodeRoiIds = []) {
   const uniqueCache = new Map();
+  // Deferred: episode reconstruction is the one index that needs row-level
+  // access, so it is only paid for by requests that render a section using it.
+  let episodeIndex = null;
+  const episodeStats = () => {
+    if (!episodeIndex) {
+      episodeIndex = buildZoneEpisodeIndex(db, venueId, startTs, endTs, {
+        dwellMs: metricThresholds.dwellMs,
+        roiIds: episodeRoiIds,
+      });
+    }
+    return episodeIndex;
+  };
   return {
     db,
     venueId,
@@ -430,6 +443,7 @@ function createJourneyContext(db, venueId, startTs, endTs, metricThresholds) {
     metricThresholds,
     roiStats: buildRoiStatsIndex(db, venueId, startTs, endTs, metricThresholds),
     queueStats: buildQueueStatsIndex(db, venueId, startTs, endTs, metricThresholds.queueFloorMs),
+    episodeStats,
     uniqueVisitorsFor(groups) {
       const signature = groups
         .map(g => `${g.key}=${[...(g.roiIds || [])].sort().join('.')}`)
@@ -534,8 +548,16 @@ function fetchFrescoBrowsingSplit(roiStats, serviceRoiIds, queueRoiIds, browseRo
   };
 }
 
+/**
+ * A counter with a handful of crossings a day is an unmapped or barely-covered
+ * fixture, not a quiet department. Reporting 0% stopping and 100% pass-through
+ * for it states a finding the data cannot support, so it is marked instead.
+ */
+const MIN_CROSSINGS_FOR_DEPT_METRICS = 30;
+
 function buildFrescoDepartments(classifiedRois, ctx) {
   const { roiStats, queueStats } = ctx;
+  const episodeStats = ctx.episodeStats();
   const frescoRois = classifiedRois.filter(r => r.classification.group === 'fresco');
   const byDept = new Map();
 
@@ -565,30 +587,64 @@ function buildFrescoDepartments(classifiedRois, ctx) {
     const split = fetchFrescoBrowsingSplit(roiStats, ids.serviceIds, ids.queueIds, ids.browseIds);
     const deptQueueStats = queueStats.statsFor(ids.queueIds);
     const hasQueueZones = ids.queueIds.length > 0;
-    const stoppingPct = stats.visits > 0 ? pct(stats.dwellVisits, stats.visits) : 0;
-    const passThroughPct = Math.max(0, Math.round((100 - stoppingPct) * 10) / 10);
-    // Total time over distinct shoppers, matching how the aisles are measured:
-    // it answers "how long does a shopper spend at this counter" and survives a
-    // track being split into several episodes, which a per-episode mean does not.
     const deptUnique = uniqueByDept.get(dept) ?? stats.uniqueVisitors;
-    const avgDwellSec = deptUnique > 0 ? Math.round(stats.totalDurationMs / deptUnique / 1000) : 0;
-    const avgDwellMin = avgDwellSec > 0 ? Math.round((avgDwellSec / 60) * 10) / 10 : 0;
+
+    // Fragments joined back into visits. Everything the card shows about
+    // duration or stopping is read off these, because a fragment measures the
+    // tracker's ID lifetime rather than the shopper's stay.
+    const episodes = episodeStats.statsFor(allIds);
+    const reportable = stats.visits >= MIN_CROSSINGS_FOR_DEPT_METRICS;
+    const dwellReliable = reportable && episodes.reliable;
+
+    // Stopping is an episode-level rate: of the reconstructed visits to this
+    // counter, how many were a pause rather than a walk-past. The fragment-level
+    // rate understates it, because a pause chopped into four fragments can leave
+    // every piece under the bar.
+    const stoppingPct = episodes.episodes > 0
+      ? episodes.stoppingPct
+      : (stats.visits > 0 ? pct(stats.dwellVisits, stats.visits) : 0);
+    const passThroughPct = reportable
+      ? Math.max(0, Math.round((100 - stoppingPct) * 10) / 10)
+      : null;
+
+    // The median, not the mean: episode length is heavy-tailed (single visits
+    // past ten minutes) and a mean built on a handful of those moves a counter's
+    // headline by seconds for reasons that have nothing to do with the counter.
+    const medianDwellSec = dwellReliable ? episodes.medianStopSec : null;
+    const p75DwellSec = dwellReliable ? episodes.p75StopSec : null;
 
     return {
       id: dept,
       label: ids.displayLabel || FRESCO_DEPT_LABELS[dept] || dept.replace(/_/g, ' '),
       visits: stats.visits,
-      dwellVisits: stats.dwellVisits,
+      // Counting stops only needs to know which side of the bar a visit fell,
+      // which survives the coarse pre-6-Aug durations. Measuring how long the
+      // stop lasted does not, so the count stays while the duration goes.
+      dwellVisits: reportable ? episodes.stops : 0,
       engagementVisits: stats.engagementVisits,
       uniqueVisitors: deptUnique,
-      avgDwellMin,
-      avgDwellSec,
+
+      episodes: episodes.episodes,
+      fragmentsPerEpisode: episodes.fragmentsPerEpisode,
+      medianDwellSec,
+      p75DwellSec,
+      dwellUnavailableReason: dwellReliable
+        ? null
+        : (reportable ? episodes.unreliableReason : 'too_few_crossings'),
+      // Retained for the PDF and the week-on-week comparison, which both key off
+      // avgDwellSec. It is now the episode mean, so it measures the same thing
+      // the card does rather than total zone time diluted by pass-throughs.
+      avgDwellSec: dwellReliable ? episodes.meanStopSec : 0,
+      avgDwellMin: dwellReliable ? Math.round((episodes.meanStopSec / 60) * 10) / 10 : 0,
+      dwellReliable,
+      reportable,
+
       engagementRatePct: stats.visits > 0 ? pct(stats.rankVisits, stats.visits) : 0,
       bands: bandShares(stats),
-      stoppingPct,
+      stoppingPct: reportable ? stoppingPct : null,
       passThroughPct,
       hasQueueZones,
-      browsingPct: stoppingPct,
+      browsingPct: reportable ? stoppingPct : null,
       waitingPct: split.waitingPct,
       abandonPct: deptQueueStats.abandonPct,
       serviceEfficiency: deptQueueStats.completed > 0
@@ -1513,7 +1569,10 @@ export function computeExecutiveJourney(db, venueId, startTs, endTs, variant = '
 
   // Shared indexes replace the per-zone-group range scans that used to dominate
   // this request.
-  const ctx = createJourneyContext(db, venueId, startTs, endTs, metricThresholds);
+  const ctx = createJourneyContext(
+    db, venueId, startTs, endTs, metricThresholds,
+    classifiedRois.filter(r => r.classification.group === 'fresco').map(r => r.id),
+  );
 
   const frescoDepartments = buildFrescoDepartments(classifiedRois, ctx);
   const checkoutChannels = buildCheckoutChannels(classifiedRois, ctx);
@@ -1616,7 +1675,22 @@ export function computeExecutiveJourney(db, venueId, startTs, endTs, variant = '
       spi: crossKpis.spi,
       spiSource: crossKpis.spiSource,
     },
-    fresco: { departments: frescoDepartments },
+    fresco: {
+      departments: frescoDepartments,
+      // Reconstruction provenance. The reader is looking at rebuilt visits, and
+      // whether a duration is measurable at all depends on which side of the
+      // 6 Aug 2026 pipeline change the window falls.
+      episodeModel: (() => {
+        const idx = ctx.episodeStats();
+        return {
+          available: idx.available,
+          reidGapSec: idx.gapMs / 1000,
+          reidMaxDistanceM: idx.maxDistM,
+          durationsQuantised: idx.quantisation?.quantised ?? false,
+          onTickPct: idx.quantisation?.onTickPct ?? null,
+        };
+      })(),
+    },
     aisles: { ...aisleMetrics, aisleConversionPct: aisleConversion },
     checkout: {
       channels: checkoutChannels,
