@@ -13,37 +13,62 @@ const TONE_STYLE: Record<ExecutiveHeadline['tone'], { bar: string; ring: string;
   info: { bar: 'bg-sky-400', ring: 'border-sky-500/30', label: 'text-sky-300', text: 'No comparison' },
 };
 
-export function VerdictBanner({
+/**
+ * The verdict and the numbers behind it share one frame. Split across two
+ * blocks they read as unrelated, and the gap between them was the single
+ * biggest band of empty space at the top of the page.
+ */
+export function ExecutiveHeader({
   headline,
   venueName,
   rangeLabel,
   generatedAtLabel,
+  kpis,
 }: {
   headline?: ExecutiveHeadline;
   venueName: string;
   rangeLabel: string;
   generatedAtLabel: string;
+  kpis: HeadlineKpi[];
 }) {
   const tone = TONE_STYLE[headline?.tone ?? 'info'];
 
   return (
     <section className={`relative rounded-2xl border ${tone.ring} bg-gray-800/40 overflow-hidden`}>
       <span className={`absolute inset-y-0 left-0 w-1 ${tone.bar}`} aria-hidden />
-      <div className="pl-6 pr-5 py-6 flex flex-col gap-4">
+      <div className="pl-6 pr-5 py-5 flex flex-col gap-3">
         <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
           <h1 className="text-lg font-semibold text-white tracking-tight">{venueName}</h1>
           <span className="text-[13px] text-gray-400">{rangeLabel}</span>
-          <span
-            className={`ml-auto text-xs uppercase tracking-wider font-medium ${tone.label}`}
-          >
+          <span className="text-[13px] text-gray-500">· updated {generatedAtLabel}</span>
+          <span className={`ml-auto text-xs uppercase tracking-wider font-medium ${tone.label}`}>
             {tone.text}
           </span>
         </div>
-        <p className="text-[17px] text-gray-100 leading-relaxed max-w-4xl">
+        <p className="text-[17px] text-gray-100 leading-relaxed max-w-5xl">
           {headline?.text ?? 'Not enough data in this window to summarise the period.'}
         </p>
-        <p className="text-xs text-gray-400">Updated {generatedAtLabel}</p>
       </div>
+
+      {kpis.length > 0 && (
+        <div
+          className="grid border-t border-gray-700/50 divide-x divide-y sm:divide-y-0 divide-gray-700/50"
+          style={{ gridTemplateColumns: `repeat(auto-fit, minmax(190px, 1fr))` }}
+        >
+          {kpis.map(kpi => (
+            <div key={kpi.id} className="px-5 py-4 flex flex-col gap-1.5 min-w-0">
+              <span className="text-xs uppercase tracking-wider text-gray-400 truncate">
+                {kpi.label}
+              </span>
+              <span className="text-3xl font-semibold text-white tabular-nums leading-none">
+                {kpi.display}
+              </span>
+              <DeltaChip kpi={kpi} />
+              <span className="text-[13px] text-gray-400 leading-snug">{kpi.hint}</span>
+            </div>
+          ))}
+        </div>
+      )}
     </section>
   );
 }
@@ -78,27 +103,5 @@ function DeltaChip({ kpi }: { kpi: HeadlineKpi }) {
       {Math.abs(kpi.deltaPct)}%
       <span className="text-gray-400 font-normal ml-1">vs last week</span>
     </span>
-  );
-}
-
-export function HeadlineKpiGrid({ items }: { items: HeadlineKpi[] }) {
-  if (items.length === 0) return null;
-
-  return (
-    <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-      {items.map(kpi => (
-        <div
-          key={kpi.id}
-          className="rounded-xl border border-gray-700/60 bg-gray-800/40 px-5 py-5 flex flex-col gap-2"
-        >
-          <span className="text-xs uppercase tracking-wider text-gray-400">{kpi.label}</span>
-          <span className="text-4xl font-semibold text-white tabular-nums leading-none">
-            {kpi.display}
-          </span>
-          <DeltaChip kpi={kpi} />
-          <span className="text-[13px] text-gray-400 leading-snug mt-0.5">{kpi.hint}</span>
-        </div>
-      ))}
-    </div>
   );
 }

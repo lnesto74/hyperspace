@@ -64,7 +64,24 @@ function pct(num, den) {
   return Math.round((num / den) * 1000) / 10;
 }
 
-/** Venue defaults or API preview overrides — executive metrics use duration_ms, not stale is_dwell flags. */
+/**
+ * Stopping Power counts a visitor who paused longer than this. Esselunga's own
+ * KPI specification fixes it at 5 seconds, so that is what this report answers.
+ *
+ * It deliberately does not read venues.default_dwell_threshold_sec. That column
+ * is the operational zone-dwell threshold: it stamps is_dwell on every stored
+ * visit and is consumed by KPICalculator, the neural funnels, DOOH attribution
+ * and replay insight. Treviglio has it at 20s, which was calibrated when zone
+ * durations were quantised to a 10-15s tick and could not represent a 5s pause
+ * at all. Retuning it to satisfy this report would silently re-cut all those
+ * other metrics, and would only re-stamp visits written after the change,
+ * leaving a mixed population behind. The executive figures are computed from
+ * duration_ms at query time, so they can hold the contractual definition
+ * without disturbing any of that.
+ */
+const STOPPING_POWER_SPEC_SEC = 5;
+
+/** Executive metrics use duration_ms directly, not stale is_dwell flags. */
 export function resolveExecutiveMetricThresholds(db, venueId, dwellThresholdSec, engagementThresholdSec) {
   const venue = safeQuery(db, `
     SELECT default_dwell_threshold_sec, default_engagement_threshold_sec FROM venues WHERE id = ?
@@ -73,7 +90,7 @@ export function resolveExecutiveMetricThresholds(db, venueId, dwellThresholdSec,
   const hasEngageOverride = engagementThresholdSec != null && engagementThresholdSec !== '';
   const dwellSec = hasDwellOverride
     ? Math.max(1, Number(dwellThresholdSec))
-    : (venue?.default_dwell_threshold_sec ?? 10);
+    : STOPPING_POWER_SPEC_SEC;
   const engagementSec = hasEngageOverride
     ? Math.max(1, Number(engagementThresholdSec))
     : (venue?.default_engagement_threshold_sec ?? 30);
@@ -118,6 +135,7 @@ function buildJourneySignals(totalVisitors, footfall, aisleMetrics, checkoutChan
       aisleZoneVisits: aisleMetrics.totalAisleVisits,
       dwellVisits: aisleMetrics.dwellVisits ?? 0,
       stoppingPct: aisleMetrics.stoppingPowerPct,
+      passThroughPct: aisleMetrics.passThroughPct,
       bypassPct: aisleMetrics.bypassPct,
     },
     checkout: {
@@ -355,7 +373,9 @@ function buildQueueStatsIndex(db, venueId, startTs, endTs) {
 
   return {
     statsFor(roiIds) {
-      if (!roiIds?.length) return { sessions: 0, avgWaitMin: 0, abandonPct: 0, completed: 0 };
+      if (!roiIds?.length) {
+        return { sessions: 0, avgWaitMin: 0, avgWaitSec: 0, abandonPct: 0, completed: 0 };
+      }
       let sessions = 0;
       let waitMsSum = 0;
       let completed = 0;
@@ -371,6 +391,10 @@ function buildQueueStatsIndex(db, venueId, startTs, endTs) {
       return {
         sessions,
         avgWaitMin: completed > 0 ? Math.round((waitMsSum / completed / 60000) * 100) / 100 : 0,
+        // A wait rounded to a tenth of a minute buckets every lane into
+        // six-second steps, which makes a 14-second queue and a 19-second one
+        // read the same. Seconds are what the reader is shown.
+        avgWaitSec: completed > 0 ? Math.round(waitMsSum / completed / 1000) : 0,
         abandonPct: sessions > 0 ? Math.round((abandoned / sessions) * 1000) / 10 : 0,
         completed,
       };
@@ -470,28 +494,43 @@ function buildFrescoDepartments(classifiedRois, ctx) {
   }).sort((a, b) => b.visits - a.visits);
 }
 
+/**
+ * "Checkout 5 - Queue" and "Checkout 5 - Service" are two zones of one till.
+ * Grouping on the number keeps a lane a lane; anything unnumbered falls back to
+ * its own name so an oddly-labelled zone is still reported rather than merged
+ * into a stranger.
+ */
+function checkoutLaneKey(name) {
+  const m = /(?:checkout|cassa)\s*0*(\d+)/i.exec(name || '');
+  return m ? `#${m[1]}` : (name || '').trim() || 'unnamed';
+}
+
 function buildCheckoutChannels(classifiedRois, ctx) {
   const { db, endTs, queueStats } = ctx;
   const checkoutRois = classifiedRois.filter(r => r.classification.group === 'checkout');
   const byChannel = new Map();
 
+  const push = (channel, roi) => {
+    if (!byChannel.has(channel)) byChannel.set(channel, []);
+    byChannel.get(channel).push(roi);
+  };
+
   for (const roi of checkoutRois) {
-    const ch = roi.classification.subGroup || 'traditional';
-    if (!byChannel.has(ch)) byChannel.set(ch, []);
-    byChannel.get(ch).push(roi.id);
+    push(roi.classification.subGroup || 'traditional', roi);
   }
 
   if (byChannel.size === 0) {
-    const fallback = classifiedRois.filter(r =>
-      r.name.toLowerCase().includes('queue') && r.name.toLowerCase().includes('checkout'),
-    );
-    if (fallback.length) byChannel.set('traditional', fallback.map(r => r.id));
+    for (const roi of classifiedRois) {
+      const n = roi.name.toLowerCase();
+      if (n.includes('queue') && n.includes('checkout')) push('traditional', roi);
+    }
   }
 
   // Loop-invariant, and scoped to the checkout ROIs so it rides
   // idx_zone_occupancy_roi_time. Filtering by venue_id instead has no index and
   // cost a full scan of millions of occupancy rows on every request.
-  const allCheckoutRoiIds = [...byChannel.values()].flat();
+  const allCheckoutRois = [...byChannel.values()].flat();
+  const allCheckoutRoiIds = allCheckoutRois.map(r => r.id);
   const latestTs = allCheckoutRoiIds.length
     ? safeQuery(db, `
       SELECT MAX(timestamp) as ts FROM zone_occupancy
@@ -499,26 +538,69 @@ function buildCheckoutChannels(classifiedRois, ctx) {
     `, [...allCheckoutRoiIds, endTs])?.ts
     : null;
 
-  return [...byChannel.entries()].map(([channel, roiIds]) => {
-    const q = queueStats.statsFor(roiIds);
-    let currentQueue = 0;
-    if (latestTs && roiIds.length) {
-      const ph = roiIds.map(() => '?').join(',');
-      const occ = safeQuery(db, `
-        SELECT SUM(occupancy_count) as total FROM zone_occupancy
-        WHERE roi_id IN (${ph}) AND timestamp = ?
-      `, [...roiIds, latestTs]);
-      currentQueue = occ?.total || 0;
+  // One grouped read for every checkout zone, so adding per-lane queue counts
+  // costs nothing beyond the query already being made for the channel totals.
+  const queueNow = new Map();
+  if (latestTs && allCheckoutRoiIds.length) {
+    const ph = allCheckoutRoiIds.map(() => '?').join(',');
+    for (const r of safeQueryAll(db, `
+      SELECT roi_id, SUM(occupancy_count) AS total FROM zone_occupancy
+      WHERE roi_id IN (${ph}) AND timestamp = ?
+      GROUP BY roi_id
+    `, [...allCheckoutRoiIds, latestTs])) {
+      queueNow.set(r.roi_id, r.total || 0);
     }
+  }
+  const queuedIn = (ids) => ids.reduce((a, id) => a + (queueNow.get(id) || 0), 0);
+
+  return [...byChannel.entries()].map(([channel, rois]) => {
+    const roiIds = rois.map(r => r.id);
+    const q = queueStats.statsFor(roiIds);
+
+    const byLane = new Map();
+    for (const roi of rois) {
+      const key = checkoutLaneKey(roi.name);
+      if (!byLane.has(key)) byLane.set(key, { queueIds: [], allIds: [] });
+      const lane = byLane.get(key);
+      lane.allIds.push(roi.id);
+      const isQueue = roi.classification.role === 'queue'
+        || roi.name.toLowerCase().includes('queue');
+      if (isQueue) lane.queueIds.push(roi.id);
+    }
+
+    const lanes = [...byLane.entries()]
+      .map(([label, ids]) => {
+        // Wait means time spent queuing, so it is read off the queue zone. A
+        // lane with no queue zone mapped falls back to all of its zones rather
+        // than reporting nothing.
+        const waitIds = ids.queueIds.length ? ids.queueIds : ids.allIds;
+        const s = queueStats.statsFor(waitIds);
+        return {
+          id: label,
+          label,
+          sessions: s.sessions,
+          completed: s.completed,
+          avgWaitMin: s.avgWaitMin,
+          avgWaitSec: s.avgWaitSec,
+          abandonPct: s.abandonPct,
+          currentQueue: queuedIn(waitIds),
+          roiIds: ids.allIds,
+        };
+      })
+      .filter(l => l.sessions > 0 || l.currentQueue > 0)
+      .sort((a, b) => b.sessions - a.sessions);
+
     return {
       id: channel,
       label: CHECKOUT_CHANNEL_LABELS[channel] || channel,
       sessions: q.sessions,
       completed: q.completed,
       avgWaitMin: q.avgWaitMin,
+      avgWaitSec: q.avgWaitSec,
       abandonPct: q.abandonPct,
-      currentQueue,
+      currentQueue: queuedIn(roiIds),
       roiIds,
+      lanes,
     };
   });
 }
@@ -534,6 +616,7 @@ function categoryGroupToHeatmapRow(g) {
     engagementRate: g.engagementPct || 0,
     conversionRate: 0,
     avgBrowseTimeMin: g.avgDwellMin || 0,
+    avgBrowseTimeSec: g.avgDwellSec || 0,
   };
 }
 
@@ -548,6 +631,7 @@ function frescoDeptToHeatmapRow(d) {
     engagementRate: d.visits > 0 ? pct(d.engagementVisits || 0, d.visits) : 0,
     conversionRate: 0,
     avgBrowseTimeMin: d.avgDwellMin || 0,
+    avgBrowseTimeSec: d.avgDwellSec || 0,
   };
 }
 
@@ -798,6 +882,9 @@ function buildAisleCategoryGroups(classifiedRois, ctx) {
       avgDwellMin: uniqueVisitors > 0
         ? Math.round((stats.totalDurationMs / uniqueVisitors) / 60000 * 10) / 10
         : 0,
+      avgDwellSec: uniqueVisitors > 0
+        ? Math.round((stats.totalDurationMs / uniqueVisitors) / 1000)
+        : 0,
       roiCount: roiIds.length,
       roiIds,
     };
@@ -843,7 +930,19 @@ function buildAisleMetrics(classifiedRois, ctx, totalVisitors, sessionAnalytics)
   const aisleReachReliable = sessionAnalytics?.aislePenetration?.reliable
     ?? (totalVisitors > 0 && aisleDwellUnique <= totalVisitors * 1.05);
   const stoppingPowerPct = stats.visits > 0 ? pct(stats.dwellVisits, stats.visits) : 0;
-  const bypassPct = Math.max(0, Math.round((100 - stoppingPowerPct) * 10) / 10);
+
+  // These are two different questions that used to share one field. Of the
+  // crossings that happened, how many did not stop? That is pass-through, and it
+  // is what the ring gauge has always been labelled.
+  const passThroughPct = Math.max(0, Math.round((100 - stoppingPowerPct) * 10) / 10);
+
+  // Bypass, as Esselunga define it, is 100 - penetration: the share of store
+  // visitors who skipped the category entirely. Null rather than 100 when
+  // penetration cannot be measured, so an unknown never reads as "everybody
+  // walked past".
+  const bypassPct = penetrationPct != null
+    ? Math.max(0, Math.round((100 - penetrationPct) * 10) / 10)
+    : null;
 
   // Reading from the shared index makes ranking every aisle as cheap as the
   // arbitrary first-20 slice this used to settle for.
@@ -861,18 +960,34 @@ function buildAisleMetrics(classifiedRois, ctx, totalVisitors, sessionAnalytics)
       avgDwellMin: s.uniqueVisitors > 0
         ? Math.round((s.totalDurationMs / s.uniqueVisitors) / 60000 * 10) / 10
         : 0,
+      // Rounding to a tenth of a minute buckets every zone into multiples of
+      // six seconds, which makes genuinely different zones look identical and
+      // reads as sensor quantisation when it is only our arithmetic. Seconds
+      // are what the reader is shown, so seconds are what we round to.
+      avgDwellSec: s.uniqueVisitors > 0
+        ? Math.round((s.totalDurationMs / s.uniqueVisitors) / 1000)
+        : 0,
     });
   }
+  // Surfaced so the tab can say how much of the floor is unaccounted for. A
+  // reader who sees "Uncategorized" against the busiest shelf should be told
+  // it is a gap in the shelf mapper, not a category the store actually sells.
+  const untaggedZones = topAisles.filter(a => a.category === 'Uncategorized').length;
+  const taggedZones = topAisles.length - untaggedZones;
+
   topAisles.sort((a, b) => b.visits - a.visits);
   topAisles.splice(20);
 
   return {
+    untaggedZones,
+    taggedZones,
     penetrationPct,
     aisleDwellUnique,
     aisleReachReliable,
     dwellVisits: stats.dwellVisits,
     engagementVisits: stats.engagementVisits,
     stoppingPowerPct,
+    passThroughPct,
     bypassPct,
     totalAisleVisits: stats.visits,
     categoryGroups,
@@ -995,6 +1110,229 @@ function buildInsights(payload) {
 }
 
 /**
+ * The same window one week earlier, so every headline number can carry a
+ * direction. Esselunga's own mock states its KPIs as "▲ 4% vs sett. scorsa",
+ * and a number with no comparison is not a management report.
+ *
+ * A week back rather than the previous day, because supermarket traffic is
+ * strongly weekday-shaped and Saturday against Friday would mostly measure the
+ * calendar.
+ *
+ * Only for windows up to 36h. A 7d window takes around 12s to build at
+ * Treviglio, and doubling that to decorate four tiles is not a trade worth
+ * making.
+ */
+const COMPARISON_MAX_SPAN_MS = 36 * 60 * 60 * 1000;
+const COMPARISON_SHIFT_MS = 7 * 24 * 60 * 60 * 1000;
+
+/**
+ * The date the pipeline changed in two ways that both break comparison with
+ * anything earlier.
+ *
+ * Zone dwell moved from one sample per storage tick to frame rate, so short
+ * pauses stopped collapsing to zero: the share of aisle visits over 5s went
+ * from roughly 21% to 49% on the day, with no matching change in the store.
+ * Ingestion also stopped depending on a browser being subscribed, which had
+ * been silently dropping traffic — 5 August recorded no entrants at all.
+ *
+ * So neither the durations nor the counts are like-for-like across it. Deltas
+ * are withheld rather than estimated until a full week of history exists on
+ * the far side, because reporting a measurement fix as a week of spectacular
+ * trading is the one mistake this report cannot make while we are disputing
+ * data quality with the perception vendor.
+ */
+const MEASUREMENT_EPOCH_MS = Date.parse(process.env.MEASUREMENT_EPOCH || '2026-08-06T00:00:00+02:00');
+
+function buildComparison(db, venueId, startTs, endTs, variant, metricThresholdOpts) {
+  if (endTs - startTs > COMPARISON_MAX_SPAN_MS) return null;
+
+  let prev;
+  try {
+    prev = computeExecutiveJourney(
+      db,
+      venueId,
+      startTs - COMPARISON_SHIFT_MS,
+      endTs - COMPARISON_SHIFT_MS,
+      variant,
+      { ...metricThresholdOpts, skipComparison: true },
+    );
+  } catch (err) {
+    console.warn('[ExecutiveJourney] comparison window failed:', err.message);
+    return null;
+  }
+
+  const prevStart = startTs - COMPARISON_SHIFT_MS;
+
+  return {
+    label: 'same window, previous week',
+    range: { startTs: prevStart, endTs: endTs - COMPARISON_SHIFT_MS },
+    comparable: Number.isFinite(MEASUREMENT_EPOCH_MS) ? prevStart >= MEASUREMENT_EPOCH_MS : true,
+    caveat: 'counting and dwell measurement both changed on 6 August, so a comparison back to before then would report the fix as a change in trade',
+    entrants: prev.overview.perimeterEntrants ?? 0,
+    totalVisitors: prev.overview.totalVisitors,
+    shoppingDwellMin: prev.overview.avgStoreDwellMin,
+    shoppingDwellReliable: prev.overview.avgStoreDwellReliable === true,
+    stoppingPowerPct: prev.aisles.stoppingPowerPct,
+    penetrationPct: prev.aisles.penetrationPct,
+    checkoutCompleted: prev.checkout.completed ?? 0,
+    avgWaitMin: prev.checkout.avgWaitMin,
+    avgTicket: prev.overview.avgTicket,
+    spi: prev.overview.spi,
+  };
+}
+
+function relDelta(now, before) {
+  if (!Number.isFinite(now) || !Number.isFinite(before) || before <= 0) return null;
+  return Math.round(((now - before) / before) * 1000) / 10;
+}
+
+function formatWait(minutes) {
+  if (!Number.isFinite(minutes) || minutes <= 0) return '—';
+  const total = Math.round(minutes * 60);
+  if (total < 60) return `${total}s`;
+  return `${Math.floor(total / 60)}m ${String(total % 60).padStart(2, '0')}s`;
+}
+
+/**
+ * The numbers the report leads with, resolved once on the server so the screen
+ * and the PDF cannot drift apart. Ordered as the shopper moves: in, along the
+ * shelf, out.
+ */
+function buildHeadlineKpis(payload) {
+  const cmp = payload.comparison;
+  const o = payload.overview;
+
+  const items = [
+    {
+      id: 'entrants',
+      label: 'Entrants',
+      value: o.perimeterEntrants ?? 0,
+      display: (o.perimeterEntrants ?? 0).toLocaleString(),
+      hint: 'people crossing the entrance line',
+      previous: cmp?.entrants ?? null,
+      higherIsBetter: true,
+    },
+    {
+      id: 'stopping',
+      label: 'Stopping power',
+      value: payload.aisles.stoppingPowerPct,
+      display: `${payload.aisles.stoppingPowerPct}%`,
+      hint: `aisle crossings with a pause over ${payload.metricThresholds.dwellSec}s`,
+      previous: cmp?.stoppingPowerPct ?? null,
+      higherIsBetter: true,
+    },
+    {
+      id: 'dwell',
+      // Deliberately not "store dwell": this is time inside tracked zones, not
+      // the entrance-to-exit total, and the two differ by an order of magnitude.
+      label: 'Shopping dwell',
+      value: o.avgStoreDwellReliable ? o.avgStoreDwellMin : null,
+      display: o.avgStoreDwellReliable ? `${o.avgStoreDwellMin}m` : '—',
+      hint: 'median time in tracked zones per visit',
+      previous: cmp?.shoppingDwellReliable ? cmp.shoppingDwellMin : null,
+      higherIsBetter: true,
+    },
+    {
+      id: 'wait',
+      label: 'Checkout wait',
+      value: payload.checkout.avgWaitMin,
+      display: formatWait(payload.checkout.avgWaitMin),
+      hint: 'average queue time across lanes',
+      previous: cmp?.avgWaitMin ?? null,
+      higherIsBetter: false,
+    },
+  ];
+
+  if (payload.erp?.hasData) {
+    if (o.avgTicket != null) {
+      items.push({
+        id: 'ticket',
+        label: 'Average basket',
+        value: o.avgTicket,
+        display: `€${o.avgTicket.toFixed(2)}`,
+        hint: 'from ERP receipts',
+        previous: cmp?.avgTicket ?? null,
+        higherIsBetter: true,
+      });
+    }
+    if (o.spi != null) {
+      items.push({
+        id: 'spi',
+        label: 'Space yield',
+        value: o.spi,
+        display: `€${o.spi}`,
+        hint: 'revenue per m² per dwell hour',
+        previous: cmp?.spi ?? null,
+        higherIsBetter: true,
+      });
+    }
+  }
+
+  const blocked = cmp != null && cmp.comparable === false;
+
+  return items.map((it) => {
+    const deltaPct = blocked ? null : relDelta(it.value, it.previous);
+    return {
+      ...it,
+      previous: blocked ? null : it.previous,
+      noCompareReason: blocked ? cmp.caveat : null,
+      deltaPct,
+      direction: deltaPct == null ? 'flat' : deltaPct > 0 ? 'up' : deltaPct < 0 ? 'down' : 'flat',
+      // Whether the movement is good news, which is not the same as whether it
+      // went up — a longer checkout queue is a bigger number and a worse store.
+      good: deltaPct == null || deltaPct === 0
+        ? null
+        : (deltaPct > 0) === it.higherIsBetter,
+    };
+  });
+}
+
+/**
+ * One sentence saying whether the period went well, in the terms a store
+ * director would use. This is what an executive reads before anything else, and
+ * for many of them it is the only thing they read.
+ */
+function buildHeadline(payload) {
+  const cmp = payload.comparison;
+  const entrants = payload.overview.perimeterEntrants ?? 0;
+  const stopping = payload.aisles.stoppingPowerPct ?? 0;
+  const waitMin = payload.checkout.avgWaitMin ?? 0;
+
+  const usable = cmp != null && cmp.comparable !== false;
+  const dEntrants = usable ? relDelta(entrants, cmp.entrants) : null;
+  const dStopping = usable ? relDelta(stopping, cmp.stoppingPowerPct) : null;
+
+  const sentences = [];
+  sentences.push(
+    dEntrants == null
+      ? `${entrants.toLocaleString()} people came in.`
+      : `${entrants.toLocaleString()} people came in, ${dEntrants >= 0 ? 'up' : 'down'} `
+        + `${Math.abs(dEntrants)}% on the same window last week.`,
+  );
+  sentences.push(
+    dStopping == null
+      ? `${stopping}% of aisle crossings became a stop at the shelf.`
+      : `${stopping}% of aisle crossings became a stop at the shelf, against `
+        + `${cmp.stoppingPowerPct}% a week ago.`,
+  );
+  if (waitMin > 0) sentences.push(`Checkout queues averaged ${formatWait(waitMin)}.`);
+
+  // A queue is bad news on its own evidence, with or without last week to
+  // compare against, so it is judged before the deltas rather than inside them.
+  let tone = dEntrants == null && dStopping == null ? 'info' : 'good';
+  if ((dEntrants != null && dEntrants < -10)
+    || (dStopping != null && dStopping < -15)
+    || waitMin > 5) tone = 'warn';
+  if ((dEntrants != null && dEntrants < -25) || waitMin > 10) tone = 'bad';
+
+  if (!usable && cmp != null) {
+    sentences.push(`Week-on-week change is not shown: ${cmp.caveat}.`);
+  }
+
+  return { tone, text: sentences.join(' ') };
+}
+
+/**
  * @param {'live'|'hq'} variant
  */
 export function computeExecutiveJourney(db, venueId, startTs, endTs, variant = 'live', metricThresholdOpts = {}) {
@@ -1091,6 +1429,9 @@ export function computeExecutiveJourney(db, venueId, startTs, endTs, variant = '
   const avgWaitMin = checkoutChannels.length
     ? checkoutChannels.reduce((s, c) => s + c.avgWaitMin, 0) / checkoutChannels.length
     : 0;
+  const avgWaitSec = checkoutChannels.length
+    ? Math.round(checkoutChannels.reduce((s, c) => s + (c.avgWaitSec || 0), 0) / checkoutChannels.length)
+    : 0;
 
   const checkoutCompleted = checkoutChannels.reduce((s, c) => s + (c.completed || 0), 0);
   const journeySignals = buildJourneySignals(
@@ -1168,6 +1509,7 @@ export function computeExecutiveJourney(db, venueId, startTs, endTs, variant = '
     checkout: {
       channels: checkoutChannels,
       avgWaitMin,
+      avgWaitSec,
       completed: checkoutCompleted,
       frictionScore: dwellStats.reliable ? crossKpis.checkoutFrictionScore : null,
     },
@@ -1184,6 +1526,11 @@ export function computeExecutiveJourney(db, venueId, startTs, endTs, variant = '
   };
 
   payload.insights = buildInsights(payload);
+  payload.comparison = metricThresholdOpts.skipComparison
+    ? null
+    : buildComparison(db, venueId, startTs, endTs, variant, metricThresholdOpts);
+  payload.headlineKpis = buildHeadlineKpis(payload);
+  payload.headline = buildHeadline(payload);
 
   if (variant === 'hq') {
     payload.hqSummary = {

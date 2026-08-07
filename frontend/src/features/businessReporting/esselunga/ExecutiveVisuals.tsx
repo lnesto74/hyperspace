@@ -4,6 +4,59 @@ import { HelpCircle, Maximize2 } from 'lucide-react';
 import type { ActivityTimeline, ActivityTimelineSet, HeatmapCategoryRow } from './types';
 import HeatmapEmbedPreview from '../../../components/heatmap/HeatmapEmbedPreview';
 import { SECTION_TOOLTIPS, PULSE_TOOLTIPS } from './kpiTooltips';
+import { formatDwellDuration } from './formatDuration';
+import { getCategoryVisual } from '../operationsConsole/categoryVisuals';
+
+/**
+ * Floats over the heatmap while a category is hovered, so the shape lighting up
+ * on the floor arrives with the numbers that explain it instead of sending the
+ * reader down the page to find them.
+ */
+function CategoryGlassCard({
+  row,
+  trafficShare,
+}: {
+  row: HeatmapCategoryRow;
+  trafficShare: number | null;
+}) {
+  const { Icon, color } = getCategoryVisual(row.category);
+
+  return (
+    <div
+      className="absolute left-3 bottom-3 right-3 sm:right-auto sm:w-64 rounded-xl border border-white/15 bg-gray-950/60 backdrop-blur-md p-3 shadow-xl shadow-black/40 pointer-events-none"
+      aria-live="polite"
+    >
+      <div className="flex items-center gap-2 mb-2.5">
+        <Icon className="w-4 h-4 shrink-0" style={{ color }} strokeWidth={2.25} />
+        <span className="text-sm font-semibold text-white truncate">{row.category}</span>
+      </div>
+      <div className="grid grid-cols-2 gap-x-3 gap-y-2">
+        <GlassStat value={row.totalVisits.toLocaleString()} label="shoppers" />
+        <GlassStat
+          value={formatDwellDuration(row.avgBrowseTimeSec, row.avgBrowseTimeMin)}
+          label="mean dwell"
+        />
+        <GlassStat value={`${Math.round(row.browsingRate)}%`} label="stopped" />
+        <GlassStat
+          value={trafficShare != null ? `${trafficShare}%` : '—'}
+          label="of category traffic"
+        />
+      </div>
+      <p className="text-[11px] text-gray-400 mt-2.5">
+        {row.zoneCount} {row.zoneCount === 1 ? 'zone' : 'zones'} lit on the map
+      </p>
+    </div>
+  );
+}
+
+function GlassStat({ value, label }: { value: string; label: string }) {
+  return (
+    <div className="min-w-0">
+      <div className="text-lg font-bold text-white tabular-nums leading-tight">{value}</div>
+      <div className="text-[11px] text-gray-400 truncate">{label}</div>
+    </div>
+  );
+}
 
 export function KpiTooltip({ text, children }: { text: string; children?: ReactNode }) {
   const [open, setOpen] = useState(false);
@@ -398,6 +451,14 @@ export function ExecutivePulseBand({
   const [hoverCat, setHoverCat] = useState<string | null>(null);
   const topCats = heatmapCategories.slice(0, 8);
 
+  const hoveredRow = hoverCat
+    ? heatmapCategories.find(c => c.category === hoverCat) ?? null
+    : null;
+  const totalVisits = heatmapCategories.reduce((s, c) => s + (c.totalVisits || 0), 0);
+  const hoveredShare = hoveredRow && totalVisits > 0
+    ? Math.round((hoveredRow.totalVisits / totalVisits) * 1000) / 10
+    : null;
+
   return (
     <div className="rounded-2xl border border-cyan-500/20 bg-gradient-to-br from-gray-800/80 via-gray-900/60 to-gray-950/80 shadow-lg shadow-cyan-950/20">
       <div className="px-4 py-3 border-b border-gray-700/40 flex flex-wrap items-center justify-between gap-2">
@@ -486,6 +547,9 @@ export function ExecutivePulseBand({
                 highlightCategory={hoverCat}
                 onExpand={onExpandHeatmap}
               />
+              {hoveredRow && (
+                <CategoryGlassCard row={hoveredRow} trafficShare={hoveredShare} />
+              )}
               {onExpandHeatmap && (
                 <button
                   type="button"

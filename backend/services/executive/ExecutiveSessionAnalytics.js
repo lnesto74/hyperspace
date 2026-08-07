@@ -320,6 +320,7 @@ export function buildSessionCategoryGroups(
       stoppingPowerPct,
       engagementPct,
       avgDwellMin: Math.round((medianDwellSec / 60) * 10) / 10,
+      avgDwellSec: Math.round(medianDwellSec),
       medianDwellSec: Math.round(medianDwellSec * 10) / 10,
       sessionStopPct: stoppingPowerPct,
       roiCount: roiIds.length,

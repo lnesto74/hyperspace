@@ -3,6 +3,9 @@ import type { ComponentType, CSSProperties, ReactNode } from 'react';
 import { getCategoryVisual } from '../operationsConsole/categoryVisuals';
 import { KpiTooltip, AnimatedValue } from './ExecutiveVisuals';
 import { FRESCO_TOOLTIPS, JOURNEY_SIGNAL_TOOLTIPS } from './kpiTooltips';
+import { formatDwellDuration } from './formatDuration';
+
+export { formatDwellDuration };
 
 export interface BarRow {
   label: string;
@@ -105,15 +108,6 @@ export function HorizontalBarChart({
       <p className="text-[11px] text-gray-400 text-right pt-1">Sorted by {valueLabel}</p>
     </div>
   );
-}
-
-export function formatDwellDuration(avgDwellSec?: number, avgDwellMin?: number): string {
-  const sec = avgDwellSec ?? Math.round((avgDwellMin ?? 0) * 60);
-  if (sec <= 0) return '—';
-  if (sec < 60) return `${sec}s`;
-  const m = Math.floor(sec / 60);
-  const s = sec % 60;
-  return s > 0 ? `${m}m ${s}s` : `${m}m`;
 }
 
 export function FrescoDepartmentCard({
@@ -409,64 +403,180 @@ export function JourneySignalsPanel({
   );
 }
 
-export function CheckoutLaneCards({
+interface CheckoutLaneView {
+  id: string;
+  label: string;
+  sessions: number;
+  completed?: number;
+  avgWaitMin: number;
+  avgWaitSec?: number;
+  abandonPct: number;
+  currentQueue: number;
+}
+
+interface CheckoutChannelView extends CheckoutLaneView {
+  color: string;
+  lanes?: CheckoutLaneView[];
+}
+
+const waitSec = (l: CheckoutLaneView) => l.avgWaitSec ?? Math.round((l.avgWaitMin || 0) * 60);
+
+/**
+ * Load across the tills of one channel. A single card per channel hides the
+ * question anyone standing in the store actually asks — which till is the
+ * queue forming at — even though every lane is measured separately.
+ */
+function LaneLoadChart({ lanes }: { lanes: CheckoutLaneView[] }) {
+  const max = Math.max(...lanes.map(l => l.sessions), 1);
+  const slowest = lanes.reduce((a, b) => (waitSec(b) > waitSec(a) ? b : a), lanes[0]);
+
+  return (
+    <div>
+      <div className="flex items-end gap-1 h-24">
+        {lanes.map(lane => {
+          const hot = lane.id === slowest.id && waitSec(slowest) > 0;
+          return (
+            <div
+              key={lane.id}
+              className="flex-1 flex flex-col justify-end min-w-0"
+              title={`${lane.label} · ${lane.sessions.toLocaleString()} shoppers · ${formatDwellDuration(lane.avgWaitSec, lane.avgWaitMin)} wait`}
+            >
+              <div
+                className={`w-full rounded-t transition-colors ${hot ? 'bg-amber-400/80' : 'bg-cyan-500/60'}`}
+                style={{ height: `${Math.max(3, (lane.sessions / max) * 100)}%` }}
+              />
+            </div>
+          );
+        })}
+      </div>
+      <div className="flex gap-1 mt-1.5">
+        {lanes.map(lane => (
+          <div key={lane.id} className="flex-1 min-w-0 text-center">
+            <span className="text-[11px] text-gray-400 tabular-nums">
+              {lane.label.replace('#', '')}
+            </span>
+          </div>
+        ))}
+      </div>
+      <p className="text-[11px] text-gray-400 mt-2">
+        Lane number · shoppers who joined that queue. Amber is the longest average wait.
+      </p>
+    </div>
+  );
+}
+
+export function CheckoutPanel({
   channels,
+  frictionScore,
+  showFriction,
 }: {
-  channels: Array<{
-    label: string;
-    sessions: number;
-    completed?: number;
-    avgWaitMin: number;
-    abandonPct: number;
-    currentQueue: number;
-    color: string;
-  }>;
+  channels: CheckoutChannelView[];
+  frictionScore?: number | null;
+  showFriction?: boolean;
 }) {
   if (channels.length === 0) {
     return <p className="text-xs text-gray-400 py-6 text-center">No checkout lanes detected.</p>;
   }
 
   return (
-    <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
-      {channels.map(ch => (
-        <div
-          key={ch.label}
-          className="rounded-xl border border-gray-700/60 bg-gray-800/40 p-5"
-        >
-          <div className="flex items-center justify-between gap-2 mb-4">
-            <span className="text-base font-semibold text-white">{ch.label}</span>
-            {ch.currentQueue > 0 && (
-              <span className="text-xs px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-300">
-                {ch.currentQueue} in queue
-              </span>
+    <div className="space-y-4">
+      {channels.map(ch => {
+        const lanes = ch.lanes ?? [];
+        const slowest = lanes.length
+          ? lanes.reduce((a, b) => (waitSec(b) > waitSec(a) ? b : a), lanes[0])
+          : null;
+        const byWait = [...lanes].sort((a, b) => waitSec(b) - waitSec(a)).slice(0, 5);
+
+        return (
+          <div key={ch.id} className="rounded-xl border border-gray-700/60 bg-gray-800/40 p-5">
+            <div className="flex items-center justify-between gap-3 flex-wrap">
+              <div>
+                <span className="text-base font-semibold text-white">{ch.label}</span>
+                {lanes.length > 0 && (
+                  <span className="text-xs text-gray-400 ml-2">
+                    {lanes.length} {lanes.length === 1 ? 'lane' : 'lanes'} mapped
+                  </span>
+                )}
+              </div>
+              {ch.currentQueue > 0 && (
+                <span className="text-xs px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-300">
+                  {ch.currentQueue} in queue now
+                </span>
+              )}
+            </div>
+
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4 mt-4">
+              <Stat value={(ch.completed ?? ch.sessions).toLocaleString()} label="completed" />
+              <Stat value={formatDwellDuration(ch.avgWaitSec, ch.avgWaitMin)} label="avg wait" />
+              <Stat
+                value={`${ch.abandonPct}%`}
+                label="abandon"
+                tone={ch.abandonPct > 15 ? 'warn' : undefined}
+              />
+              {showFriction && frictionScore != null && (
+                <Stat value={String(frictionScore)} label="friction" />
+              )}
+              {slowest && waitSec(slowest) > 0 && (
+                <Stat
+                  value={formatDwellDuration(slowest.avgWaitSec, slowest.avgWaitMin)}
+                  label={`worst lane (${slowest.label})`}
+                  tone="warn"
+                />
+              )}
+            </div>
+
+            {lanes.length > 1 && (
+              <>
+                <div className="h-px bg-gray-700/50 my-4" />
+                <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+                  <div className="lg:col-span-8">
+                    <h4 className="text-[13px] font-medium text-gray-200 mb-2">
+                      Shoppers queued per lane
+                    </h4>
+                    <LaneLoadChart lanes={lanes} />
+                  </div>
+                  <div className="lg:col-span-4">
+                    <h4 className="text-[13px] font-medium text-gray-200 mb-2">Longest waits</h4>
+                    <table className="w-full text-[13px]">
+                      <thead>
+                        <tr className="text-gray-400 border-b border-gray-700/50">
+                          <th className="text-left font-normal pb-1.5">Lane</th>
+                          <th className="text-right font-normal pb-1.5">Shoppers</th>
+                          <th className="text-right font-normal pb-1.5">Wait</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {byWait.map(lane => (
+                          <tr key={lane.id} className="border-b border-gray-800/60 last:border-0">
+                            <td className="py-2 text-gray-200">{lane.label}</td>
+                            <td className="py-2 text-right text-gray-300 tabular-nums">
+                              {lane.sessions.toLocaleString()}
+                            </td>
+                            <td className="py-2 text-right text-white tabular-nums">
+                              {formatDwellDuration(lane.avgWaitSec, lane.avgWaitMin)}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </>
             )}
           </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <div className="text-xl font-bold text-white tabular-nums">
-                {(ch.completed ?? ch.sessions).toLocaleString()}
-              </div>
-              <div className="text-xs text-gray-400">completed</div>
-            </div>
-            <div>
-              <div className="text-xl font-bold text-white tabular-nums">
-                {formatDwellDuration(undefined, ch.avgWaitMin)}
-              </div>
-              <div className="text-xs text-gray-400">avg wait</div>
-            </div>
-            <div>
-              <div className="text-lg font-semibold text-gray-300 tabular-nums">{ch.sessions}</div>
-              <div className="text-xs text-gray-400">sessions</div>
-            </div>
-            <div>
-              <div className={`text-lg font-semibold tabular-nums ${ch.abandonPct > 15 ? 'text-amber-400' : 'text-gray-300'}`}>
-                {ch.abandonPct}%
-              </div>
-              <div className="text-xs text-gray-400">abandon</div>
-            </div>
-          </div>
-        </div>
-      ))}
+        );
+      })}
+    </div>
+  );
+}
+
+function Stat({ value, label, tone }: { value: string; label: string; tone?: 'warn' }) {
+  return (
+    <div className="min-w-0">
+      <div className={`text-xl font-bold tabular-nums ${tone === 'warn' ? 'text-amber-400' : 'text-white'}`}>
+        {value}
+      </div>
+      <div className="text-xs text-gray-400 truncate">{label}</div>
     </div>
   );
 }

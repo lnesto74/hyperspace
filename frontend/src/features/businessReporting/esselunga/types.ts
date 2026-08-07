@@ -38,6 +38,7 @@ export interface HeatmapCategoryRow {
   engagementRate: number;
   conversionRate: number;
   avgBrowseTimeMin: number;
+  avgBrowseTimeSec?: number;
 }
 
 export interface JourneySignals {
@@ -83,15 +84,30 @@ export interface FrescoDepartment {
   roiIds: string[];
 }
 
+/** A single till. Queue and service zones of the same checkout are one lane. */
+export interface CheckoutLane {
+  id: string;
+  label: string;
+  sessions: number;
+  completed?: number;
+  avgWaitMin: number;
+  avgWaitSec?: number;
+  abandonPct: number;
+  currentQueue: number;
+  roiIds: string[];
+}
+
 export interface CheckoutChannel {
   id: string;
   label: string;
   sessions: number;
   completed?: number;
   avgWaitMin: number;
+  avgWaitSec?: number;
   abandonPct: number;
   currentQueue: number;
   roiIds: string[];
+  lanes?: CheckoutLane[];
 }
 
 export interface AisleCategoryGroup {
@@ -235,6 +251,7 @@ export interface EsselungaJourneyPayload {
   checkout: {
     channels: CheckoutChannel[];
     avgWaitMin: number;
+    avgWaitSec?: number;
     completed?: number;
     frictionScore: number | null;
   };

@@ -24,11 +24,11 @@ import {
   HorizontalBarChart,
   FrescoDepartmentCard,
   JourneySignalsPanel,
-  CheckoutLaneCards,
+  CheckoutPanel,
   SectionCard,
   formatDwellDuration,
 } from './EsselungaCharts';
-import { VerdictBanner, HeadlineKpiGrid } from './ExecutiveHeadline';
+import { ExecutiveHeader } from './ExecutiveHeadline';
 import { getCategoryVisual } from '../operationsConsole/categoryVisuals';
 import { ExecutivePulseBand } from './ExecutiveVisuals';
 import { useHeatmap } from '../../../context/HeatmapContext';
@@ -463,18 +463,20 @@ export default function EsselungaExecutiveViewport({
         </div>
       </div>
 
-      <VerdictBanner
+      <ExecutiveHeader
         headline={journey.headline}
         venueName={venueName}
         rangeLabel={rangeLabel}
         generatedAtLabel={generatedAtLabel}
+        kpis={headlineKpis}
       />
-
-      <HeadlineKpiGrid items={headlineKpis} />
 
       {/* What to act on */}
       {insights.length > 0 && (
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+        <div
+          className="grid gap-2"
+          style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))' }}
+        >
           {insights.slice(0, 3).map(ins => (
             <div key={ins.id} className={`rounded-lg border p-3 ${INSIGHT_COLOR[ins.severity]}`}>
               <div className="flex items-center gap-1.5 mb-1">
@@ -528,7 +530,10 @@ export default function EsselungaExecutiveViewport({
             No service counters detected. Tag banco fixtures with Pesce, Pane, Salumi, etc.
           </p>
         ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+          <div
+            className="grid gap-3"
+            style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))' }}
+          >
             {fresco.departments.map(dept => {
               const visual = getCategoryVisual(dept.label);
               return (
@@ -655,15 +660,16 @@ export default function EsselungaExecutiveViewport({
         title="4 · Checkout"
         subtitle="Queue sessions by channel. A session starts when a shopper joins the queue zone and ends when they leave it, so the wait is time queuing rather than time at the till."
       >
-        <CheckoutLaneCards channels={checkoutChannels} />
+        <CheckoutPanel
+          channels={checkoutChannels}
+          frictionScore={checkout.frictionScore}
+          showFriction={dwellReliable && checkout.avgWaitMin > 0}
+        />
         {dwellReliable && checkout.frictionScore != null && checkout.avgWaitMin > 0 && (
-          <div className="mt-3 rounded-lg border border-gray-700/50 bg-gray-800/30 px-4 py-2 flex flex-wrap items-center justify-between gap-2 text-xs">
-            <span className="text-gray-400">Checkout friction</span>
-            <span className="text-white font-medium">{checkout.frictionScore}</span>
-            <span className="text-gray-400">
-              wait ÷ shopping dwell ({formatDwellDuration(undefined, checkout.avgWaitMin)} avg wait)
-            </span>
-          </div>
+          <p className="mt-3 text-[13px] text-gray-400 leading-relaxed">
+            Friction is the wait divided by shopping dwell, so {checkout.frictionScore} means a
+            shopper spends that fraction of their trip queuing.
+          </p>
         )}
       </SectionCard>
 
@@ -677,7 +683,7 @@ export default function EsselungaExecutiveViewport({
         title="5 · Retail media"
         subtitle="How in-store screens performed, measured as exposure to the screen followed by a visit to the promoted category."
       >
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 max-w-xl">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div className="flex items-center gap-4">
             <RingGauge value={media.ces} max={100} label="CES" color="#a78bfa" size={88} />
             <div>

@@ -26,6 +26,24 @@ function collectSkuIdsFromSlots(slotsJson) {
   return [...skuIds];
 }
 
+/**
+ * Placeholders the planogram importer writes when a SKU row carries no real
+ * category. They are not categories, and treating them as one hides the shelf
+ * fixture's own label behind a string no shopper would recognise.
+ */
+const PLACEHOLDER_CATEGORIES = new Set([
+  'no content available',
+  'uncategorized',
+  'uncategorised',
+  'n/a',
+  '-',
+]);
+
+const isRealCategory = (c) => {
+  const s = String(c ?? '').trim();
+  return s.length > 0 && !PLACEHOLDER_CATEGORIES.has(s.toLowerCase());
+};
+
 export function getPlanogramSkuCategories(db, shelfId) {
   const row = db.prepare('SELECT slots_json FROM shelf_planograms WHERE shelf_id = ?').get(shelfId);
   if (!row?.slots_json) return [];
@@ -38,7 +56,7 @@ export function getPlanogramSkuCategories(db, shelfId) {
     `SELECT DISTINCT category FROM sku_items
      WHERE id IN (${placeholders}) AND category IS NOT NULL
      ORDER BY category`
-  ).all(...skuIds).map((r) => r.category);
+  ).all(...skuIds).map((r) => r.category).filter(isRealCategory);
 }
 
 export function getObjectBusinessCategory(db, shelfId) {
@@ -47,7 +65,7 @@ export function getObjectBusinessCategory(db, shelfId) {
 
   const meta = parseJson(row.metadata_json) || {};
   const label = meta.business_category_label || meta.business_category;
-  if (!label) return null;
+  if (!isRealCategory(label)) return null;
 
   return {
     objectType: row.type || null,
