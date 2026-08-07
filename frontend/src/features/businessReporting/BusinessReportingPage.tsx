@@ -209,6 +209,15 @@ export default function BusinessReportingPage({ onClose, publicDashboard = false
   ) => {
     if (!selectedVenueId) return;
 
+    // The audit tab is not a KPI persona — it reads the raw-feed forensics and
+    // per-zone endpoints itself, and the summary route rejects an id it has no
+    // KPI set for.
+    if (selectedPersonaId === AUDIT_PERSONA) {
+      setLoading(false);
+      setError(null);
+      return;
+    }
+
     const isPreview = !!(opts?.silent && metricOpts);
     let previewSeq = 0;
 
