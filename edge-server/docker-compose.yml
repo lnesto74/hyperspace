@@ -10,7 +10,10 @@ services:
       - ./mosquitto/config:/mosquitto/config
       - ./mosquitto/data:/mosquitto/data
       - ./mosquitto/log:/mosquitto/log
-    restart: unless-stopped
+    # "always", not "unless-stopped": any manual or scripted "compose down"
+    # leaves unless-stopped containers marked as explicitly stopped, so they stay
+    # down across the next reboot.
+    restart: always
 
   edge-lidar:
     build: .
@@ -22,6 +25,10 @@ services:
       - "host.docker.internal:host-gateway"
     volumes:
       - ./data:/app/backend/data
+      # Mounted from the host so the adapter survives a container recreate and can be
+      # updated without a rebuild. The store network blocks Docker Hub, so the base
+      # image cannot be re-pulled on site and `compose build` fails there.
+      - ./backend/perception-adapter.js:/app/backend/perception-adapter.js
       - ./mosquitto/config:/app/mosquitto/config
       - /var/run/docker.sock:/var/run/docker.sock
     environment:
@@ -30,4 +37,4 @@ services:
       - MQTT_BROKER=mqtt://host.docker.internal:1883
     depends_on:
       - mosquitto
-    restart: unless-stopped
+    restart: always

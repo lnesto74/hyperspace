@@ -3,6 +3,20 @@ import mqtt from 'mqtt';
 const DEFAULT_COLOR = '#22c55e';
 const COLORS = ['#22c55e', '#3b82f6', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#14b8a6', '#f97316'];
 
+/**
+ * The bridge to the cloud is configured to survive an outage — cleansession
+ * false, max_queued_messages 100000, topic forwarded at QoS 1 — but a broker
+ * never queues a QoS 0 message for a disconnected subscriber, so at QoS 0 none
+ * of that applies and everything published during an outage is discarded.
+ *
+ * That matters because the bridge is not stable: the store blocks outbound UDP,
+ * so Tailscale cannot build a direct path and falls back to a DERP relay at
+ * ~176 ms. Measured on 2026-08-08 the bridge dropped and reconnected 850 times
+ * in 99 minutes — once every 7 s, unavailable for about 1.7 s each time — and
+ * 21.7% of the perception feed never reached the cloud.
+ */
+const PUBLISH_QOS = Number(process.env.PERCEPTION_PUBLISH_QOS ?? 1);
+
 // Deterministic color per person ID so each track has a stable color
 const colorForId = (id) => {
   let hash = 0;
@@ -147,7 +161,7 @@ export class PerceptionAdapter {
           message.publishedAt = Date.now();
         }
 
-        this.client.publish(outTopic, JSON.stringify(message), { qos: 0 });
+        this.client.publish(outTopic, JSON.stringify(message), { qos: PUBLISH_QOS });
         this.stats.tracksForwarded++;
       }
     } catch (err) {
