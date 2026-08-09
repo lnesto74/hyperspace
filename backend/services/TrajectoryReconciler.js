@@ -33,6 +33,11 @@ export const DEFAULT_CONFIG = Object.freeze({
   ghost_max_speed_m_s: 3.5,                // walking max ~ 2 m/s; sprint ~ 6 m/s
   ghost_min_promotion_lifetime_ms: 500,    // a perception ID must be alive this long before it gets a stable ID
   ghost_min_promotion_displacement_m: 0.4, // and have moved at least this far
+  // Soft grocery-safe gate (OR): promote if lived this long OR covered this extent.
+  // Holds only short+tiny flicker. Never uses net displacement as a hard kill —
+  // that deletes shelf browsers. 0/0 disables (legacy AND gates above apply alone).
+  ghost_soft_min_lifetime_ms: 0,
+  ghost_soft_min_extent_m: 0,
   ghost_static_timeout_s: 30,              // stable tracks stationary for this long get dropped (fixture)
   ghost_static_displacement_m: 0.2,        // < this displacement during static_timeout counts as stationary
   // Venue bounds gate (in venue meters). null means no gate.
@@ -78,6 +83,8 @@ export function normalizeReconcilerConfig(raw) {
   merged.ghost_max_speed_m_s = num(raw.ghost_max_speed_m_s, DEFAULT_CONFIG.ghost_max_speed_m_s);
   merged.ghost_min_promotion_lifetime_ms = num(raw.ghost_min_promotion_lifetime_ms, DEFAULT_CONFIG.ghost_min_promotion_lifetime_ms);
   merged.ghost_min_promotion_displacement_m = num(raw.ghost_min_promotion_displacement_m, DEFAULT_CONFIG.ghost_min_promotion_displacement_m);
+  merged.ghost_soft_min_lifetime_ms = num(raw.ghost_soft_min_lifetime_ms, DEFAULT_CONFIG.ghost_soft_min_lifetime_ms);
+  merged.ghost_soft_min_extent_m = num(raw.ghost_soft_min_extent_m, DEFAULT_CONFIG.ghost_soft_min_extent_m);
   merged.ghost_static_timeout_s = num(raw.ghost_static_timeout_s, DEFAULT_CONFIG.ghost_static_timeout_s);
   merged.ghost_static_displacement_m = num(raw.ghost_static_displacement_m, DEFAULT_CONFIG.ghost_static_displacement_m);
   merged.reid_max_gap_s = num(raw.reid_max_gap_s, DEFAULT_CONFIG.reid_max_gap_s);
@@ -331,6 +338,10 @@ export class TrajectoryReconciler {
         lastPos: { x: pos.x, z: pos.z },
         lastTs: now,
         totalDisp: 0,
+        minX: pos.x,
+        maxX: pos.x,
+        minZ: pos.z,
+        maxZ: pos.z,
       };
       state.candidatePerceptions.set(perceptionId, candidate);
       return null;
@@ -338,29 +349,61 @@ export class TrajectoryReconciler {
     candidate.totalDisp += Math.hypot(pos.x - candidate.lastPos.x, pos.z - candidate.lastPos.z);
     candidate.lastPos = { x: pos.x, z: pos.z };
     candidate.lastTs = now;
+    if (pos.x < candidate.minX) candidate.minX = pos.x;
+    if (pos.x > candidate.maxX) candidate.maxX = pos.x;
+    if (pos.z < candidate.minZ) candidate.minZ = pos.z;
+    if (pos.z > candidate.maxZ) candidate.maxZ = pos.z;
     const lifetime = now - candidate.firstSeen;
     const initialDisp = Math.hypot(pos.x - candidate.firstPos.x, pos.z - candidate.firstPos.z);
-    if (cfg.ghost_min_promotion_lifetime_ms > 0 && lifetime < cfg.ghost_min_promotion_lifetime_ms) {
-      // Occlusion: new blip near a recently-lost track — merge before probation ends.
-      if (cfg.reid_occlusion_bypass_promotion !== false) {
-        const occlusion = this._tryReid(state, pos, vel, now, cfg, { occlusionOnly: true });
-        if (occlusion) {
-          state.candidatePerceptions.delete(perceptionId);
-          this._claimReidTarget(state, occlusion, perceptionId, cfg);
-          occlusion.perceptionIds.add(perceptionId);
-          state.perceptionToStable.set(perceptionId, occlusion.stableId);
-          this._updateTrackState(occlusion, pos, vel, now, cfg);
-          state.stats.reid_count++;
-          return this._emit(track, occlusion, perceptionId);
+    const extent = Math.hypot(candidate.maxX - candidate.minX, candidate.maxZ - candidate.minZ);
+
+    const softLife = cfg.ghost_soft_min_lifetime_ms;
+    const softExtent = cfg.ghost_soft_min_extent_m;
+    const softEnabled = softLife > 0 || softExtent > 0;
+
+    if (softEnabled) {
+      // Grocery-safe OR gate: promote if lived long enough OR covered enough
+      // floor area. Only short+tiny flicker stays in probation.
+      const livedLong = softLife <= 0 || lifetime >= softLife;
+      const movedEnough = softExtent <= 0 || extent >= softExtent;
+      if (!livedLong && !movedEnough) {
+        if (cfg.reid_occlusion_bypass_promotion !== false) {
+          const occlusion = this._tryReid(state, pos, vel, now, cfg, { occlusionOnly: true });
+          if (occlusion) {
+            state.candidatePerceptions.delete(perceptionId);
+            this._claimReidTarget(state, occlusion, perceptionId, cfg);
+            occlusion.perceptionIds.add(perceptionId);
+            state.perceptionToStable.set(perceptionId, occlusion.stableId);
+            this._updateTrackState(occlusion, pos, vel, now, cfg);
+            state.stats.reid_count++;
+            return this._emit(track, occlusion, perceptionId);
+          }
         }
+        return null;
       }
-      return null;
-    }
-    if (candidate.totalDisp < cfg.ghost_min_promotion_displacement_m && initialDisp < cfg.ghost_min_promotion_displacement_m) {
-      // Probation passed but the candidate barely moved — ghost.
-      this._rejectGhost(state, 'jitter_no_motion');
-      // Keep it in the candidate map so subsequent updates are also dropped (don't churn).
-      return null;
+    } else {
+      if (cfg.ghost_min_promotion_lifetime_ms > 0 && lifetime < cfg.ghost_min_promotion_lifetime_ms) {
+        // Occlusion: new blip near a recently-lost track — merge before probation ends.
+        if (cfg.reid_occlusion_bypass_promotion !== false) {
+          const occlusion = this._tryReid(state, pos, vel, now, cfg, { occlusionOnly: true });
+          if (occlusion) {
+            state.candidatePerceptions.delete(perceptionId);
+            this._claimReidTarget(state, occlusion, perceptionId, cfg);
+            occlusion.perceptionIds.add(perceptionId);
+            state.perceptionToStable.set(perceptionId, occlusion.stableId);
+            this._updateTrackState(occlusion, pos, vel, now, cfg);
+            state.stats.reid_count++;
+            return this._emit(track, occlusion, perceptionId);
+          }
+        }
+        return null;
+      }
+      if (candidate.totalDisp < cfg.ghost_min_promotion_displacement_m && initialDisp < cfg.ghost_min_promotion_displacement_m) {
+        // Probation passed but the candidate barely moved — ghost.
+        this._rejectGhost(state, 'jitter_no_motion');
+        // Keep it in the candidate map so subsequent updates are also dropped (don't churn).
+        return null;
+      }
     }
 
     // ---------- Stage 4: try to re-identify against lost tracks ----------
@@ -439,8 +482,13 @@ export class TrajectoryReconciler {
         }
       }
       // candidate expiry — perception IDs that never made it past probation
+      const holdMs = Math.max(
+        cfg.ghost_min_promotion_lifetime_ms || 0,
+        cfg.ghost_soft_min_lifetime_ms || 0,
+        500,
+      );
       for (const [pid, c] of state.candidatePerceptions) {
-        if (now - c.lastTs > 2 * cfg.ghost_min_promotion_lifetime_ms) {
+        if (now - c.lastTs > 2 * holdMs) {
           state.candidatePerceptions.delete(pid);
         }
       }

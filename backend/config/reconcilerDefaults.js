@@ -7,8 +7,14 @@ export const LUCA_LIVE_RECONCILER_RAW = Object.freeze({
   enabled: true,
 
   ghost_max_speed_m_s: 3.5,
+  // Legacy AND gates stay off — soft OR filter below is the grocery-safe gate.
   ghost_min_promotion_lifetime_ms: 0,
   ghost_min_promotion_displacement_m: 0,
+  // Soft filter from 2026-08-08 Treviglio sweep: drop only short+tiny flicker
+  // (span<2s AND extent<0.5m). Keeps 100% of dweller-candidates and ~97% of
+  // people-present; vendor net>=2m kept only ~45% of dwellers.
+  ghost_soft_min_lifetime_ms: 2000,
+  ghost_soft_min_extent_m: 0.5,
   ghost_static_timeout_s: 90,
   ghost_static_displacement_m: 1.6,
 
