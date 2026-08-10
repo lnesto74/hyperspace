@@ -49,12 +49,12 @@ const SLICE_LABELS = {
   weekend: 'Weekend (Sat–Sun)',
 };
 const bootQs = new URLSearchParams(location.search);
-const sliceId = SLICE_LABELS[bootQs.get('slice')] ? bootQs.get('slice') : 'all';
-const field = await loadField(`./slices/field_${sliceId}.json` + bust);
+let sliceId = SLICE_LABELS[bootQs.get('slice')] ? bootQs.get('slice') : 'all';
+let field = await loadField(`./slices/field_${sliceId}.json` + bust);
 const layout = await (await fetch('./layout_prod.json' + bust)).json();
-const CELL = field.meta.cell_m;
-const FIELD_W = field.NX * CELL;
-const FIELD_D = field.NY * CELL;
+let CELL = field.meta.cell_m;
+let FIELD_W = field.NX * CELL;
+let FIELD_D = field.NY * CELL;
 
 // Everything is drawn in VENUE metres, matching how the product works: the DWG
 // plan stays axis-aligned and the measured field is transformed into it.
@@ -69,8 +69,17 @@ const VENUE_SPAN = Math.max(VENUE_W, VENUE_D);
 // The field is aggregated in venue metres, so the grid is already parallel to
 // the building and the mapping is a plain offset. The controls below apply a
 // DELTA on top, for correcting the fitted pose by eye — at zero they do nothing.
-const ORIGIN = field.meta.origin_m;
+let ORIGIN = field.meta.origin_m;
 const fieldCenter = { x: ORIGIN.x + FIELD_W / 2, z: ORIGIN.y + FIELD_D / 2 };
+
+function setLoader(visible, label) {
+  const el = document.getElementById('loader');
+  const text = document.getElementById('loaderLabel');
+  if (!el) return;
+  if (label && text) text.textContent = label;
+  el.classList.toggle('hidden', !visible);
+  el.setAttribute('aria-busy', visible ? 'true' : 'false');
+}
 
 /** Fractional field-grid coords -> venue metres. */
 function gridToVenue(gx, gy) {
@@ -135,25 +144,40 @@ scene.add(key);
 // Dwell becomes elevation, so the streams visibly flow around and over the
 // places where people stop. The colour ramp carries the selected scalar.
 const gridGeom = new THREE.BufferGeometry();
-const vertCount = field.NX * field.NY;
-const positions = new Float32Array(vertCount * 3);
-const colors = new Float32Array(vertCount * 3);
+let vertCount = 0;
+let positions = new Float32Array(0);
+let colors = new Float32Array(0);
 // Quads are emitted only where the sensor actually saw people, so the surface is
 // a measured patch floating over the plan rather than a slab that hides it —
 // uncovered floor stays visibly uncovered instead of being interpolated away.
-const indices = new Uint32Array((field.NX - 1) * (field.NY - 1) * 6);
-for (let j = 0; j < field.NY; j++) {
-  for (let i = 0; i < field.NX; i++) {
-    const v = j * field.NX + i;
-    const p = gridToVenue(i, j);
-    positions[v * 3] = p.x;
-    positions[v * 3 + 1] = 0;
-    positions[v * 3 + 2] = p.z;
+let indices = new Uint32Array(0);
+
+function syncFieldGeometry() {
+  CELL = field.meta.cell_m;
+  FIELD_W = field.NX * CELL;
+  FIELD_D = field.NY * CELL;
+  ORIGIN = field.meta.origin_m;
+  fieldCenter.x = ORIGIN.x + FIELD_W / 2;
+  fieldCenter.z = ORIGIN.y + FIELD_D / 2;
+  vertCount = field.NX * field.NY;
+  positions = new Float32Array(vertCount * 3);
+  colors = new Float32Array(vertCount * 3);
+  indices = new Uint32Array(Math.max(0, (field.NX - 1) * (field.NY - 1) * 6));
+  for (let j = 0; j < field.NY; j++) {
+    for (let i = 0; i < field.NX; i++) {
+      const v = j * field.NX + i;
+      const p = gridToVenue(i, j);
+      positions[v * 3] = p.x;
+      positions[v * 3 + 1] = 0;
+      positions[v * 3 + 2] = p.z;
+    }
   }
+  gridGeom.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  gridGeom.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+  gridGeom.setIndex(new THREE.BufferAttribute(indices, 1));
 }
-gridGeom.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-gridGeom.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-gridGeom.setIndex(new THREE.BufferAttribute(indices, 1));
+syncFieldGeometry();
+
 const terrain = new THREE.Mesh(
   gridGeom,
   // Held back from full opacity: the scalar carpet is background, and the plan
@@ -306,7 +330,7 @@ function buildArrows() {
 // ---------------------------------------------------------------- streamlines
 const MAX_PARTICLES = 12000;
 const MAX_TRAIL = 20;
-const roseBuf = new Float32Array(field.B);
+let roseBuf = new Float32Array(field.B);
 
 let particles = [];
 let lineGeom, lineMesh, linePos, lineCol;
@@ -537,21 +561,94 @@ function updateLegend() {
 
 // Companion slices for temporal-shift / purity-break overlays (lazy).
 let analysisPromise = null;
+let companionMaps = null;
 async function ensureShiftAnalysis() {
   if (field.scalars.shift_me && field.scalars.shift_ww) return;
   if (!analysisPromise) {
     analysisPromise = (async () => {
-      const ids = ['morning', 'evening', 'weekday', 'weekend'];
-      const payloads = await Promise.all(
-        ids.map((id) => fetch(`./slices/field_${id}.json` + bust).then((r) => r.json())),
-      );
-      const [morning, evening, weekday, weekend] = payloads.map(cellMapFromFieldJson);
+      if (!companionMaps) {
+        const ids = ['morning', 'evening', 'weekday', 'weekend'];
+        const payloads = await Promise.all(
+          ids.map((id) => fetch(`./slices/field_${id}.json` + bust).then((r) => r.json())),
+        );
+        const [morning, evening, weekday, weekend] = payloads.map(cellMapFromFieldJson);
+        companionMaps = { morning, evening, weekday, weekend };
+      }
+      const { morning, evening, weekday, weekend } = companionMaps;
       attachShiftScalar(field, morning, evening, 'shift_me', 'Shift morning \u2192 evening');
       attachShiftScalar(field, weekday, weekend, 'shift_ww', 'Shift weekday \u2192 weekend');
       boostOutliersWithPurityBreak(field, morning, evening);
     })();
   }
   await analysisPromise;
+}
+
+function markSliceActive(id) {
+  document.querySelectorAll('button.slice[data-slice]').forEach((btn) => {
+    btn.classList.toggle('active', btn.dataset.slice === id);
+  });
+  const note = document.getElementById('sliceNote');
+  if (note) note.textContent = SLICE_LABELS[id] || id;
+}
+
+function updateMeta() {
+  document.getElementById('meta').innerHTML =
+    `${field.NX}\u00d7${field.NY} cells at ${CELL} m \u00b7 ` +
+    `${(field.meta.rows_in_hours || 0).toLocaleString()} positions \u00b7 ` +
+    `${field.meta.cells_emitted.toLocaleString()} cells \u00b7 ` +
+    `${(field.meta.steps_total || 0).toLocaleString()} steps`;
+  const planSource = document.getElementById('planSource');
+  if (planSource) {
+    planSource.textContent =
+      `${layout.venue?.name || 'Venue'} \u00b7 `
+      + `${(layout.counts?.polygons || 0).toLocaleString()} fixtures \u00b7 `
+      + `slice: ${sliceId}`;
+  }
+}
+
+let sliceSwitching = false;
+async function switchSlice(next) {
+  if (!next || !SLICE_LABELS[next] || next === sliceId || sliceSwitching) return;
+  sliceSwitching = true;
+  markSliceActive(next);
+  setLoader(true, `Loading ${SLICE_LABELS[next]}…`);
+  document.querySelectorAll('button.slice[data-slice]').forEach((b) => { b.disabled = true; });
+  try {
+    const nextField = await loadField(`./slices/field_${next}.json` + bust);
+    field = nextField;
+    sliceId = next;
+    // Shift overlays are tied to absolute cells of the active grid — rebuild.
+    analysisPromise = null;
+    if (field.scalars.shift_me) delete field.scalars.shift_me;
+    if (field.scalars.shift_ww) delete field.scalars.shift_ww;
+    roseBuf = new Float32Array(field.B);
+    syncFieldGeometry();
+    if (params.scalar === 'shift_me' || params.scalar === 'shift_ww' || params.scalar === 'outlier') {
+      await ensureShiftAnalysis();
+    } else if (!field.scalars[params.scalar]) {
+      params.scalar = 'dwell';
+      const sel = document.getElementById('scalar');
+      if (sel) sel.value = 'dwell';
+      document.querySelectorAll('button.analysis').forEach((btn) => btn.classList.remove('active'));
+    }
+    updateMeta();
+    rebuildTerrain();
+    buildArrows();
+    buildFloorplan();
+    buildParticles();
+    const u = new URL(location.href);
+    u.searchParams.set('slice', next);
+    history.replaceState(null, '', u.toString());
+  } catch (err) {
+    console.error('Failed to switch time window', err);
+    markSliceActive(sliceId);
+    setLoader(true, 'Could not load that time window');
+    await new Promise((r) => setTimeout(r, 900));
+  } finally {
+    document.querySelectorAll('button.slice[data-slice]').forEach((b) => { b.disabled = false; });
+    setLoader(false);
+    sliceSwitching = false;
+  }
 }
 
 async function setScalar(next) {
@@ -639,39 +736,18 @@ function resize() {
 }
 new ResizeObserver(resize).observe(container);
 
-document.getElementById('meta').innerHTML =
-  `${field.NX}\u00d7${field.NY} cells at ${CELL} m \u00b7 ` +
-  `${(field.meta.rows_in_hours || 0).toLocaleString()} positions \u00b7 ` +
-  `${field.meta.cells_emitted.toLocaleString()} cells \u00b7 ` +
-  `${(field.meta.steps_total || 0).toLocaleString()} steps`;
-
-const sliceNote = document.getElementById('sliceNote');
-if (sliceNote) sliceNote.textContent = SLICE_LABELS[sliceId] || sliceId;
-document.querySelectorAll('button.slice').forEach((btn) => {
-  if (btn.dataset.slice === sliceId) btn.classList.add('active');
-  btn.addEventListener('click', () => {
-    const next = btn.dataset.slice;
-    if (!next || next === sliceId) return;
-    const u = new URL(location.href);
-    u.searchParams.set('slice', next);
-    // Keep embed/export flags so the executive iframe stays in panel mode.
-    location.href = u.toString();
-  });
+updateMeta();
+markSliceActive(sliceId);
+document.querySelectorAll('button.slice[data-slice]').forEach((btn) => {
+  btn.addEventListener('click', () => { void switchSlice(btn.dataset.slice); });
 });
-
-const planSource = document.getElementById('planSource');
-if (planSource) {
-  planSource.textContent =
-    `${layout.venue?.name || 'Venue'} \u00b7 `
-    + `${(layout.counts?.polygons || 0).toLocaleString()} fixtures \u00b7 `
-    + `slice: ${sliceId}`;
-}
 
 rebuildTerrain();
 buildArrows();
 buildFloorplan();
 buildParticles();
 resize();
+setLoader(false);
 
 /** Named camera poses for report captures (`?export=1&view=overview`). */
 function setExportView(name = 'overview') {
@@ -710,8 +786,10 @@ if (bootQs.has('export') || bootQs.get('scalar')) {
 
 // Exposed so the scene can be poked from the devtools console while tuning.
 window.flowProto = {
-  THREE, scene, camera, controls, field, params,
-  rebuildTerrain, buildArrows, buildParticles, stepParticles, renderer, setExportView,
+  THREE, scene, camera, controls, params,
+  get field() { return field; },
+  get sliceId() { return sliceId; },
+  switchSlice, rebuildTerrain, buildArrows, buildParticles, stepParticles, renderer, setExportView,
 };
 
 let last = performance.now();
