@@ -1,6 +1,14 @@
 # Hyperspace Production Caddyfile
 # Domain: app.hyspace.app (auto HTTPS via Let's Encrypt)
 
+# HTTP/3 (QUIC) was stalling the 3.5MB JS bundle for some Chrome clients
+# (H3_REQUEST_CANCELLED / 29s idle timeout → blank black shell). Prefer H1/H2.
+{
+	servers {
+		protocols h1 h2
+	}
+}
+
 # IP address handler for edge server access (no HTTPS)
 :80 {
     # Backend API
