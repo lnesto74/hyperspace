@@ -49,19 +49,24 @@ const DAY_MS = 24 * HOUR_MS;
  * A single `now` per range keeps the span exactly the advertised duration; two
  * `Date.now()` calls can straddle a millisecond and push 30d past the server's
  * 30-day ceiling.
+ *
+ * The end is floored to `alignMs` so a trailing window stays on the same cache
+ * key for that whole bucket. Without this, every open of "last 24h" ended at a
+ * different millisecond and never hit the server cache, so each refresh paid
+ * for a cold Esselunga recompute on the live ingest process.
  */
-function trailingRange(durationMs: number) {
+function trailingRange(durationMs: number, alignMs = 30_000) {
   return () => {
-    const endTs = Date.now();
+    const endTs = Math.floor(Date.now() / alignMs) * alignMs;
     return { startTs: endTs - durationMs, endTs };
   };
 }
 
 const TIME_RANGES: TimeRangeOption[] = [
-  { id: '1h', label: '1h', getRange: trailingRange(HOUR_MS) },
-  { id: '24h', label: '24h', getRange: trailingRange(DAY_MS) },
-  { id: '7d', label: '7d', getRange: trailingRange(7 * DAY_MS) },
-  { id: '30d', label: '30d', getRange: trailingRange(30 * DAY_MS) },
+  { id: '1h', label: '1h', getRange: trailingRange(HOUR_MS, 30_000) },
+  { id: '24h', label: '24h', getRange: trailingRange(DAY_MS, 5 * 60_000) },
+  { id: '7d', label: '7d', getRange: trailingRange(7 * DAY_MS, 5 * 60_000) },
+  { id: '30d', label: '30d', getRange: trailingRange(30 * DAY_MS, 5 * 60_000) },
 ];
 
 /** Ranges whose timelines are more readable bucketed by day than by hour. */

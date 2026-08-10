@@ -1313,16 +1313,46 @@ const COMPARISON_SHIFT_MS = 7 * 24 * 60 * 60 * 1000;
  */
 const MEASUREMENT_EPOCH_MS = Date.parse(process.env.MEASUREMENT_EPOCH || '2026-08-06T00:00:00+02:00');
 
+const COMPARISON_CAVEAT =
+  'counting and dwell measurement both changed on 6 August, so a comparison back to before then would report the fix as a change in trade';
+
 function buildComparison(db, venueId, startTs, endTs, variant, metricThresholdOpts) {
   if (endTs - startTs > COMPARISON_MAX_SPAN_MS) return null;
+
+  const prevStart = startTs - COMPARISON_SHIFT_MS;
+  const prevEnd = endTs - COMPARISON_SHIFT_MS;
+
+  // The headline builders only need the caveat when the previous window sits
+  // before the measurement epoch. Recomputing that whole journey (~3s idle,
+  // much more under live load) just to throw the numbers away is what made
+  // every 24h open pay for two reports until a full week of post-epoch history
+  // exists.
+  if (Number.isFinite(MEASUREMENT_EPOCH_MS) && prevStart < MEASUREMENT_EPOCH_MS) {
+    return {
+      label: 'same window, previous week',
+      range: { startTs: prevStart, endTs: prevEnd },
+      comparable: false,
+      caveat: COMPARISON_CAVEAT,
+      entrants: null,
+      totalVisitors: null,
+      shoppingDwellMin: null,
+      shoppingDwellReliable: false,
+      stoppingPowerPct: null,
+      penetrationPct: null,
+      checkoutCompleted: null,
+      avgWaitMin: null,
+      avgTicket: null,
+      spi: null,
+    };
+  }
 
   let prev;
   try {
     prev = computeExecutiveJourney(
       db,
       venueId,
-      startTs - COMPARISON_SHIFT_MS,
-      endTs - COMPARISON_SHIFT_MS,
+      prevStart,
+      prevEnd,
       variant,
       { ...metricThresholdOpts, skipComparison: true },
     );
@@ -1331,13 +1361,11 @@ function buildComparison(db, venueId, startTs, endTs, variant, metricThresholdOp
     return null;
   }
 
-  const prevStart = startTs - COMPARISON_SHIFT_MS;
-
   return {
     label: 'same window, previous week',
-    range: { startTs: prevStart, endTs: endTs - COMPARISON_SHIFT_MS },
-    comparable: Number.isFinite(MEASUREMENT_EPOCH_MS) ? prevStart >= MEASUREMENT_EPOCH_MS : true,
-    caveat: 'counting and dwell measurement both changed on 6 August, so a comparison back to before then would report the fix as a change in trade',
+    range: { startTs: prevStart, endTs: prevEnd },
+    comparable: true,
+    caveat: COMPARISON_CAVEAT,
     entrants: prev.overview.perimeterEntrants ?? 0,
     totalVisitors: prev.overview.totalVisitors,
     shoppingDwellMin: prev.overview.avgStoreDwellMin,

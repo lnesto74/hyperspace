@@ -65,9 +65,15 @@ const cache = new Map();
  * repeat loads share a result, and wider ranges — which cost far more to compute
  * and change far more slowly — get a coarser bucket and a longer TTL.
  */
+/**
+ * Trailing windows used to recompute on every open: a 24h range ending at
+ * "now" moves every millisecond, so a 60s TTL never saw a second hit. Bucket
+ * and TTL are paired so a refresh inside the same bucket reuses the payload
+ * instead of freezing the live ingest loop again.
+ */
 function cacheProfileFor(spanMs) {
   if (spanMs <= 2 * 60 * 60 * 1000) return { bucketMs: 30_000, ttlMs: 30_000 };
-  if (spanMs <= 36 * 60 * 60 * 1000) return { bucketMs: 60_000, ttlMs: 60_000 };
+  if (spanMs <= 36 * 60 * 60 * 1000) return { bucketMs: 5 * 60_000, ttlMs: 5 * 60_000 };
   return { bucketMs: 5 * 60_000, ttlMs: 5 * 60_000 };
 }
 
@@ -105,6 +111,9 @@ function setCache(key, data, ttlMs) {
     }
   }
 }
+
+/** Same cache key in flight → share one compute instead of stacking two freezes. */
+const inFlight = new Map();
 
 // Feature flag check middleware
 const checkFeatureFlag = (req, res, next) => {
@@ -405,11 +414,32 @@ router.get('/summary', async (req, res) => {
       case 'executive':
         ({ kpis, supporting } = await computeExecutiveKpis(db, kpiCalculator, trajectoryStorage, venueId, start, end, campaignId));
         break;
-      case 'esselunga-executive':
-        ({ kpis, supporting } = computeEsselungaExecutiveKpis(
+      case 'esselunga-executive': {
+        // The journey is synchronous SQLite on the live process. Yield once so
+        // MQTT/track sync can drain, and coalesce identical opens so a double
+        // mount or refresh does not run two full reports back to back.
+        const run = () => computeEsselungaExecutiveKpis(
           db, venueId, start, end, variant, mqttService, metricThresholdOpts,
-        ));
+        );
+        if (thresholdPreview) {
+          ({ kpis, supporting } = run());
+        } else if (inFlight.has(cacheKey)) {
+          ({ kpis, supporting } = await inFlight.get(cacheKey));
+        } else {
+          const pending = new Promise((resolve, reject) => {
+            setImmediate(() => {
+              try { resolve(run()); } catch (err) { reject(err); }
+            });
+          });
+          inFlight.set(cacheKey, pending);
+          try {
+            ({ kpis, supporting } = await pending);
+          } finally {
+            inFlight.delete(cacheKey);
+          }
+        }
         break;
+      }
     }
 
     const response = {
