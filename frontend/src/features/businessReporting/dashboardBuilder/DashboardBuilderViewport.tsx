@@ -1,4 +1,11 @@
-import { useEffect, useMemo, useState, type DragEvent } from 'react';
+import {
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type DragEvent,
+} from 'react';
 import {
   LayoutDashboard,
   Plus,
@@ -68,6 +75,9 @@ export default function DashboardBuilderViewport({
   const [publishedUrl, setPublishedUrl] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [publishError, setPublishError] = useState<string | null>(null);
+  const [inspectorAlign, setInspectorAlign] = useState(0);
+  const builderGridRef = useRef<HTMLDivElement | null>(null);
+  const tileRefs = useRef<Map<string, HTMLDivElement>>(new Map());
   const saved = readOnly ? [] : listLayouts();
 
   useEffect(() => {
@@ -87,9 +97,40 @@ export default function DashboardBuilderViewport({
     });
   }, [kindFilter, query]);
 
+  const usedOnBoard = useMemo(() => {
+    const counts = new Map<WidgetId, number>();
+    for (const item of layout?.items || []) {
+      counts.set(item.widgetId, (counts.get(item.widgetId) || 0) + 1);
+    }
+    return counts;
+  }, [layout?.items]);
+
   const selected = layout?.items.find((i) => i.instanceId === selectedId) ?? null;
   const mapCount = layout?.items.filter((i) => getWidget(i.widgetId).isMap).length ?? 0;
   const canEdit = !readOnly && editing;
+
+  // Keep the inspector next to the selected tile so you don't scroll up to edit it.
+  useLayoutEffect(() => {
+    if (!canEdit || !selectedId) {
+      setInspectorAlign(0);
+      return;
+    }
+    const tile = tileRefs.current.get(selectedId);
+    const grid = builderGridRef.current;
+    if (!tile || !grid) {
+      setInspectorAlign(0);
+      return;
+    }
+    const align = () => {
+      const gridRect = grid.getBoundingClientRect();
+      const tileRect = tile.getBoundingClientRect();
+      setInspectorAlign(Math.max(0, Math.round(tileRect.top - gridRect.top)));
+    };
+    align();
+    tile.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    window.addEventListener('resize', align);
+    return () => window.removeEventListener('resize', align);
+  }, [canEdit, selectedId, layout?.items]);
 
   const flash = (msg: string) => {
     setNotice(msg);
@@ -320,9 +361,12 @@ export default function DashboardBuilderViewport({
         </div>
       )}
 
-      <div className={`grid gap-3 ${canEdit ? 'lg:grid-cols-[240px_1fr_220px]' : 'grid-cols-1'}`}>
+      <div
+        ref={builderGridRef}
+        className={`grid gap-3 items-start ${canEdit ? 'lg:grid-cols-[240px_1fr_220px]' : 'grid-cols-1'}`}
+      >
         {canEdit && (
-          <aside className="rounded-lg border border-gray-700/80 bg-gray-800/40 p-2 space-y-2 max-h-[70vh] overflow-y-auto">
+          <aside className="rounded-lg border border-gray-700/80 bg-gray-800/40 p-2 space-y-2 lg:sticky lg:top-3 lg:self-start max-h-[calc(100vh-5.5rem)] overflow-y-auto">
             <div className="text-[11px] font-semibold text-white px-1">Component library</div>
             <input
               value={query}
@@ -347,31 +391,50 @@ export default function DashboardBuilderViewport({
               ))}
             </div>
             <div className="space-y-1.5">
-              {library.map((w) => (
-                <div
-                  key={w.id}
-                  draggable
-                  onDragStart={(e) => onDragStartLibrary(e, w.id)}
-                  className="rounded-md border border-gray-700/80 bg-gray-900/40 px-2 py-1.5 cursor-grab active:cursor-grabbing hover:border-cyan-500/40"
-                >
-                  <div className="flex items-start gap-1.5">
-                    <GripVertical className="w-3 h-3 text-gray-600 mt-0.5 shrink-0" />
-                    <div className="min-w-0">
-                      <div className="text-[11px] font-medium text-white truncate">{w.name}</div>
-                      <div className="text-[10px] text-gray-500 line-clamp-2">{w.description}</div>
-                      <div className="text-[9px] text-gray-600 mt-0.5">{w.kind} · {w.sources[0]}</div>
+              {library.map((w) => {
+                const usedCount = usedOnBoard.get(w.id) || 0;
+                const onBoard = usedCount > 0;
+                return (
+                  <div
+                    key={w.id}
+                    draggable
+                    onDragStart={(e) => onDragStartLibrary(e, w.id)}
+                    className={`rounded-md border px-2 py-1.5 cursor-grab active:cursor-grabbing ${
+                      onBoard
+                        ? 'border-cyan-500/35 bg-cyan-950/20 hover:border-cyan-500/55'
+                        : 'border-gray-700/80 bg-gray-900/40 hover:border-cyan-500/40'
+                    }`}
+                  >
+                    <div className="flex items-start gap-1.5">
+                      <GripVertical className="w-3 h-3 text-gray-600 mt-0.5 shrink-0" />
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-1.5 min-w-0">
+                          <div className="text-[11px] font-medium text-white truncate">{w.name}</div>
+                          {onBoard && (
+                            <span
+                              className="shrink-0 inline-flex items-center gap-0.5 px-1 py-px rounded text-[9px] font-medium bg-cyan-500/15 text-cyan-300 border border-cyan-500/30"
+                              title={usedCount > 1 ? `${usedCount} on this dashboard` : 'Already on this dashboard'}
+                            >
+                              <Check className="w-2.5 h-2.5" />
+                              {usedCount > 1 ? `On board ×${usedCount}` : 'On board'}
+                            </span>
+                          )}
+                        </div>
+                        <div className="text-[10px] text-gray-500 line-clamp-2">{w.description}</div>
+                        <div className="text-[9px] text-gray-600 mt-0.5">{w.kind} · {w.sources[0]}</div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => addWidget(w.id)}
+                        className="ml-auto p-0.5 text-cyan-400 hover:text-cyan-300"
+                        title={onBoard ? 'Add another' : 'Add'}
+                      >
+                        <Plus className="w-3.5 h-3.5" />
+                      </button>
                     </div>
-                    <button
-                      type="button"
-                      onClick={() => addWidget(w.id)}
-                      className="ml-auto p-0.5 text-cyan-400 hover:text-cyan-300"
-                      title="Add"
-                    >
-                      <Plus className="w-3.5 h-3.5" />
-                    </button>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </aside>
         )}
@@ -411,6 +474,10 @@ export default function DashboardBuilderViewport({
                 return (
                   <div
                     key={item.instanceId}
+                    ref={(el) => {
+                      if (el) tileRefs.current.set(item.instanceId, el);
+                      else tileRefs.current.delete(item.instanceId);
+                    }}
                     style={{
                       gridColumn: `span ${item.colSpan} / span ${item.colSpan}`,
                       minHeight: rowHeightPx(item.rowSpan),
@@ -452,7 +519,10 @@ export default function DashboardBuilderViewport({
         </main>
 
         {canEdit && (
-          <aside className="rounded-lg border border-gray-700/80 bg-gray-800/40 p-2 space-y-2 max-h-[70vh] overflow-y-auto">
+          <aside
+            className="rounded-lg border border-gray-700/80 bg-gray-800/40 p-2 space-y-2 lg:sticky lg:top-3 lg:self-start max-h-[calc(100vh-5.5rem)] overflow-y-auto shadow-lg shadow-black/20 transition-[margin] duration-200"
+            style={{ marginTop: inspectorAlign > 0 ? inspectorAlign : undefined }}
+          >
             <div className="text-[11px] font-semibold text-white px-1">Inspector</div>
             {!selected ? (
               <p className="text-[11px] text-gray-500 px-1">Select a tile on the canvas</p>
