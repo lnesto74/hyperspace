@@ -1,0 +1,92 @@
+{
+  "slices": [
+    {
+      "id": "all",
+      "file": "field_all.json",
+      "cells": 1745,
+      "rows": 2965074,
+      "hours": [
+        7,
+        22
+      ],
+      "dows": null
+    },
+    {
+      "id": "morning",
+      "file": "field_morning.json",
+      "cells": 1698,
+      "rows": 856061,
+      "hours": [
+        7,
+        11
+      ],
+      "dows": null
+    },
+    {
+      "id": "midday",
+      "file": "field_midday.json",
+      "cells": 1704,
+      "rows": 867392,
+      "hours": [
+        11,
+        15
+      ],
+      "dows": null
+    },
+    {
+      "id": "afternoon",
+      "file": "field_afternoon.json",
+      "cells": 1690,
+      "rows": 824220,
+      "hours": [
+        15,
+        19
+      ],
+      "dows": null
+    },
+    {
+      "id": "evening",
+      "file": "field_evening.json",
+      "cells": 1676,
+      "rows": 417401,
+      "hours": [
+        19,
+        22
+      ],
+      "dows": null
+    },
+    {
+      "id": "weekday",
+      "file": "field_weekday.json",
+      "cells": 1730,
+      "rows": 1741499,
+      "hours": [
+        7,
+        22
+      ],
+      "dows": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ]
+    },
+    {
+      "id": "weekend",
+      "file": "field_weekend.json",
+      "cells": 1715,
+      "rows": 1223575,
+      "hours": [
+        7,
+        22
+      ],
+      "dows": [
+        5,
+        6
+      ]
+    }
+  ],
+  "cell_m": 1.5,
+  "venue_id": "55fdd53b-3298-4355-97c0-b4e789b11d06"
+}
