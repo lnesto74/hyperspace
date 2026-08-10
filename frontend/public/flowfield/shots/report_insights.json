@@ -1,0 +1,31 @@
+{
+  "meta": {
+    "venue": "TREVIGLIO Schematico",
+    "cells": 1734,
+    "spanDays": 9.4,
+    "steps": 592686,
+    "positions": 2480076,
+    "hours": [7, 22],
+    "coverageNote": "1,734 cells = ~80% of walkable floor (production track store)"
+  },
+  "shots": [
+    {
+      "id": "footfall",
+      "file": "01_footfall_overview.png",
+      "title": "Where traffic concentrates",
+      "caption": "Footfall over 9.4 trading days (07:00–22:00 local), overlaid on the store wireframe. Colour and relief mark distinct-track density; animated streamlines show direction. Coverage reaches ~80% of walkable floor. Traffic is not evenly spread: the busiest tenth of cells carries about 39% of all track evidence, funneling through a small set of corridors and nodes — strongest in the south-west of the plan."
+    },
+    {
+      "id": "dwell",
+      "file": "02_dwell_overview.png",
+      "title": "Where shoppers slow and stop",
+      "caption": "Same field coloured by dwell. Peaks are places people stay; valleys are through-routes with high movement and little stopping. Read the valleys as circulation and the peaks as engagement or queueing. Pair this with the aisle and fresco tables in the executive report: the map shows where the stopping power sits spatially, not only as a percentage."
+    },
+    {
+      "id": "streams",
+      "file": "03_streamlines_low.png",
+      "title": "How people move through the plan",
+      "caption": "A lower camera angle emphasises the wind-map streamlines. Each trail follows the measured direction rose in its cell. Along the busiest through-route cells, flow is often two-way (average directional purity ≈ 0.3), so a single mean arrow would mislead — the rose keeps opposing aisle traffic visible. Use this view to see which aisle mouths feed the fresco / checkout spine."
+    }
+  ]
+}

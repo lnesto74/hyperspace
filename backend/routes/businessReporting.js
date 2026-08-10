@@ -499,17 +499,25 @@ router.get('/esselunga-executive/pdf', (req, res) => {
     const journey = supporting.esselungaJourney;
     const venueName = safeQuery(db, 'SELECT name FROM venues WHERE id = ?', [venueId])?.name || 'Venue';
 
-    // Optional Windy-style appendix when export frames exist on disk
-    // (`?includeFlowField=1`). Keeps the default download lean.
+    // Windy-style people-flow appendix. Shipped with the backend image under
+    // assets/flowfield/; opt out with ?includeFlowField=0. Local/dev fallback
+    // keeps the prototypes/ path working outside Docker.
     let flowFieldShots;
-    if (String(req.query.includeFlowField || '') === '1') {
-      const shotsDir = path.resolve(process.cwd(), 'prototypes/flowfield/shots');
-      const manifestPath = path.join(shotsDir, 'report_insights.json');
-      if (fs.existsSync(manifestPath)) {
+    const includeFlowField = String(req.query.includeFlowField || '1') !== '0';
+    if (includeFlowField) {
+      const candidates = [
+        path.resolve(process.cwd(), 'assets/flowfield'),
+        path.resolve(process.cwd(), 'prototypes/flowfield/shots'),
+        path.resolve(process.cwd(), '../prototypes/flowfield/shots'),
+      ];
+      for (const shotsDir of candidates) {
+        const manifestPath = path.join(shotsDir, 'report_insights.json');
+        if (!fs.existsSync(manifestPath)) continue;
         const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
         flowFieldShots = (manifest.shots || [])
           .map((s) => ({ ...s, imagePath: path.join(shotsDir, s.file) }))
           .filter((s) => fs.existsSync(s.imagePath));
+        if (flowFieldShots.length) break;
       }
     }
 

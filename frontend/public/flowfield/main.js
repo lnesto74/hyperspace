@@ -554,15 +554,27 @@ async function ensureShiftAnalysis() {
   await analysisPromise;
 }
 
-// ---------------------------------------------------------------------- wiring
-const bind = (id, fn, evt = 'input') => document.getElementById(id).addEventListener(evt, fn);
-bind('scalar', async (e) => {
-  params.scalar = e.target.value;
-  if (params.scalar === 'shift_me' || params.scalar === 'shift_ww' || params.scalar === 'outlier') {
+async function setScalar(next) {
+  if (!next) return;
+  params.scalar = next;
+  const sel = document.getElementById('scalar');
+  if (sel && sel.value !== next) sel.value = next;
+  document.querySelectorAll('button.analysis').forEach((btn) => {
+    btn.classList.toggle('active', btn.dataset.scalar === next);
+  });
+  if (next === 'shift_me' || next === 'shift_ww' || next === 'outlier') {
     await ensureShiftAnalysis();
   }
   rebuildTerrain();
-}, 'change');
+}
+
+// ---------------------------------------------------------------------- wiring
+const bind = (id, fn, evt = 'input') => document.getElementById(id).addEventListener(evt, fn);
+bind('scalar', (e) => { void setScalar(e.target.value); }, 'change');
+document.querySelectorAll('button.analysis').forEach((btn) => {
+  btn.addEventListener('click', () => { void setScalar(btn.dataset.scalar); });
+  if (btn.dataset.scalar === params.scalar) btn.classList.add('active');
+});
 bind('terrainHeight', (e) => {
   params.terrainHeight = +e.target.value;
   document.getElementById('terrainHeightVal').textContent = params.terrainHeight.toFixed(1) + ' m';
@@ -686,20 +698,13 @@ function setExportView(name = 'overview') {
 if (bootQs.has('export') || bootQs.get('scalar')) {
   const scalar = bootQs.get('scalar');
   if (scalar && (field.scalars[scalar] || scalar === 'shift_me' || scalar === 'shift_ww')) {
-    params.scalar = scalar;
-    const sel = document.getElementById('scalar');
-    if (sel) sel.value = scalar;
-    if (scalar === 'shift_me' || scalar === 'shift_ww' || scalar === 'outlier') {
-      await ensureShiftAnalysis();
-    }
+    await setScalar(scalar);
   }
   if (bootQs.has('export')) {
     setExportView(bootQs.get('view') || 'overview');
     rebuildTerrain();
     // Pause after trails have a moment to form, so report frames are sharp.
     setTimeout(() => { params.paused = true; }, 4500);
-  } else {
-    rebuildTerrain();
   }
 }
 

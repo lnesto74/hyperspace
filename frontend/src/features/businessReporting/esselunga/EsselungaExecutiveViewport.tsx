@@ -491,6 +491,8 @@ export default function EsselungaExecutiveViewport({
       engagementThresholdSec: String(engagementSec),
       engagementRankSec: String(engagementRankSec),
       queueFloorSec: String(queueFloorSec),
+      // Include the Windy-style people-flow chart appendix (3 snapshot pages).
+      includeFlowField: '1',
     });
     window.open(`${API_BASE}/api/reporting/esselunga-executive/pdf?${params}`, '_blank', 'noopener');
   };

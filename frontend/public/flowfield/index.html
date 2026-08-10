@@ -120,6 +120,17 @@
     </div>
 
     <div class="field">
+      <div class="subtitle">Analysis</div>
+      <div class="note" style="margin-bottom:6px">Aisle behaviour, time shifts, engagement traps</div>
+      <div class="slice-grid" id="analysisModes">
+        <button type="button" class="slice analysis" data-scalar="regime">Behaviour<br/><span>regime</span></button>
+        <button type="button" class="slice analysis" data-scalar="outlier">Outlier<br/><span>dwell / traffic</span></button>
+        <button type="button" class="slice analysis" data-scalar="shift_me">Shift<br/><span>morning → evening</span></button>
+        <button type="button" class="slice analysis" data-scalar="shift_ww">Shift<br/><span>weekday → weekend</span></button>
+      </div>
+    </div>
+
+    <div class="field">
       <label for="scalar">Surface colour</label>
       <select id="scalar">
         <option value="dwell" selected>Dwell</option>
@@ -134,7 +145,6 @@
           <option value="outlier">Outlier (dwell / traffic)</option>
         </optgroup>
       </select>
-      <div class="note" style="margin-top:4px">Analysis modes classify aisle behaviour, time shifts, and engagement traps.</div>
     </div>
 
     <div class="field">
