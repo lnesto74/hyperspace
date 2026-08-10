@@ -186,29 +186,31 @@ function fetchAisleDwellUnique(db, aisleRoiIds, startTs, endTs, dwellMs) {
 }
 
 /**
- * Esselunga's penetration is "visitors who entered an aisle / visitors who
- * entered the store". Session stitching used to answer that from ~a few
- * thousand in-memory entrance sessions, which produced an 80% bypass figure
- * while a quarter of a million aisle tracks existed in the same week.
+ * Esselunga's penetration is "visitors who entered aisle X / visitors who
+ * entered the store". Session stitching used to answer the store-wide version
+ * from a few thousand in-memory entrance sessions and reported ~80% bypass
+ * while most of the floor was busy.
  *
- * Of the distinct track keys seen at the entrance line, the share that also
- * appears in an aisle ROI is the closest we can get with the identities we
- * actually have. It still understates true reach when re-ID fails between the
- * door and the shelf, but it can no longer invent a store where four in five
- * shoppers never walk an aisle.
+ * Of the distinct track keys seen at the entrance, the share that also appears
+ * in a shopping-zone ROI (grocery aisle or fresco) is the closest honest
+ * store-wide answer. Grocery aisles alone are too narrow here: at Treviglio
+ * about twenty Shelf zones are classified as fresco, so an "aisles only" reach
+ * rate collapses to ~14% while shopping-floor reach sits near 58%.
+ *
+ * It still understates true reach when re-ID fails between door and shelf.
  */
-function fetchAisleReachByEntranceTracks(db, venueId, startTs, endTs, trafficRoiIds, aisleRoiIds) {
-  if (!trafficRoiIds?.length || !aisleRoiIds?.length) {
+function fetchShoppingReachByEntranceTracks(db, venueId, startTs, endTs, trafficRoiIds, shoppingRoiIds) {
+  if (!trafficRoiIds?.length || !shoppingRoiIds?.length) {
     return {
       entranceTracks: 0,
-      reachedAisle: 0,
+      reachedShopping: 0,
       penetrationPct: null,
       reliable: false,
       method: 'entrance_track_overlap',
     };
   }
   const tPh = trafficRoiIds.map(() => '?').join(',');
-  const aPh = aisleRoiIds.map(() => '?').join(',');
+  const sPh = shoppingRoiIds.map(() => '?').join(',');
   const row = safeQuery(db, `
     WITH ent AS (
       SELECT DISTINCT track_key
@@ -217,24 +219,24 @@ function fetchAisleReachByEntranceTracks(db, venueId, startTs, endTs, trafficRoi
         AND roi_id IN (${tPh})
         AND track_key NOT LIKE '%cashier%'
     ),
-    aisle AS (
+    shop AS (
       SELECT DISTINCT track_key
       FROM zone_visits
       WHERE venue_id = ? AND start_time >= ? AND start_time < ?
-        AND roi_id IN (${aPh})
+        AND roi_id IN (${sPh})
         AND track_key NOT LIKE '%cashier%'
     )
     SELECT
       (SELECT COUNT(*) FROM ent) AS entranceTracks,
-      (SELECT COUNT(*) FROM ent e JOIN aisle a ON a.track_key = e.track_key) AS reachedAisle
-  `, [venueId, startTs, endTs, ...trafficRoiIds, venueId, startTs, endTs, ...aisleRoiIds]);
+      (SELECT COUNT(*) FROM ent e JOIN shop s ON s.track_key = e.track_key) AS reachedShopping
+  `, [venueId, startTs, endTs, ...trafficRoiIds, venueId, startTs, endTs, ...shoppingRoiIds]);
 
   const entranceTracks = row?.entranceTracks || 0;
-  const reachedAisle = row?.reachedAisle || 0;
+  const reachedShopping = row?.reachedShopping || 0;
   return {
     entranceTracks,
-    reachedAisle,
-    penetrationPct: entranceTracks > 0 ? pct(reachedAisle, entranceTracks) : null,
+    reachedShopping,
+    penetrationPct: entranceTracks > 0 ? pct(reachedShopping, entranceTracks) : null,
     // A handful of entrance tracks is noise; below that the share swings on one person.
     reliable: entranceTracks >= 30,
     method: 'entrance_track_overlap',
@@ -1114,6 +1116,9 @@ function buildAisleCategoryGroups(classifiedRois, ctx) {
 function buildAisleMetrics(classifiedRois, ctx, totalVisitors, sessionAnalytics) {
   const { db, venueId, startTs, endTs, metricThresholds, roiStats, trafficRoiIds } = ctx;
   const aisleRois = classifiedRois.filter(r => r.classification.group === 'aisles');
+  const shoppingRoiIds = classifiedRois
+    .filter(r => r.classification.group === 'aisles' || r.classification.group === 'fresco')
+    .map(r => r.id);
   const roiIds = aisleRois.map(r => r.id);
   const stats = roiStats.statsFor(roiIds);
 
@@ -1142,13 +1147,13 @@ function buildAisleMetrics(classifiedRois, ctx, totalVisitors, sessionAnalytics)
       .filter(g => g.category && !/^(uncategorized|no content available)$/i.test(g.category));
   })();
 
-  const aisleReach = fetchAisleReachByEntranceTracks(
-    db, venueId, startTs, endTs, trafficRoiIds || [], roiIds,
+  const shoppingReach = fetchShoppingReachByEntranceTracks(
+    db, venueId, startTs, endTs, trafficRoiIds || [], shoppingRoiIds,
   );
-  const penetrationPct = aisleReach.reliable ? aisleReach.penetrationPct : null;
+  const penetrationPct = shoppingReach.reliable ? shoppingReach.penetrationPct : null;
   const aisleDwellUnique = sessionAnalytics?.aislePenetration?.sessionsWithAisleStop
     ?? fetchAisleDwellUnique(db, roiIds, startTs, endTs, metricThresholds.dwellMs);
-  const aisleReachReliable = aisleReach.reliable;
+  const aisleReachReliable = shoppingReach.reliable;
   const stoppingPowerPct = stats.visits > 0 ? pct(stats.dwellVisits, stats.visits) : 0;
 
   // These are two different questions that used to share one field. Of the
@@ -1156,9 +1161,10 @@ function buildAisleMetrics(classifiedRois, ctx, totalVisitors, sessionAnalytics)
   // is what the ring gauge has always been labelled.
   const passThroughPct = Math.max(0, Math.round((100 - stoppingPowerPct) * 10) / 10);
 
-  // Bypass, as Esselunga define it, is 100 − penetration: of people seen at the
-  // entrance, the share never seen in an aisle. Null rather than 100 when the
-  // reach sample is too thin, so an unknown never reads as "everybody walked past".
+  // Bypass here is store-wide: of people seen at the entrance, the share never
+  // seen in a shopping zone (aisle or fresco). Esselunga's brief defines bypass
+  // per category; this tile answers the store-level form of the same question.
+  // Null rather than 100 when the reach sample is too thin.
   const bypassPct = penetrationPct != null
     ? Math.max(0, Math.round((100 - penetrationPct) * 10) / 10)
     : null;
@@ -1208,9 +1214,9 @@ function buildAisleMetrics(classifiedRois, ctx, totalVisitors, sessionAnalytics)
     penetrationPct,
     aisleDwellUnique,
     aisleReachReliable,
-    aisleReachMethod: aisleReach.method,
-    entranceTracks: aisleReach.entranceTracks,
-    entranceTracksReachedAisle: aisleReach.reachedAisle,
+    aisleReachMethod: shoppingReach.method,
+    entranceTracks: shoppingReach.entranceTracks,
+    entranceTracksReachedShopping: shoppingReach.reachedShopping,
     dwellVisits: stats.dwellVisits,
     engagementVisits: stats.engagementVisits,
     engagementRatePct: stats.visits > 0 ? pct(stats.rankVisits, stats.visits) : 0,
@@ -1306,9 +1312,9 @@ function buildInsights(payload) {
     insights.push({
       id: 'aisle-penetration',
       severity: 'info',
-      title: 'Aisle penetration below target',
-      message: `Only ${payload.aisles.penetrationPct}% of entrance tracks are also seen in an aisle. Top aisle: ${topAisle.name}.`,
-      action: 'Review layout and signage toward high-traffic aisles',
+      title: 'Shopping-floor reach below target',
+      message: `Only ${payload.aisles.penetrationPct}% of entrance tracks are also seen in an aisle or fresco zone. Top aisle: ${topAisle.name}.`,
+      action: 'Review layout and signage toward high-traffic areas',
       section: 'aisles',
     });
   }
