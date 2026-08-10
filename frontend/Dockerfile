@@ -30,8 +30,11 @@ RUN npm install -g serve@14
 
 # Copy built static files from builder
 COPY --from=builder /app/dist /app/dist
+# Keep cleanUrls off so /flowfield/index.html is served as a real file
+# (serve -s otherwise strips .html and SPA-falls-back to the React shell).
+COPY serve.json /app/dist/serve.json
 
 EXPOSE 4173
 
 # Serve static files on port 4173
-CMD ["serve", "-s", "dist", "-l", "4173"]
+CMD ["serve", "-s", "dist", "-l", "4173", "-c", "serve.json"]

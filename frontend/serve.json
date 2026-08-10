@@ -1,0 +1,12 @@
+{
+  "cleanUrls": false,
+  "headers": [
+    {
+      "source": "/flowfield/**",
+      "headers": [
+        { "key": "Cache-Control", "value": "public, max-age=300" },
+        { "key": "X-Frame-Options", "value": "SAMEORIGIN" }
+      ]
+    }
+  ]
+}
