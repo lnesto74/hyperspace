@@ -623,8 +623,9 @@ function drawCheckout(doc, journey, y) {
 }
 
 /**
- * Optional wind-map style people-flow frames. All shots share one appendix page
- * at reduced height so the report stays dense (matches the executive page-2 feel).
+ * Optional wind-map style people-flow frames. All shots share one appendix page.
+ * Title, image and caption sit in one left-aligned column of equal width — never
+ * centred with full-bleed text wrapping wider than the frame.
  */
 function drawFlowField(doc, shots) {
   if (!Array.isArray(shots) || !shots.length) return;
@@ -633,6 +634,7 @@ function drawFlowField(doc, shots) {
   let next = MARGIN;
   const pageBottom = A4.height - MARGIN - 32;
   const n = Math.min(3, shots.length);
+  const colX = MARGIN;
 
   next = sectionTitle(
     doc,
@@ -641,52 +643,70 @@ function drawFlowField(doc, shots) {
     'LiDAR trajectories as a continuous field — density, dwell and direction over the store plan.',
   );
 
-  // Budget remaining height evenly across frames (image + title + 2-line caption).
-  const chromePer = 28; // title + caption + gaps
+  // Budget remaining height evenly (title + image + 2-line caption + gap).
+  const chromePer = 30;
   const avail = pageBottom - next;
   const maxImgH = Math.max(110, Math.floor((avail - chromePer * n) / n));
 
+  // Size every frame into the same column width so the left edge and text
+  // measure line up. Prefer height-fit, then clamp width to CONTENT_W.
+  const frames = [];
+  let colW = CONTENT_W;
   for (let i = 0; i < n; i++) {
     const shot = shots[i];
-    doc.font('Helvetica-Bold').fontSize(9).fillColor(INK)
-      .text(shot.title, MARGIN, next, { width: CONTENT_W, lineBreak: false });
-    next = doc.y + 4;
-
-    let imgH = maxImgH;
-    let imgW = CONTENT_W;
+    let ar = 16 / 9;
     if (shot.imagePath) {
       try {
         const fitted = doc.openImage(shot.imagePath);
-        const ar = fitted.width / fitted.height;
-        imgW = CONTENT_W;
-        imgH = imgW / ar;
-        if (imgH > maxImgH) {
-          imgH = maxImgH;
-          imgW = imgH * ar;
-        }
-        const ix = MARGIN + (CONTENT_W - imgW) / 2;
-        doc.image(shot.imagePath, ix, next, { width: imgW, height: imgH });
-        doc.roundedRect(ix - 0.5, next - 0.5, imgW + 1, imgH + 1, 2)
+        ar = fitted.width / Math.max(1, fitted.height);
+      } catch {
+        /* keep default */
+      }
+    }
+    let imgH = maxImgH;
+    let imgW = imgH * ar;
+    if (imgW > CONTENT_W) {
+      imgW = CONTENT_W;
+      imgH = imgW / ar;
+    }
+    frames.push({ shot, ar, imgW, imgH });
+    colW = Math.min(colW, imgW);
+  }
+  // Re-fit heights to the shared column width so all three share one measure.
+  for (const f of frames) {
+    f.imgW = colW;
+    f.imgH = Math.min(maxImgH, colW / f.ar);
+  }
+
+  for (const { shot, imgW, imgH } of frames) {
+    doc.font('Helvetica-Bold').fontSize(9).fillColor(INK)
+      .text(shot.title, colX, next, { width: colW, lineBreak: false });
+    next = doc.y + 3;
+
+    if (shot.imagePath) {
+      try {
+        doc.image(shot.imagePath, colX, next, { width: imgW, height: imgH });
+        doc.roundedRect(colX - 0.5, next - 0.5, imgW + 1, imgH + 1, 2)
           .lineWidth(0.6).strokeColor(RULE).stroke();
-        next += imgH + 4;
+        next += imgH + 3;
       } catch {
         doc.font('Helvetica').fontSize(8).fillColor(FAINT)
-          .text('(flow-field image unavailable)', MARGIN, next, { width: CONTENT_W });
-        next = doc.y + 4;
+          .text('(flow-field image unavailable)', colX, next, { width: colW });
+        next = doc.y + 3;
       }
     }
 
     const caption = shot.shortCaption || shot.caption;
     if (caption) {
       doc.font('Helvetica').fontSize(7.5).fillColor('#374151')
-        .text(caption, MARGIN, next, {
-          width: CONTENT_W,
-          height: 22,
+        .text(caption, colX, next, {
+          width: colW,
+          height: 20,
           ellipsis: true,
         });
-      next = doc.y + 8;
+      next = doc.y + 10;
     } else {
-      next += 6;
+      next += 8;
     }
   }
 }
