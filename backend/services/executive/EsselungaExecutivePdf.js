@@ -64,17 +64,55 @@ function drawArrow(doc, x, y, direction, colour) {
   doc.restore();
 }
 
-function formatRange(startTs, endTs) {
-  const s = new Date(startTs);
-  const e = new Date(endTs);
-  const date = { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' };
-  const hm = { hour: '2-digit', minute: '2-digit', hour12: false };
-  if (s.toDateString() === e.toDateString()) {
-    return `${s.toLocaleDateString('en-GB', date)} · `
-      + `${s.toLocaleTimeString('en-GB', hm)}–${e.toLocaleTimeString('en-GB', hm)}`;
+/**
+ * The daily report window is "venue midnight → now". On a UTC host that looks
+ * like two calendar days if you only print dates, which is how a 6 August
+ * trading day became "5 Aug – 6 Aug" with no times. Always print the clock, and
+ * always in the venue timezone, so a daily report reads as one day with a clear
+ * start and end.
+ */
+export function formatRange(startTs, endTs, timeZone = 'Europe/Rome') {
+  const start = Number(startTs);
+  const end = Number(endTs);
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return '—';
+
+  const dayKey = {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  };
+  const longDay = {
+    timeZone,
+    weekday: 'long',
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+  };
+  const shortDay = {
+    timeZone,
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+  };
+  const hm = {
+    timeZone,
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  };
+
+  const startDay = new Date(start).toLocaleDateString('en-CA', dayKey); // YYYY-MM-DD
+  const endDay = new Date(end).toLocaleDateString('en-CA', dayKey);
+  const startTime = new Date(start).toLocaleTimeString('en-GB', hm);
+  const endTime = new Date(end).toLocaleTimeString('en-GB', hm);
+
+  if (startDay === endDay) {
+    return `${new Date(start).toLocaleDateString('en-GB', longDay)} · ${startTime}–${endTime}`;
   }
-  const short = { day: 'numeric', month: 'short', year: 'numeric' };
-  return `${s.toLocaleDateString('en-GB', short)} – ${e.toLocaleDateString('en-GB', short)}`;
+
+  return `${new Date(start).toLocaleDateString('en-GB', shortDay)} ${startTime}`
+    + ` → ${new Date(end).toLocaleDateString('en-GB', shortDay)} ${endTime}`;
 }
 
 // ---------------------------------------------------------------- primitives
@@ -484,6 +522,73 @@ function drawInsights(doc, journey, y) {
   return next;
 }
 
+/**
+ * Optional wind-map style people-flow frames. Each shot is
+ * `{ title, caption, imagePath }` — imagePath is a PNG/JPEG on disk.
+ * Laid out one frame per page so the caption has room under a wide figure.
+ */
+function drawFlowField(doc, shots) {
+  if (!Array.isArray(shots) || !shots.length) return;
+
+  const pageBottom = A4.height - MARGIN - 36;
+
+  for (let i = 0; i < shots.length; i++) {
+    const shot = shots[i];
+    doc.addPage();
+    let next = MARGIN;
+
+    next = sectionTitle(
+      doc,
+      i === 0 ? 'People-flow field' : shot.title,
+      next,
+      i === 0
+        ? 'LiDAR trajectories aggregated into a continuous field — density, dwell and direction '
+          + 'in one Windy-style view over the store plan.'
+        : undefined,
+    );
+
+    if (i === 0) {
+      doc.font('Helvetica-Bold').fontSize(10).fillColor(INK)
+        .text(shot.title, MARGIN, next, { width: CONTENT_W });
+      next = doc.y + 8;
+    }
+
+    const maxImgH = Math.min(420, pageBottom - next - 72);
+    const maxImgW = CONTENT_W;
+    let imgH = maxImgH;
+    let imgW = maxImgW;
+
+    if (shot.imagePath) {
+      try {
+        // Fit the frame into the page while preserving aspect; dark screenshots
+        // read better with a thin rule than a heavy card.
+        const fitted = doc.openImage(shot.imagePath);
+        const ar = fitted.width / fitted.height;
+        imgW = maxImgW;
+        imgH = imgW / ar;
+        if (imgH > maxImgH) {
+          imgH = maxImgH;
+          imgW = imgH * ar;
+        }
+        const ix = MARGIN + (CONTENT_W - imgW) / 2;
+        doc.image(shot.imagePath, ix, next, { width: imgW, height: imgH });
+        doc.roundedRect(ix - 0.5, next - 0.5, imgW + 1, imgH + 1, 2)
+          .lineWidth(0.6).strokeColor(RULE).stroke();
+        next += imgH + 10;
+      } catch {
+        doc.font('Helvetica').fontSize(8).fillColor(FAINT)
+          .text('(flow-field image unavailable)', MARGIN, next, { width: CONTENT_W });
+        next = doc.y + 8;
+      }
+    }
+
+    if (shot.caption) {
+      doc.font('Helvetica').fontSize(9).fillColor('#374151')
+        .text(shot.caption, MARGIN, next, { width: CONTENT_W, align: 'left' });
+    }
+  }
+}
+
 function drawDefinitions(doc, journey, y) {
   const th = journey.metricThresholds || {};
   const t = th.dwellSec ?? 5;
@@ -547,15 +652,22 @@ function drawFooter(doc, pageNo) {
 /**
  * @returns {PDFDocument} a streaming document; the caller pipes and ends it.
  */
-export function renderEsselungaExecutivePdf(journey, { venueName }) {
+export function renderEsselungaExecutivePdf(journey, { venueName, flowFieldShots } = {}) {
   const doc = new PDFDocument({ size: 'A4', margin: MARGIN, autoFirstPage: false, bufferPages: true });
 
+  const timeZone = journey.storeHours?.timeZone || 'Europe/Rome';
   doc.addPage();
   let y = drawHeader(doc, {
     venueName,
-    rangeLabel: formatRange(journey.range.startTs, journey.range.endTs),
+    rangeLabel: formatRange(journey.range.startTs, journey.range.endTs, timeZone),
     generatedAt: new Date(journey.generatedAt).toLocaleString('en-GB', {
-      day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', hour12: false,
+      timeZone,
+      day: 'numeric',
+      month: 'short',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
     }),
   });
 
@@ -575,6 +687,11 @@ export function renderEsselungaExecutivePdf(journey, { venueName }) {
   }
   y = drawCheckout(doc, journey, y + 6);
   drawDefinitions(doc, journey, y + 6);
+
+  // Optional wind-map appendix — full page per frame so captions sit under the figure.
+  if (flowFieldShots?.length) {
+    drawFlowField(doc, flowFieldShots);
+  }
 
   const range = doc.bufferedPageRange();
   for (let i = 0; i < range.count; i++) {

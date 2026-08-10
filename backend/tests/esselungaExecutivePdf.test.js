@@ -10,7 +10,11 @@
  * Run: node backend/tests/esselungaExecutivePdf.test.js
  */
 import assert from 'node:assert/strict';
-import { renderEsselungaExecutivePdf, executivePdfFileName } from '../services/executive/EsselungaExecutivePdf.js';
+import {
+  renderEsselungaExecutivePdf,
+  executivePdfFileName,
+  formatRange,
+} from '../services/executive/EsselungaExecutivePdf.js';
 
 const HOUR = 3600_000;
 const END = Date.parse('2026-08-06T18:00:00Z');
@@ -171,6 +175,27 @@ const check = (name, fn) => fn()
     const name = executivePdfFileName('TREVIGLIO Schematico', fullPayload());
     assert.match(name, /^esselunga-executive-treviglio-schematico-\d{4}-\d{2}-\d{2}\.pdf$/, name);
     assert.ok(!/[/\\\s]/.test(name), `unsafe characters in ${name}`);
+  });
+
+  await check('daily window in Rome TZ reads as one day with start and end times', async () => {
+    // Venue midnight → 14:38 on 6 Aug — in UTC that is 5 Aug 22:00 → 6 Aug 12:38,
+    // which used to render as "5 Aug – 6 Aug" with no clocks.
+    const start = Date.parse('2026-08-05T22:00:00.000Z');
+    const end = Date.parse('2026-08-06T12:38:00.000Z');
+    const label = formatRange(start, end, 'Europe/Rome');
+    assert.match(label, /6 August 2026/, label);
+    assert.match(label, /00:00/, label);
+    assert.match(label, /14:38/, label);
+    assert.ok(!label.includes('5 Aug'), `must not look like two bare dates: ${label}`);
+  });
+
+  await check('multi-day windows always keep times so the span is unambiguous', async () => {
+    const start = Date.parse('2026-08-05T06:00:00.000Z'); // 08:00 Rome
+    const end = Date.parse('2026-08-06T12:38:00.000Z');   // 14:38 Rome
+    const label = formatRange(start, end, 'Europe/Rome');
+    assert.match(label, /5 Aug 2026 08:00/, label);
+    assert.match(label, /6 Aug 2026 14:38/, label);
+    assert.match(label, /→/, label);
   });
 
   // Layout defects survive every assertion above — the only way to catch a
