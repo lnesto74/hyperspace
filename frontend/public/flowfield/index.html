@@ -60,6 +60,9 @@
   #legend-bar { height: 7px; border-radius: 3px; }
   .legend-ends { display: flex; justify-content: space-between; font-size: 10px;
     color: var(--fg-dim); margin-top: 3px; font-variant-numeric: tabular-nums; }
+  #legend-cats { display: none; grid-template-columns: 1fr 1fr; gap: 4px 8px; margin-top: 4px; }
+  .legend-cat { display: flex; align-items: center; gap: 5px; font-size: 10px; color: var(--fg-dim); }
+  .legend-cat .swatch { width: 9px; height: 9px; border-radius: 2px; flex: 0 0 auto; }
 
   #hud { top: 10px; right: 10px; width: 220px; display: none; z-index: 2; }
   .hud-row { display: flex; justify-content: space-between; gap: 10px; padding: 2px 0; font-size: 11px;
@@ -124,7 +127,14 @@
         <option value="speed">Walking speed</option>
         <option value="purity">Directional purity</option>
         <option value="convergence">Convergence</option>
+        <optgroup label="Analysis">
+          <option value="regime">Behaviour regime</option>
+          <option value="shift_me">Shift morning → evening</option>
+          <option value="shift_ww">Shift weekday → weekend</option>
+          <option value="outlier">Outlier (dwell / traffic)</option>
+        </optgroup>
       </select>
+      <div class="note" style="margin-top:4px">Analysis modes classify aisle behaviour, time shifts, and engagement traps.</div>
     </div>
 
     <div class="field">
@@ -186,6 +196,7 @@
   <div id="legend" class="panel">
     <div id="legend-label">Dwell (s)</div>
     <div id="legend-bar"></div>
+    <div id="legend-cats"></div>
     <div class="legend-ends"><span id="legend-lo">0</span><span id="legend-hi"></span></div>
   </div>
 

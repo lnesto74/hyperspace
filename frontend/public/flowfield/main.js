@@ -3,7 +3,16 @@ import { OrbitControls } from './vendor/OrbitControls.js';
 // Dynamic, cache-busted: the field module is edited alongside the extractor and
 // the browser otherwise pins the first version it saw for the whole session.
 const bust = `?t=${Date.now()}`;
-const { loadField, heatRamp, divergingRamp } = await import('./field.js' + bust);
+const {
+  loadField,
+  heatRamp,
+  divergingRamp,
+  regimeRamp,
+  REGIME_CATEGORIES,
+  cellMapFromFieldJson,
+  attachShiftScalar,
+  boostOutliersWithPurityBreak,
+} = await import('./field.js' + bust);
 
 const params = {
   scalar: 'dwell',
@@ -171,6 +180,7 @@ function heightAtCell(k) {
 
 function rebuildTerrain() {
   const sc = field.scalars[params.scalar];
+  if (!sc) return;
   const extent = sc.signed ? Math.max(Math.abs(sc.min ?? 0), Math.abs(sc.max ?? 1)) || 1 : 0;
   const col = new THREE.Color();
   for (let k = 0; k < vertCount; k++) {
@@ -178,16 +188,20 @@ function rebuildTerrain() {
     positions[k * 3 + 1] = params.showTerrain ? heightAtCell(k) : 0;
     let r = 0.04, g = 0.05, b = 0.07;
     if (sup > 0.02) {
-      const { h, s, l } = sc.signed
-        ? divergingRamp(sc.data[k] / extent)
-        : heatRamp(sc.data[k] / (sc.max || 1));
+      const { h, s, l } = sc.categorical
+        ? regimeRamp(sc.data[k])
+        : sc.signed
+          ? divergingRamp(sc.data[k] / extent)
+          : heatRamp(sc.data[k] / (sc.max || 1));
       col.setHSL(h, s, l);
       // Lift the bottom of the ramp: a corridor people walk through has ~0 dwell
       // and would otherwise render as black, indistinguishable from floor the
       // sensor never saw. Measured-and-quiet must not look like unmeasured.
-      r = 0.10 + col.r * 0.90;
-      g = 0.12 + col.g * 0.88;
-      b = 0.16 + col.b * 0.84;
+      // Categorical regimes keep fuller saturation so classes stay distinct.
+      const lift = sc.categorical ? 0.04 : 0.10;
+      r = lift + col.r * (1 - lift);
+      g = lift + col.g * (1 - lift * 0.9);
+      b = lift + col.b * (1 - lift * 0.7);
     }
     colors[k * 3] = r; colors[k * 3 + 1] = g; colors[k * 3 + 2] = b;
   }
@@ -438,11 +452,35 @@ renderer.domElement.addEventListener('pointermove', (e) => {
   updateHud();
 });
 
+const REGIME_NOTE = {
+  0: 'Mixed / quiet — no dominant behaviour class',
+  1: 'Through-route — high motion, low dwell',
+  2: 'Dwell node — top engagement / queueing',
+  3: 'One-way spine — directional purity ≥ 0.55',
+  4: 'Two-way aisle — milling / opposing flows',
+};
+
 function updateHud() {
   const el = document.getElementById('hud');
   if (hoverCell == null || field.support[hoverCell] <= 0) { el.style.display = 'none'; return; }
   const k = hoverCell;
   const deg = ((Math.atan2(field.meanY[k], field.meanX[k]) * 180 / Math.PI) + 360) % 360;
+  const rid = field.regime ? (field.regime[k] | 0) : 0;
+  const sc = field.scalars[params.scalar];
+  let extra = '';
+  if (params.scalar === 'regime') {
+    extra = `<div class="hud-row"><span>Regime</span><b>${REGIME_CATEGORIES[rid]?.label || '—'}</b></div>`;
+  } else if (params.scalar === 'outlier') {
+    extra = `<div class="hud-row"><span>Outlier score</span><b>${(field.outlier[k] || 0).toFixed(2)}</b></div>`;
+  } else if (sc?.signed && sc.dwellDelta) {
+    const dFoot = sc.data[k];
+    const dDwell = sc.dwellDelta[k];
+    const pBr = sc.purityBreak?.[k] || 0;
+    extra = `
+      <div class="hud-row"><span>Δ footfall</span><b>${dFoot >= 0 ? '+' : ''}${(dFoot * 100).toFixed(0)}%</b></div>
+      <div class="hud-row"><span>Δ dwell</span><b>${dDwell >= 0 ? '+' : ''}${(dDwell * 100).toFixed(0)}%</b></div>
+      <div class="hud-row"><span>Purity break</span><b>${pBr.toFixed(2)}</b></div>`;
+  }
   el.style.display = 'block';
   el.innerHTML = `
     <div class="hud-row"><span>Footfall</span><b>${Math.round(field.traffic[k])} tracks</b></div>
@@ -450,11 +488,32 @@ function updateHud() {
     <div class="hud-row"><span>Walking speed</span><b>${field.speed[k].toFixed(2)} m/s</b></div>
     <div class="hud-row"><span>Directional purity</span><b>${field.purity[k].toFixed(2)}</b></div>
     <div class="hud-row"><span>Net heading</span><b>${deg.toFixed(0)}&deg;</b></div>
-    <div class="hud-note">${field.purity[k] < 0.25 ? 'Two-way / milling — a mean arrow would cancel here' : 'Directional flow'}</div>`;
+    ${extra}
+    <div class="hud-note">${params.scalar === 'regime' ? (REGIME_NOTE[rid] || '')
+      : field.purity[k] < 0.25 ? 'Two-way / milling — a mean arrow would cancel here' : 'Directional flow'}</div>`;
 }
 
 function updateLegend() {
   const sc = field.scalars[params.scalar];
+  if (!sc) return;
+  const bar = document.getElementById('legend-bar');
+  const cats = document.getElementById('legend-cats');
+  const ends = document.querySelector('.legend-ends');
+  if (sc.categorical) {
+    bar.style.display = 'none';
+    if (ends) ends.style.display = 'none';
+    if (cats) {
+      cats.style.display = 'grid';
+      cats.innerHTML = (sc.categories || REGIME_CATEGORIES).map((c) =>
+        `<div class="legend-cat"><span class="swatch" style="background:${c.color}"></span>${c.label}</div>`
+      ).join('');
+    }
+    document.getElementById('legend-label').textContent = sc.label;
+    return;
+  }
+  bar.style.display = 'block';
+  if (ends) ends.style.display = 'flex';
+  if (cats) { cats.style.display = 'none'; cats.innerHTML = ''; }
   const extent = sc.signed ? Math.max(Math.abs(sc.min ?? 0), Math.abs(sc.max ?? 1)) || 1 : 0;
   const stops = [];
   for (let i = 0; i <= 24; i++) {
@@ -462,19 +521,48 @@ function updateLegend() {
     const { h, s, l } = sc.signed ? divergingRamp(u * 2 - 1) : heatRamp(u);
     stops.push(`hsl(${(h * 360).toFixed(0)} ${(s * 100).toFixed(0)}% ${(l * 100).toFixed(0)}%) ${(u * 100).toFixed(0)}%`);
   }
-  document.getElementById('legend-bar').style.background = `linear-gradient(90deg, ${stops.join(',')})`;
+  bar.style.background = `linear-gradient(90deg, ${stops.join(',')})`;
   document.getElementById('legend-label').textContent = sc.signed
-    ? `${sc.label} \u2014 cyan = flows merging, red = flows splitting`
+    ? (params.scalar.startsWith('shift_')
+      ? `${sc.label} — cyan = loss, red = gain`
+      : `${sc.label} — cyan = flows merging, red = flows splitting`)
     : `${sc.label} (${sc.unit})`;
-  document.getElementById('legend-lo').textContent = sc.signed ? `\u2212${extent.toFixed(2)}` : '0';
+  document.getElementById('legend-lo').textContent = sc.signed
+    ? (params.scalar.startsWith('shift_') ? 'Earlier stronger' : `\u2212${extent.toFixed(2)}`)
+    : '0';
   document.getElementById('legend-hi').textContent = sc.signed
-    ? `+${extent.toFixed(2)}`
-    : Math.round(sc.max).toLocaleString();
+    ? (params.scalar.startsWith('shift_') ? 'Later stronger' : `+${extent.toFixed(2)}`)
+    : (sc.max <= 1 ? sc.max.toFixed(2) : Math.round(sc.max).toLocaleString());
+}
+
+// Companion slices for temporal-shift / purity-break overlays (lazy).
+let analysisPromise = null;
+async function ensureShiftAnalysis() {
+  if (field.scalars.shift_me && field.scalars.shift_ww) return;
+  if (!analysisPromise) {
+    analysisPromise = (async () => {
+      const ids = ['morning', 'evening', 'weekday', 'weekend'];
+      const payloads = await Promise.all(
+        ids.map((id) => fetch(`./slices/field_${id}.json` + bust).then((r) => r.json())),
+      );
+      const [morning, evening, weekday, weekend] = payloads.map(cellMapFromFieldJson);
+      attachShiftScalar(field, morning, evening, 'shift_me', 'Shift morning \u2192 evening');
+      attachShiftScalar(field, weekday, weekend, 'shift_ww', 'Shift weekday \u2192 weekend');
+      boostOutliersWithPurityBreak(field, morning, evening);
+    })();
+  }
+  await analysisPromise;
 }
 
 // ---------------------------------------------------------------------- wiring
 const bind = (id, fn, evt = 'input') => document.getElementById(id).addEventListener(evt, fn);
-bind('scalar', (e) => { params.scalar = e.target.value; rebuildTerrain(); }, 'change');
+bind('scalar', async (e) => {
+  params.scalar = e.target.value;
+  if (params.scalar === 'shift_me' || params.scalar === 'shift_ww' || params.scalar === 'outlier') {
+    await ensureShiftAnalysis();
+  }
+  rebuildTerrain();
+}, 'change');
 bind('terrainHeight', (e) => {
   params.terrainHeight = +e.target.value;
   document.getElementById('terrainHeightVal').textContent = params.terrainHeight.toFixed(1) + ' m';
@@ -595,17 +683,24 @@ function setExportView(name = 'overview') {
   controls.update();
 }
 
-if (bootQs.has('export')) {
+if (bootQs.has('export') || bootQs.get('scalar')) {
   const scalar = bootQs.get('scalar');
-  if (scalar && field.scalars[scalar]) {
+  if (scalar && (field.scalars[scalar] || scalar === 'shift_me' || scalar === 'shift_ww')) {
     params.scalar = scalar;
     const sel = document.getElementById('scalar');
     if (sel) sel.value = scalar;
+    if (scalar === 'shift_me' || scalar === 'shift_ww' || scalar === 'outlier') {
+      await ensureShiftAnalysis();
+    }
   }
-  setExportView(bootQs.get('view') || 'overview');
-  rebuildTerrain();
-  // Pause after trails have a moment to form, so report frames are sharp.
-  setTimeout(() => { params.paused = true; }, 4500);
+  if (bootQs.has('export')) {
+    setExportView(bootQs.get('view') || 'overview');
+    rebuildTerrain();
+    // Pause after trails have a moment to form, so report frames are sharp.
+    setTimeout(() => { params.paused = true; }, 4500);
+  } else {
+    rebuildTerrain();
+  }
 }
 
 // Exposed so the scene can be poked from the devtools console while tuning.
