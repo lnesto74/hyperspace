@@ -261,7 +261,7 @@ function drawKpiCards(doc, items, y) {
       // Measured with the font that just drew it, so the two never collide.
       const labelW = doc.widthOfString(label);
       doc.font('Helvetica').fontSize(6.5).fillColor(FAINT)
-        .text('vs last week', x + 17 + labelW + 4, cy + 44, { lineBreak: false });
+        .text(`vs ${kpi.compareLabel || 'last week'}`, x + 17 + labelW + 4, cy + 44, { lineBreak: false });
     }
 
     doc.font('Helvetica').fontSize(6).fillColor(FAINT)
