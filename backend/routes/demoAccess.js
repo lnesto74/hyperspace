@@ -3,7 +3,31 @@ import { randomBytes } from 'crypto';
 import { requireAuth, requireSuperadmin } from '../middleware/auth.js';
 import { createMapperProjectForToken } from './shelfMapper.js';
 
-const VALID_LINK_TYPES = new Set(['story', 'dashboard', 'mapper']);
+const VALID_LINK_TYPES = new Set(['story', 'dashboard', 'mapper', 'custom-dashboard']);
+const VALID_WIDGET_IDS = new Set([
+  'ops-hero-kpi-strip',
+  'ops-alerts-panel',
+  'reporting-kpi-strip',
+  'reporting-insights-panel',
+  'exec-store-health-pillars',
+  'exec-highlight-chips',
+  'category-visits-panel',
+  'zone-performance-map',
+  'peble-screen-campaign-map',
+  'campaign-ranking-table',
+  'exec-header-headline',
+  'exec-action-insights',
+  'activity-timeline-chart',
+  'floor-visual-toggle',
+  'journey-signals-panel',
+  'fresco-department-cards',
+  'aisle-stat-stack',
+  'checkout-panel',
+  'media-ring-gauges',
+]);
+const VALID_COL_SPANS = new Set([3, 4, 6, 8, 12]);
+const VALID_ROW_SPANS = new Set([1, 2, 3]);
+const MAX_PAYLOAD_CHARS = 80_000;
 
 /**
  * Demo access tokens.
@@ -12,6 +36,7 @@ const VALID_LINK_TYPES = new Set(['story', 'dashboard', 'mapper']);
  * `?demo=<token>` validates the token here (public endpoint) and, if valid,
  * the frontend skips the Google login. Story links auto-start the guided tour;
  * dashboard links open the Esselunga Executive reporting view;
+ * custom-dashboard links open a published My-dashboards board (view-only);
  * mapper links open the shelf-mapping tool at /m/<token>.
  */
 export default function demoAccessRoutes(db) {
@@ -20,17 +45,55 @@ export default function demoAccessRoutes(db) {
   function normalizeLinkType(raw) {
     if (raw === 'dashboard') return 'dashboard';
     if (raw === 'mapper') return 'mapper';
+    if (raw === 'custom-dashboard') return 'custom-dashboard';
     return 'story';
+  }
+
+  function sanitizeLayout(raw) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+    if (!Array.isArray(raw.items)) return null;
+    const items = [];
+    for (const it of raw.items.slice(0, 40)) {
+      if (!it || typeof it !== 'object') continue;
+      const widgetId = String(it.widgetId || '');
+      if (!VALID_WIDGET_IDS.has(widgetId)) continue;
+      const colSpan = Number(it.colSpan);
+      const rowSpan = Number(it.rowSpan);
+      if (!VALID_COL_SPANS.has(colSpan) || !VALID_ROW_SPANS.has(rowSpan)) continue;
+      items.push({
+        instanceId: String(it.instanceId || `${widgetId}-${items.length}`).slice(0, 80),
+        widgetId,
+        colSpan,
+        rowSpan,
+      });
+    }
+    return {
+      id: String(raw.id || `dash-${Date.now().toString(36)}`).slice(0, 80),
+      name: String(raw.name || 'Shared dashboard').slice(0, 120),
+      updatedAt: Number(raw.updatedAt) || Date.now(),
+      items,
+    };
+  }
+
+  function parsePayload(raw) {
+    if (!raw) return null;
+    try {
+      return typeof raw === 'string' ? JSON.parse(raw) : raw;
+    } catch {
+      return null;
+    }
   }
 
   function formatRow(row) {
     const expired = !!row.expires_at && new Date(row.expires_at).getTime() < Date.now();
     const linkType = normalizeLinkType(row.link_type);
+    const payload = parsePayload(row.payload);
     return {
       token: row.token,
       label: row.label,
       venueId: row.venue_id,
       linkType,
+      layoutName: payload?.layout?.name || null,
       createdBy: row.created_by,
       createdAt: row.created_at,
       expiresAt: row.expires_at,
@@ -61,12 +124,18 @@ export default function demoAccessRoutes(db) {
         /* non-fatal */
       }
 
-      res.json({
+      const linkType = normalizeLinkType(row.link_type);
+      const payload = parsePayload(row.payload);
+      const body = {
         valid: true,
         venueId: row.venue_id || null,
         label: row.label || null,
-        linkType: normalizeLinkType(row.link_type),
-      });
+        linkType,
+      };
+      if (linkType === 'custom-dashboard' && payload?.layout) {
+        body.layout = payload.layout;
+      }
+      res.json(body);
     } catch (error) {
       console.error('[DemoAccess] validate error:', error);
       res.status(500).json({ valid: false, error: 'Validation failed' });
@@ -88,10 +157,22 @@ export default function demoAccessRoutes(db) {
 
   router.post('/tokens', (req, res) => {
     try {
-      const { label, venueId, expiresInDays, linkType: rawLinkType } = req.body || {};
+      const { label, venueId, expiresInDays, linkType: rawLinkType, layout: rawLayout } = req.body || {};
       const linkType = VALID_LINK_TYPES.has(rawLinkType) ? rawLinkType : 'story';
-      if (linkType === 'dashboard' && !venueId) {
+      if ((linkType === 'dashboard' || linkType === 'custom-dashboard') && !venueId) {
         return res.status(400).json({ error: 'venueId is required for dashboard public links' });
+      }
+
+      let payloadJson = null;
+      if (linkType === 'custom-dashboard') {
+        const layout = sanitizeLayout(rawLayout);
+        if (!layout || layout.items.length === 0) {
+          return res.status(400).json({ error: 'layout with at least one widget is required' });
+        }
+        payloadJson = JSON.stringify({ layout });
+        if (payloadJson.length > MAX_PAYLOAD_CHARS) {
+          return res.status(400).json({ error: 'layout payload too large' });
+        }
       }
 
       const token = randomBytes(18).toString('hex');
@@ -103,8 +184,8 @@ export default function demoAccessRoutes(db) {
       }
 
       db.prepare(`
-        INSERT INTO demo_tokens (token, label, venue_id, created_by, expires_at, link_type)
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO demo_tokens (token, label, venue_id, created_by, expires_at, link_type, payload)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
       `).run(
         token,
         (label && String(label).trim()) || null,
@@ -112,6 +193,7 @@ export default function demoAccessRoutes(db) {
         req.user?.email || null,
         expiresAt,
         linkType,
+        payloadJson,
       );
 
       if (linkType === 'mapper') {
@@ -137,7 +219,7 @@ export default function demoAccessRoutes(db) {
       res.json({ ok: true });
     } catch (error) {
       console.error('[DemoAccess] revoke error:', error);
-      res.status(500).json({ error: 'Failed to revoke demo token' });
+      res.status(500).json({ error: 'Failed to revoke token' });
     }
   });
 

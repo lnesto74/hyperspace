@@ -32,9 +32,10 @@ import EsselungaExecutiveViewport from './esselunga/EsselungaExecutiveViewport';
 import ZoneAuditViewport from './components/ZoneAuditViewport';
 import type { EsselungaJourneyPayload, ExecutiveVariant, MetricThresholdSettings } from './esselunga/types';
 import type { DoohScreenMarker } from '../../components/shared/FloorPlanMiniMap';
-import { getDemoVenueId } from '../../config/demo';
+import { getDemoVenueId, getDemoLinkType, getDemoPublishedLayout } from '../../config/demo';
 import DashboardBuilderViewport from './dashboardBuilder/DashboardBuilderViewport';
 import { CUSTOM_DASHBOARD_PERSONA } from './dashboardBuilder/types';
+import type { DashboardLayout } from './dashboardBuilder/types';
 import type { DashboardDataContext } from './dashboardBuilder/WidgetRenderer';
 
 type TimeRange = '1h' | '24h' | '7d' | '30d' | 'custom';
@@ -98,9 +99,16 @@ export default function BusinessReportingPage({ onClose, publicDashboard = false
   const { isSuperadmin } = useAuth();
   const { openHeatmapForCategory, openHeatmapModal } = useHeatmap();
   const pinnedVenueId = publicDashboard ? getDemoVenueId() : null;
+  const publicCustomLayout = useMemo<DashboardLayout | null>(
+    () => (publicDashboard && getDemoLinkType() === 'custom-dashboard' ? getDemoPublishedLayout() : null),
+    [publicDashboard],
+  );
+  const isPublicCustomBoard = publicDashboard && !!publicCustomLayout;
   const [selectedVenueId, setSelectedVenueId] = useState<string | null>(pinnedVenueId || venue?.id || null);
   const [selectedPersonaId, setSelectedPersonaId] = useState<string>(
-    publicDashboard ? ESSELUNGA_PERSONA : PERSONAS[0].id,
+    publicDashboard
+      ? (getDemoLinkType() === 'custom-dashboard' ? CUSTOM_DASHBOARD_PERSONA : ESSELUNGA_PERSONA)
+      : PERSONAS[0].id,
   );
   const [selectedTimeRange, setSelectedTimeRange] = useState<TimeRange>(publicDashboard ? '7d' : '24h');
   const [opsGrain, setOpsGrain] = useState<TimelineGrain>('hour');
@@ -539,7 +547,11 @@ export default function BusinessReportingPage({ onClose, publicDashboard = false
             </>
           )}
           <h1 className="text-white text-sm font-semibold truncate">
-            {publicDashboard ? `Executive Dashboard · ${selectedVenueName}` : 'Business Reporting'}
+            {isPublicCustomBoard
+              ? `${publicCustomLayout?.name || 'Shared dashboard'} · ${selectedVenueName}`
+              : publicDashboard
+                ? `Executive Dashboard · ${selectedVenueName}`
+                : 'Business Reporting'}
           </h1>
         </div>
 
@@ -630,7 +642,11 @@ export default function BusinessReportingPage({ onClose, publicDashboard = false
           {!loading && !error && (
             <>
               {showCustomDashboard && customDashboardData ? (
-                <DashboardBuilderViewport data={customDashboardData} />
+                <DashboardBuilderViewport
+                  data={customDashboardData}
+                  readOnly={isPublicCustomBoard}
+                  fixedLayout={publicCustomLayout}
+                />
               ) : showMeasurementAudit ? (
                 <ZoneAuditViewport
                   venueId={selectedVenueId!}

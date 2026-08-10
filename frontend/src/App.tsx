@@ -48,7 +48,7 @@ import CompaniesPage from './components/admin/CompaniesPage'
 import StoryMode from './components/storymode/StoryMode'
 import StoryNarrativeLayout from './components/storymode/StoryNarrativeLayout'
 import MobileTaskPage from './features/opsDispatch/MobileTaskPage'
-import { isDemo, isDashboardDemo, getDemoVenueId, isDemoActivated, getPendingDemoToken, activateDemoFromToken, hasDemoIntent, getDemoLinkType } from './config/demo'
+import { isDemo, isPublicReportingDemo, getDemoVenueId, isDemoActivated, getPendingDemoToken, activateDemoFromToken, hasDemoIntent, getDemoLinkType } from './config/demo'
 import DemoLinksModal from './components/admin/DemoLinksModal'
 
 // App view mode context
@@ -436,7 +436,7 @@ function MainApp() {
   const { venue, loadVenue } = useVenue()
   const { applyLiveTrackDelivery, setInterpolation } = useTrackingActions()
   const [viewMode, setViewModeInternal] = useState<ViewMode>(() =>
-    isDashboardDemo() ? 'businessReporting' : 'main',
+    isPublicReportingDemo() ? 'businessReporting' : 'main',
   )
   const [showLanding, setShowLanding] = useState(() => !isDemo())
   const [launchPadOpen, setLaunchPadOpen] = useState(false)
@@ -465,7 +465,7 @@ function MainApp() {
     demoBootstrappedRef.current = true
     setShowLanding(false)
 
-    if (isDashboardDemo()) {
+    if (isPublicReportingDemo()) {
       ;(async () => {
         const venueId = getDemoVenueId()
         if (venueId) {
@@ -496,7 +496,7 @@ function MainApp() {
 
   // Auto-start Story Mode for story demo links once the venue is loaded.
   useEffect(() => {
-    if (!isDemo() || isDashboardDemo() || demoStoryStartedRef.current || !venue?.id) return
+    if (!isDemo() || isPublicReportingDemo() || demoStoryStartedRef.current || !venue?.id) return
     demoStoryStartedRef.current = true
     // Keep the DWG wireframe in sync (same as a FloorplanPanel selection) so the
     // Store Awakening intro renders on the real floorplan.
@@ -682,7 +682,7 @@ function MainApp() {
         {viewMode === 'businessReporting' && (
           <BusinessReportingPage
             onClose={() => setViewMode('main')}
-            publicDashboard={isDashboardDemo()}
+            publicDashboard={isPublicReportingDemo()}
           />
         )}
         {/* Profit Radar View */}
@@ -738,7 +738,7 @@ function MainApp() {
         </StoryNarrativeLayout>
 
         {/* Demo storytelling overlay — story links only; never on public dashboard */}
-        {!isDashboardDemo() && (
+        {!isPublicReportingDemo() && (
           <StoryMode
             viewMode={viewMode}
             setViewMode={setViewMode}
@@ -922,7 +922,11 @@ function DemoLinkGate() {
         setPhase('invalid')
         return
       }
-      setPhase(getDemoLinkType() === 'dashboard' ? 'dashboard' : 'story')
+      setPhase(
+        getDemoLinkType() === 'dashboard' || getDemoLinkType() === 'custom-dashboard'
+          ? 'dashboard'
+          : 'story',
+      )
     })()
     return () => { cancelled = true }
   }, [])
@@ -948,7 +952,7 @@ function App() {
   if (getPendingDemoToken()) {
     return <DemoLinkGate />
   }
-  if (isDashboardDemo()) {
+  if (isPublicReportingDemo()) {
     return (
       <PublicDashboardProviders>
         <PublicDashboardApp />
@@ -1017,7 +1021,7 @@ function AppGated() {
   }
 
   // Extra guard: never prompt login when a share session is active
-  if (hasDemoIntent() || isDashboardDemo()) {
+  if (hasDemoIntent() || isPublicReportingDemo()) {
     return <AuthenticatedApp />
   }
 

@@ -994,6 +994,7 @@ export function initDatabase() {
       use_count INTEGER NOT NULL DEFAULT 0,
       last_used_at TEXT,
       link_type TEXT NOT NULL DEFAULT 'story',
+      payload TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
@@ -1036,6 +1037,10 @@ export function initDatabase() {
     if (demoCols.length > 0 && !demoCols.map((c) => c.name).includes('link_type')) {
       db.exec("ALTER TABLE demo_tokens ADD COLUMN link_type TEXT NOT NULL DEFAULT 'story'");
       console.log('📦 Migration: Added link_type column to demo_tokens');
+    }
+    if (demoCols.length > 0 && !demoCols.map((c) => c.name).includes('payload')) {
+      db.exec('ALTER TABLE demo_tokens ADD COLUMN payload TEXT');
+      console.log('📦 Migration: Added payload column to demo_tokens');
     }
   } catch {
     /* table may not exist yet on fresh installs */

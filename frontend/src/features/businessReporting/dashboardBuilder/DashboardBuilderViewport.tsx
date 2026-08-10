@@ -1,4 +1,4 @@
-import { useMemo, useState, type DragEvent } from 'react';
+import { useEffect, useMemo, useState, type DragEvent } from 'react';
 import {
   LayoutDashboard,
   Plus,
@@ -7,7 +7,13 @@ import {
   GripVertical,
   Eye,
   Pencil,
+  Link2,
+  Copy,
+  Check,
+  X,
 } from 'lucide-react';
+import { useAuth } from '../../../context/AuthContext';
+import { API_BASE } from '../../../config/api';
 import { ALL_WIDGETS, getWidget } from './registry';
 import { DASHBOARD_TEMPLATES, cloneTemplate } from './templates';
 import {
@@ -37,16 +43,36 @@ function rowHeightPx(span: number) {
 
 export default function DashboardBuilderViewport({
   data,
+  readOnly = false,
+  fixedLayout = null,
 }: {
   data: DashboardDataContext;
+  /** Public share — canvas only, no library / inspector / edit chrome. */
+  readOnly?: boolean;
+  /** Published layout snapshot (overrides localStorage). */
+  fixedLayout?: DashboardLayout | null;
 }) {
-  const [layout, setLayout] = useState<DashboardLayout | null>(() => getActiveLayout());
-  const [editing, setEditing] = useState(true);
+  const { token: authToken, isSuperadmin } = useAuth();
+  const [layout, setLayout] = useState<DashboardLayout | null>(
+    () => fixedLayout ?? (readOnly ? null : getActiveLayout()),
+  );
+  const [editing, setEditing] = useState(!readOnly);
   const [kindFilter, setKindFilter] = useState<WidgetKind | 'all'>('all');
   const [query, setQuery] = useState('');
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const saved = listLayouts();
+  const [publishOpen, setPublishOpen] = useState(false);
+  const [publishLabel, setPublishLabel] = useState('');
+  const [publishExpires, setPublishExpires] = useState('30');
+  const [publishing, setPublishing] = useState(false);
+  const [publishedUrl, setPublishedUrl] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+  const [publishError, setPublishError] = useState<string | null>(null);
+  const saved = readOnly ? [] : listLayouts();
+
+  useEffect(() => {
+    if (fixedLayout) setLayout(fixedLayout);
+  }, [fixedLayout]);
 
   const library = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -63,6 +89,7 @@ export default function DashboardBuilderViewport({
 
   const selected = layout?.items.find((i) => i.instanceId === selectedId) ?? null;
   const mapCount = layout?.items.filter((i) => getWidget(i.widgetId).isMap).length ?? 0;
+  const canEdit = !readOnly && editing;
 
   const flash = (msg: string) => {
     setNotice(msg);
@@ -77,6 +104,7 @@ export default function DashboardBuilderViewport({
   };
 
   const commit = (next: DashboardLayout, persist = false) => {
+    if (readOnly) return;
     setLayout(next);
     if (persist) {
       saveLayout(next);
@@ -85,6 +113,7 @@ export default function DashboardBuilderViewport({
   };
 
   const addWidget = (widgetId: WidgetId) => {
+    if (readOnly) return;
     const def = getWidget(widgetId);
     if (def.isMap && mapCount >= MAX_MAP_TILES) {
       flash(`At most ${MAX_MAP_TILES} map tiles per dashboard`);
@@ -103,12 +132,13 @@ export default function DashboardBuilderViewport({
   };
 
   const removeSelected = () => {
-    if (!layout || !selectedId) return;
+    if (!layout || !selectedId || readOnly) return;
     commit({ ...layout, items: layout.items.filter((i) => i.instanceId !== selectedId) });
     setSelectedId(null);
   };
 
   const applyTemplate = (templateId: string) => {
+    if (readOnly) return;
     const next = cloneTemplate(templateId);
     if (!next) return;
     commit(next);
@@ -123,12 +153,13 @@ export default function DashboardBuilderViewport({
 
   const onDropCanvas = (e: DragEvent) => {
     e.preventDefault();
+    if (readOnly) return;
     const widgetId = e.dataTransfer.getData('application/x-hs-widget') as WidgetId;
     if (widgetId && getWidget(widgetId)) addWidget(widgetId);
   };
 
   const moveItem = (instanceId: string, dir: -1 | 1) => {
-    if (!layout) return;
+    if (!layout || readOnly) return;
     const idx = layout.items.findIndex((i) => i.instanceId === instanceId);
     if (idx < 0) return;
     const j = idx + dir;
@@ -138,54 +169,119 @@ export default function DashboardBuilderViewport({
     commit({ ...layout, items });
   };
 
+  const openPublish = () => {
+    if (!layout?.items.length) {
+      flash('Add at least one widget before publishing');
+      return;
+    }
+    saveLayout(layout);
+    setPublishLabel(layout.name || 'My dashboard');
+    setPublishedUrl(null);
+    setPublishError(null);
+    setCopied(false);
+    setPublishOpen(true);
+  };
+
+  const publishBoard = async () => {
+    if (!layout || !authToken) return;
+    setPublishing(true);
+    setPublishError(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/demo-access/tokens`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${authToken}`,
+        },
+        body: JSON.stringify({
+          label: publishLabel.trim() || layout.name,
+          venueId: data.venueId,
+          linkType: 'custom-dashboard',
+          expiresInDays: publishExpires ? Number(publishExpires) : null,
+          layout,
+        }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        setPublishError(body?.error || 'Failed to publish link');
+        return;
+      }
+      const created = await res.json();
+      const url = `${window.location.origin}/?demo=${created.token}`;
+      setPublishedUrl(url);
+      try {
+        await navigator.clipboard.writeText(url);
+        setCopied(true);
+        window.setTimeout(() => setCopied(false), 2000);
+      } catch { /* clipboard may be blocked */ }
+    } catch {
+      setPublishError('Failed to publish link');
+    } finally {
+      setPublishing(false);
+    }
+  };
+
   return (
     <div className="space-y-3">
-      <div className="flex flex-wrap items-center gap-2 justify-between rounded-lg border border-gray-700/80 bg-gray-800/40 px-3 py-2">
-        <div className="flex items-center gap-2 min-w-0">
-          <LayoutDashboard className="w-4 h-4 text-cyan-400 shrink-0" />
-          <input
-            value={layout?.name ?? 'My dashboard'}
-            onChange={(e) => layout && commit({ ...layout, name: e.target.value })}
-            className="bg-transparent text-sm font-medium text-white border-b border-transparent focus:border-cyan-500/50 outline-none max-w-[220px]"
-            disabled={!editing}
-          />
-          {notice && <span className="text-[11px] text-cyan-300">{notice}</span>}
-        </div>
-        <div className="flex flex-wrap items-center gap-1.5">
-          <button
-            type="button"
-            onClick={() => setEditing((v) => !v)}
-            className="inline-flex items-center gap-1 px-2 py-1 text-xs rounded-md border border-gray-600 text-gray-300 hover:bg-gray-700/60"
-          >
-            {editing ? <Eye className="w-3 h-3" /> : <Pencil className="w-3 h-3" />}
-            {editing ? 'Preview' : 'Edit'}
-          </button>
-          <button
-            type="button"
-            onClick={() => layout && commit(layout, true)}
-            disabled={!layout}
-            className="inline-flex items-center gap-1 px-2 py-1 text-xs rounded-md bg-cyan-600/80 hover:bg-cyan-500 text-white disabled:opacity-40"
-          >
-            <Save className="w-3 h-3" /> Save
-          </button>
-          {layout && (
+      {!readOnly && (
+        <div className="flex flex-wrap items-center gap-2 justify-between rounded-lg border border-gray-700/80 bg-gray-800/40 px-3 py-2">
+          <div className="flex items-center gap-2 min-w-0">
+            <LayoutDashboard className="w-4 h-4 text-cyan-400 shrink-0" />
+            <input
+              value={layout?.name ?? 'My dashboard'}
+              onChange={(e) => layout && commit({ ...layout, name: e.target.value })}
+              className="bg-transparent text-sm font-medium text-white border-b border-transparent focus:border-cyan-500/50 outline-none max-w-[220px]"
+              disabled={!canEdit}
+            />
+            {notice && <span className="text-[11px] text-cyan-300">{notice}</span>}
+          </div>
+          <div className="flex flex-wrap items-center gap-1.5">
             <button
               type="button"
-              onClick={() => {
-                deleteLayout(layout.id);
-                setLayout(getActiveLayout());
-                setSelectedId(null);
-                flash('Dashboard deleted');
-              }}
-              className="inline-flex items-center gap-1 px-2 py-1 text-xs rounded-md border border-gray-600 text-gray-400 hover:text-rose-300"
+              onClick={() => setEditing((v) => !v)}
+              className="inline-flex items-center gap-1 px-2 py-1 text-xs rounded-md border border-gray-600 text-gray-300 hover:bg-gray-700/60"
             >
-              <Trash2 className="w-3 h-3" />
+              {editing ? <Eye className="w-3 h-3" /> : <Pencil className="w-3 h-3" />}
+              {editing ? 'Preview' : 'Edit'}
             </button>
-          )}
+            <button
+              type="button"
+              onClick={() => layout && commit(layout, true)}
+              disabled={!layout}
+              className="inline-flex items-center gap-1 px-2 py-1 text-xs rounded-md bg-cyan-600/80 hover:bg-cyan-500 text-white disabled:opacity-40"
+            >
+              <Save className="w-3 h-3" /> Save
+            </button>
+            {isSuperadmin && (
+              <button
+                type="button"
+                onClick={openPublish}
+                disabled={!layout?.items.length}
+                className="inline-flex items-center gap-1 px-2 py-1 text-xs rounded-md border border-cyan-500/40 text-cyan-200 hover:bg-cyan-500/10 disabled:opacity-40"
+                title="Publish a view-only public link (like Demo Links)"
+              >
+                <Link2 className="w-3 h-3" /> Publish
+              </button>
+            )}
+            {layout && (
+              <button
+                type="button"
+                onClick={() => {
+                  deleteLayout(layout.id);
+                  setLayout(getActiveLayout());
+                  setSelectedId(null);
+                  flash('Dashboard deleted');
+                }}
+                className="inline-flex items-center gap-1 px-2 py-1 text-xs rounded-md border border-gray-600 text-gray-400 hover:text-rose-300"
+              >
+                <Trash2 className="w-3 h-3" />
+              </button>
+            )}
+          </div>
         </div>
-      </div>
+      )}
 
-      {editing && (
+      {canEdit && (
         <div className="flex flex-wrap gap-1.5">
           <span className="text-[11px] text-gray-500 self-center mr-1">Templates</span>
           {DASHBOARD_TEMPLATES.map((t) => (
@@ -224,8 +320,8 @@ export default function DashboardBuilderViewport({
         </div>
       )}
 
-      <div className={`grid gap-3 ${editing ? 'lg:grid-cols-[240px_1fr_220px]' : 'grid-cols-1'}`}>
-        {editing && (
+      <div className={`grid gap-3 ${canEdit ? 'lg:grid-cols-[240px_1fr_220px]' : 'grid-cols-1'}`}>
+        {canEdit && (
           <aside className="rounded-lg border border-gray-700/80 bg-gray-800/40 p-2 space-y-2 max-h-[70vh] overflow-y-auto">
             <div className="text-[11px] font-semibold text-white px-1">Component library</div>
             <input
@@ -281,27 +377,31 @@ export default function DashboardBuilderViewport({
         )}
 
         <main
-          onDragOver={(e) => editing && e.preventDefault()}
-          onDrop={editing ? onDropCanvas : undefined}
+          onDragOver={(e) => canEdit && e.preventDefault()}
+          onDrop={canEdit ? onDropCanvas : undefined}
           className={`min-h-[420px] rounded-lg border ${
-            editing ? 'border-dashed border-gray-600 bg-gray-900/20' : 'border-transparent'
+            canEdit ? 'border-dashed border-gray-600 bg-gray-900/20' : 'border-transparent'
           } p-2`}
         >
           {!layout?.items.length ? (
             <div className="h-full min-h-[360px] flex flex-col items-center justify-center gap-3 text-center px-4">
-              <p className="text-sm text-gray-300">Start from a template or drag widgets here</p>
-              <div className="flex flex-wrap gap-2 justify-center">
-                {DASHBOARD_TEMPLATES.filter((t) => t.id !== 'tpl-blank').map((t) => (
-                  <button
-                    key={t.id}
-                    type="button"
-                    onClick={() => applyTemplate(t.id)}
-                    className="px-3 py-1.5 text-xs rounded-md bg-cyan-600/80 text-white hover:bg-cyan-500"
-                  >
-                    {t.name}
-                  </button>
-                ))}
-              </div>
+              <p className="text-sm text-gray-300">
+                {readOnly ? 'This shared board has no widgets.' : 'Start from a template or drag widgets here'}
+              </p>
+              {!readOnly && (
+                <div className="flex flex-wrap gap-2 justify-center">
+                  {DASHBOARD_TEMPLATES.filter((t) => t.id !== 'tpl-blank').map((t) => (
+                    <button
+                      key={t.id}
+                      type="button"
+                      onClick={() => applyTemplate(t.id)}
+                      className="px-3 py-1.5 text-xs rounded-md bg-cyan-600/80 text-white hover:bg-cyan-500"
+                    >
+                      {t.name}
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
           ) : (
             <div className="grid grid-cols-12 gap-2">
@@ -315,10 +415,10 @@ export default function DashboardBuilderViewport({
                       gridColumn: `span ${item.colSpan} / span ${item.colSpan}`,
                       minHeight: rowHeightPx(item.rowSpan),
                     }}
-                    className={`relative ${editing && selectedTile ? 'ring-1 ring-cyan-500/60 rounded-lg' : ''}`}
-                    onClick={() => editing && setSelectedId(item.instanceId)}
+                    className={`relative ${canEdit && selectedTile ? 'ring-1 ring-cyan-500/60 rounded-lg' : ''}`}
+                    onClick={() => canEdit && setSelectedId(item.instanceId)}
                   >
-                    {editing && (
+                    {canEdit && (
                       <div className="absolute top-1 right-1 z-10 flex gap-0.5">
                         <button
                           type="button"
@@ -339,7 +439,7 @@ export default function DashboardBuilderViewport({
                     <div className="h-full" style={{ minHeight: rowHeightPx(item.rowSpan) - 4 }}>
                       <WidgetRenderer widgetId={item.widgetId} ctx={data} />
                     </div>
-                    {editing && (
+                    {canEdit && (
                       <div className="absolute bottom-1 left-1 text-[9px] text-gray-500 bg-gray-950/70 px-1 rounded">
                         {def.name}
                       </div>
@@ -351,7 +451,7 @@ export default function DashboardBuilderViewport({
           )}
         </main>
 
-        {editing && (
+        {canEdit && (
           <aside className="rounded-lg border border-gray-700/80 bg-gray-800/40 p-2 space-y-2 max-h-[70vh] overflow-y-auto">
             <div className="text-[11px] font-semibold text-white px-1">Inspector</div>
             {!selected ? (
@@ -405,6 +505,85 @@ export default function DashboardBuilderViewport({
           </aside>
         )}
       </div>
+
+      {publishOpen && (
+        <div
+          className="fixed inset-0 z-[80] flex items-center justify-center bg-black/60 backdrop-blur-sm"
+          onClick={() => setPublishOpen(false)}
+        >
+          <div
+            className="w-[28rem] max-w-[94vw] rounded-2xl border border-gray-700 bg-gray-900 shadow-2xl p-5 space-y-3"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-2">
+              <div>
+                <h3 className="text-sm font-semibold text-white flex items-center gap-2">
+                  <Link2 className="w-4 h-4 text-cyan-400" /> Publish public link
+                </h3>
+                <p className="text-[11px] text-gray-500 mt-1">
+                  View-only full page — no editor or inspector. Same Demo Links system.
+                </p>
+              </div>
+              <button type="button" onClick={() => setPublishOpen(false)} className="p-1 text-gray-500 hover:text-white">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div>
+              <label className="block text-[10px] uppercase tracking-wider text-gray-500 mb-1">Label</label>
+              <input
+                value={publishLabel}
+                onChange={(e) => setPublishLabel(e.target.value)}
+                className="w-full px-2.5 py-1.5 text-sm bg-gray-800 border border-gray-700 rounded-lg text-white"
+              />
+            </div>
+            <div>
+              <label className="block text-[10px] uppercase tracking-wider text-gray-500 mb-1">Expires</label>
+              <select
+                value={publishExpires}
+                onChange={(e) => setPublishExpires(e.target.value)}
+                className="w-full px-2.5 py-1.5 text-sm bg-gray-800 border border-gray-700 rounded-lg text-white"
+              >
+                <option value="">Never</option>
+                <option value="1">1 day</option>
+                <option value="7">7 days</option>
+                <option value="30">30 days</option>
+                <option value="90">90 days</option>
+              </select>
+            </div>
+            {publishedUrl ? (
+              <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 space-y-2">
+                <p className="text-xs text-emerald-300">Link ready — share this URL:</p>
+                <p className="text-[11px] font-mono text-gray-300 break-all">{publishedUrl}</p>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    try {
+                      await navigator.clipboard.writeText(publishedUrl);
+                      setCopied(true);
+                      window.setTimeout(() => setCopied(false), 2000);
+                    } catch { /* ignore */ }
+                  }}
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-md bg-gray-800 text-white border border-gray-600"
+                >
+                  {copied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                  {copied ? 'Copied' : 'Copy link'}
+                </button>
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={publishBoard}
+                disabled={publishing}
+                className="w-full flex items-center justify-center gap-2 px-3 py-2 text-sm font-medium rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white disabled:opacity-60"
+              >
+                <Link2 className="w-4 h-4" />
+                {publishing ? 'Generating…' : 'Generate public link'}
+              </button>
+            )}
+            {publishError && <p className="text-xs text-red-400">{publishError}</p>}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

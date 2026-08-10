@@ -2,13 +2,14 @@ import { useState, useEffect, useCallback } from 'react'
 import { useAuth } from '../../context/AuthContext'
 import { API_BASE } from '../../config/api'
 import type { DemoLinkType } from '../../config/demo'
-import { Film, Plus, Copy, Check, Trash2, X, Link2, LayoutDashboard, MapPin } from 'lucide-react'
+import { Film, Plus, Copy, Check, Trash2, X, Link2, LayoutDashboard, MapPin, LayoutGrid } from 'lucide-react'
 
 interface DemoToken {
   token: string
   label: string | null
   venueId: string | null
   linkType: DemoLinkType
+  layoutName?: string | null
   createdBy: string | null
   createdAt: string
   expiresAt: string | null
@@ -16,6 +17,11 @@ interface DemoToken {
   useCount: number
   lastUsedAt: string | null
   status: 'active' | 'expired' | 'revoked'
+}
+
+function normalizeListedType(t: DemoLinkType | string | undefined): DemoLinkType {
+  if (t === 'dashboard' || t === 'mapper' || t === 'custom-dashboard') return t
+  return 'story'
 }
 
 interface VenueOption {
@@ -56,7 +62,7 @@ export default function DemoLinksModal({ onClose }: { onClose: () => void }) {
         const rows = await tokRes.json()
         setTokens(rows.map((t: DemoToken) => ({
           ...t,
-          linkType: t.linkType === 'dashboard' ? 'dashboard' : t.linkType === 'mapper' ? 'mapper' : 'story',
+          linkType: normalizeListedType(t.linkType),
         })))
       } else setError('Failed to load demo links (superadmin required).')
       if (venueRes.ok) {
@@ -150,6 +156,13 @@ export default function DemoLinksModal({ onClose }: { onClose: () => void }) {
         </span>
       )
     }
+    if (type === 'custom-dashboard') {
+      return (
+        <span className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[9px] uppercase tracking-wider rounded font-semibold bg-teal-500/15 text-teal-300">
+          <LayoutGrid className="w-3 h-3" /> Custom board
+        </span>
+      )
+    }
     if (type === 'dashboard') {
       return (
         <span className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[9px] uppercase tracking-wider rounded font-semibold bg-cyan-500/15 text-cyan-400">
@@ -176,7 +189,7 @@ export default function DemoLinksModal({ onClose }: { onClose: () => void }) {
             <div>
               <h2 className="text-sm font-semibold text-white">Demo Links</h2>
               <p className="text-[11px] text-gray-500">
-                Shareable links — 3D story tour, executive dashboard, or shelf mapper
+                Shareable links — 3D story tour, executive dashboard, custom board, or shelf mapper
               </p>
             </div>
           </div>
@@ -273,6 +286,9 @@ export default function DemoLinksModal({ onClose }: { onClose: () => void }) {
                   : 'Generate demo link'}
           </button>
           {error && <p className="text-xs text-red-400">{error}</p>}
+          <p className="text-[11px] text-gray-500">
+            Custom boards are published from Business Reporting → My dashboards → Publish, then appear in the list below.
+          </p>
         </div>
 
         <div className="flex-1 overflow-y-auto px-5 py-4">
@@ -291,12 +307,14 @@ export default function DemoLinksModal({ onClose }: { onClose: () => void }) {
                   <div key={t.token} className={`flex items-center gap-3 px-3 py-2.5 rounded-xl border ${active ? 'border-gray-700 bg-gray-800/50' : 'border-gray-800 bg-gray-900/40 opacity-70'}`}>
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 flex-wrap">
-                        <span className="text-sm text-white font-medium truncate">{t.label || 'Untitled link'}</span>
+                        <span className="text-sm text-white font-medium truncate">{t.label || t.layoutName || 'Untitled link'}</span>
                         {typeBadge(t.linkType || 'story')}
                         {statusBadge(t.status)}
                       </div>
                       <p className="text-[11px] text-gray-500 truncate">
-                        {venueName(t.venueId)} · {t.useCount} open{t.useCount === 1 ? '' : 's'}
+                        {venueName(t.venueId)}
+                        {t.linkType === 'custom-dashboard' && t.layoutName ? ` · ${t.layoutName}` : ''}
+                        {' · '}{t.useCount} open{t.useCount === 1 ? '' : 's'}
                         {t.expiresAt ? ` · expires ${new Date(t.expiresAt).toLocaleDateString()}` : ' · no expiry'}
                       </p>
                       {active && (
