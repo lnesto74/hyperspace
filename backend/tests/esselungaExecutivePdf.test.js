@@ -65,7 +65,8 @@ function fullPayload() {
       ],
     },
     aisles: {
-      penetrationPct: 6.5, stoppingPowerPct: 54.4, passThroughPct: 45.6, bypassPct: 93.5,
+      penetrationPct: 6.5, stoppingPowerPct: 54.4, engagementRatePct: 28.1,
+      passThroughPct: 45.6, bypassPct: 93.5,
       dwellVisits: 1493, totalAisleVisits: 2746, aisleConversionPct: null,
       categoryGroups: [
         { category: 'Surgelati', visits: 1211, uniqueVisitors: 573, stoppingPowerPct: 70.2, avgDwellMin: 0.4, roiCount: 10 },

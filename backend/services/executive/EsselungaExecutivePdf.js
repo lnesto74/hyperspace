@@ -132,18 +132,22 @@ function sectionTitle(doc, text, y, note) {
 
 /**
  * Rows are arrays of strings. `align` is per column; widths are fractions of
- * the content width and must sum to 1.
+ * the content width and must sum to 1. Optional `x` / `contentW` place a
+ * narrow table in a page-1 column without a second table helper.
  */
-function table(doc, { headers, rows, widths, align = [], y, zebra = true }) {
+function table(doc, {
+  headers, rows, widths, align = [], y, zebra = true,
+  x: originX = MARGIN, contentW = CONTENT_W,
+}) {
   const colX = [];
-  let x = MARGIN;
+  let x = originX;
   for (const w of widths) {
     colX.push(x);
-    x += w * CONTENT_W;
+    x += w * contentW;
   }
 
   const cell = (text, i, cy, opts = {}) => {
-    const w = widths[i] * CONTENT_W - 6;
+    const w = widths[i] * contentW - 6;
     doc.text(String(text ?? '—'), colX[i] + 3, cy, {
       width: w,
       align: align[i] || 'left',
@@ -157,13 +161,13 @@ function table(doc, { headers, rows, widths, align = [], y, zebra = true }) {
   doc.font('Helvetica-Bold').fontSize(7.5).fillColor(MUTED);
   headers.forEach((h, i) => cell(h, i, cy));
   cy += 12;
-  doc.moveTo(MARGIN, cy - 3).lineTo(MARGIN + CONTENT_W, cy - 3)
+  doc.moveTo(originX, cy - 3).lineTo(originX + contentW, cy - 3)
     .lineWidth(0.5).strokeColor(RULE).stroke();
 
   doc.font('Helvetica').fontSize(8.5);
   rows.forEach((row, r) => {
     if (zebra && r % 2 === 1) {
-      doc.rect(MARGIN, cy - 3, CONTENT_W, 14).fillColor(PANEL).fill();
+      doc.rect(originX, cy - 3, contentW, 14).fillColor(PANEL).fill();
     }
     doc.fillColor(INK);
     row.forEach((v, i) => cell(v, i, cy));
@@ -322,17 +326,143 @@ function drawRhythm(doc, journey, y) {
       : undefined,
   );
 
+  // Shorter than the old 110pt chart so page 1 has room for the journey strip
+  // and the checkout / insights columns below.
   return barChart(doc, {
     x: MARGIN,
     y: next,
     width: CONTENT_W,
-    height: 110,
+    height: 90,
     labels: hourly.visitors.map((p) => p.label),
     series: [
       { name: 'Entrants', color: '#0891b2', data: hourly.visitors.map((p) => p.value) },
       { name: 'Shelf stops', color: '#f59e0b', data: (hourly.dwells || []).map((p) => p.value) },
     ],
-  }) + 8;
+  }) + 6;
+}
+
+/**
+ * Compact aisle / journey cards already used on page 2 — repeated as a strip on
+ * page 1 so the first page is not half-empty under the rhythm chart.
+ */
+function drawJourneyStrip(doc, journey, y) {
+  const a = journey.aisles || {};
+  const rankSec = journey.metricThresholds?.engagementRankSec ?? 15;
+  const stats = [
+    ['Stopping power', `${a.stoppingPowerPct ?? 0}%`, 'of aisle crossings became a stop'],
+    a.engagementRatePct != null
+      ? ['Engagement', `${a.engagementRatePct}%`, `held past ${rankSec}s`]
+      : null,
+    ['Pass-through', `${a.passThroughPct ?? Math.max(0, 100 - (a.stoppingPowerPct ?? 0))}%`, 'crossed without stopping'],
+    a.penetrationPct != null
+      ? ['Penetration', `${a.penetrationPct}%`, 'of entrance tracks also seen in aisle/fresco']
+      : null,
+  ].filter(Boolean);
+
+  if (!stats.length) return y;
+
+  let next = sectionTitle(doc, 'Journey at a glance', y);
+  const gap = 8;
+  const w = (CONTENT_W - gap * (stats.length - 1)) / stats.length;
+  stats.forEach(([label, value, hint], i) => {
+    const x = MARGIN + i * (w + gap);
+    doc.roundedRect(x, next, w, 42, 3).fillColor(PANEL).fill();
+    doc.font('Helvetica').fontSize(6.5).fillColor(MUTED)
+      .text(label.toUpperCase(), x + 7, next + 6, { width: w - 14, lineBreak: false });
+    doc.font('Helvetica-Bold').fontSize(14).fillColor(INK)
+      .text(value, x + 7, next + 16, { width: w - 14, lineBreak: false });
+    doc.font('Helvetica').fontSize(6).fillColor(FAINT)
+      .text(hint, x + 7, next + 32, { width: w - 14, lineBreak: false, ellipsis: true });
+  });
+  next += 50;
+
+  if (journey.checkout?.frictionScore != null) {
+    doc.font('Helvetica').fontSize(7.5).fillColor(MUTED)
+      .text(
+        `Checkout friction ${journey.checkout.frictionScore} — queue time as a share of shopping dwell.`,
+        MARGIN, next, { width: CONTENT_W },
+      );
+    next = doc.y + 6;
+  }
+
+  return next;
+}
+
+/**
+ * Page-1 lower half: checkout channel snapshot (left) + up to two insights (right).
+ * Matches the density of page 2 without duplicating Fresco / aisle tables.
+ */
+function drawPage1Lower(doc, journey, y) {
+  const colGap = 14;
+  const colW = (CONTENT_W - colGap) / 2;
+  const leftX = MARGIN;
+  const rightX = MARGIN + colW + colGap;
+  const channels = (journey.checkout?.channels || []).slice(0, 3);
+  const insights = (journey.insights || []).slice(0, 2);
+
+  if (!channels.length && !insights.length) return y;
+
+  // Shared baseline for both column titles.
+  const titleY = y;
+  doc.font('Helvetica-Bold').fontSize(11).fillColor(INK)
+    .text(channels.length ? 'Checkout snapshot' : ' ', leftX, titleY, {
+      width: colW, lineBreak: false,
+    });
+  doc.font('Helvetica-Bold').fontSize(11).fillColor(INK)
+    .text(insights.length ? 'What to act on' : ' ', rightX, titleY, {
+      width: colW, lineBreak: false,
+    });
+  let ruleY = titleY + 14;
+  doc.moveTo(MARGIN, ruleY).lineTo(MARGIN + CONTENT_W, ruleY)
+    .lineWidth(0.5).strokeColor(RULE).stroke();
+  let leftY = ruleY + 10;
+  let rightY = ruleY + 10;
+
+  if (channels.length) {
+    doc.font('Helvetica').fontSize(7).fillColor(FAINT)
+      .text('Queue sessions by channel', leftX, leftY, { width: colW });
+    leftY = doc.y + 4;
+    leftY = table(doc, {
+      x: leftX,
+      contentW: colW,
+      y: leftY,
+      headers: ['Channel', 'Done', 'Wait', 'Abandon'],
+      widths: [0.40, 0.18, 0.22, 0.20],
+      align: ['left', 'right', 'right', 'right'],
+      rows: channels.map((ch) => [
+        ch.label,
+        num(ch.completed ?? ch.sessions),
+        dur(ch.avgWaitSec != null ? ch.avgWaitSec / 60 : ch.avgWaitMin),
+        `${ch.abandonPct}%`,
+      ]),
+    });
+  }
+
+  for (const ins of insights) {
+    const tone = TONE[ins.severity] || TONE.info;
+    doc.font('Helvetica').fontSize(8);
+    const bodyH = doc.heightOfString(ins.message, { width: colW - 16 });
+    const actionH = ins.action
+      ? doc.heightOfString(`Action: ${ins.action}`, { width: colW - 16 })
+      : 0;
+    const boxH = Math.min(78, bodyH + actionH + 26);
+
+    doc.roundedRect(rightX, rightY, colW, boxH, 3).fillColor(tone.fill).fill();
+    doc.rect(rightX, rightY + 1, 2.5, boxH - 2).fillColor(tone.text).fill();
+    doc.font('Helvetica-Bold').fontSize(8.5).fillColor(INK)
+      .text(ins.title, rightX + 10, rightY + 6, { width: colW - 16, ellipsis: true });
+    doc.font('Helvetica').fontSize(8).fillColor('#374151')
+      .text(ins.message, rightX + 10, doc.y + 1, { width: colW - 16, height: bodyH + 2 });
+    if (ins.action) {
+      doc.font('Helvetica-Oblique').fontSize(7.5).fillColor(tone.text)
+        .text(`Action: ${ins.action}`, rightX + 10, Math.min(doc.y + 1, rightY + boxH - 14), {
+          width: colW - 16, ellipsis: true, lineBreak: false,
+        });
+    }
+    rightY += boxH + 6;
+  }
+
+  return Math.max(leftY, rightY, y);
 }
 
 function drawFresco(doc, journey, y) {
@@ -492,79 +622,43 @@ function drawCheckout(doc, journey, y) {
   return after;
 }
 
-function drawInsights(doc, journey, y) {
-  const insights = (journey.insights || []).slice(0, 3);
-  if (!insights.length) return y;
-
-  let next = sectionTitle(doc, 'What to act on', y);
-
-  for (const ins of insights) {
-    const tone = TONE[ins.severity] || TONE.info;
-    doc.font('Helvetica').fontSize(8.5);
-    const bodyH = doc.heightOfString(ins.message, { width: CONTENT_W - 24 });
-    const actionH = ins.action ? doc.heightOfString(`Action: ${ins.action}`, { width: CONTENT_W - 24 }) : 0;
-    const boxH = bodyH + actionH + 30;
-
-    doc.roundedRect(MARGIN, next, CONTENT_W, boxH, 3).fillColor(tone.fill).fill();
-    doc.rect(MARGIN, next + 1, 2.5, boxH - 2).fillColor(tone.text).fill();
-
-    doc.font('Helvetica-Bold').fontSize(9).fillColor(INK)
-      .text(ins.title, MARGIN + 12, next + 8, { width: CONTENT_W - 24 });
-    doc.font('Helvetica').fontSize(8.5).fillColor('#374151')
-      .text(ins.message, MARGIN + 12, doc.y + 2, { width: CONTENT_W - 24 });
-    if (ins.action) {
-      doc.font('Helvetica-Oblique').fontSize(8).fillColor(tone.text)
-        .text(`Action: ${ins.action}`, MARGIN + 12, doc.y + 2, { width: CONTENT_W - 24 });
-    }
-    next += boxH + 8;
-  }
-
-  return next;
-}
-
 /**
- * Optional wind-map style people-flow frames. Each shot is
- * `{ title, caption, imagePath }` — imagePath is a PNG/JPEG on disk.
- * Laid out one frame per page so the caption has room under a wide figure.
+ * Optional wind-map style people-flow frames. All shots share one appendix page
+ * at reduced height so the report stays dense (matches the executive page-2 feel).
  */
 function drawFlowField(doc, shots) {
   if (!Array.isArray(shots) || !shots.length) return;
 
-  const pageBottom = A4.height - MARGIN - 36;
+  doc.addPage();
+  let next = MARGIN;
+  const pageBottom = A4.height - MARGIN - 32;
+  const n = Math.min(3, shots.length);
 
-  for (let i = 0; i < shots.length; i++) {
+  next = sectionTitle(
+    doc,
+    'People-flow field',
+    next,
+    'LiDAR trajectories as a continuous field — density, dwell and direction over the store plan.',
+  );
+
+  // Budget remaining height evenly across frames (image + title + 2-line caption).
+  const chromePer = 28; // title + caption + gaps
+  const avail = pageBottom - next;
+  const maxImgH = Math.max(110, Math.floor((avail - chromePer * n) / n));
+
+  for (let i = 0; i < n; i++) {
     const shot = shots[i];
-    doc.addPage();
-    let next = MARGIN;
+    doc.font('Helvetica-Bold').fontSize(9).fillColor(INK)
+      .text(shot.title, MARGIN, next, { width: CONTENT_W, lineBreak: false });
+    next = doc.y + 4;
 
-    next = sectionTitle(
-      doc,
-      i === 0 ? 'People-flow field' : shot.title,
-      next,
-      i === 0
-        ? 'LiDAR trajectories aggregated into a continuous field — density, dwell and direction '
-          + 'in one Windy-style view over the store plan.'
-        : undefined,
-    );
-
-    if (i === 0) {
-      doc.font('Helvetica-Bold').fontSize(10).fillColor(INK)
-        .text(shot.title, MARGIN, next, { width: CONTENT_W });
-      next = doc.y + 8;
-    }
-
-    const maxImgH = Math.min(420, pageBottom - next - 72);
-    const maxImgW = CONTENT_W;
     let imgH = maxImgH;
-    let imgW = maxImgW;
-
+    let imgW = CONTENT_W;
     if (shot.imagePath) {
       try {
-        // Fit the frame into the page while preserving aspect; dark screenshots
-        // read better with a thin rule than a heavy card.
         const fitted = doc.openImage(shot.imagePath);
         const ar = fitted.width / fitted.height;
-        imgW = maxImgW;
+        imgW = CONTENT_W;
         imgH = imgW / ar;
         if (imgH > maxImgH) {
           imgH = maxImgH;
@@ -574,17 +668,25 @@ function drawFlowField(doc, shots) {
         doc.image(shot.imagePath, ix, next, { width: imgW, height: imgH });
         doc.roundedRect(ix - 0.5, next - 0.5, imgW + 1, imgH + 1, 2)
           .lineWidth(0.6).strokeColor(RULE).stroke();
-        next += imgH + 10;
+        next += imgH + 4;
       } catch {
         doc.font('Helvetica').fontSize(8).fillColor(FAINT)
           .text('(flow-field image unavailable)', MARGIN, next, { width: CONTENT_W });
-        next = doc.y + 8;
+        next = doc.y + 4;
       }
     }
 
-    if (shot.caption) {
-      doc.font('Helvetica').fontSize(9).fillColor('#374151')
-        .text(shot.caption, MARGIN, next, { width: CONTENT_W, align: 'left' });
+    const caption = shot.shortCaption || shot.caption;
+    if (caption) {
+      doc.font('Helvetica').fontSize(7.5).fillColor('#374151')
+        .text(caption, MARGIN, next, {
+          width: CONTENT_W,
+          height: 22,
+          ellipsis: true,
+        });
+      next = doc.y + 8;
+    } else {
+      next += 6;
     }
   }
 }
@@ -674,7 +776,8 @@ export function renderEsselungaExecutivePdf(journey, { venueName, flowFieldShots
   y = drawVerdict(doc, journey.headline, y);
   y = drawKpiCards(doc, journey.headlineKpis || [], y);
   y = drawRhythm(doc, journey, y);
-  y = drawInsights(doc, journey, y);
+  y = drawJourneyStrip(doc, journey, y);
+  y = drawPage1Lower(doc, journey, y);
 
   doc.addPage();
   y = MARGIN;
@@ -688,7 +791,7 @@ export function renderEsselungaExecutivePdf(journey, { venueName, flowFieldShots
   y = drawCheckout(doc, journey, y + 6);
   drawDefinitions(doc, journey, y + 6);
 
-  // Optional wind-map appendix — full page per frame so captions sit under the figure.
+  // Optional wind-map appendix — three frames on one page.
   if (flowFieldShots?.length) {
     drawFlowField(doc, flowFieldShots);
   }
