@@ -38,7 +38,7 @@ export const SECTION_TOOLTIPS = {
 
 export const PULSE_TOOLTIPS = {
   storeRhythm:
-    'When the store is busiest. Compare entrants at the gate (cyan) with aisle stops (amber) per hour or day. These are independent LiDAR signals — not a conversion funnel.',
+    'When the store is busiest. Toggle Entrants or Stops — each uses its own scale so the shape of the day stays readable. Hover a bar for both counts and stop rate. Independent LiDAR signals, not a conversion funnel.',
   footfall:
     'Entrance 1121 perimeter crossings in each time bucket. A crossing is counted when the live trail crosses the gate rectangle edge.',
   stops:

@@ -124,7 +124,7 @@ export const WIDGET_REGISTRY: Record<WidgetId, WidgetDefinition> = {
   'activity-timeline-chart': {
     id: 'activity-timeline-chart',
     name: 'Store rhythm',
-    description: 'Entrants vs shelf stops over time',
+    description: 'Entrants or shelf stops over time (toggle, own Y-scale)',
     kind: 'chart',
     sources: ['Esselunga Executive'],
     defaultSize: { colSpan: 6, rowSpan: 2 },

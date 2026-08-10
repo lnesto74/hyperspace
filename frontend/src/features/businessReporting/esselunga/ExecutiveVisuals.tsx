@@ -7,6 +7,7 @@ import FlowFieldEmbed from '../../../components/flowfield/FlowFieldEmbed';
 import { SECTION_TOOLTIPS, PULSE_TOOLTIPS } from './kpiTooltips';
 import { formatDwellDuration } from './formatDuration';
 import { getCategoryVisual } from '../operationsConsole/categoryVisuals';
+import { buildYAxisTicks } from '../operationsConsole/chartYAxis';
 
 type FloorVizMode = 'heatmap' | 'flow';
 
@@ -226,6 +227,10 @@ export function Sparkline({
   );
 }
 
+type RhythmMetric = 'entrants' | 'stops';
+
+const RHYTHM_CHART_H = 112;
+
 export function ActivityTimelineChart({
   timelines,
   storeHoursLabel,
@@ -241,6 +246,9 @@ export function ActivityTimelineChart({
   // rather than as a day of trade, so the hourly shape is shown instead.
   const dailyIsUseful = timelines.daily.visitors.filter(p => p.value > 0).length > 1;
   const [view, setView] = useState<'hourly' | 'daily'>(dailyIsUseful ? 'daily' : 'hourly');
+  // Separate Y-scales: entrants and shelf stops often differ by 10–50×, so a
+  // shared axis flattens one series into a hairline.
+  const [metric, setMetric] = useState<RhythmMetric>('stops');
 
   useEffect(() => {
     setView(dailyIsUseful ? 'daily' : 'hourly');
@@ -253,6 +261,18 @@ export function ActivityTimelineChart({
   const count = Math.max(visitors.length, dwells.length);
   const hasData = visitors.some(p => p.value > 0) || dwells.some(p => p.value > 0);
 
+  const series = metric === 'entrants' ? visitors : dwells;
+  const maxVal = Math.max(...series.map(p => p.value), 1);
+  const yTicks = buildYAxisTicks(maxVal);
+  const yTop = yTicks[0] || maxVal;
+  const barColor = metric === 'entrants' ? '#06b6d4' : '#f59e0b';
+  const ringClass = metric === 'entrants' ? 'ring-cyan-400/50' : 'ring-amber-400/50';
+  const labelStep = count > 14 ? Math.ceil(count / 7) : count > 8 ? 2 : 1;
+  const peak = series.reduce(
+    (best, p, i) => (p.value > best.value ? { value: p.value, label: p.label, i } : best),
+    { value: 0, label: '', i: -1 },
+  );
+
   if (!hasData && !dailyHasData) {
     return (
       <div className={`flex items-center justify-center h-28 text-xs text-gray-400 ${className}`}>
@@ -260,13 +280,6 @@ export function ActivityTimelineChart({
       </div>
     );
   }
-
-  const maxVal = Math.max(
-    ...visitors.map(p => p.value),
-    ...dwells.map(p => p.value),
-    1,
-  );
-  const labelStep = count > 14 ? Math.ceil(count / 7) : count > 8 ? 2 : 1;
 
   const hideTooltip = () => setHover(null);
   const showTooltip = (index: number, el: HTMLElement) => {
@@ -278,6 +291,18 @@ export function ActivityTimelineChart({
     });
   };
 
+  const rangeCaption = view === 'hourly'
+    ? (() => {
+      const hourly = timelines.hourly;
+      const tz = hourly.timeZone === 'Europe/Rome' ? 'Italy' : (hourly.timeZone || 'store TZ');
+      const through = hourly.throughHourLabel;
+      const open = storeHoursLabel ?? '08:00 – 20:00';
+      return through
+        ? `Today · ${tz} · ${open.split(' – ')[0] ?? '08:00'}–${through}`
+        : `Today · ${tz} · ${open}`;
+    })()
+    : 'Selected period — one bar per day';
+
   return (
     <div className={className}>
       <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
@@ -285,106 +310,121 @@ export function ActivityTimelineChart({
           Store rhythm
           <KpiTooltip text={PULSE_TOOLTIPS.storeRhythm} />
         </span>
-        <div className="flex bg-gray-800 rounded-md p-0.5 border border-gray-700/60">
-          <button
-            type="button"
-            onClick={() => { setView('hourly'); hideTooltip(); }}
-            className={`px-2 py-0.5 text-xs rounded transition-colors ${
-              view === 'hourly' ? 'bg-cyan-600 text-white' : 'text-gray-400 hover:text-white'
-            }`}
-          >
-            Today · hourly
-          </button>
-          {dailyIsUseful && (
+        <div className="flex flex-wrap items-center gap-1.5">
+          <div className="flex bg-gray-800 rounded-md p-0.5 border border-gray-700/60">
             <button
               type="button"
-              onClick={() => { setView('daily'); hideTooltip(); }}
+              onClick={() => { setMetric('entrants'); hideTooltip(); }}
               className={`px-2 py-0.5 text-xs rounded transition-colors ${
-                view === 'daily' ? 'bg-cyan-600 text-white' : 'text-gray-400 hover:text-white'
+                metric === 'entrants' ? 'bg-cyan-600 text-white' : 'text-gray-400 hover:text-white'
               }`}
             >
-              Week · daily
+              Entrants
             </button>
-          )}
+            <button
+              type="button"
+              onClick={() => { setMetric('stops'); hideTooltip(); }}
+              className={`px-2 py-0.5 text-xs rounded transition-colors ${
+                metric === 'stops' ? 'bg-amber-600 text-white' : 'text-gray-400 hover:text-white'
+              }`}
+            >
+              Stops
+            </button>
+          </div>
+          <div className="flex bg-gray-800 rounded-md p-0.5 border border-gray-700/60">
+            <button
+              type="button"
+              onClick={() => { setView('hourly'); hideTooltip(); }}
+              className={`px-2 py-0.5 text-xs rounded transition-colors ${
+                view === 'hourly' ? 'bg-white/10 text-white' : 'text-gray-400 hover:text-white'
+              }`}
+            >
+              Today · hourly
+            </button>
+            {dailyIsUseful && (
+              <button
+                type="button"
+                onClick={() => { setView('daily'); hideTooltip(); }}
+                className={`px-2 py-0.5 text-xs rounded transition-colors ${
+                  view === 'daily' ? 'bg-white/10 text-white' : 'text-gray-400 hover:text-white'
+                }`}
+              >
+                Week · daily
+              </button>
+            )}
+          </div>
         </div>
       </div>
 
       <p className="text-[11px] text-gray-400 mb-2">
-        {view === 'hourly'
-          ? (() => {
-            const hourly = timelines.hourly;
-            const tz = hourly.timeZone === 'Europe/Rome' ? 'Italy' : (hourly.timeZone || 'store TZ');
-            const through = hourly.throughHourLabel;
-            const open = storeHoursLabel ?? '08:00 – 20:00';
-            return through
-              ? `Today · ${tz} · ${open.split(' – ')[0] ?? '08:00'}–${through} — entrants vs stops`
-              : `Today · ${tz} · ${open} — entrants vs stops`;
-          })()
-          : 'Selected period — one bar pair per day'}
+        {rangeCaption}
+        {' — '}
+        {metric === 'entrants' ? 'gate entrants' : 'shelf stops'}
+        {peak.value > 0 && (
+          <span className="text-gray-500">
+            {' · '}peak {peak.value.toLocaleString()}
+            {peak.label ? ` at ${peak.label.replace(':00', '')}` : ''}
+          </span>
+        )}
       </p>
 
-      <div className="flex gap-3 text-[11px] text-gray-400 mb-2">
-        <span className="flex items-center gap-1.5">
-          <span className="w-2.5 h-2.5 rounded-sm bg-cyan-500/90" />
-          Entrants
-          <KpiTooltip text={PULSE_TOOLTIPS.footfall} />
-        </span>
-        <span className="flex items-center gap-1.5">
-          <span className="w-2.5 h-2.5 rounded-sm bg-amber-500/90" />
-          Stops
-          <KpiTooltip text={PULSE_TOOLTIPS.stops} />
-        </span>
-      </div>
-
       <div className="rounded-lg bg-gray-900/50 border border-gray-700/40 px-2 pt-3 pb-1 mb-3">
-        <div className="flex items-end gap-0.5 h-28 w-full">
-          {Array.from({ length: count }, (_, i) => {
-            const foot = visitors[i]?.value ?? 0;
-            const stops = dwells[i]?.value ?? 0;
-            const footH = foot > 0 ? Math.max(6, Math.round((foot / maxVal) * 100)) : 0;
-            const stopH = stops > 0 ? Math.max(6, Math.round((stops / maxVal) * 100)) : 0;
-            const active = hover?.index === i;
-            return (
-              <div
-                key={i}
-                className="flex-1 min-w-0 flex gap-px items-end h-full cursor-crosshair"
-                onMouseEnter={(e) => showTooltip(i, e.currentTarget)}
-                onMouseLeave={hideTooltip}
-              >
-                <div
-                  className={`flex-1 rounded-t-sm transition-opacity ${active ? 'opacity-100 ring-1 ring-cyan-400/50' : 'opacity-80 hover:opacity-100'}`}
-                  style={{
-                    height: `${footH}%`,
-                    backgroundColor: foot > 0 ? '#06b6d4' : 'transparent',
-                  }}
-                />
-                <div
-                  className={`flex-1 rounded-t-sm transition-opacity ${active ? 'opacity-100 ring-1 ring-amber-400/50' : 'opacity-80 hover:opacity-100'}`}
-                  style={{
-                    height: `${stopH}%`,
-                    backgroundColor: stops > 0 ? '#f59e0b' : 'transparent',
-                  }}
-                />
-              </div>
-            );
-          })}
-        </div>
-        <div className="flex justify-between mt-1.5 px-0.5">
-          {Array.from({ length: count }, (_, i) => {
-            const label = visitors[i]?.label ?? dwells[i]?.label ?? '';
-            if (i % labelStep !== 0 && i !== count - 1) {
-              return <span key={i} className="flex-1 min-w-0" />;
-            }
-            return (
-              <span
-                key={i}
-                className="flex-1 min-w-0 text-center text-[10px] text-gray-400 truncate leading-tight"
-                title={label}
-              >
-                {label.replace(':00', '')}
-              </span>
-            );
-          })}
+        <div className="flex gap-1.5">
+          <div
+            className="flex flex-col justify-between shrink-0 text-[10px] text-gray-500 tabular-nums py-0.5"
+            style={{ height: RHYTHM_CHART_H, minWidth: 28 }}
+            aria-hidden
+          >
+            {yTicks.map(tick => (
+              <span key={tick} className="leading-none">{tick}</span>
+            ))}
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="flex items-end gap-0.5 w-full" style={{ height: RHYTHM_CHART_H }}>
+              {Array.from({ length: count }, (_, i) => {
+                const value = series[i]?.value ?? 0;
+                const barH = value > 0
+                  ? Math.max(3, Math.round((value / yTop) * (RHYTHM_CHART_H - 4)))
+                  : 0;
+                const active = hover?.index === i;
+                return (
+                  <div
+                    key={i}
+                    className="flex-1 min-w-0 flex items-end h-full cursor-crosshair"
+                    onMouseEnter={(e) => showTooltip(i, e.currentTarget)}
+                    onMouseLeave={hideTooltip}
+                  >
+                    <div
+                      className={`w-full rounded-t-sm transition-opacity ${
+                        active ? `opacity-100 ring-1 ${ringClass}` : 'opacity-85 hover:opacity-100'
+                      }`}
+                      style={{
+                        height: barH,
+                        backgroundColor: value > 0 ? barColor : 'transparent',
+                      }}
+                    />
+                  </div>
+                );
+              })}
+            </div>
+            <div className="flex justify-between mt-1.5 px-0.5">
+              {Array.from({ length: count }, (_, i) => {
+                const label = visitors[i]?.label ?? dwells[i]?.label ?? '';
+                if (i % labelStep !== 0 && i !== count - 1) {
+                  return <span key={i} className="flex-1 min-w-0" />;
+                }
+                return (
+                  <span
+                    key={i}
+                    className="flex-1 min-w-0 text-center text-[10px] text-gray-400 truncate leading-tight"
+                    title={label}
+                  >
+                    {label.replace(':00', '')}
+                  </span>
+                );
+              })}
+            </div>
+          </div>
         </div>
       </div>
 
@@ -406,11 +446,11 @@ export function ActivityTimelineChart({
             return (
               <>
                 <div className="font-semibold text-white mb-1">{label}</div>
-                <div className="flex justify-between gap-3">
+                <div className={`flex justify-between gap-3 ${metric === 'entrants' ? 'font-medium' : ''}`}>
                   <span className="text-cyan-400">Entrants</span>
                   <span className="tabular-nums">{foot.toLocaleString()}</span>
                 </div>
-                <div className="flex justify-between gap-3">
+                <div className={`flex justify-between gap-3 ${metric === 'stops' ? 'font-medium' : ''}`}>
                   <span className="text-amber-400">Stops</span>
                   <span className="tabular-nums">{stops.toLocaleString()}</span>
                 </div>
