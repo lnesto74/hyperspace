@@ -492,7 +492,7 @@ export function ExecutivePulseBand({
   heatmapTimeframe: 'day' | 'week' | 'month';
 }) {
   const [hoverCat, setHoverCat] = useState<string | null>(null);
-  const [vizMode, setVizMode] = useState<FloorVizMode>('heatmap');
+  const [vizMode, setVizMode] = useState<FloorVizMode>('flow');
   const topCats = heatmapCategories.slice(0, 8);
 
   const hoveredRow = hoverCat
