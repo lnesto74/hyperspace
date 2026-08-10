@@ -1,5 +1,5 @@
 import { API_BASE } from '../../config/api'
-import { useState, useEffect, useMemo, useRef } from 'react';
+import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import {
   ArrowLeft,
   ShoppingBag,
@@ -15,7 +15,7 @@ import { useHeatmap } from '../../context/HeatmapContext';
 import { PERSONAS, getPersonaById, enforceKpiCap } from './personas';
 import ReportingKpiStrip from './components/ReportingKpiStrip';
 import OperationsPulseConsole from './operationsConsole/OperationsPulseConsole';
-import type { OperationsConsoleData, TimelineGrain } from './operationsConsole/types';
+import type { OperationsConsoleData, TimelineGrain, PeriodDeltas as OpsPeriodDeltas } from './operationsConsole/types';
 import ReportingInsightsPanel from './components/ReportingInsightsPanel';
 import ZonePerformanceViewport, { type ZonePerformanceItem } from './components/ZonePerformanceViewport';
 import PebleEffectivenessViewport, { type CampaignPerformanceItem } from './components/PebleEffectivenessViewport';
@@ -33,6 +33,9 @@ import ZoneAuditViewport from './components/ZoneAuditViewport';
 import type { EsselungaJourneyPayload, ExecutiveVariant, MetricThresholdSettings } from './esselunga/types';
 import type { DoohScreenMarker } from '../../components/shared/FloorPlanMiniMap';
 import { getDemoVenueId } from '../../config/demo';
+import DashboardBuilderViewport from './dashboardBuilder/DashboardBuilderViewport';
+import { CUSTOM_DASHBOARD_PERSONA } from './dashboardBuilder/types';
+import type { DashboardDataContext } from './dashboardBuilder/WidgetRenderer';
 
 type TimeRange = '1h' | '24h' | '7d' | '30d' | 'custom';
 
@@ -93,7 +96,7 @@ interface BusinessReportingPageProps {
 export default function BusinessReportingPage({ onClose, publicDashboard = false }: BusinessReportingPageProps) {
   const { venue, venueList } = useVenue();
   const { isSuperadmin } = useAuth();
-  const { openHeatmapForCategory } = useHeatmap();
+  const { openHeatmapForCategory, openHeatmapModal } = useHeatmap();
   const pinnedVenueId = publicDashboard ? getDemoVenueId() : null;
   const [selectedVenueId, setSelectedVenueId] = useState<string | null>(pinnedVenueId || venue?.id || null);
   const [selectedPersonaId, setSelectedPersonaId] = useState<string>(
@@ -122,13 +125,26 @@ export default function BusinessReportingPage({ onClose, publicDashboard = false
     if (id) setSelectedVenueId(id);
   }, [publicDashboard, pinnedVenueId, venue?.id]);
 
+  const isCustomDashboard = selectedPersonaId === CUSTOM_DASHBOARD_PERSONA;
+
   const selectedPersona = useMemo(
-    () => getPersonaById(selectedPersonaId) || PERSONAS[0],
-    [selectedPersonaId],
+    () => getPersonaById(isCustomDashboard ? 'executive' : selectedPersonaId) || PERSONAS[0],
+    [selectedPersonaId, isCustomDashboard],
   );
 
-  const kpiDefinitions = useMemo(
-    () => enforceKpiCap(selectedPersona),
+  /** Custom boards mix Ops + Exec + Media tiles — merge defs so hero IDs resolve. */
+  const kpiDefinitions = useMemo(() => {
+    if (!isCustomDashboard) return enforceKpiCap(selectedPersona);
+    const byId = new Map<string, (typeof selectedPersona.kpis)[number]>();
+    for (const id of ['store-manager', 'executive', 'retail-media'] as const) {
+      const p = getPersonaById(id);
+      for (const k of p?.kpis || []) byId.set(k.id, k);
+    }
+    return Array.from(byId.values());
+  }, [isCustomDashboard, selectedPersona]);
+
+  const stripKpiDefinitions = useMemo(
+    () => enforceKpiCap(getPersonaById('executive') || selectedPersona),
     [selectedPersona],
   );
 
@@ -176,6 +192,7 @@ export default function BusinessReportingPage({ onClose, publicDashboard = false
   );
 
   const showEsselungaExecutive = selectedPersonaId === ESSELUNGA_PERSONA && !!selectedVenueId;
+  const showCustomDashboard = isCustomDashboard && !!selectedVenueId;
 
   // Gated in three places on purpose: the rail hides it, this refuses to render
   // it, and the API routes reject the request. A hidden button is not access
@@ -252,66 +269,102 @@ export default function BusinessReportingPage({ onClose, publicDashboard = false
       const timeRangeOption = TIME_RANGES.find(t => t.id === selectedTimeRange);
       const { startTs, endTs } = timeRangeOption?.getRange() || TIME_RANGES[1].getRange();
 
-      const params = new URLSearchParams({
-        personaId: selectedPersonaId,
-        venueId: selectedVenueId,
-        startTs: String(startTs),
-        endTs: String(endTs),
-      });
+      const fetchPersona = async (personaId: string, extra?: Record<string, string>) => {
+        const params = new URLSearchParams({
+          personaId,
+          venueId: selectedVenueId,
+          startTs: String(startTs),
+          endTs: String(endTs),
+          ...extra,
+        });
+        const controller = new AbortController();
+        const timeoutId = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+        try {
+          const response = await fetch(`${API_BASE}/api/reporting/summary?${params}`, {
+            signal: controller.signal,
+          });
+          if (!response.ok) {
+            if (response.status === 404) {
+              throw new Error('Business Reporting feature is not enabled. Set FEATURE_BUSINESS_REPORTING=true.');
+            }
+            let detail = response.statusText || `HTTP ${response.status}`;
+            try {
+              const errBody = await response.json();
+              if (errBody?.message) detail = errBody.message;
+              else if (errBody?.error) detail = errBody.error;
+            } catch { /* ignore */ }
+            throw new Error(detail);
+          }
+          return response.json();
+        } finally {
+          window.clearTimeout(timeoutId);
+        }
+      };
 
+      // Custom board pulls Ops + Executive + Esselunga so mixed tiles have data.
+      if (selectedPersonaId === CUSTOM_DASHBOARD_PERSONA && !isPreview) {
+        const [exec, ops, ess] = await Promise.all([
+          fetchPersona('executive'),
+          fetchPersona('store-manager', { grain: opsGrain }),
+          fetchPersona(ESSELUNGA_PERSONA, { variant: esselungaVariant }),
+        ]);
+        setKpiValues({ ...(ops.kpis || {}), ...(exec.kpis || {}) });
+        const journey = ess.supporting?.esselungaJourney as EsselungaJourneyPayload | undefined;
+        setSupporting({
+          ...(exec.supporting || {}),
+          operationsConsole: ops.supporting?.operationsConsole,
+          esselungaJourney: journey,
+          periodDeltas: {
+            ...((ops.supporting?.periodDeltas as object) || {}),
+            ...((exec.supporting?.periodDeltas as object) || {}),
+          },
+          topCategories:
+            exec.supporting?.topCategories
+            ?? ops.supporting?.topCategories
+            ?? journey?.heatmapCategories,
+          topCampaigns: exec.supporting?.topCampaigns ?? ops.supporting?.topCampaigns,
+          underperformingCampaigns:
+            exec.supporting?.underperformingCampaigns ?? ops.supporting?.underperformingCampaigns,
+          campaignRanking: exec.supporting?.campaignRanking,
+          doohScreens: exec.supporting?.doohScreens ?? ops.supporting?.doohScreens,
+        });
+        setLastUpdated(new Date());
+        return;
+      }
+
+      const paramsExtra: Record<string, string> = {};
       if (selectedPersonaId === 'merchandising' && selectedCategoryId !== 'all') {
-        params.set('categoryId', selectedCategoryId);
+        paramsExtra.categoryId = selectedCategoryId;
       }
-
       if (selectedPersonaId === 'store-manager') {
-        params.set('grain', opsGrain);
+        paramsExtra.grain = opsGrain;
       }
-
       if (selectedPersonaId === ESSELUNGA_PERSONA) {
-        params.set('variant', esselungaVariant);
+        paramsExtra.variant = esselungaVariant;
         const th = metricOpts ?? esselungaMetricsRef.current;
         if (th) {
-          params.set('dwellThresholdSec', String(th.dwellSec));
-          params.set('engagementThresholdSec', String(th.engagementSec));
-          params.set('engagementRankSec', String(th.engagementRankSec));
-          params.set('queueFloorSec', String(th.queueFloorSec));
+          paramsExtra.dwellThresholdSec = String(th.dwellSec);
+          paramsExtra.engagementThresholdSec = String(th.engagementSec);
+          paramsExtra.engagementRankSec = String(th.engagementRankSec);
+          paramsExtra.queueFloorSec = String(th.queueFloorSec);
         }
-        if (isPreview) {
-          params.set('metricPreview', 'true');
-        }
+        if (isPreview) paramsExtra.metricPreview = 'true';
       }
-
-      const controller = isPreview ? previewAbortRef.current! : new AbortController();
-      const timeoutId = isPreview
-        ? undefined
-        : window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
-
-      let response: Response;
-      try {
-        response = await fetch(`${API_BASE}/api/reporting/summary?${params}`, {
-          signal: controller.signal,
-        });
-      } finally {
-        if (timeoutId != null) window.clearTimeout(timeoutId);
-      }
-
-      if (!response.ok) {
-        if (response.status === 404) {
-          setError('Business Reporting feature is not enabled. Set FEATURE_BUSINESS_REPORTING=true.');
-          return;
-        }
-        let detail = response.statusText || `HTTP ${response.status}`;
-        try {
-          const errBody = await response.json();
-          if (errBody?.message) detail = errBody.message;
-          else if (errBody?.error) detail = errBody.error;
-        } catch { /* ignore */ }
-        throw new Error(detail);
-      }
-
-      const data = await response.json();
 
       if (isPreview) {
+        const params = new URLSearchParams({
+          personaId: selectedPersonaId,
+          venueId: selectedVenueId,
+          startTs: String(startTs),
+          endTs: String(endTs),
+          ...paramsExtra,
+        });
+        const controller = previewAbortRef.current!;
+        const response = await fetch(`${API_BASE}/api/reporting/summary?${params}`, {
+          signal: controller.signal,
+        });
+        if (!response.ok) throw new Error(response.statusText || `HTTP ${response.status}`);
+        const data = await response.json();
         if (previewSeq !== previewSeqRef.current) return;
         const next = data.supporting?.esselungaJourney as EsselungaJourneyPayload | undefined;
         if (!next) return;
@@ -338,10 +391,13 @@ export default function BusinessReportingPage({ onClose, publicDashboard = false
           stoppingPowerPct: data.kpis?.stoppingPowerPct ?? prev.stoppingPowerPct,
           aislePenetrationPct: data.kpis?.aislePenetrationPct ?? prev.aislePenetrationPct,
         }));
-      } else {
-        setKpiValues(data.kpis || {});
-        setSupporting(data.supporting || {});
+        setLastUpdated(new Date());
+        return;
       }
+
+      const data = await fetchPersona(selectedPersonaId, paramsExtra);
+      setKpiValues(data.kpis || {});
+      setSupporting(data.supporting || {});
       setLastUpdated(new Date());
     } catch (err) {
       if (isPreview) {
@@ -407,10 +463,10 @@ export default function BusinessReportingPage({ onClose, publicDashboard = false
 
   const heatmapTimeframe = DAY_GRAIN_RANGES.has(selectedTimeRange) ? 'week' as const : 'day' as const;
 
-  const handleCategoryHeatmap = (row: CategoryRankingRow) => {
+  const handleCategoryHeatmap = useCallback((row: CategoryRankingRow) => {
     if (!row.roiIds?.length || !selectedVenueId) return;
     openHeatmapForCategory(row.roiIds, row.category, heatmapTimeframe, selectedVenueId);
-  };
+  }, [openHeatmapForCategory, selectedVenueId, heatmapTimeframe]);
 
   const selectedVenueName = useMemo(
     () => (venueList || []).find(v => v.id === selectedVenueId)?.name || 'Store',
@@ -419,6 +475,51 @@ export default function BusinessReportingPage({ onClose, publicDashboard = false
 
   const showCategoryVisits = Array.isArray(topCategories) && topCategories.length > 0
     && selectedPersonaId === 'merchandising';
+
+  const customDashboardData: DashboardDataContext | null = useMemo(() => {
+    if (!showCustomDashboard || !selectedVenueId) return null;
+    const categoriesForBoard = (topCategories?.length
+      ? topCategories
+      : esselungaJourney?.heatmapCategories) as CategoryRankingRow[] | undefined;
+    return {
+      venueId: selectedVenueId,
+      venueName: selectedVenueName,
+      kpiDefinitions,
+      stripKpiDefinitions,
+      kpiValues,
+      periodDeltas,
+      topCategories: categoriesForBoard,
+      deadZones,
+      topZones,
+      zoneUtilThresholdPct,
+      topCampaigns,
+      underperformingCampaigns,
+      campaignRanking,
+      doohScreens,
+      dataWindowStartTs: supporting.dataWindowStartTs as number | undefined,
+      dataWindowEndTs: supporting.dataWindowEndTs as number | undefined,
+      executivePillars,
+      executiveHighlights,
+      operationsConsole,
+      journey: esselungaJourney,
+      heatmapTimeframe,
+      onOpenCategoryHeatmap: handleCategoryHeatmap,
+      onExpandHeatmap: () => {
+        const first = esselungaJourney?.heatmapCategories?.[0];
+        if (first?.roiIds?.length) {
+          openHeatmapForCategory(first.roiIds, first.category, heatmapTimeframe, selectedVenueId);
+        } else {
+          openHeatmapModal({ zoneIds: [], venueId: selectedVenueId });
+        }
+      },
+    };
+  }, [
+    showCustomDashboard, selectedVenueId, selectedVenueName, kpiDefinitions, stripKpiDefinitions,
+    kpiValues, periodDeltas, topCategories, deadZones, topZones, zoneUtilThresholdPct, topCampaigns,
+    underperformingCampaigns, campaignRanking, doohScreens, supporting.dataWindowStartTs,
+    supporting.dataWindowEndTs, executivePillars, executiveHighlights, operationsConsole,
+    esselungaJourney, heatmapTimeframe, handleCategoryHeatmap, openHeatmapForCategory, openHeatmapModal,
+  ]);
 
   return (
     <div className="fixed inset-0 z-50 bg-gray-900 flex flex-col overflow-hidden">
@@ -528,7 +629,9 @@ export default function BusinessReportingPage({ onClose, publicDashboard = false
 
           {!loading && !error && (
             <>
-              {showMeasurementAudit ? (
+              {showCustomDashboard && customDashboardData ? (
+                <DashboardBuilderViewport data={customDashboardData} />
+              ) : showMeasurementAudit ? (
                 <ZoneAuditViewport
                   venueId={selectedVenueId!}
                   startTs={auditRange.startTs}
@@ -562,7 +665,7 @@ export default function BusinessReportingPage({ onClose, publicDashboard = false
                 <OperationsPulseConsole
                   consoleData={operationsConsole}
                   kpiValues={kpiValues}
-                  periodDeltas={periodDeltas}
+                  periodDeltas={periodDeltas as unknown as OpsPeriodDeltas}
                   grain={opsGrain}
                   onGrainChange={setOpsGrain}
                   topCategories={topCategories}
@@ -591,7 +694,7 @@ export default function BusinessReportingPage({ onClose, publicDashboard = false
                 />
               )}
 
-              {showCategoryVisits && selectedPersonaId !== 'executive' && (
+              {showCategoryVisits && (
                 <div className="rounded-lg border border-gray-700/80 bg-gray-800/40 overflow-hidden">
                   <div className="px-3 py-2 border-b border-gray-700/60">
                     <span className="text-xs font-medium text-white">Category Traffic</span>
@@ -601,7 +704,7 @@ export default function BusinessReportingPage({ onClose, publicDashboard = false
                     <CategoryVisitsPanel
                       categories={topCategories!}
                       onOpenHeatmap={handleCategoryHeatmap}
-                      compact={selectedPersonaId === 'store-manager'}
+                      compact={false}
                     />
                   </div>
                 </div>
