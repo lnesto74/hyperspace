@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Hyperspace — people-flow field</title>
+<style>
+  :root {
+    --bg: #07080b;
+    --panel: #101319;
+    --stroke: #232936;
+    --fg: #e6e9ef;
+    --fg-dim: #8b94a6;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; background: var(--bg); color: var(--fg);
+    font: 12px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    overflow: hidden; }
+  #view { position: absolute; inset: 0; }
+  #view canvas { display: block; width: 100%; height: 100%; }
+
+  .panel { position: absolute; background: rgba(16, 19, 25, 0.92); border: 1px solid var(--stroke);
+    border-radius: 8px; padding: 10px 12px; backdrop-filter: blur(8px); }
+
+  #controls { top: 10px; left: 10px; width: 240px; max-height: calc(100% - 20px); overflow-y: auto;
+    z-index: 2; }
+  .subsection { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--stroke); }
+  .subtitle { font-size: 11px; font-weight: 600; color: var(--fg); margin-bottom: 3px; }
+  .subsection .note { margin-bottom: 8px; }
+  #controls h1 { font-size: 12px; font-weight: 600; margin: 0 0 2px; letter-spacing: .01em; }
+  #meta { font-size: 10px; color: var(--fg-dim); margin-bottom: 10px; }
+
+  .field { margin-bottom: 9px; }
+  .field label { display: flex; justify-content: space-between; align-items: baseline;
+    font-size: 11px; color: var(--fg-dim); margin-bottom: 3px; }
+  .field label b { color: var(--fg); font-weight: 500; font-variant-numeric: tabular-nums; }
+  select, input[type=range] { width: 100%; }
+  select { background: #171b23; color: var(--fg); border: 1px solid var(--stroke);
+    border-radius: 5px; padding: 4px 6px; font-size: 11px; }
+  input[type=range] { accent-color: #6aa9f0; height: 14px; }
+
+  .note { font-size: 10px; color: var(--fg-dim); margin-top: 2px; }
+  .checks { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 8px; margin: 10px 0 8px;
+    font-size: 11px; color: var(--fg-dim); }
+  .checks label { display: flex; align-items: center; gap: 5px; cursor: pointer; }
+  input[type=checkbox] { accent-color: #6aa9f0; margin: 0; }
+
+  button { width: 100%; background: #1b212c; color: var(--fg); border: 1px solid var(--stroke);
+    border-radius: 5px; padding: 5px; font-size: 11px; cursor: pointer; }
+  button:hover { background: #222937; }
+
+  #legend { bottom: 10px; left: 10px; width: 240px; z-index: 2; }
+  #legend-label { font-size: 10px; color: var(--fg-dim); margin-bottom: 5px; }
+  #legend-bar { height: 7px; border-radius: 3px; }
+  .legend-ends { display: flex; justify-content: space-between; font-size: 10px;
+    color: var(--fg-dim); margin-top: 3px; font-variant-numeric: tabular-nums; }
+
+  #hud { top: 10px; right: 10px; width: 220px; display: none; z-index: 2; }
+  .hud-row { display: flex; justify-content: space-between; gap: 10px; padding: 2px 0; font-size: 11px;
+    color: var(--fg-dim); }
+  .hud-row b { color: var(--fg); font-weight: 500; font-variant-numeric: tabular-nums; }
+  .hud-note { margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--stroke);
+    font-size: 10px; color: var(--fg-dim); }
+
+  #hint { bottom: 10px; right: 10px; font-size: 10px; color: var(--fg-dim);
+    background: rgba(16, 19, 25, 0.85); border: 1px solid var(--stroke); border-radius: 8px;
+    padding: 6px 9px; z-index: 2; }
+
+  /* Embed in the executive: keep controls + legend, hide alignment nudge & hint. */
+  html.embed #hint { display: none !important; }
+  html.embed .subsection { display: none !important; }
+  html.embed #controls { width: 220px; max-height: calc(100% - 72px); }
+  html.embed #legend { width: 220px; }
+
+  html.export #controls,
+  html.export #hint,
+  html.export #hud { display: none !important; }
+  html.export #legend { left: 16px; bottom: 16px; width: 200px;
+    background: rgba(16, 19, 25, 0.72); }
+</style>
+<script>
+  const qs = new URLSearchParams(location.search);
+  if (qs.has('export')) document.documentElement.classList.add('export');
+  if (qs.has('embed') || !qs.has('export')) document.documentElement.classList.add('embed');
+</script>
+<script type="importmap">
+{ "imports": { "three": "./vendor/three.module.js" } }
+</script>
+</head>
+<body>
+  <div id="view"></div>
+
+  <div id="controls" class="panel">
+    <h1>People-flow field</h1>
+    <div id="meta"></div>
+
+    <div class="field">
+      <label for="scalar">Surface colour</label>
+      <select id="scalar">
+        <option value="dwell" selected>Dwell</option>
+        <option value="footfall">Footfall</option>
+        <option value="speed">Walking speed</option>
+        <option value="purity">Directional purity</option>
+        <option value="convergence">Convergence</option>
+      </select>
+    </div>
+
+    <div class="field">
+      <label for="terrainHeight">Dwell relief <b id="terrainHeightVal">6.0 m</b></label>
+      <input type="range" id="terrainHeight" min="0" max="16" step="0.5" value="6" />
+    </div>
+
+    <div class="field">
+      <label for="particles">Streamlines <b id="particlesVal">2,400</b></label>
+      <input type="range" id="particles" min="200" max="12000" step="100" value="2400" />
+    </div>
+
+    <div class="field">
+      <label for="trail">Trail length <b id="trailVal">18</b></label>
+      <input type="range" id="trail" min="2" max="20" step="1" value="18" />
+    </div>
+
+    <div class="field">
+      <label for="timeScale">Time compression <b id="timeScaleVal">12.0&times;</b></label>
+      <input type="range" id="timeScale" min="1" max="40" step="0.5" value="12" />
+      <div id="timeScaleNote" class="note">&asymp; 7.2 m/s on screen for a 0.6 m/s walker</div>
+    </div>
+
+    <div class="field">
+      <label for="kappa">Heading commitment <b id="kappaVal">2.8</b></label>
+      <input type="range" id="kappa" min="0" max="6" step="0.2" value="2.8" />
+    </div>
+
+    <div class="checks">
+      <label><input type="checkbox" id="showFlow" checked /> Streamlines</label>
+      <label><input type="checkbox" id="showTerrain" checked /> Dwell relief</label>
+      <label><input type="checkbox" id="showArrows" /> Mean arrows</label>
+      <label><input type="checkbox" id="dwellDrag" checked /> Dwell drag</label>
+      <label><input type="checkbox" id="showPlan" checked /> Floor plan</label>
+      <label><input type="checkbox" id="planMirror" /> Mirror plan</label>
+    </div>
+
+    <button id="pause">Pause</button>
+
+    <div class="subsection">
+      <div class="subtitle">Alignment nudge</div>
+      <div id="planSource" class="note"></div>
+
+      <div class="field">
+        <label for="planRot">Rotation <b id="planRotVal">0.0&deg;</b></label>
+        <input type="range" id="planRot" min="-20" max="20" step="0.25" value="0" />
+      </div>
+      <div class="field">
+        <label for="planDx">Offset X <b id="planDxVal">0.0 m</b></label>
+        <input type="range" id="planDx" min="-30" max="30" step="0.25" value="0" />
+      </div>
+      <div class="field">
+        <label for="planDz">Offset Z <b id="planDzVal">0.0 m</b></label>
+        <input type="range" id="planDz" min="-30" max="30" step="0.25" value="0" />
+      </div>
+    </div>
+  </div>
+
+  <div id="legend" class="panel">
+    <div id="legend-label">Dwell (s)</div>
+    <div id="legend-bar"></div>
+    <div class="legend-ends"><span id="legend-lo">0</span><span id="legend-hi"></span></div>
+  </div>
+
+  <div id="hud" class="panel"></div>
+  <div id="hint">Drag to orbit &middot; scroll to zoom &middot; hover a cell for its stats</div>
+
+  <script type="module" src="./main.js"></script>
+</body>
+</html>

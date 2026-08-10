@@ -1,11 +1,14 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
-import { HelpCircle, Maximize2 } from 'lucide-react';
+import { HelpCircle, Maximize2, Wind, Map } from 'lucide-react';
 import type { ActivityTimeline, ActivityTimelineSet, HeatmapCategoryRow } from './types';
 import HeatmapEmbedPreview from '../../../components/heatmap/HeatmapEmbedPreview';
+import FlowFieldEmbed from '../../../components/flowfield/FlowFieldEmbed';
 import { SECTION_TOOLTIPS, PULSE_TOOLTIPS } from './kpiTooltips';
 import { formatDwellDuration } from './formatDuration';
 import { getCategoryVisual } from '../operationsConsole/categoryVisuals';
+
+type FloorVizMode = 'heatmap' | 'flow';
 
 /**
  * Floats over the heatmap while a category is hovered, so the shape lighting up
@@ -449,6 +452,7 @@ export function ExecutivePulseBand({
   heatmapTimeframe: 'day' | 'week' | 'month';
 }) {
   const [hoverCat, setHoverCat] = useState<string | null>(null);
+  const [vizMode, setVizMode] = useState<FloorVizMode>('heatmap');
   const topCats = heatmapCategories.slice(0, 8);
 
   const hoveredRow = hoverCat
@@ -458,6 +462,8 @@ export function ExecutivePulseBand({
   const hoveredShare = hoveredRow && totalVisits > 0
     ? Math.round((hoveredRow.totalVisits / totalVisits) * 1000) / 10
     : null;
+
+  const vizHint = vizMode === 'flow' ? SECTION_TOOLTIPS.flowField : SECTION_TOOLTIPS.heatmap;
 
   return (
     <div className="rounded-2xl border border-cyan-500/20 bg-gradient-to-br from-gray-800/80 via-gray-900/60 to-gray-950/80 shadow-lg shadow-cyan-950/20">
@@ -472,16 +478,52 @@ export function ExecutivePulseBand({
             <span className="text-xs text-cyan-400/90 font-medium">Live store intelligence</span>
           </div>
           <p className="text-xs text-gray-400 mt-0.5 max-w-xl">
-            {SECTION_TOOLTIPS.heatmap} {SECTION_TOOLTIPS.timeline}
+            {vizHint} {SECTION_TOOLTIPS.timeline}
           </p>
         </div>
-        <div className="flex items-center gap-3 px-3 py-2 rounded-xl bg-gray-900/60 border border-gray-700/50">
-          <div className="text-right">
-            <div className="text-[11px] text-gray-400 uppercase tracking-wider flex items-center justify-end">
-              In store now
-              <KpiTooltip text={PULSE_TOOLTIPS.inStoreNow} />
+        <div className="flex items-center gap-3">
+          <div
+            className="inline-flex rounded-lg border border-gray-700/70 bg-gray-900/70 p-0.5"
+            role="tablist"
+            aria-label="Floor visualisation"
+          >
+            <button
+              type="button"
+              role="tab"
+              aria-selected={vizMode === 'heatmap'}
+              onClick={() => setVizMode('heatmap')}
+              className={`flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-md transition-colors ${
+                vizMode === 'heatmap'
+                  ? 'bg-cyan-500/20 text-cyan-100 border border-cyan-500/30'
+                  : 'text-gray-400 hover:text-gray-200 border border-transparent'
+              }`}
+            >
+              <Map className="w-3.5 h-3.5" />
+              Heatmap
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={vizMode === 'flow'}
+              onClick={() => setVizMode('flow')}
+              className={`flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-md transition-colors ${
+                vizMode === 'flow'
+                  ? 'bg-cyan-500/20 text-cyan-100 border border-cyan-500/30'
+                  : 'text-gray-400 hover:text-gray-200 border border-transparent'
+              }`}
+            >
+              <Wind className="w-3.5 h-3.5" />
+              Flow field
+            </button>
+          </div>
+          <div className="flex items-center gap-3 px-3 py-2 rounded-xl bg-gray-900/60 border border-gray-700/50">
+            <div className="text-right">
+              <div className="text-[11px] text-gray-400 uppercase tracking-wider flex items-center justify-end">
+                In store now
+                <KpiTooltip text={PULSE_TOOLTIPS.inStoreNow} />
+              </div>
+              <AnimatedValue value={liveOccupancy} className="text-2xl font-bold text-white" />
             </div>
-            <AnimatedValue value={liveOccupancy} className="text-2xl font-bold text-white" />
           </div>
         </div>
       </div>
@@ -536,8 +578,14 @@ export function ExecutivePulseBand({
           )}
         </div>
 
-        <div className="lg:col-span-3 relative min-h-[260px] border-t lg:border-t-0 border-gray-700/40">
-          {heatmapCategories.length > 0 ? (
+        <div
+          className={`lg:col-span-3 relative border-t lg:border-t-0 border-gray-700/40 ${
+            vizMode === 'flow' ? 'min-h-[480px]' : 'min-h-[260px]'
+          }`}
+        >
+          {vizMode === 'flow' ? (
+            <FlowFieldEmbed className="absolute inset-0 rounded-br-2xl" />
+          ) : heatmapCategories.length > 0 ? (
             <>
               <HeatmapEmbedPreview
                 venueId={venueId}

@@ -496,7 +496,21 @@ router.get('/esselunga-executive/pdf', (req, res) => {
     const journey = supporting.esselungaJourney;
     const venueName = safeQuery(db, 'SELECT name FROM venues WHERE id = ?', [venueId])?.name || 'Venue';
 
-    const doc = renderEsselungaExecutivePdf(journey, { venueName });
+    // Optional Windy-style appendix when export frames exist on disk
+    // (`?includeFlowField=1`). Keeps the default download lean.
+    let flowFieldShots;
+    if (String(req.query.includeFlowField || '') === '1') {
+      const shotsDir = path.resolve(process.cwd(), 'prototypes/flowfield/shots');
+      const manifestPath = path.join(shotsDir, 'report_insights.json');
+      if (fs.existsSync(manifestPath)) {
+        const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+        flowFieldShots = (manifest.shots || [])
+          .map((s) => ({ ...s, imagePath: path.join(shotsDir, s.file) }))
+          .filter((s) => fs.existsSync(s.imagePath));
+      }
+    }
+
+    const doc = renderEsselungaExecutivePdf(journey, { venueName, flowFieldShots });
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader(
       'Content-Disposition',

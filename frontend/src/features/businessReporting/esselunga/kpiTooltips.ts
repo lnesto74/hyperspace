@@ -31,6 +31,8 @@ export const JOURNEY_SIGNAL_TOOLTIPS = {
 
 export const SECTION_TOOLTIPS = {
   heatmap: 'Live 3D heatmap of where shoppers walk and dwell. Warmer colours = more visits or dwell time. Drag to rotate the floorplan.',
+  flowField:
+    'Windy-style people-flow field: continuous carpet for density or dwell, animated streamlines for direction. Use the left panel to switch scalars and visualisation options.',
   timeline: 'Store rhythm over the selected period — when footfall and stopping activity peak.',
 };
 
