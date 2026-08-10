@@ -531,6 +531,7 @@ export default function BusinessReportingPage({ onClose, publicDashboard = false
       heatmapTimeframe,
       opsGrain,
       onOpsGrainChange: setOpsGrain,
+      loading,
       onOpenCategoryHeatmap: handleCategoryHeatmap,
       onExpandHeatmap: () => {
         const first = esselungaJourney?.heatmapCategories?.[0];
@@ -546,8 +547,8 @@ export default function BusinessReportingPage({ onClose, publicDashboard = false
     kpiValues, periodDeltas, topCategories, deadZones, topZones, zoneUtilThresholdPct, topCampaigns,
     underperformingCampaigns, campaignRanking, doohScreens, supporting.dataWindowStartTs,
     supporting.dataWindowEndTs, executivePillars, executiveHighlights, operationsConsole,
-    esselungaJourney, heatmapTimeframe, opsGrain, handleCategoryHeatmap, openHeatmapForCategory,
-    openHeatmapModal,
+    esselungaJourney, heatmapTimeframe, opsGrain, loading, handleCategoryHeatmap,
+    openHeatmapForCategory, openHeatmapModal,
   ]);
 
   return (
@@ -666,13 +667,15 @@ export default function BusinessReportingPage({ onClose, publicDashboard = false
             </div>
           )}
 
-          {loading && !error && (
+          {/* Custom boards keep the canvas visible and load per-tile; other
+              personas keep the full-page spinner until data is ready. */}
+          {loading && !error && !showCustomDashboard && (
             <div className="flex items-center justify-center py-8">
               <RefreshCw className="w-6 h-6 text-blue-400 animate-spin" />
             </div>
           )}
 
-          {!loading && !error && (
+          {((!loading && !error) || (showCustomDashboard && !error)) && (
             <>
               {showCustomDashboard && customDashboardData ? (
                 <DashboardBuilderViewport
@@ -680,7 +683,7 @@ export default function BusinessReportingPage({ onClose, publicDashboard = false
                   readOnly={isPublicCustomBoard}
                   fixedLayout={publicCustomLayout}
                 />
-              ) : showMeasurementAudit ? (
+              ) : loading ? null : showMeasurementAudit ? (
                 <ZoneAuditViewport
                   venueId={selectedVenueId!}
                   startTs={auditRange.startTs}

@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import { Loader2 } from 'lucide-react';
 import type { KpiTileDefinition } from '../personas';
 import ReportingKpiStrip from '../components/ReportingKpiStrip';
 import ReportingInsightsPanel from '../components/ReportingInsightsPanel';
@@ -70,6 +71,8 @@ export interface DashboardDataContext {
   onOpsGrainChange?: (grain: TimelineGrain) => void;
   onOpenCategoryHeatmap?: (row: CategoryRankingRow) => void;
   onExpandHeatmap?: () => void;
+  /** When true, tiles show a spinner instead of empty “no data” states. */
+  loading?: boolean;
 }
 
 const OPS_GRAINS: { id: TimelineGrain; label: string }[] = [
@@ -108,6 +111,17 @@ function Empty({ label }: { label: string }) {
   );
 }
 
+function WidgetLoader({ title }: { title?: string }) {
+  return (
+    <div className="h-full min-h-[100px] flex flex-col items-center justify-center gap-2 rounded-lg border border-gray-700/70 bg-gray-900/40 px-3">
+      <Loader2 className="w-5 h-5 text-cyan-400 animate-spin" />
+      <p className="text-[11px] text-gray-400">
+        {title ? `Loading ${title}…` : 'Loading…'}
+      </p>
+    </div>
+  );
+}
+
 function Shell({ title, children }: { title: string; children: ReactNode }) {
   return (
     <div className="h-full rounded-lg border border-gray-700/80 bg-gray-800/40 overflow-hidden flex flex-col">
@@ -117,6 +131,17 @@ function Shell({ title, children }: { title: string; children: ReactNode }) {
       <div className="p-2 flex-1 min-h-0 overflow-auto">{children}</div>
     </div>
   );
+}
+
+/** True while a fetch is in flight and this tile has no usable payload yet. */
+function shouldShowLoader(widgetId: WidgetId, ctx: DashboardDataContext): boolean {
+  if (!ctx.loading) return false;
+  const def = getWidget(widgetId);
+  if (def.needsJourney) return !ctx.journey;
+  if (def.needsOps) return !ctx.operationsConsole;
+  // Shared strips / maps: keep prior content on refresh; spinner only on first load.
+  const hasKpis = Object.keys(ctx.kpiValues || {}).length > 0;
+  return !ctx.journey && !ctx.operationsConsole && !hasKpis;
 }
 
 export default function WidgetRenderer({
@@ -129,6 +154,10 @@ export default function WidgetRenderer({
   const def = getWidget(widgetId);
   const journey = ctx.journey;
   const ops = ctx.operationsConsole;
+
+  if (shouldShowLoader(widgetId, ctx)) {
+    return <WidgetLoader title={def.name} />;
+  }
 
   switch (widgetId) {
     case 'ops-hero-kpi-strip': {
