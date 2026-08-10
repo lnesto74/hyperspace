@@ -29,6 +29,8 @@ import multer from 'multer';
 import { computeExecutiveJourney } from '../services/executive/ExecutiveJourneyService.js';
 import {
   renderEsselungaExecutivePdf,
+  renderBoardScopedExecutivePdf,
+  resolveBoardPdfPlan,
   executivePdfFileName,
 } from '../services/executive/EsselungaExecutivePdf.js';
 import { computeZoneAudit } from '../services/executive/ZoneAuditService.js';
@@ -521,11 +523,36 @@ router.get('/esselunga-executive/pdf', (req, res) => {
       }
     }
 
-    const doc = renderEsselungaExecutivePdf(journey, { venueName, flowFieldShots });
+    // Board mode: chapters follow published My-dashboards widgets. Thin boards
+    // fall back to the full Esselunga executive template so customers never get
+    // a near-empty PDF.
+    const mode = String(req.query.mode || 'full');
+    const widgetIds = String(req.query.widgets || '')
+      .split(',')
+      .map((w) => w.trim())
+      .filter(Boolean);
+
+    let doc;
+    let boardScoped = false;
+    if (mode === 'board' && widgetIds.length) {
+      const plan = resolveBoardPdfPlan(widgetIds);
+      if (!plan.thin) {
+        boardScoped = true;
+        doc = renderBoardScopedExecutivePdf(journey, {
+          venueName,
+          flowFieldShots: plan.sections.has('flow') ? flowFieldShots : undefined,
+          sections: plan.sections,
+        });
+      }
+    }
+    if (!doc) {
+      doc = renderEsselungaExecutivePdf(journey, { venueName, flowFieldShots });
+    }
+
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader(
       'Content-Disposition',
-      `attachment; filename="${executivePdfFileName(venueName, journey)}"`,
+      `attachment; filename="${executivePdfFileName(venueName, journey, { board: boardScoped })}"`,
     );
     doc.pipe(res);
     doc.end();

@@ -8,6 +8,7 @@ import {
   ChevronDown,
   ChevronRight,
   MonitorPlay,
+  Download,
 } from 'lucide-react';
 import { useVenue } from '../../context/VenueContext';
 import { useAuth } from '../../context/AuthContext';
@@ -476,6 +477,23 @@ export default function BusinessReportingPage({ onClose, publicDashboard = false
     openHeatmapForCategory(row.roiIds, row.category, heatmapTimeframe, selectedVenueId);
   }, [openHeatmapForCategory, selectedVenueId, heatmapTimeframe]);
 
+  /** Public custom boards: fixed-template PDF chapters from published widgets. */
+  const handleDownloadBoardPdf = useCallback(() => {
+    if (!selectedVenueId || !publicCustomLayout?.items?.length) return;
+    const { startTs, endTs } = (TIME_RANGES.find((t) => t.id === selectedTimeRange) || TIME_RANGES[1]).getRange();
+    const widgets = [...new Set(publicCustomLayout.items.map((i) => i.widgetId))];
+    const params = new URLSearchParams({
+      venueId: selectedVenueId,
+      startTs: String(startTs),
+      endTs: String(endTs),
+      variant: esselungaVariant,
+      mode: 'board',
+      widgets: widgets.join(','),
+      includeFlowField: '1',
+    });
+    window.open(`${API_BASE}/api/reporting/esselunga-executive/pdf?${params}`, '_blank', 'noopener');
+  }, [selectedVenueId, publicCustomLayout, selectedTimeRange, esselungaVariant]);
+
   const selectedVenueName = useMemo(
     () => (venueList || []).find(v => v.id === selectedVenueId)?.name || 'Store',
     [venueList, selectedVenueId],
@@ -602,6 +620,18 @@ export default function BusinessReportingPage({ onClose, publicDashboard = false
                 </option>
               ))}
             </select>
+          )}
+
+          {isPublicCustomBoard && (
+            <button
+              type="button"
+              onClick={handleDownloadBoardPdf}
+              className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-md bg-gray-700 hover:bg-gray-600 text-white"
+              title="Download a printable report for this board"
+            >
+              <Download className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Download report</span>
+            </button>
           )}
 
           <button

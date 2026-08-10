@@ -769,17 +769,55 @@ function drawFooter(doc, pageNo) {
   doc.page.margins.bottom = bottom;
 }
 
-// ----------------------------------------------------------------- entrypoint
+// ----------------------------------------------------------------- board → PDF
 
 /**
- * @returns {PDFDocument} a streaming document; the caller pipes and ends it.
+ * My-dashboards widget ids → report sections that reuse the executive page-2 look.
+ * Ops/PEBLE-only tiles do not yet have PDF chapters and do not count toward thickness.
  */
-export function renderEsselungaExecutivePdf(journey, { venueName, flowFieldShots } = {}) {
-  const doc = new PDFDocument({ size: 'A4', margin: MARGIN, autoFirstPage: false, bufferPages: true });
+const WIDGET_TO_SECTIONS = {
+  'exec-header-headline': ['verdict', 'kpis'],
+  'activity-timeline-chart': ['rhythm'],
+  'journey-signals-panel': ['journey'],
+  'exec-action-insights': ['insights'],
+  'checkout-panel': ['checkout', 'insights'],
+  'fresco-department-cards': ['fresco'],
+  'aisle-stat-stack': ['aisles'],
+  'category-visits-panel': ['aisles'],
+  'floor-visual-toggle': ['flow'],
+};
 
+const PAGE1_SECTIONS = new Set(['verdict', 'kpis', 'rhythm', 'journey', 'insights', 'checkout']);
+const PAGE2_SECTIONS = new Set(['fresco', 'aisles', 'checkout']);
+
+/**
+ * @param {string[]} widgetIds
+ * @returns {{ thin: boolean, sections: Set<string> }}
+ */
+export function resolveBoardPdfPlan(widgetIds) {
+  const sections = new Set();
+  for (const id of widgetIds || []) {
+    for (const s of WIDGET_TO_SECTIONS[id] || []) sections.add(s);
+  }
+  // Thickness ignores flow appendix — a board of only a floor visual still falls back.
+  const core = [...sections].filter((s) => s !== 'flow');
+  return { thin: core.length < 3, sections };
+}
+
+function finishPdf(doc) {
+  const range = doc.bufferedPageRange();
+  for (let i = 0; i < range.count; i++) {
+    doc.switchToPage(range.start + i);
+    drawFooter(doc, i + 1);
+  }
+  return doc;
+}
+
+function startPdfDoc(journey, venueName) {
+  const doc = new PDFDocument({ size: 'A4', margin: MARGIN, autoFirstPage: false, bufferPages: true });
   const timeZone = journey.storeHours?.timeZone || 'Europe/Rome';
   doc.addPage();
-  let y = drawHeader(doc, {
+  const y = drawHeader(doc, {
     venueName,
     rangeLabel: formatRange(journey.range.startTs, journey.range.endTs, timeZone),
     generatedAt: new Date(journey.generatedAt).toLocaleString('en-GB', {
@@ -792,6 +830,63 @@ export function renderEsselungaExecutivePdf(journey, { venueName, flowFieldShots
       hour12: false,
     }),
   });
+  return { doc, y };
+}
+
+/**
+ * Fixed-template report whose chapters follow a published My-dashboards board.
+ * Same visual language as the executive PDF; omits sections the board does not use.
+ *
+ * @returns {PDFDocument}
+ */
+export function renderBoardScopedExecutivePdf(journey, { venueName, flowFieldShots, sections } = {}) {
+  const want = sections instanceof Set ? sections : new Set(sections || []);
+  const { doc, y: headerY } = startPdfDoc(journey, venueName);
+  let y = headerY;
+
+  const wantPage1 = [...PAGE1_SECTIONS].some((s) => want.has(s));
+  if (wantPage1) {
+    if (want.has('verdict')) y = drawVerdict(doc, journey.headline, y);
+    if (want.has('kpis')) y = drawKpiCards(doc, journey.headlineKpis || [], y);
+    if (want.has('rhythm')) y = drawRhythm(doc, journey, y);
+    if (want.has('journey')) y = drawJourneyStrip(doc, journey, y);
+    if (want.has('insights') || want.has('checkout')) {
+      // Page-1 lower block already handles missing checkout or insights gracefully.
+      y = drawPage1Lower(doc, journey, y);
+    }
+  }
+
+  const wantPage2 = [...PAGE2_SECTIONS].some((s) => want.has(s));
+  if (wantPage2) {
+    doc.addPage();
+    y = MARGIN;
+    if (want.has('fresco')) y = drawFresco(doc, journey, y);
+    if (want.has('aisles')) y = drawAisles(doc, journey, y + (want.has('fresco') ? 6 : 0));
+    if (want.has('checkout')) {
+      if (y > A4.height - 200) {
+        doc.addPage();
+        y = MARGIN;
+      }
+      y = drawCheckout(doc, journey, y + 6);
+    }
+    drawDefinitions(doc, journey, y + 6);
+  }
+
+  if (want.has('flow') && flowFieldShots?.length) {
+    drawFlowField(doc, flowFieldShots);
+  }
+
+  return finishPdf(doc);
+}
+
+// ----------------------------------------------------------------- entrypoint
+
+/**
+ * @returns {PDFDocument} a streaming document; the caller pipes and ends it.
+ */
+export function renderEsselungaExecutivePdf(journey, { venueName, flowFieldShots } = {}) {
+  const { doc, y: headerY } = startPdfDoc(journey, venueName);
+  let y = headerY;
 
   y = drawVerdict(doc, journey.headline, y);
   y = drawKpiCards(doc, journey.headlineKpis || [], y);
@@ -816,17 +911,12 @@ export function renderEsselungaExecutivePdf(journey, { venueName, flowFieldShots
     drawFlowField(doc, flowFieldShots);
   }
 
-  const range = doc.bufferedPageRange();
-  for (let i = 0; i < range.count; i++) {
-    doc.switchToPage(range.start + i);
-    drawFooter(doc, i + 1);
-  }
-
-  return doc;
+  return finishPdf(doc);
 }
 
-export function executivePdfFileName(venueName, journey) {
+export function executivePdfFileName(venueName, journey, { board } = {}) {
   const slug = String(venueName || 'venue').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
   const day = new Date(journey.range.endTs).toISOString().slice(0, 10);
-  return `esselunga-executive-${slug}-${day}.pdf`;
+  const prefix = board ? 'hyperspace-board' : 'esselunga-executive';
+  return `${prefix}-${slug}-${day}.pdf`;
 }

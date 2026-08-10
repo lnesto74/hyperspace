@@ -12,6 +12,8 @@
 import assert from 'node:assert/strict';
 import {
   renderEsselungaExecutivePdf,
+  renderBoardScopedExecutivePdf,
+  resolveBoardPdfPlan,
   executivePdfFileName,
   formatRange,
 } from '../services/executive/EsselungaExecutivePdf.js';
@@ -197,6 +199,45 @@ const check = (name, fn) => fn()
     assert.match(label, /5 Aug 2026 08:00/, label);
     assert.match(label, /6 Aug 2026 14:38/, label);
     assert.match(label, /→/, label);
+  });
+
+  await check('thin boards are flagged so the route can fall back to full template', async () => {
+    const thin = resolveBoardPdfPlan(['ops-hero-kpi-strip', 'ops-alerts-panel']);
+    assert.equal(thin.thin, true);
+    const rich = resolveBoardPdfPlan([
+      'exec-header-headline',
+      'fresco-department-cards',
+      'aisle-stat-stack',
+      'checkout-panel',
+    ]);
+    assert.equal(rich.thin, false);
+    assert.ok(rich.sections.has('fresco'));
+    assert.ok(rich.sections.has('aisles'));
+    assert.ok(rich.sections.has('checkout'));
+  });
+
+  await check('board-scoped PDF renders with page-2 sections only', async () => {
+    const plan = resolveBoardPdfPlan([
+      'fresco-department-cards',
+      'aisle-stat-stack',
+      'checkout-panel',
+    ]);
+    const buf = await new Promise((resolve, reject) => {
+      const doc = renderBoardScopedExecutivePdf(fullPayload(), {
+        venueName: 'TREVIGLIO Schematico',
+        sections: plan.sections,
+      });
+      const chunks = [];
+      doc.on('data', (c) => chunks.push(c));
+      doc.on('end', () => resolve(Buffer.concat(chunks)));
+      doc.on('error', reject);
+      doc.end();
+    });
+    assert.strictEqual(buf.subarray(0, 5).toString(), '%PDF-');
+    assert.ok(buf.subarray(-1024).includes('%%EOF'));
+    assert.ok(buf.length > 4000, `suspiciously small: ${buf.length}`);
+    const name = executivePdfFileName('TREVIGLIO Schematico', fullPayload(), { board: true });
+    assert.match(name, /^hyperspace-board-treviglio-schematico-\d{4}-\d{2}-\d{2}\.pdf$/, name);
   });
 
   // Layout defects survive every assertion above — the only way to catch a
