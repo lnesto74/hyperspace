@@ -199,6 +199,15 @@ function fetchAisleDwellUnique(db, aisleRoiIds, startTs, endTs, dwellMs) {
  *
  * It still understates true reach when re-ID fails between door and shelf.
  */
+/**
+ * Of entrance track keys, how many also appear in a shopping ROI.
+ *
+ * The naïve form (DISTINCT entrance ⋈ DISTINCT shopping) materialises two huge
+ * sets and joins them. On a 7-day Treviglio window that was ~122s of the ~143s
+ * report and tripped Caddy's proxy timeout (HTTP 502). Probe shopping for the
+ * entrance keys in chunks instead: entrance DISTINCT is cheap (one gate ROI),
+ * and each chunk hits (venue, track, time) then filters by shopping ROI.
+ */
 function fetchShoppingReachByEntranceTracks(db, venueId, startTs, endTs, trafficRoiIds, shoppingRoiIds) {
   if (!trafficRoiIds?.length || !shoppingRoiIds?.length) {
     return {
@@ -211,28 +220,31 @@ function fetchShoppingReachByEntranceTracks(db, venueId, startTs, endTs, traffic
   }
   const tPh = trafficRoiIds.map(() => '?').join(',');
   const sPh = shoppingRoiIds.map(() => '?').join(',');
-  const row = safeQuery(db, `
-    WITH ent AS (
-      SELECT DISTINCT track_key
-      FROM zone_visits
-      WHERE venue_id = ? AND start_time >= ? AND start_time < ?
-        AND roi_id IN (${tPh})
-        AND track_key NOT LIKE '%cashier%'
-    ),
-    shop AS (
-      SELECT DISTINCT track_key
+
+  const entranceKeys = safeQueryAll(db, `
+    SELECT DISTINCT track_key
+    FROM zone_visits
+    WHERE venue_id = ? AND start_time >= ? AND start_time < ?
+      AND roi_id IN (${tPh})
+      AND track_key NOT LIKE '%cashier%'
+  `, [venueId, startTs, endTs, ...trafficRoiIds]).map(r => r.track_key);
+
+  const entranceTracks = entranceKeys.length;
+  let reachedShopping = 0;
+  const CHUNK = 500;
+  for (let i = 0; i < entranceKeys.length; i += CHUNK) {
+    const part = entranceKeys.slice(i, i + CHUNK);
+    const kPh = part.map(() => '?').join(',');
+    const row = safeQuery(db, `
+      SELECT COUNT(DISTINCT track_key) AS c
       FROM zone_visits
       WHERE venue_id = ? AND start_time >= ? AND start_time < ?
         AND roi_id IN (${sPh})
-        AND track_key NOT LIKE '%cashier%'
-    )
-    SELECT
-      (SELECT COUNT(*) FROM ent) AS entranceTracks,
-      (SELECT COUNT(*) FROM ent e JOIN shop s ON s.track_key = e.track_key) AS reachedShopping
-  `, [venueId, startTs, endTs, ...trafficRoiIds, venueId, startTs, endTs, ...shoppingRoiIds]);
+        AND track_key IN (${kPh})
+    `, [venueId, startTs, endTs, ...shoppingRoiIds, ...part]);
+    reachedShopping += row?.c || 0;
+  }
 
-  const entranceTracks = row?.entranceTracks || 0;
-  const reachedShopping = row?.reachedShopping || 0;
   return {
     entranceTracks,
     reachedShopping,

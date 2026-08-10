@@ -73,8 +73,11 @@ const cache = new Map();
  */
 function cacheProfileFor(spanMs) {
   if (spanMs <= 2 * 60 * 60 * 1000) return { bucketMs: 30_000, ttlMs: 30_000 };
+  // 24h trailing windows: short enough that a refresh should see new traffic.
   if (spanMs <= 36 * 60 * 60 * 1000) return { bucketMs: 5 * 60_000, ttlMs: 5 * 60_000 };
-  return { bucketMs: 5 * 60_000, ttlMs: 5 * 60_000 };
+  // Multi-day (7d) reports are expensive and change slowly — hold longer so a
+  // second open does not freeze the live process again.
+  return { bucketMs: 15 * 60_000, ttlMs: 15 * 60_000 };
 }
 
 /**

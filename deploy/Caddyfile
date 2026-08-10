@@ -55,6 +55,19 @@
 }
 
 app.hyspace.app {
+    # Multi-day Esselunga executive can still take tens of seconds on cold cache;
+    # the default reverse_proxy idle cut (~60-90s) was returning HTTP 502 before
+    # the handler finished. Give reporting a longer leash than the rest of /api.
+    handle /api/reporting/* {
+        reverse_proxy backend:3001 {
+            transport http {
+                read_timeout 180s
+                write_timeout 180s
+                response_header_timeout 180s
+            }
+        }
+    }
+
     # Backend API
     handle /api/* {
         reverse_proxy backend:3001
