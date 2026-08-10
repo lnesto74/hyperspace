@@ -669,7 +669,7 @@ export default function EsselungaExecutiveViewport({
                 <AisleStat
                   value={`${aisles.bypassPct}%`}
                   label="Bypass"
-                  caption="of store visitors never entered the category"
+                  caption="of entrance tracks never seen in an aisle"
                   color="#fb923c"
                 />
               )}
@@ -683,8 +683,8 @@ export default function EsselungaExecutiveViewport({
               </p>
               <p>
                 <span className="text-gray-400">Pass-through</span> and <span className="text-gray-400">bypass</span> answer
-                different questions. Pass-through is the share of crossings that did not stop; bypass is the share of store
-                visitors who never entered the category at all.
+                different questions. Pass-through is the share of aisle crossings that did not stop; bypass is the share of
+                people seen at the entrance who were never seen in an aisle.
               </p>
               <p>
                 Rank fixtures by <span className="text-gray-400">engagement rate</span> rather than stopping power. At
@@ -859,7 +859,9 @@ export default function EsselungaExecutiveViewport({
               </div>
               <div>
                 <dt className="inline text-gray-400 font-medium">Bypass · </dt>
-                <dd className="inline">share of store visitors who never entered the category, i.e. 100 − penetration.</dd>
+                <dd className="inline">
+                  of distinct tracks seen at the entrance, the share never seen in an aisle (100 − penetration).
+                </dd>
               </div>
               <div>
                 <dt className="inline text-gray-400 font-medium">Checkout wait · </dt>

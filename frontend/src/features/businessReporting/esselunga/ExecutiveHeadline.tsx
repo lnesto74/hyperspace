@@ -101,7 +101,7 @@ function DeltaChip({ kpi }: { kpi: HeadlineKpi }) {
     <span className={`inline-flex items-center gap-0.5 text-[11px] font-medium ${colour}`}>
       <Icon className="w-3.5 h-3.5" />
       {Math.abs(kpi.deltaPct)}%
-      <span className="text-gray-400 font-normal ml-1">vs last week</span>
+      <span className="text-gray-400 font-normal ml-1">vs {kpi.compareLabel || 'last week'}</span>
     </span>
   );
 }

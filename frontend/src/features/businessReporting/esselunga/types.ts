@@ -185,18 +185,20 @@ export interface ExecutiveInsight {
 /** The same window one week earlier, so headline numbers can carry a direction. */
 export interface ExecutiveComparison {
   label: string;
+  /** Short chip label, e.g. "last week" or "previous 24 hours". */
+  shortLabel?: string;
   range: { startTs: number; endTs: number };
   /** False when the comparison window predates a change in how the data is measured. */
   comparable: boolean;
-  caveat: string;
-  entrants: number;
-  totalVisitors: number;
-  shoppingDwellMin: number;
+  caveat: string | null;
+  entrants: number | null;
+  totalVisitors: number | null;
+  shoppingDwellMin: number | null;
   shoppingDwellReliable: boolean;
-  stoppingPowerPct: number;
+  stoppingPowerPct: number | null;
   penetrationPct: number | null;
-  checkoutCompleted: number;
-  avgWaitMin: number;
+  checkoutCompleted: number | null;
+  avgWaitMin: number | null;
   avgTicket: number | null;
   spi: number | null;
 }
@@ -216,6 +218,8 @@ export interface HeadlineKpi {
   deltaPct: number | null;
   /** Set when the delta was withheld rather than simply unavailable. */
   noCompareReason?: string | null;
+  /** What the delta is against — "last week" or "previous 24 hours". */
+  compareLabel?: string;
   direction: 'up' | 'down' | 'flat';
   /** Whether the movement is good news — a longer queue is a bigger number and a worse store. */
   good: boolean | null;

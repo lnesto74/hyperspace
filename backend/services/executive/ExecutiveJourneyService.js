@@ -185,6 +185,62 @@ function fetchAisleDwellUnique(db, aisleRoiIds, startTs, endTs, dwellMs) {
   return row?.c || 0;
 }
 
+/**
+ * Esselunga's penetration is "visitors who entered an aisle / visitors who
+ * entered the store". Session stitching used to answer that from ~a few
+ * thousand in-memory entrance sessions, which produced an 80% bypass figure
+ * while a quarter of a million aisle tracks existed in the same week.
+ *
+ * Of the distinct track keys seen at the entrance line, the share that also
+ * appears in an aisle ROI is the closest we can get with the identities we
+ * actually have. It still understates true reach when re-ID fails between the
+ * door and the shelf, but it can no longer invent a store where four in five
+ * shoppers never walk an aisle.
+ */
+function fetchAisleReachByEntranceTracks(db, venueId, startTs, endTs, trafficRoiIds, aisleRoiIds) {
+  if (!trafficRoiIds?.length || !aisleRoiIds?.length) {
+    return {
+      entranceTracks: 0,
+      reachedAisle: 0,
+      penetrationPct: null,
+      reliable: false,
+      method: 'entrance_track_overlap',
+    };
+  }
+  const tPh = trafficRoiIds.map(() => '?').join(',');
+  const aPh = aisleRoiIds.map(() => '?').join(',');
+  const row = safeQuery(db, `
+    WITH ent AS (
+      SELECT DISTINCT track_key
+      FROM zone_visits
+      WHERE venue_id = ? AND start_time >= ? AND start_time < ?
+        AND roi_id IN (${tPh})
+        AND track_key NOT LIKE '%cashier%'
+    ),
+    aisle AS (
+      SELECT DISTINCT track_key
+      FROM zone_visits
+      WHERE venue_id = ? AND start_time >= ? AND start_time < ?
+        AND roi_id IN (${aPh})
+        AND track_key NOT LIKE '%cashier%'
+    )
+    SELECT
+      (SELECT COUNT(*) FROM ent) AS entranceTracks,
+      (SELECT COUNT(*) FROM ent e JOIN aisle a ON a.track_key = e.track_key) AS reachedAisle
+  `, [venueId, startTs, endTs, ...trafficRoiIds, venueId, startTs, endTs, ...aisleRoiIds]);
+
+  const entranceTracks = row?.entranceTracks || 0;
+  const reachedAisle = row?.reachedAisle || 0;
+  return {
+    entranceTracks,
+    reachedAisle,
+    penetrationPct: entranceTracks > 0 ? pct(reachedAisle, entranceTracks) : null,
+    // A handful of entrance tracks is noise; below that the share swings on one person.
+    reliable: entranceTracks >= 30,
+    method: 'entrance_track_overlap',
+  };
+}
+
 function buildJourneySignals(totalVisitors, footfall, aisleMetrics, checkoutChannels, checkoutCompleted, avgWaitMin) {
   const totalSessions = checkoutChannels.reduce((s, c) => s + c.sessions, 0);
   const avgAbandon = checkoutChannels.length
@@ -421,7 +477,7 @@ function fetchUniqueVisitorsByGroup(db, venueId, startTs, endTs, groups) {
  * rollups need, so each aggregate is computed once no matter how many callers
  * ask for it.
  */
-function createJourneyContext(db, venueId, startTs, endTs, metricThresholds, episodeRoiIds = []) {
+function createJourneyContext(db, venueId, startTs, endTs, metricThresholds, episodeRoiIds = [], trafficRoiIds = []) {
   const uniqueCache = new Map();
   // Deferred: episode reconstruction is the one index that needs row-level
   // access, so it is only paid for by requests that render a section using it.
@@ -441,6 +497,7 @@ function createJourneyContext(db, venueId, startTs, endTs, metricThresholds, epi
     startTs,
     endTs,
     metricThresholds,
+    trafficRoiIds,
     roiStats: buildRoiStatsIndex(db, venueId, startTs, endTs, metricThresholds),
     queueStats: buildQueueStatsIndex(db, venueId, startTs, endTs, metricThresholds.queueFloorMs),
     episodeStats,
@@ -1055,7 +1112,7 @@ function buildAisleCategoryGroups(classifiedRois, ctx) {
 }
 
 function buildAisleMetrics(classifiedRois, ctx, totalVisitors, sessionAnalytics) {
-  const { db, startTs, endTs, metricThresholds, roiStats } = ctx;
+  const { db, venueId, startTs, endTs, metricThresholds, roiStats, trafficRoiIds } = ctx;
   const aisleRois = classifiedRois.filter(r => r.classification.group === 'aisles');
   const roiIds = aisleRois.map(r => r.id);
   const stats = roiStats.statsFor(roiIds);
@@ -1085,13 +1142,13 @@ function buildAisleMetrics(classifiedRois, ctx, totalVisitors, sessionAnalytics)
       .filter(g => g.category && !/^(uncategorized|no content available)$/i.test(g.category));
   })();
 
-  const penetrationPct = sessionAnalytics?.aislePenetration?.reliable
-    ? sessionAnalytics.aislePenetration.penetrationPct
-    : null;
+  const aisleReach = fetchAisleReachByEntranceTracks(
+    db, venueId, startTs, endTs, trafficRoiIds || [], roiIds,
+  );
+  const penetrationPct = aisleReach.reliable ? aisleReach.penetrationPct : null;
   const aisleDwellUnique = sessionAnalytics?.aislePenetration?.sessionsWithAisleStop
     ?? fetchAisleDwellUnique(db, roiIds, startTs, endTs, metricThresholds.dwellMs);
-  const aisleReachReliable = sessionAnalytics?.aislePenetration?.reliable
-    ?? (totalVisitors > 0 && aisleDwellUnique <= totalVisitors * 1.05);
+  const aisleReachReliable = aisleReach.reliable;
   const stoppingPowerPct = stats.visits > 0 ? pct(stats.dwellVisits, stats.visits) : 0;
 
   // These are two different questions that used to share one field. Of the
@@ -1099,10 +1156,9 @@ function buildAisleMetrics(classifiedRois, ctx, totalVisitors, sessionAnalytics)
   // is what the ring gauge has always been labelled.
   const passThroughPct = Math.max(0, Math.round((100 - stoppingPowerPct) * 10) / 10);
 
-  // Bypass, as Esselunga define it, is 100 - penetration: the share of store
-  // visitors who skipped the category entirely. Null rather than 100 when
-  // penetration cannot be measured, so an unknown never reads as "everybody
-  // walked past".
+  // Bypass, as Esselunga define it, is 100 − penetration: of people seen at the
+  // entrance, the share never seen in an aisle. Null rather than 100 when the
+  // reach sample is too thin, so an unknown never reads as "everybody walked past".
   const bypassPct = penetrationPct != null
     ? Math.max(0, Math.round((100 - penetrationPct) * 10) / 10)
     : null;
@@ -1152,6 +1208,9 @@ function buildAisleMetrics(classifiedRois, ctx, totalVisitors, sessionAnalytics)
     penetrationPct,
     aisleDwellUnique,
     aisleReachReliable,
+    aisleReachMethod: aisleReach.method,
+    entranceTracks: aisleReach.entranceTracks,
+    entranceTracksReachedAisle: aisleReach.reachedAisle,
     dwellVisits: stats.dwellVisits,
     engagementVisits: stats.engagementVisits,
     engagementRatePct: stats.visits > 0 ? pct(stats.rankVisits, stats.visits) : 0,
@@ -1248,7 +1307,7 @@ function buildInsights(payload) {
       id: 'aisle-penetration',
       severity: 'info',
       title: 'Aisle penetration below target',
-      message: `Only ${payload.aisles.penetrationPct}% of entrants reach aisles. Top aisle: ${topAisle.name}.`,
+      message: `Only ${payload.aisles.penetrationPct}% of entrance tracks are also seen in an aisle. Top aisle: ${topAisle.name}.`,
       action: 'Review layout and signage toward high-traffic aisles',
       section: 'aisles',
     });
@@ -1316,21 +1375,62 @@ const MEASUREMENT_EPOCH_MS = Date.parse(process.env.MEASUREMENT_EPOCH || '2026-0
 const COMPARISON_CAVEAT =
   'counting and dwell measurement both changed on 6 August, so a comparison back to before then would report the fix as a change in trade';
 
+function formatCompareSpanLabel(spanMs) {
+  if (spanMs <= 2 * 60 * 60 * 1000) return 'previous hour';
+  if (spanMs <= 36 * 60 * 60 * 1000) return 'previous 24 hours';
+  return 'previous period';
+}
+
+/**
+ * Prefer the same window last week (supermarket traffic is weekday-shaped).
+ * When that week still sits before the measurement epoch, fall back to the
+ * immediately previous period of the same length — otherwise a 24h view on
+ * 10 August reports "no comparison" even though 9 August is fully post-fix,
+ * which reads as a bug rather than a careful caveat.
+ */
+function resolveComparisonWindow(startTs, endTs) {
+  const spanMs = endTs - startTs;
+  const weekStart = startTs - COMPARISON_SHIFT_MS;
+  const weekEnd = endTs - COMPARISON_SHIFT_MS;
+  if (!Number.isFinite(MEASUREMENT_EPOCH_MS) || weekStart >= MEASUREMENT_EPOCH_MS) {
+    return {
+      startTs: weekStart,
+      endTs: weekEnd,
+      label: 'same window, previous week',
+      shortLabel: 'last week',
+    };
+  }
+
+  const priorStart = startTs - spanMs;
+  const priorEnd = startTs;
+  if (priorStart >= MEASUREMENT_EPOCH_MS) {
+    return {
+      startTs: priorStart,
+      endTs: priorEnd,
+      label: formatCompareSpanLabel(spanMs),
+      shortLabel: formatCompareSpanLabel(spanMs),
+    };
+  }
+
+  return {
+    startTs: weekStart,
+    endTs: weekEnd,
+    label: 'same window, previous week',
+    shortLabel: 'last week',
+    blocked: true,
+  };
+}
+
 function buildComparison(db, venueId, startTs, endTs, variant, metricThresholdOpts) {
   if (endTs - startTs > COMPARISON_MAX_SPAN_MS) return null;
 
-  const prevStart = startTs - COMPARISON_SHIFT_MS;
-  const prevEnd = endTs - COMPARISON_SHIFT_MS;
+  const window = resolveComparisonWindow(startTs, endTs);
 
-  // The headline builders only need the caveat when the previous window sits
-  // before the measurement epoch. Recomputing that whole journey (~3s idle,
-  // much more under live load) just to throw the numbers away is what made
-  // every 24h open pay for two reports until a full week of post-epoch history
-  // exists.
-  if (Number.isFinite(MEASUREMENT_EPOCH_MS) && prevStart < MEASUREMENT_EPOCH_MS) {
+  if (window.blocked) {
     return {
-      label: 'same window, previous week',
-      range: { startTs: prevStart, endTs: prevEnd },
+      label: window.label,
+      shortLabel: window.shortLabel,
+      range: { startTs: window.startTs, endTs: window.endTs },
       comparable: false,
       caveat: COMPARISON_CAVEAT,
       entrants: null,
@@ -1351,8 +1451,8 @@ function buildComparison(db, venueId, startTs, endTs, variant, metricThresholdOp
     prev = computeExecutiveJourney(
       db,
       venueId,
-      prevStart,
-      prevEnd,
+      window.startTs,
+      window.endTs,
       variant,
       { ...metricThresholdOpts, skipComparison: true },
     );
@@ -1362,10 +1462,11 @@ function buildComparison(db, venueId, startTs, endTs, variant, metricThresholdOp
   }
 
   return {
-    label: 'same window, previous week',
-    range: { startTs: prevStart, endTs: prevEnd },
+    label: window.label,
+    shortLabel: window.shortLabel,
+    range: { startTs: window.startTs, endTs: window.endTs },
     comparable: true,
-    caveat: COMPARISON_CAVEAT,
+    caveat: null,
     entrants: prev.overview.perimeterEntrants ?? 0,
     totalVisitors: prev.overview.totalVisitors,
     shoppingDwellMin: prev.overview.avgStoreDwellMin,
@@ -1467,6 +1568,7 @@ function buildHeadlineKpis(payload) {
   }
 
   const blocked = cmp != null && cmp.comparable === false;
+  const compareLabel = cmp?.shortLabel || 'last week';
 
   return items.map((it) => {
     const deltaPct = blocked ? null : relDelta(it.value, it.previous);
@@ -1474,6 +1576,7 @@ function buildHeadlineKpis(payload) {
       ...it,
       previous: blocked ? null : it.previous,
       noCompareReason: blocked ? cmp.caveat : null,
+      compareLabel,
       deltaPct,
       direction: deltaPct == null ? 'flat' : deltaPct > 0 ? 'up' : deltaPct < 0 ? 'down' : 'flat',
       // Whether the movement is good news, which is not the same as whether it
@@ -1497,6 +1600,7 @@ function buildHeadline(payload) {
   const waitMin = payload.checkout.avgWaitMin ?? 0;
 
   const usable = cmp != null && cmp.comparable !== false;
+  const vsLabel = cmp?.shortLabel || cmp?.label || 'the prior period';
   const dEntrants = usable ? relDelta(entrants, cmp.entrants) : null;
   const dStopping = usable ? relDelta(stopping, cmp.stoppingPowerPct) : null;
 
@@ -1505,17 +1609,17 @@ function buildHeadline(payload) {
     dEntrants == null
       ? `${entrants.toLocaleString()} people came in.`
       : `${entrants.toLocaleString()} people came in, ${dEntrants >= 0 ? 'up' : 'down'} `
-        + `${Math.abs(dEntrants)}% on the same window last week.`,
+        + `${Math.abs(dEntrants)}% vs ${vsLabel}.`,
   );
   sentences.push(
     dStopping == null
       ? `${stopping}% of aisle crossings became a stop at the shelf.`
       : `${stopping}% of aisle crossings became a stop at the shelf, against `
-        + `${cmp.stoppingPowerPct}% a week ago.`,
+        + `${cmp.stoppingPowerPct}% ${vsLabel === 'last week' ? 'a week ago' : `in the ${vsLabel}`}.`,
   );
   if (waitMin > 0) sentences.push(`Checkout queues averaged ${formatWait(waitMin)}.`);
 
-  // A queue is bad news on its own evidence, with or without last week to
+  // A queue is bad news on its own evidence, with or without a prior window to
   // compare against, so it is judged before the deltas rather than inside them.
   let tone = dEntrants == null && dStopping == null ? 'info' : 'good';
   if ((dEntrants != null && dEntrants < -10)
@@ -1523,8 +1627,8 @@ function buildHeadline(payload) {
     || waitMin > 5) tone = 'warn';
   if ((dEntrants != null && dEntrants < -25) || waitMin > 10) tone = 'bad';
 
-  if (!usable && cmp != null) {
-    sentences.push(`Week-on-week change is not shown: ${cmp.caveat}.`);
+  if (!usable && cmp?.caveat) {
+    sentences.push(`Change vs prior period is not shown: ${cmp.caveat}.`);
   }
 
   return { tone, text: sentences.join(' ') };
@@ -1600,6 +1704,7 @@ export function computeExecutiveJourney(db, venueId, startTs, endTs, variant = '
   const ctx = createJourneyContext(
     db, venueId, startTs, endTs, metricThresholds,
     classifiedRois.filter(r => r.classification.group === 'fresco').map(r => r.id),
+    trafficRoiIds,
   );
 
   const frescoDepartments = buildFrescoDepartments(classifiedRois, ctx);

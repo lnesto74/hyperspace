@@ -355,10 +355,10 @@ function drawAisles(doc, journey, y) {
       : null,
     ['Pass-through', `${a.passThroughPct ?? Math.max(0, 100 - (a.stoppingPowerPct ?? 0))}%`, 'crossed without stopping'],
     a.penetrationPct != null
-      ? ['Penetration', `${a.penetrationPct}%`, 'of visitors reached an aisle']
+      ? ['Penetration', `${a.penetrationPct}%`, 'of entrance tracks also seen in an aisle']
       : null,
     a.bypassPct != null
-      ? ['Bypass', `${a.bypassPct}%`, 'of visitors never entered an aisle']
+      ? ['Bypass', `${a.bypassPct}%`, 'of entrance tracks never seen in an aisle']
       : null,
   ].filter(Boolean);
 
@@ -501,7 +501,7 @@ function drawDefinitions(doc, journey, y) {
     ['Mean dwell', 'Total time in the zone divided by distinct shoppers, with no minimum. Restricting the average '
       + 'to long visits raises the number but makes it less able to separate one zone from another.'],
     ['Pass-through', 'Share of crossings that did not become a stop.'],
-    ['Bypass', 'Share of store visitors who never entered the category, that is 100 minus penetration.'],
+    ['Bypass', 'Of distinct tracks seen at the entrance, the share never seen in an aisle (100 minus penetration).'],
     ['Checkout wait', `Measured over queue visits of ${queueFloor} seconds or more, since most crossings of a `
       + 'queue zone are shoppers walking past it.'],
     ['Shopping dwell', 'Median time a visit spends inside tracked zones. Not entrance-to-exit time in store.'],
