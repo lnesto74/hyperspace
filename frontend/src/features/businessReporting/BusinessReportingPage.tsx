@@ -111,7 +111,7 @@ export default function BusinessReportingPage({ onClose, publicDashboard = false
       ? (getDemoLinkType() === 'custom-dashboard' ? CUSTOM_DASHBOARD_PERSONA : ESSELUNGA_PERSONA)
       : PERSONAS[0].id,
   );
-  const [selectedTimeRange, setSelectedTimeRange] = useState<TimeRange>(publicDashboard ? '7d' : '24h');
+  const [selectedTimeRange, setSelectedTimeRange] = useState<TimeRange>('24h');
   const [opsGrain, setOpsGrain] = useState<TimelineGrain>('hour');
   const [kpiValues, setKpiValues] = useState<Record<string, number | null>>({});
   const [supporting, setSupporting] = useState<Record<string, unknown>>({});
