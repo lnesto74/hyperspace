@@ -511,6 +511,8 @@ export default function BusinessReportingPage({ onClose, publicDashboard = false
       operationsConsole,
       journey: esselungaJourney,
       heatmapTimeframe,
+      opsGrain,
+      onOpsGrainChange: setOpsGrain,
       onOpenCategoryHeatmap: handleCategoryHeatmap,
       onExpandHeatmap: () => {
         const first = esselungaJourney?.heatmapCategories?.[0];
@@ -526,7 +528,8 @@ export default function BusinessReportingPage({ onClose, publicDashboard = false
     kpiValues, periodDeltas, topCategories, deadZones, topZones, zoneUtilThresholdPct, topCampaigns,
     underperformingCampaigns, campaignRanking, doohScreens, supporting.dataWindowStartTs,
     supporting.dataWindowEndTs, executivePillars, executiveHighlights, operationsConsole,
-    esselungaJourney, heatmapTimeframe, handleCategoryHeatmap, openHeatmapForCategory, openHeatmapModal,
+    esselungaJourney, heatmapTimeframe, opsGrain, handleCategoryHeatmap, openHeatmapForCategory,
+    openHeatmapModal,
   ]);
 
   return (

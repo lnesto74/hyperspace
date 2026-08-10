@@ -7,6 +7,8 @@ const VALID_LINK_TYPES = new Set(['story', 'dashboard', 'mapper', 'custom-dashbo
 const VALID_WIDGET_IDS = new Set([
   'ops-hero-kpi-strip',
   'ops-alerts-panel',
+  'ops-store-activity-chart',
+  'ops-footfall-by-hour',
   'reporting-kpi-strip',
   'reporting-insights-panel',
   'exec-store-health-pillars',

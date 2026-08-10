@@ -470,45 +470,62 @@ interface CheckoutChannelView extends CheckoutLaneView {
 const waitSec = (l: CheckoutLaneView) => l.avgWaitSec ?? Math.round((l.avgWaitMin || 0) * 60);
 
 /**
- * Load across the tills of one channel. A single card per channel hides the
- * question anyone standing in the store actually asks — which till is the
- * queue forming at — even though every lane is measured separately.
+ * Load across the tills of one channel. Horizontal bars (sorted busiest-first)
+ * so each lane’s shopper count and wait read as one row — vertical % bars were
+ * collapsing to empty because the flex children had no definite height.
  */
 function LaneLoadChart({ lanes }: { lanes: CheckoutLaneView[] }) {
-  const max = Math.max(...lanes.map(l => l.sessions), 1);
+  const sorted = [...lanes].sort((a, b) => b.sessions - a.sessions || waitSec(b) - waitSec(a));
+  const max = Math.max(...sorted.map(l => l.sessions), 1);
   const slowest = lanes.reduce((a, b) => (waitSec(b) > waitSec(a) ? b : a), lanes[0]);
+  const slowestId = waitSec(slowest) > 0 ? slowest.id : null;
 
   return (
     <div>
-      <div className="flex items-end gap-1 h-24">
-        {lanes.map(lane => {
-          const hot = lane.id === slowest.id && waitSec(slowest) > 0;
+      <p className="text-[11px] text-gray-400 mb-3 leading-relaxed">
+        Each row is one till queue. Bar length = how many shoppers joined that lane in the period.
+        Amber = longest average wait (slowest service), not necessarily the busiest.
+      </p>
+      <div className="flex items-center gap-2 text-[10px] uppercase tracking-wider text-gray-500 mb-1.5 px-0.5">
+        <span className="w-9 shrink-0">Lane</span>
+        <span className="flex-1">Queue load</span>
+        <span className="w-14 text-right shrink-0">Shoppers</span>
+        <span className="w-12 text-right shrink-0">Wait</span>
+      </div>
+      <div className="space-y-1.5">
+        {sorted.map(lane => {
+          const hot = lane.id === slowestId;
+          const pct = Math.max(4, (lane.sessions / max) * 100);
           return (
             <div
               key={lane.id}
-              className="flex-1 flex flex-col justify-end min-w-0"
-              title={`${lane.label} · ${lane.sessions.toLocaleString()} shoppers · ${formatDwellDuration(lane.avgWaitSec, lane.avgWaitMin)} wait`}
+              className="flex items-center gap-2"
+              title={`${lane.label}: ${lane.sessions.toLocaleString()} shoppers joined · ${formatDwellDuration(lane.avgWaitSec, lane.avgWaitMin)} avg wait${hot ? ' · longest wait' : ''}`}
             >
-              <div
-                className={`w-full rounded-t transition-colors ${hot ? 'bg-amber-400/80' : 'bg-cyan-500/60'}`}
-                style={{ height: `${Math.max(3, (lane.sessions / max) * 100)}%` }}
-              />
+              <span className={`w-9 shrink-0 text-xs font-medium tabular-nums ${hot ? 'text-amber-300' : 'text-gray-200'}`}>
+                {lane.label}
+              </span>
+              <div className="flex-1 h-5 rounded bg-gray-900/70 overflow-hidden border border-gray-700/40">
+                <div
+                  className={`h-full rounded transition-all ${hot ? 'bg-amber-400/85' : 'bg-cyan-500/70'}`}
+                  style={{ width: `${pct}%` }}
+                />
+              </div>
+              <span className="w-14 shrink-0 text-right text-xs text-white tabular-nums">
+                {lane.sessions.toLocaleString()}
+              </span>
+              <span className={`w-12 shrink-0 text-right text-xs tabular-nums ${hot ? 'text-amber-300' : 'text-gray-400'}`}>
+                {formatDwellDuration(lane.avgWaitSec, lane.avgWaitMin)}
+              </span>
             </div>
           );
         })}
       </div>
-      <div className="flex gap-1 mt-1.5">
-        {lanes.map(lane => (
-          <div key={lane.id} className="flex-1 min-w-0 text-center">
-            <span className="text-[11px] text-gray-400 tabular-nums">
-              {lane.label.replace('#', '')}
-            </span>
-          </div>
-        ))}
-      </div>
-      <p className="text-[11px] text-gray-400 mt-2">
-        Lane number · shoppers who joined that queue. Amber is the longest average wait.
-      </p>
+      {slowestId && (
+        <p className="text-[11px] text-amber-400/80 mt-2.5">
+          Longest wait: {slowest.label} ({formatDwellDuration(slowest.avgWaitSec, slowest.avgWaitMin)})
+        </p>
+      )}
     </div>
   );
 }
@@ -578,7 +595,7 @@ export function CheckoutPanel({
                 <div className="h-px bg-gray-700/50 my-4" />
                 <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
                   <div className="lg:col-span-8">
-                    <h4 className="text-[13px] font-medium text-gray-200 mb-2">
+                    <h4 className="text-[13px] font-medium text-gray-200 mb-1">
                       Shoppers queued per lane
                     </h4>
                     <LaneLoadChart lanes={lanes} />

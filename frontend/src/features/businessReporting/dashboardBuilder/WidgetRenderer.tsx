@@ -14,7 +14,13 @@ import type {
 } from '../components/ExecutiveSummaryViewport';
 import OperationsHeroStrip from '../operationsConsole/OperationsHeroStrip';
 import OperationsAlertsPanel from '../operationsConsole/OperationsAlertsPanel';
-import type { OperationsConsoleData, PeriodDeltas as OpsPeriodDeltas } from '../operationsConsole/types';
+import OperationsTimelineChart from '../operationsConsole/OperationsTimelineChart';
+import OperationsFootfallPanel from '../operationsConsole/OperationsFootfallPanel';
+import type {
+  OperationsConsoleData,
+  PeriodDeltas as OpsPeriodDeltas,
+  TimelineGrain,
+} from '../operationsConsole/types';
 import { ExecutiveHeader } from '../esselunga/ExecutiveHeadline';
 import {
   ActivityTimelineChart,
@@ -60,9 +66,17 @@ export interface DashboardDataContext {
   operationsConsole?: OperationsConsoleData | null;
   journey?: EsselungaJourneyPayload | null;
   heatmapTimeframe: 'day' | 'week' | 'month';
+  opsGrain?: TimelineGrain;
+  onOpsGrainChange?: (grain: TimelineGrain) => void;
   onOpenCategoryHeatmap?: (row: CategoryRankingRow) => void;
   onExpandHeatmap?: () => void;
 }
+
+const OPS_GRAINS: { id: TimelineGrain; label: string }[] = [
+  { id: 'hour', label: 'Hour' },
+  { id: 'day', label: 'Day' },
+  { id: 'week', label: 'Week' },
+];
 
 function resolveRhythmTimelines(journey?: EsselungaJourneyPayload | null): ActivityTimelineSet | null {
   if (!journey) return null;
@@ -131,6 +145,50 @@ export default function WidgetRenderer({
     case 'ops-alerts-panel': {
       if (!ops) return <Empty label="Ops alerts need Operations Pulse data." />;
       return <OperationsAlertsPanel alerts={ops.alerts || []} />;
+    }
+    case 'ops-store-activity-chart': {
+      if (!ops?.timeline) return <Empty label="Store activity needs Operations Pulse data." />;
+      const grain = ctx.opsGrain || ops.timeline.grain || 'hour';
+      return (
+        <Shell title={def.name}>
+          <div className="space-y-2">
+            {ctx.onOpsGrainChange && (
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-[10px] text-gray-500 uppercase tracking-wide">Activity grain</span>
+                <div className="flex bg-gray-900/70 rounded-md p-0.5 border border-gray-700/60">
+                  {OPS_GRAINS.map((g) => (
+                    <button
+                      key={g.id}
+                      type="button"
+                      onClick={() => ctx.onOpsGrainChange?.(g.id)}
+                      className={`px-2 py-0.5 text-[10px] rounded transition-colors ${
+                        grain === g.id ? 'bg-white/10 text-white' : 'text-gray-400 hover:text-gray-300'
+                      }`}
+                    >
+                      {g.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+            <OperationsTimelineChart
+              timeline={ops.timeline}
+              showFootfallSeries={ops.timeline.visitorSource === 'ingress'}
+            />
+          </div>
+        </Shell>
+      );
+    }
+    case 'ops-footfall-by-hour': {
+      if (!ops?.footfall) return <Empty label="Footfall needs Operations Pulse data." />;
+      return (
+        <Shell title={def.name}>
+          <OperationsFootfallPanel
+            footfall={ops.footfall}
+            storeActivityByHour={ops.storeActivityByHour}
+          />
+        </Shell>
+      );
     }
     case 'reporting-kpi-strip':
       return (

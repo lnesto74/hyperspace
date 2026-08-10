@@ -28,9 +28,10 @@ export const DASHBOARD_TEMPLATES: Omit<DashboardLayout, 'updatedAt'>[] = [
     name: 'Ops day board',
     items: [
       item('ops-hero-kpi-strip', 12, 1),
-      item('ops-alerts-panel', 6, 2),
+      item('ops-store-activity-chart', 12, 2),
+      item('ops-footfall-by-hour', 8, 2),
+      item('ops-alerts-panel', 4, 2),
       item('category-visits-panel', 6, 2),
-      item('reporting-insights-panel', 6, 2),
       item('zone-performance-map', 6, 2),
     ],
   },

@@ -2,6 +2,8 @@
 export type WidgetId =
   | 'ops-hero-kpi-strip'
   | 'ops-alerts-panel'
+  | 'ops-store-activity-chart'
+  | 'ops-footfall-by-hour'
   | 'reporting-kpi-strip'
   | 'reporting-insights-panel'
   | 'exec-store-health-pillars'
