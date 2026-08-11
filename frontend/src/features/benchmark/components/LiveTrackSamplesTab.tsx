@@ -88,8 +88,11 @@ function windowRange(preset: WindowPreset): { start: number; end: number; label:
   return { start: Date.parse('2026-08-09T00:00:00+02:00'), end: Date.parse('2026-08-10T00:00:00+02:00'), label: 'Sun 9 Aug' }
 }
 
-/** Split a polyline wherever time/space gap is too large to be a continuous walk. */
-function splitSegments(pts: Pt[], maxDtS = 2.5, maxDistM = 4): { solid: Pt[][]; gaps: [Pt, Pt][] } {
+/**
+ * Split a polyline on real discontinuities.
+ * Stored samples are ~3s apart (often 5–10s) — only treat dt≥7s or teleports as gaps.
+ */
+function splitSegments(pts: Pt[], maxDtS = 7, teleportM = 3, teleportSpeed = 2.5): { solid: Pt[][]; gaps: [Pt, Pt][] } {
   const solid: Pt[][] = []
   const gaps: [Pt, Pt][] = []
   if (!pts.length) return { solid, gaps }
@@ -99,7 +102,8 @@ function splitSegments(pts: Pt[], maxDtS = 2.5, maxDistM = 4): { solid: Pt[][]; 
     const b = pts[i]
     const dt = (b.t - a.t) / 1000
     const dist = Math.hypot(b.x - a.x, b.z - a.z)
-    if (dt > maxDtS || dist > maxDistM) {
+    const isGap = dt >= maxDtS || (dist > teleportM && dt > 0.05 && dist / dt > teleportSpeed)
+    if (isGap) {
       if (cur.length >= 2) solid.push(cur)
       else if (cur.length === 1) solid.push(cur)
       gaps.push([a, b])
@@ -351,9 +355,12 @@ function AnimatedRawTrackMap({
 
   const pos = useMemo(() => interpAt(path, tNow), [path, tNow])
   const trail = useMemo(() => path.filter((p) => p.t <= tNow), [path, tNow])
+  const { solid: fullSolid, gaps: fullGaps } = useMemo(() => splitSegments(path), [path])
+  const { solid: trailSolid } = useMemo(() => splitSegments(trail), [trail])
   const elapsed = tNow - t0
   const speedMps = pos ? Math.hypot(pos.vx, pos.vz) : 0
   const arrowLen = Math.min(1.8, Math.max(0.35, speedMps * 0.55))
+  const isFragmented = fullGaps.length > 0
 
   return (
     <div className="rounded-xl border border-gray-700 bg-gray-950 overflow-hidden max-w-md">
@@ -362,10 +369,19 @@ function AnimatedRawTrackMap({
           <p className="text-sm text-white font-medium truncate">{title}</p>
           <p className="text-[11px] text-gray-500 truncate">{subtitle}</p>
         </div>
-        <div className="font-mono text-sm text-emerald-300 tabular-nums shrink-0">
-          {fmtClock(elapsed)}
-          <span className="text-gray-600"> / </span>
-          <span className="text-gray-400">{fmtClock(dur)}</span>
+        <div className="flex items-center gap-2 shrink-0">
+          <span className={`text-[10px] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded ${
+            isFragmented
+              ? 'bg-red-950/60 text-red-300 border border-red-800/50'
+              : 'bg-emerald-950/60 text-emerald-300 border border-emerald-800/50'
+          }`}>
+            {isFragmented ? `${fullGaps.length} gap${fullGaps.length === 1 ? '' : 's'}` : 'continuous'}
+          </span>
+          <div className="font-mono text-sm text-emerald-300 tabular-nums">
+            {fmtClock(elapsed)}
+            <span className="text-gray-600"> / </span>
+            <span className="text-gray-400">{fmtClock(dur)}</span>
+          </div>
         </div>
       </div>
 
@@ -401,25 +417,45 @@ function AnimatedRawTrackMap({
             strokeWidth={0.06}
           />
         ))}
-        {/* faint full path */}
-        <path
-          d={pathD(path)}
-          fill="none"
-          stroke="rgba(52,211,153,0.18)"
-          strokeWidth={0.06}
-          strokeLinecap="round"
-        />
-        {/* played trail */}
-        {trail.length >= 2 && (
+        {/* faint solid segments (walking) */}
+        {fullSolid.map((seg, i) => (
           <path
-            d={pathD(trail)}
+            key={`fs-${i}`}
+            d={pathD(seg)}
             fill="none"
-            stroke="rgba(52,211,153,0.95)"
-            strokeWidth={0.1}
+            stroke="rgba(52,211,153,0.22)"
+            strokeWidth={0.07}
             strokeLinecap="round"
-            strokeLinejoin="round"
           />
-        )}
+        ))}
+        {/* red dashed = tracking hole / discontinuity (not a blind-spot paint) */}
+        {fullGaps.map(([a, b], i) => (
+          <line
+            key={`fg-${i}`}
+            x1={a.x}
+            y1={a.z}
+            x2={b.x}
+            y2={b.z}
+            stroke="rgba(248,113,113,0.85)"
+            strokeWidth={0.1}
+            strokeDasharray="0.25 0.18"
+            strokeLinecap="round"
+          />
+        ))}
+        {/* played trail — solid segments only */}
+        {trailSolid.map((seg, i) => (
+          seg.length >= 2 ? (
+            <path
+              key={`ts-${i}`}
+              d={pathD(seg)}
+              fill="none"
+              stroke="rgba(52,211,153,0.95)"
+              strokeWidth={0.11}
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          ) : null
+        ))}
         {pos && (
           <g>
             {speedMps > 0.08 && (
@@ -444,6 +480,12 @@ function AnimatedRawTrackMap({
           </g>
         )}
       </svg>
+
+      <div className="px-3 py-1.5 border-t border-gray-800/80 flex flex-wrap gap-x-3 gap-y-0.5 text-[10px] text-gray-500">
+        <span><span className="inline-block w-3 h-0.5 bg-emerald-400/90 align-middle mr-1" />walking (stored samples)</span>
+        <span><span className="inline-block w-3 border-t border-dashed border-red-400 align-middle mr-1" />gap ≥7s or teleport</span>
+        <span className="text-amber-200/80">amber zone = Verdura ROI</span>
+      </div>
 
       <div className="px-3 py-2 border-t border-gray-800 flex flex-wrap items-center gap-2">
         <button
@@ -673,9 +715,13 @@ export default function LiveTrackSamplesTab({
               Pick a duration cluster (most IDs sit under ~15 s) and animate them in the same ROI.
             </p>
             <p className="text-amber-100/70 text-xs">
-              Bingo test: in one cluster, compare <span className="text-emerald-300">continuous</span> vs{' '}
-              <span className="text-red-300">gappy</span> paths in the same lidar coverage.
-              If both exist side by side → perception ID chopping, not a blind spot.
+              <strong className="text-amber-50">How to audit:</strong>{' '}
+              1) Window = Last 24h, Department = Verdura.{' '}
+              2) Life cluster = <em>15–30 s</em> (or 10–15 s).{' '}
+              3) Within cluster = <em>Most gappy</em> → play a red-dashed path.{' '}
+              4) Switch to <em>Longest (continuous first)</em> → play a solid green path in the same amber ROI.{' '}
+              Same coverage, different continuity → tracking inconsistency (not a dead sensor zone).
+              Gap = hole ≥7 s or teleport (normal 3–10 s samples are not gaps).
             </p>
           </>
         ) : (

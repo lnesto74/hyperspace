@@ -130,15 +130,21 @@ function resolveLifeBucket(id) {
   return RAW_LIFE_BUCKETS.find((b) => b.id === id) || null;
 }
 
-/** Count path discontinuities (same criteria as the frontend gap splitter). */
-function countPathGaps(rows, maxDtS = 2.5, maxDistM = 4) {
+/**
+ * Count real path discontinuities.
+ * Positions are sampled ~every 3s (often ~5–10s near shelves), so a gap must be
+ * a missed-sample streak (dt ≥ 7s) or a teleport (fast jump > 3 m).
+ * Do NOT use dt>2.5 — that marks every stored track as fragmented.
+ */
+function countPathGaps(rows, maxDtS = 7.0, teleportM = 3.0, teleportSpeed = 2.5) {
   let gaps = 0;
   for (let i = 1; i < rows.length; i++) {
     const a = rows[i - 1];
     const b = rows[i];
     const dt = (b.timestamp - a.timestamp) / 1000;
     const dist = Math.hypot(b.position_x - a.position_x, b.position_z - a.position_z);
-    if (dt > maxDtS || dist > maxDistM) gaps += 1;
+    if (dt >= maxDtS) gaps += 1;
+    else if (dist > teleportM && dt > 0.05 && dist / dt > teleportSpeed) gaps += 1;
   }
   return gaps;
 }
