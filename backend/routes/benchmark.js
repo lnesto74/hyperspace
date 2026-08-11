@@ -38,8 +38,9 @@ export default function benchmarkRoutes({
       const limit = req.query.limit != null ? Number(req.query.limit) : 12;
       const sort = String(req.query.sort || 'longest');
       const mode = String(req.query.mode || 'reconciled');
+      const lifeBucket = req.query.lifeBucket != null ? String(req.query.lifeBucket) : '';
       const payload = liveTrackSampleService.getSamples({
-        venueId, category, start, end, limit, sort, mode,
+        venueId, category, start, end, limit, sort, mode, lifeBucket,
       });
       res.json(payload);
     } catch (err) {

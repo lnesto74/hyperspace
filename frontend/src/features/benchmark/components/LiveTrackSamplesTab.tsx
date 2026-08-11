@@ -28,11 +28,21 @@ type Sample = {
   maxJumpM?: number
   spanM?: number
   suspectJumps?: number
+  gapCount?: number
+  segmentCount?: number
+  continuous?: boolean
   plausible?: boolean
   reconciledPath: Pt[]
   rawPaths: Record<string, Pt[]>
 }
 type ViewMode = 'raw' | 'reconciled'
+type LifeBucket = {
+  id: string
+  label: string
+  minS: number
+  maxS: number | null
+  count: number
+}
 
 type Payload = {
   venueId: string
@@ -41,6 +51,8 @@ type Payload = {
   categories: string[]
   rois: { id: string; name: string; vertices: { x: number; z: number }[] }[]
   samples: Sample[]
+  lifeBucket?: string
+  lifeBuckets?: LifeBucket[]
   stats?: {
     touchers: number
     returned: number
@@ -48,6 +60,8 @@ type Payload = {
     meanInRoiS: number
     meanRawIds: number
     plausibleShare?: number
+    continuousShare?: number
+    meanGaps?: number
   }
   error?: string
 }
@@ -491,7 +505,8 @@ export default function LiveTrackSamplesTab({
   const [category, setCategory] = useState('Verdura')
   const [categories, setCategories] = useState<string[]>([])
   const [mode, setMode] = useState<ViewMode>('raw')
-  const [sort, setSort] = useState<'longest' | 'chopped' | 'recent'>('longest')
+  const [sort, setSort] = useState<'longest' | 'gaps' | 'shortest' | 'chopped' | 'recent'>('longest')
+  const [lifeBucket, setLifeBucket] = useState('ge120')
   const [limit, setLimit] = useState(12)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -557,6 +572,7 @@ export default function LiveTrackSamplesTab({
         sort,
         mode,
       })
+      if (mode === 'raw' && lifeBucket) qs.set('lifeBucket', lifeBucket)
       const res = await fetch(`${API_BASE}/api/benchmark/live-samples?${qs}`)
       const j = await res.json()
       if (token !== abortRef.current) return
@@ -565,6 +581,10 @@ export default function LiveTrackSamplesTab({
       setPayload(j as Payload)
       setIdx(0)
       if (Array.isArray(j.categories) && j.categories.length) setCategories(j.categories)
+      // Keep select in sync if server falls back to another cluster.
+      if (mode === 'raw' && j.lifeBucket && j.lifeBucket !== lifeBucket) {
+        setLifeBucket(j.lifeBucket)
+      }
     } catch (e) {
       if (token !== abortRef.current) return
       setError(e instanceof Error ? e.message : String(e))
@@ -572,7 +592,7 @@ export default function LiveTrackSamplesTab({
     } finally {
       if (token === abortRef.current) setLoading(false)
     }
-  }, [venueId, category, range.start, range.end, limit, sort, mode])
+  }, [venueId, category, range.start, range.end, limit, sort, mode, lifeBucket])
 
   useEffect(() => { void load() }, [load])
 
@@ -648,12 +668,14 @@ export default function LiveTrackSamplesTab({
         {mode === 'raw' ? (
           <>
             <p>
-              <strong className="text-amber-50">Raw vendor tracks</strong> — one{' '}
+              <strong className="text-amber-50">Raw vendor tracks by life cluster</strong> — one{' '}
               <code className="text-amber-200/80">original_perception_id</code>, no reconciler merge.
-              Only IDs that crossed this department ROI, sorted by longest continuous life (≥15 s, ≥5 samples).
+              Pick a duration cluster (most IDs sit under ~15 s) and animate them in the same ROI.
             </p>
             <p className="text-amber-100/70 text-xs">
-              Plausible (no big jumps) are listed first. Use this to see real long vendor paths through the ROI.
+              Bingo test: in one cluster, compare <span className="text-emerald-300">continuous</span> vs{' '}
+              <span className="text-red-300">gappy</span> paths in the same lidar coverage.
+              If both exist side by side → perception ID chopping, not a blind spot.
             </p>
           </>
         ) : (
@@ -707,14 +729,48 @@ export default function LiveTrackSamplesTab({
             <option value="sun">Sun 9 Aug</option>
           </select>
         </label>
+        {mode === 'raw' && (
+          <label className="text-xs text-gray-400">
+            Life cluster
+            <select
+              value={lifeBucket}
+              onChange={(e) => setLifeBucket(e.target.value)}
+              className="mt-1 block bg-gray-800 border border-gray-600 rounded-lg px-2 py-1.5 text-sm text-white min-w-[260px]"
+            >
+              {(payload?.lifeBuckets?.length
+                ? payload.lifeBuckets
+                : [
+                    { id: 'lt3', label: '< 3 s — blink / 1–2 samples', count: 0 },
+                    { id: '3_6', label: '3–6 s', count: 0 },
+                    { id: '6_10', label: '6–10 s', count: 0 },
+                    { id: '10_15', label: '10–15 s — under the KPI median', count: 0 },
+                    { id: '15_30', label: '15–30 s — around the median', count: 0 },
+                    { id: '30_60', label: '30–60 s', count: 0 },
+                    { id: '60_120', label: '60–120 s', count: 0 },
+                    { id: 'ge120', label: '≥ 120 s — longest survivors', count: 0 },
+                  ]
+              ).map((b) => (
+                <option key={b.id} value={b.id} disabled={b.count === 0 && !!payload?.lifeBuckets}>
+                  {b.label} ({b.count.toLocaleString()})
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
         <label className="text-xs text-gray-400">
-          Sort
+          Within cluster
           <select
             value={sort}
             onChange={(e) => setSort(e.target.value as typeof sort)}
             className="mt-1 block bg-gray-800 border border-gray-600 rounded-lg px-2 py-1.5 text-sm text-white"
           >
-            <option value="longest">Longest track life</option>
+            <option value="longest">{mode === 'raw' ? 'Longest in cluster (continuous first)' : 'Longest track life'}</option>
+            {mode === 'raw' && (
+              <option value="gaps">Most gappy (fragmented first)</option>
+            )}
+            {mode === 'raw' && (
+              <option value="shortest">Shortest in cluster</option>
+            )}
             {mode === 'reconciled' && (
               <option value="chopped">Most chopped (life ÷ in-ROI)</option>
             )}
@@ -753,7 +809,7 @@ export default function LiveTrackSamplesTab({
 
       {!loading && payload && (
         <>
-          <div className="grid grid-cols-2 md:grid-cols-5 gap-2 text-xs">
+          <div className="grid grid-cols-2 md:grid-cols-6 gap-2 text-xs">
             <div className="rounded-lg border border-gray-700 bg-gray-800/40 px-3 py-2">
               <p className="text-gray-500 uppercase tracking-wide text-[10px]">Touchers</p>
               <p className="text-white text-lg font-semibold">{payload.stats?.touchers?.toLocaleString() ?? '—'}</p>
@@ -768,14 +824,20 @@ export default function LiveTrackSamplesTab({
             </div>
             <div className="rounded-lg border border-gray-700 bg-gray-800/40 px-3 py-2">
               <p className="text-gray-500 uppercase tracking-wide text-[10px]">
-                {mode === 'raw' ? 'Plausible in list' : 'Mean raw IDs'}
+                {mode === 'raw' ? 'Continuous in list' : 'Mean raw IDs'}
               </p>
               <p className="text-blue-300 text-lg font-semibold">
                 {mode === 'raw'
-                  ? (payload.stats?.plausibleShare != null ? `${payload.stats.plausibleShare}%` : '—')
+                  ? (payload.stats?.continuousShare != null ? `${payload.stats.continuousShare}%` : '—')
                   : (payload.stats?.meanRawIds ?? '—')}
               </p>
             </div>
+            {mode === 'raw' && (
+              <div className="rounded-lg border border-gray-700 bg-gray-800/40 px-3 py-2">
+                <p className="text-gray-500 uppercase tracking-wide text-[10px]">Mean gaps / track</p>
+                <p className="text-red-300 text-lg font-semibold">{payload.stats?.meanGaps ?? '—'}</p>
+              </div>
+            )}
             <div className="rounded-lg border border-gray-700 bg-gray-800/40 px-3 py-2">
               <p className="text-gray-500 uppercase tracking-wide text-[10px]">Window</p>
               <p className="text-white text-sm font-medium pt-1">{range.label}</p>
@@ -802,6 +864,12 @@ export default function LiveTrackSamplesTab({
                 {mode === 'reconciled' && (
                   <span className="text-xs text-blue-300">{sample.rawIdCount} raw IDs</span>
                 )}
+                {mode === 'raw' && sample.gapCount != null && (
+                  <span className={`text-xs ${(sample.gapCount || 0) > 0 ? 'text-red-300' : 'text-emerald-300'}`}>
+                    {sample.gapCount} gap{(sample.gapCount || 0) === 1 ? '' : 's'}
+                    {sample.segmentCount != null ? ` · ${sample.segmentCount} segments` : ''}
+                  </span>
+                )}
                 {sample.chopFactor != null && (
                   <span className="text-xs text-gray-400">chop ×{sample.chopFactor}</span>
                 )}
@@ -814,13 +882,14 @@ export default function LiveTrackSamplesTab({
                     {(sample.suspectJumps || 0) > 0 ? ` · ${sample.suspectJumps} suspect` : ''}
                   </span>
                 )}
-                {sample.plausible === false && (
-                  <span className="text-xs text-red-300 font-medium">
-                    {mode === 'raw' ? 'gappy path' : 'likely over-merge'}
-                  </span>
-                )}
-                {sample.plausible === true && mode === 'raw' && (
+                {mode === 'raw' && sample.continuous === true && (
                   <span className="text-xs text-emerald-300 font-medium">continuous</span>
+                )}
+                {mode === 'raw' && sample.continuous === false && (
+                  <span className="text-xs text-red-300 font-medium">fragmented</span>
+                )}
+                {mode === 'reconciled' && sample.plausible === false && (
+                  <span className="text-xs text-red-300 font-medium">likely over-merge</span>
                 )}
               </div>
 
@@ -884,8 +953,14 @@ export default function LiveTrackSamplesTab({
                     {mode === 'reconciled' && (
                       <th className="text-right px-3 py-2 font-medium">Raw IDs</th>
                     )}
+                    {mode === 'raw' && (
+                      <th className="text-right px-3 py-2 font-medium">Gaps</th>
+                    )}
                     <th className="text-right px-3 py-2 font-medium">Span</th>
                     <th className="text-right px-3 py-2 font-medium">Max jump</th>
+                    {mode === 'raw' && (
+                      <th className="text-left px-3 py-2 font-medium">Path</th>
+                    )}
                     <th className="text-left px-3 py-2 font-medium">
                       {mode === 'raw' ? 'original_perception_id' : 'track_key'}
                     </th>
@@ -904,10 +979,20 @@ export default function LiveTrackSamplesTab({
                       {mode === 'reconciled' && (
                         <td className="px-3 py-1.5 text-right text-blue-300 font-mono">{s.rawIdCount}</td>
                       )}
+                      {mode === 'raw' && (
+                        <td className={`px-3 py-1.5 text-right font-mono ${(s.gapCount || 0) > 0 ? 'text-red-300' : 'text-emerald-300'}`}>
+                          {s.gapCount ?? 0}
+                        </td>
+                      )}
                       <td className="px-3 py-1.5 text-right text-gray-300 font-mono">{s.spanM?.toFixed(1) ?? '—'}m</td>
                       <td className={`px-3 py-1.5 text-right font-mono ${(s.suspectJumps || 0) > 0 ? 'text-red-400' : 'text-gray-300'}`}>
                         {s.maxJumpM?.toFixed(1) ?? '—'}m
                       </td>
+                      {mode === 'raw' && (
+                        <td className={`px-3 py-1.5 font-medium ${s.continuous ? 'text-emerald-300' : 'text-red-300'}`}>
+                          {s.continuous ? 'continuous' : 'fragmented'}
+                        </td>
+                      )}
                       <td className="px-3 py-1.5 text-gray-500 font-mono truncate max-w-[220px]">{s.trackKey}</td>
                     </tr>
                   ))}

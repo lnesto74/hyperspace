@@ -102,6 +102,47 @@ function pathQuality(rows, jumpDistM = 5.0, jumpSpeed = 2.0) {
 
 const mean = (arr) => (arr.length ? arr.reduce((s, v) => s + v, 0) / arr.length : 0);
 
+/**
+ * Life-duration clusters for raw vendor IDs that touched a category ROI.
+ * Edges follow the 3 s position sample cadence and the observed 15 s median mass.
+ */
+export const RAW_LIFE_BUCKETS = Object.freeze([
+  { id: 'lt3', label: '< 3 s — blink / 1–2 samples', minS: 0, maxS: 3 },
+  { id: '3_6', label: '3–6 s', minS: 3, maxS: 6 },
+  { id: '6_10', label: '6–10 s', minS: 6, maxS: 10 },
+  { id: '10_15', label: '10–15 s — under the KPI median', minS: 10, maxS: 15 },
+  { id: '15_30', label: '15–30 s — around the median', minS: 15, maxS: 30 },
+  { id: '30_60', label: '30–60 s', minS: 30, maxS: 60 },
+  { id: '60_120', label: '60–120 s', minS: 60, maxS: 120 },
+  { id: 'ge120', label: '≥ 120 s — longest survivors', minS: 120, maxS: Infinity },
+]);
+
+function bucketForLifeS(lifeS) {
+  for (const b of RAW_LIFE_BUCKETS) {
+    if (lifeS >= b.minS && lifeS < b.maxS) return b.id;
+    if (b.maxS === Infinity && lifeS >= b.minS) return b.id;
+  }
+  return RAW_LIFE_BUCKETS[0].id;
+}
+
+function resolveLifeBucket(id) {
+  if (!id || id === 'all') return null;
+  return RAW_LIFE_BUCKETS.find((b) => b.id === id) || null;
+}
+
+/** Count path discontinuities (same criteria as the frontend gap splitter). */
+function countPathGaps(rows, maxDtS = 2.5, maxDistM = 4) {
+  let gaps = 0;
+  for (let i = 1; i < rows.length; i++) {
+    const a = rows[i - 1];
+    const b = rows[i];
+    const dt = (b.timestamp - a.timestamp) / 1000;
+    const dist = Math.hypot(b.position_x - a.position_x, b.position_z - a.position_z);
+    if (dt > maxDtS || dist > maxDistM) gaps += 1;
+  }
+  return gaps;
+}
+
 export default class LiveTrackSampleService {
   constructor({ db }) {
     this.db = db;
@@ -144,20 +185,60 @@ export default class LiveTrackSampleService {
     if (!resolved) {
       return {
         venueId, start, end, mode: 'raw', category: opts.category || null,
-        categories, rois: [], samples: [],
+        categories, rois: [], samples: [], lifeBuckets: [],
         error: `Unknown category. Try one of: ${categories.slice(0, 12).join(', ')}`,
       };
     }
 
     const roiIds = resolved.rois.map((r) => r.id);
     const placeholders = roiIds.map(() => '?').join(',');
-    // Prefer long, continuous vendor tracks (not chopped single blips).
-    const minLifeMs = 15_000;
-    const minPts = 5;
+
+    // Histogram of ALL raw IDs that touched the category (n≥2), for the cluster select.
+    const lifeRows = this.db.prepare(`
+      SELECT (MAX(timestamp) - MIN(timestamp)) AS life_ms
+      FROM track_positions
+      WHERE venue_id = ?
+        AND timestamp >= ? AND timestamp < ?
+        AND original_perception_id IS NOT NULL
+        AND original_perception_id != ''
+      GROUP BY original_perception_id
+      HAVING SUM(CASE WHEN roi_id IN (${placeholders}) THEN 1 ELSE 0 END) >= 1
+         AND COUNT(*) >= 2
+    `).all(venueId, start, end, ...roiIds);
+
+    const bucketCounts = Object.fromEntries(RAW_LIFE_BUCKETS.map((b) => [b.id, 0]));
+    for (const r of lifeRows) {
+      const id = bucketForLifeS((Number(r.life_ms) || 0) / 1000);
+      bucketCounts[id] = (bucketCounts[id] || 0) + 1;
+    }
+    const lifeBuckets = RAW_LIFE_BUCKETS.map((b) => ({
+      id: b.id,
+      label: b.label,
+      minS: b.minS,
+      maxS: b.maxS === Infinity ? null : b.maxS,
+      count: bucketCounts[b.id] || 0,
+    }));
+
+    // Default cluster: longest survivors if any, else the fattest bucket.
+    let bucket = resolveLifeBucket(opts.lifeBucket);
+    if (!bucket) {
+      const ge120 = lifeBuckets.find((b) => b.id === 'ge120');
+      if (ge120?.count) bucket = resolveLifeBucket('ge120');
+      else {
+        const fattest = [...lifeBuckets].sort((a, b) => b.count - a.count)[0];
+        bucket = resolveLifeBucket(fattest?.id) || resolveLifeBucket('15_30');
+      }
+    }
+    const lifeLoMs = Math.round(bucket.minS * 1000);
+    const lifeHiMs = bucket.maxS === Infinity
+      ? Number.MAX_SAFE_INTEGER
+      : Math.round(bucket.maxS * 1000);
+    // Short blinks often have only 2 samples; longer clusters need more.
+    const minPts = bucket.minS < 6 ? 2 : bucket.minS < 15 ? 3 : 5;
 
     const orderSql =
       sort === 'recent' ? 't1 DESC'
-        : sort === 'chopped' ? 'life_ms ASC'
+        : sort === 'chopped' || sort === 'shortest' ? 'life_ms ASC'
           : 'life_ms DESC';
 
     const ranked = this.db.prepare(`
@@ -174,29 +255,30 @@ export default class LiveTrackSampleService {
           AND original_perception_id IS NOT NULL
           AND original_perception_id != ''
         GROUP BY original_perception_id
-        HAVING in_roi_hits >= 1 AND n >= ? AND life_ms >= ?
+        HAVING in_roi_hits >= 1
+           AND n >= ?
+           AND life_ms >= ?
+           AND life_ms < ?
       )
       SELECT raw_id AS rawId, t0, t1, life_ms AS lifeMs, n AS nPts, in_roi_hits AS inRoiHits
       FROM candidates
       ORDER BY ${orderSql}
       LIMIT ?
-    `).all(...roiIds, venueId, start, end, minPts, minLifeMs, Math.max(limit * 6, 120));
+    `).all(
+      ...roiIds, venueId, start, end,
+      minPts, lifeLoMs, lifeHiMs,
+      Math.max(limit * 8, 160),
+    );
 
-    const touchersCountRow = this.db.prepare(`
-      SELECT COUNT(DISTINCT original_perception_id) AS c
-      FROM track_positions
-      WHERE venue_id = ?
-        AND timestamp >= ? AND timestamp < ?
-        AND original_perception_id IS NOT NULL
-        AND roi_id IN (${placeholders})
-    `).get(venueId, start, end, ...roiIds);
-    const touchersCount = touchersCountRow?.c || 0;
+    const touchersCount = lifeRows.length;
 
     if (!ranked.length) {
       return {
         venueId, start, end, mode: 'raw',
         category: resolved.label,
         categories, rois: resolved.rois, samples: [],
+        lifeBucket: bucket.id,
+        lifeBuckets,
         stats: { touchers: touchersCount },
       };
     }
@@ -209,13 +291,13 @@ export default class LiveTrackSampleService {
       ORDER BY timestamp ASC
     `);
 
-    // Build samples, then prefer "not chopped" = no suspect jumps / modest span.
     const built = [];
     for (const row of ranked) {
       const rows = posStmt.all(venueId, row.rawId, row.t0, row.t1);
       if (rows.length < minPts) continue;
       const q = pathQuality(rows);
-      // Estimate in-ROI time from consecutive samples that sit inside a category ROI.
+      const gapCount = countPathGaps(rows);
+      const segmentCount = gapCount + 1;
       let inRoiMs = 0;
       for (let i = 1; i < rows.length; i++) {
         if (rows[i - 1].roi_id && roiIds.includes(rows[i - 1].roi_id)) {
@@ -227,7 +309,7 @@ export default class LiveTrackSampleService {
         x: p.position_x,
         z: p.position_z,
         inRoi: !!(p.roi_id && roiIds.includes(p.roi_id)),
-      })));
+      })), bucket.minS < 15 ? 200 : 400);
       built.push({
         trackKey: row.rawId,
         rawId: row.rawId,
@@ -241,19 +323,29 @@ export default class LiveTrackSampleService {
         maxJumpM: q.maxJumpM,
         spanM: q.spanM,
         suspectJumps: q.suspectJumps,
-        plausible: q.plausible,
+        gapCount,
+        segmentCount,
+        // Continuous = no time/space gaps in the stored path (blind-spot vs chop test).
+        continuous: gapCount === 0 && q.suspectJumps === 0,
+        plausible: q.plausible && gapCount === 0,
         reconciledPath: path,
         rawPaths: { [row.rawId]: path },
       });
     }
 
-    // For "longest" raw view: show continuous long tracks first (plausible before junk).
-    if (sort === 'longest') {
+    if (sort === 'gaps' || sort === 'chopped') {
+      // Most fragmented first — bingo candidates if neighbours are continuous.
       built.sort((a, b) => {
-        if (a.plausible !== b.plausible) return a.plausible ? -1 : 1;
+        if (b.gapCount !== a.gapCount) return b.gapCount - a.gapCount;
         return b.durationS - a.durationS;
       });
-    } else if (sort === 'chopped') {
+    } else if (sort === 'longest') {
+      built.sort((a, b) => {
+        // Prefer continuous paths within the cluster, then longer life.
+        if (a.continuous !== b.continuous) return a.continuous ? -1 : 1;
+        return b.durationS - a.durationS;
+      });
+    } else if (sort === 'shortest') {
       built.sort((a, b) => a.durationS - b.durationS);
     } else {
       built.sort((a, b) => b.t1 - a.t1);
@@ -269,6 +361,8 @@ export default class LiveTrackSampleService {
       category: resolved.label,
       categories,
       rois: resolved.rois,
+      lifeBucket: bucket.id,
+      lifeBuckets,
       samples,
       stats: {
         touchers: touchersCount,
@@ -277,6 +371,10 @@ export default class LiveTrackSampleService {
         meanTrackLifeS: Math.round(mean(samples.map((s) => s.durationS)) * 10) / 10,
         meanInRoiS: Math.round(mean(samples.map((s) => s.inRoiDurationS)) * 10) / 10,
         meanRawIds: 1,
+        meanGaps: Math.round(mean(samples.map((s) => s.gapCount || 0)) * 10) / 10,
+        continuousShare: samples.length
+          ? Math.round((samples.filter((s) => s.continuous).length / samples.length) * 100)
+          : 0,
         plausibleShare: samples.length
           ? Math.round((samples.filter((s) => s.plausible).length / samples.length) * 100)
           : 0,
