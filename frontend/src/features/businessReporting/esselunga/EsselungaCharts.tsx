@@ -4,6 +4,7 @@ import { getCategoryVisual } from '../operationsConsole/categoryVisuals';
 import { KpiTooltip, AnimatedValue } from './ExecutiveVisuals';
 import { FRESCO_TOOLTIPS, JOURNEY_SIGNAL_TOOLTIPS } from './kpiTooltips';
 import { formatDwellDuration } from './formatDuration';
+import { DwellGeometryHelp, type DwellGeometryRadii } from './DwellGeometryLegend';
 
 export { formatDwellDuration };
 
@@ -126,6 +127,10 @@ export function FrescoDepartmentCard({
   hasQueueZones = false,
   waitingPct = 0,
   abandonPct = 0,
+  medianEngagementSec = null,
+  p75EngagementSec = null,
+  engagementReliable = false,
+  geometryRadii = null,
   color,
   bg,
   Icon,
@@ -145,18 +150,23 @@ export function FrescoDepartmentCard({
   hasQueueZones?: boolean;
   waitingPct?: number;
   abandonPct?: number;
+  medianEngagementSec?: number | null;
+  p75EngagementSec?: number | null;
+  engagementReliable?: boolean;
+  geometryRadii?: DwellGeometryRadii | null;
   color: string;
   bg: string;
   Icon: ComponentType<{ className?: string; style?: CSSProperties }>;
 }) {
-  // Typical-to-long rather than a single figure: the spread is the honest part.
-  // A lone number here reads as a measurement when it is an estimate rebuilt
-  // from fragments, and four counters printing the same one is what made the
-  // old card look precise and be wrong.
   const dwellLabel = dwellReliable && medianDwellSec != null
     ? (p75DwellSec != null && p75DwellSec > medianDwellSec
       ? `${formatDwellDuration(medianDwellSec)}–${formatDwellDuration(p75DwellSec)}`
       : formatDwellDuration(medianDwellSec))
+    : '—';
+  const engagementLabel = engagementReliable && medianEngagementSec != null
+    ? (p75EngagementSec != null && p75EngagementSec > medianEngagementSec
+      ? `${formatDwellDuration(medianEngagementSec)}–${formatDwellDuration(p75EngagementSec)}`
+      : formatDwellDuration(medianEngagementSec))
     : '—';
   const stopPct = stoppingPct == null ? null : Math.min(100, stoppingPct);
 
@@ -195,7 +205,7 @@ export function FrescoDepartmentCard({
       )}
       {reportable && !dwellReliable && dwellUnavailableReason === 'quantised_durations' && (
         <p className="text-[11px] text-amber-400/90 leading-snug">
-          Dwell not shown: this period reaches back before 6 Aug 2026, when zone durations
+          Category dwell not shown: this period reaches back before 6 Aug 2026, when zone durations
           were recorded in whole 5-second steps. Every counter would read the same 15s.
           Stopping rate is unaffected.
         </p>
@@ -214,22 +224,44 @@ export function FrescoDepartmentCard({
         <div className="rounded-md bg-gray-900/50 px-2.5 py-2">
           <div className="text-base font-bold text-white tabular-nums">{dwellLabel}</div>
           <div className="text-[11px] text-gray-400 leading-tight flex items-center">
-            typical dwell
+            category dwell
+            <DwellGeometryHelp radii={geometryRadii}>
+              <span className="sr-only">geometry</span>
+            </DwellGeometryHelp>
             <KpiTooltip text={FRESCO_TOOLTIPS.avgDwell} />
           </div>
         </div>
+        <div className="rounded-md bg-gray-900/50 px-2.5 py-2">
+          <div className="text-base font-bold text-sky-200/90 tabular-nums">{engagementLabel}</div>
+          <div className="text-[11px] text-gray-400 leading-tight flex items-center">
+            engagement
+            <KpiTooltip text={FRESCO_TOOLTIPS.engagement} />
+          </div>
+        </div>
         {hasQueueZones ? (
-          <>
-            <div className="rounded-md bg-gray-900/50 px-2.5 py-2">
-              <div className={`text-base font-bold tabular-nums ${waitingPct > 15 ? 'text-amber-400' : 'text-white'}`}>
-                {waitingPct}%
-              </div>
-              <div className="text-[11px] text-gray-400 leading-tight flex items-center">
-                in queue
-                <KpiTooltip text={FRESCO_TOOLTIPS.queue} />
-              </div>
+          <div className="rounded-md bg-gray-900/50 px-2.5 py-2">
+            <div className={`text-base font-bold tabular-nums ${waitingPct > 15 ? 'text-amber-400' : 'text-white'}`}>
+              {waitingPct}%
             </div>
-            <div className="rounded-md bg-gray-900/50 px-2.5 py-2">
+            <div className="text-[11px] text-gray-400 leading-tight flex items-center">
+              in queue
+              <KpiTooltip text={FRESCO_TOOLTIPS.queue} />
+            </div>
+          </div>
+        ) : (
+          <div className="rounded-md bg-gray-900/50 px-2.5 py-2">
+            <div className="text-base font-bold text-gray-300 tabular-nums">
+              {passThroughPct == null ? '—' : `${passThroughPct}%`}
+            </div>
+            <div className="text-[11px] text-gray-400 flex items-center">
+              pass-through
+              <KpiTooltip text={FRESCO_TOOLTIPS.passThrough} />
+            </div>
+          </div>
+        )}
+        {hasQueueZones && (
+          <div className="col-span-2 rounded-md bg-gray-900/50 px-2.5 py-2 flex items-center justify-between gap-3">
+            <div>
               <div className={`text-base font-bold tabular-nums ${abandonPct > 10 ? 'text-amber-400' : 'text-white'}`}>
                 {abandonPct}%
               </div>
@@ -238,14 +270,11 @@ export function FrescoDepartmentCard({
                 <KpiTooltip text={FRESCO_TOOLTIPS.abandon} />
               </div>
             </div>
-          </>
-        ) : (
-          <div className="col-span-2 rounded-md bg-gray-900/50 px-2.5 py-2 flex items-center justify-between">
-            <div>
+            <div className="text-right">
               <div className="text-base font-bold text-gray-300 tabular-nums">
                 {passThroughPct == null ? '—' : `${passThroughPct}%`}
               </div>
-              <div className="text-[11px] text-gray-400 flex items-center">
+              <div className="text-[11px] text-gray-400 flex items-center justify-end">
                 pass-through
                 <KpiTooltip text={FRESCO_TOOLTIPS.passThrough} />
               </div>
@@ -256,8 +285,10 @@ export function FrescoDepartmentCard({
 
       {reportable && episodes > 0 && (
         <p className="text-[10px] text-gray-500 leading-snug flex items-center">
-          {episodes.toLocaleString()} visits rebuilt from {fragmentsPerEpisode.toFixed(1)} tracker
-          fragments each
+          {episodes.toLocaleString()} category visits
+          {fragmentsPerEpisode > 1.05
+            ? ` · ${fragmentsPerEpisode.toFixed(1)} sensor segments each`
+            : ''}
           <KpiTooltip text={FRESCO_TOOLTIPS.episodes} />
         </p>
       )}

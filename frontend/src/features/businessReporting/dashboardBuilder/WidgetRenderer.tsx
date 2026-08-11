@@ -463,6 +463,10 @@ export default function WidgetRenderer({
                   hasQueueZones={d.hasQueueZones}
                   waitingPct={d.waitingPct}
                   abandonPct={d.abandonPct}
+                  medianEngagementSec={d.medianEngagementSec}
+                  p75EngagementSec={d.p75EngagementSec}
+                  engagementReliable={d.engagementReliable}
+                  geometryRadii={journey?.categoryPresence}
                   color={visual.color}
                   bg={visual.bg}
                   Icon={visual.Icon}

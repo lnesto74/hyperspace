@@ -598,7 +598,7 @@ export default function EsselungaExecutiveViewport({
       <SectionCard
         id="fresco"
         title="2 · Piazza del Fresco"
-        subtitle="The service counters, where a crossing that turns into a pause is the signal worth watching. The tracker holds a shopper's identity for about 13 seconds, so visits are rebuilt by rejoining fragments before anything is measured. Dwell is the typical length of a pause and is a lower bound; compare counters on stopping rate, which is the sturdier of the two."
+        subtitle={`Service counters: stopping rate says who paused; category dwell is time within ~${(journey.categoryPresence?.categoryDwellRadiusM ?? 2).toFixed(1)} m of the counter; engagement is time at the shelf face (~${(journey.categoryPresence?.engagementRadiusM ?? 0.5).toFixed(1)} m). Hover the ? next to category dwell for a diagram.`}
       >
         {fresco.departments.length === 0 ? (
           <p className="text-xs text-gray-400 py-4 text-center">
@@ -629,6 +629,10 @@ export default function EsselungaExecutiveViewport({
                   hasQueueZones={dept.hasQueueZones}
                   waitingPct={dept.waitingPct}
                   abandonPct={dept.abandonPct}
+                  medianEngagementSec={dept.medianEngagementSec}
+                  p75EngagementSec={dept.p75EngagementSec}
+                  engagementReliable={dept.engagementReliable}
+                  geometryRadii={journey.categoryPresence}
                   color={visual.color}
                   bg={visual.bg}
                   Icon={visual.Icon}
@@ -722,7 +726,7 @@ export default function EsselungaExecutiveViewport({
                         <th className="text-right px-4 py-3 font-medium">Visits</th>
                         <th className="text-right px-4 py-3 font-medium">Stop</th>
                         <th className="text-right px-4 py-3 font-medium">Held</th>
-                        <th className="text-right px-4 py-3 font-medium">Dwell</th>
+                        <th className="text-right px-4 py-3 font-medium">Category dwell</th>
                         <th className="text-left px-4 py-3 font-medium w-32">How long they stayed</th>
                       </tr>
                     </thead>

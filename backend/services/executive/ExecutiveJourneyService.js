@@ -28,6 +28,10 @@ import {
   buildSessionCategoryGroups,
 } from './ExecutiveSessionAnalytics.js';
 import { buildZoneEpisodeIndex } from './ZoneEpisodeIndex.js';
+import {
+  buildCategoryPresenceIndex,
+  loadCategoryPresenceConfigForVenue,
+} from './CategoryPresenceIndex.js';
 
 function safeQuery(db, sql, params = []) {
   try {
@@ -505,6 +509,24 @@ function createJourneyContext(db, venueId, startTs, endTs, metricThresholds, epi
     }
     return episodeIndex;
   };
+
+  // Category dwell / engagement (2 m halo / 0.5 m face) — deferred until fresco.
+  let presenceIndex = null;
+  let presenceDeptKeys = null;
+  const categoryPresence = (departments) => {
+    const signature = departments
+      .map((d) => `${d.key}=${[...(d.roiIds || [])].sort().join('.')}`)
+      .join('|');
+    if (!presenceIndex || presenceDeptKeys !== signature) {
+      const cfg = loadCategoryPresenceConfigForVenue(db, venueId);
+      presenceIndex = buildCategoryPresenceIndex({
+        db, venueId, startTs, endTs, departments, config: cfg,
+      });
+      presenceDeptKeys = signature;
+    }
+    return presenceIndex;
+  };
+
   return {
     db,
     venueId,
@@ -515,6 +537,7 @@ function createJourneyContext(db, venueId, startTs, endTs, metricThresholds, epi
     roiStats: buildRoiStatsIndex(db, venueId, startTs, endTs, metricThresholds),
     queueStats: buildQueueStatsIndex(db, venueId, startTs, endTs, metricThresholds.queueFloorMs),
     episodeStats,
+    categoryPresence,
     uniqueVisitorsFor(groups) {
       const signature = groups
         .map(g => `${g.key}=${[...(g.roiIds || [])].sort().join('.')}`)
@@ -652,6 +675,13 @@ function buildFrescoDepartments(classifiedRois, ctx) {
     roiIds: [...ids.serviceIds, ...ids.queueIds, ...ids.browseIds],
   })));
 
+  // Geometric category dwell (2 m halo) + engagement (0.5 m) — preferred clocks.
+  const presenceDepts = deptEntries.map(([dept, ids]) => ({
+    key: dept,
+    roiIds: [...ids.serviceIds, ...ids.queueIds, ...ids.browseIds],
+  }));
+  const presence = ctx.categoryPresence(presenceDepts);
+
   return deptEntries.map(([dept, ids]) => {
     const allIds = [...ids.serviceIds, ...ids.queueIds, ...ids.browseIds];
     const stats = roiStats.statsFor(allIds);
@@ -660,17 +690,17 @@ function buildFrescoDepartments(classifiedRois, ctx) {
     const hasQueueZones = ids.queueIds.length > 0;
     const deptUnique = uniqueByDept.get(dept) ?? stats.uniqueVisitors;
 
-    // Fragments joined back into visits. Everything the card shows about
-    // duration or stopping is read off these, because a fragment measures the
-    // tracker's ID lifetime rather than the shopper's stay.
+    // Legacy polygon-fragment episodes (still used for stopping / pass-through).
     const episodes = episodeStats.statsFor(allIds);
     const reportable = stats.visits >= MIN_CROSSINGS_FOR_DEPT_METRICS;
-    const dwellReliable = reportable && episodes.reliable;
 
-    // Stopping is an episode-level rate: of the reconstructed visits to this
-    // counter, how many were a pause rather than a walk-past. The fragment-level
-    // rate understates it, because a pause chopped into four fragments can leave
-    // every piece under the bar.
+    const presenceStats = presence.statsFor(dept);
+    const dwell = presenceStats.dwell;
+    const engagement = presenceStats.engagement;
+    // Prefer geometric category dwell; fall back to legacy polygon episodes.
+    const usePresence = dwell.episodes >= 15;
+    const dwellReliable = reportable && (usePresence ? dwell.reliable : episodes.reliable);
+
     const stoppingPct = episodes.episodes > 0
       ? episodes.stoppingPct
       : (stats.visits > 0 ? pct(stats.dwellVisits, stats.visits) : 0);
@@ -678,37 +708,47 @@ function buildFrescoDepartments(classifiedRois, ctx) {
       ? Math.max(0, Math.round((100 - stoppingPct) * 10) / 10)
       : null;
 
-    // The median, not the mean: episode length is heavy-tailed (single visits
-    // past ten minutes) and a mean built on a handful of those moves a counter's
-    // headline by seconds for reasons that have nothing to do with the counter.
-    const medianDwellSec = dwellReliable ? episodes.medianStopSec : null;
-    const p75DwellSec = dwellReliable ? episodes.p75StopSec : null;
+    const medianDwellSec = dwellReliable
+      ? Math.round(usePresence ? dwell.medianSec : episodes.medianStopSec)
+      : null;
+    const p75DwellSec = dwellReliable
+      ? Math.round(usePresence ? dwell.p75Sec : episodes.p75StopSec)
+      : null;
+    const meanDwellSec = dwellReliable
+      ? Math.round(usePresence ? dwell.meanSec : episodes.meanStopSec)
+      : 0;
 
     return {
       id: dept,
       label: ids.displayLabel || FRESCO_DEPT_LABELS[dept] || dept.replace(/_/g, ' '),
       visits: stats.visits,
-      // Counting stops only needs to know which side of the bar a visit fell,
-      // which survives the coarse pre-6-Aug durations. Measuring how long the
-      // stop lasted does not, so the count stays while the duration goes.
       dwellVisits: reportable ? episodes.stops : 0,
       engagementVisits: stats.engagementVisits,
       uniqueVisitors: deptUnique,
 
-      episodes: episodes.episodes,
+      episodes: usePresence ? dwell.episodes : episodes.episodes,
       fragmentsPerEpisode: episodes.fragmentsPerEpisode,
       medianDwellSec,
       p75DwellSec,
       dwellUnavailableReason: dwellReliable
         ? null
-        : (reportable ? episodes.unreliableReason : 'too_few_crossings'),
-      // Retained for the PDF and the week-on-week comparison, which both key off
-      // avgDwellSec. It is now the episode mean, so it measures the same thing
-      // the card does rather than total zone time diluted by pass-throughs.
-      avgDwellSec: dwellReliable ? episodes.meanStopSec : 0,
-      avgDwellMin: dwellReliable ? Math.round((episodes.meanStopSec / 60) * 10) / 10 : 0,
+        : (reportable
+          ? (usePresence ? 'too_few_presence_episodes' : episodes.unreliableReason)
+          : 'too_few_crossings'),
+      // Category dwell (2 m halo) — headline "dwell" on fresco cards / PDF.
+      avgDwellSec: meanDwellSec,
+      avgDwellMin: meanDwellSec ? Math.round((meanDwellSec / 60) * 10) / 10 : 0,
       dwellReliable,
+      dwellMetric: usePresence ? 'category_halo' : 'polygon_episode',
       reportable,
+
+      // Shelf-face engagement (0.5 m / inside ROI).
+      avgEngagementSec: engagement.episodes >= 15 ? Math.round(engagement.meanSec) : 0,
+      medianEngagementSec: engagement.episodes >= 15 ? Math.round(engagement.medianSec) : null,
+      p75EngagementSec: engagement.episodes >= 15 ? Math.round(engagement.p75Sec) : null,
+      engagementEpisodes: engagement.episodes,
+      engagementReliable: engagement.episodes >= 15,
+      presenceIdentityMode: presenceStats.identityMode,
 
       engagementRatePct: stats.visits > 0 ? pct(stats.rankVisits, stats.visits) : 0,
       bands: bandShares(stats),
@@ -1085,6 +1125,32 @@ function fetchActivityTimelines(
   return { hourly, daily, trailingHourly, activityTimeline };
 }
 
+/** Overlay geometric category dwell / engagement onto aisle category rows. */
+function applyCategoryPresenceDwell(groups, ctx) {
+  if (!groups?.length || !ctx.categoryPresence) return groups;
+  const depts = groups
+    .filter((g) => g.roiIds?.length)
+    .map((g) => ({ key: g.category || g.id || g.key, roiIds: g.roiIds }));
+  if (!depts.length) return groups;
+  const presence = ctx.categoryPresence(depts);
+  return groups.map((g) => {
+    const key = g.category || g.id || g.key;
+    const p = presence.statsFor(key);
+    if (!p?.dwell || p.dwell.episodes < 15) return g;
+    const meanSec = p.dwell.meanSec;
+    return {
+      ...g,
+      avgDwellSec: Math.round(meanSec),
+      avgDwellMin: Math.round((meanSec / 60) * 10) / 10,
+      medianDwellSec: Math.round(p.dwell.medianSec),
+      avgEngagementSec: p.engagement.episodes >= 15 ? Math.round(p.engagement.meanSec) : g.avgEngagementSec,
+      medianEngagementSec: p.engagement.episodes >= 15 ? Math.round(p.engagement.medianSec) : null,
+      dwellMetric: 'category_halo',
+      presenceIdentityMode: p.identityMode,
+    };
+  });
+}
+
 function buildAisleCategoryGroups(classifiedRois, ctx) {
   const { roiStats } = ctx;
   const aisleRois = classifiedRois.filter(r => r.classification.group === 'aisles');
@@ -1102,7 +1168,7 @@ function buildAisleCategoryGroups(classifiedRois, ctx) {
     catEntries.map(([category, roiIds]) => ({ key: category, roiIds })),
   );
 
-  return catEntries.map(([category, roiIds]) => {
+  const groups = catEntries.map(([category, roiIds]) => {
     const stats = roiStats.statsFor(roiIds);
     const uniqueVisitors = uniqueByCat.get(category) ?? stats.uniqueVisitors;
     return {
@@ -1123,6 +1189,8 @@ function buildAisleCategoryGroups(classifiedRois, ctx) {
       roiIds,
     };
   }).sort((a, b) => b.visits - a.visits);
+
+  return applyCategoryPresenceDwell(groups, ctx);
 }
 
 function buildAisleMetrics(classifiedRois, ctx, totalVisitors, sessionAnalytics) {
@@ -1154,7 +1222,10 @@ function buildAisleMetrics(classifiedRois, ctx, totalVisitors, sessionAnalytics)
         roiIdsByCategory,
       )
       : [];
-    if (sessionGroups.length > 0) return sessionGroups;
+    if (sessionGroups.length > 0) {
+      // Keep session reach stats; replace dwell clocks with 2 m category halo.
+      return applyCategoryPresenceDwell(sessionGroups, ctx);
+    }
     return buildAisleCategoryGroups(classifiedRois, ctx)
       .filter(g => g.category && !/^(uncategorized|no content available)$/i.test(g.category));
   })();
@@ -1787,6 +1858,7 @@ export function computeExecutiveJourney(db, venueId, startTs, endTs, variant = '
       minVisitMs: metricThresholds.minVisitMs,
       source: metricThresholds.source,
     },
+    categoryPresence: loadCategoryPresenceConfigForVenue(db, venueId),
     storeHours: {
       openingHour: storeHours.openingHour,
       closingHour: storeHours.closingHour,

@@ -17,13 +17,14 @@ import BenchmarkExecutiveTab from './components/BenchmarkExecutiveTab'
 import RunBenchmarkPanel from './components/RunBenchmarkPanel'
 import RawVsReconciledTab from './components/RawVsReconciledTab'
 import ReconciliationProofTab from './components/ReconciliationProofTab'
+import LiveTrackSamplesTab from './components/LiveTrackSamplesTab'
 import type { TrackViewMode } from './types'
 
 interface BenchmarkPageProps {
   onClose: () => void
 }
 
-type Tab = 'executive' | 'raw_vs' | 'proof' | 'overview' | 'reconciler' | 'coverage' | 'spatial' | 'artifacts'
+type Tab = 'live_samples' | 'executive' | 'raw_vs' | 'proof' | 'overview' | 'reconciler' | 'coverage' | 'spatial' | 'artifacts'
 
 function fmt(n: number | undefined | null, d = 1) {
   if (n == null || Number.isNaN(n)) return '—'
@@ -58,7 +59,7 @@ export default function BenchmarkPage({ onClose }: BenchmarkPageProps) {
   const [loading, setLoading] = useState(true)
   const [detailLoading, setDetailLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [tab, setTab] = useState<Tab>('raw_vs')
+  const [tab, setTab] = useState<Tab>('live_samples')
   const [selectedImage, setSelectedImage] = useState<string | null>(null)
   const [showCompare, setShowCompare] = useState(false)
   const [coverageTrackView, setCoverageTrackView] = useState<TrackViewMode | undefined>()
@@ -125,8 +126,9 @@ export default function BenchmarkPage({ onClose }: BenchmarkPageProps) {
   const fc = s?.fragmentation_cause_pct
 
   const tabs: { id: Tab; label: string }[] = [
-    { id: 'raw_vs', label: 'Raw vs reconciled' },
+    { id: 'live_samples', label: 'Live samples' },
     { id: 'proof', label: 'Proof (before/after)' },
+    { id: 'raw_vs', label: 'Raw vs reconciled' },
     { id: 'executive', label: 'Executive' },
     { id: 'overview', label: 'Overview' },
     { id: 'coverage', label: 'Venue map' },
@@ -267,15 +269,33 @@ export default function BenchmarkPage({ onClose }: BenchmarkPageProps) {
             <RunComparePanel baseline={baselineRun} current={currentRun} />
           )}
 
-          {!selectedId && !loading && (
+          {/* Tabs — Live samples works without a capture run */}
+          <div className="flex flex-wrap gap-1 bg-gray-800 rounded-lg p-1 w-fit">
+            {tabs.map((t) => (
+              <button
+                key={t.id}
+                type="button"
+                onClick={() => setTab(t.id)}
+                className={`px-4 py-1.5 rounded-md text-sm transition-colors ${
+                  tab === t.id ? 'bg-amber-600 text-white' : 'text-gray-400 hover:text-white'
+                }`}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
+
+          {tab === 'live_samples' && <LiveTrackSamplesTab />}
+
+          {tab !== 'live_samples' && !selectedId && !loading && (
             <p className="text-gray-500 text-center py-12">Select a run from the sidebar.</p>
           )}
 
-          {selectedId && detailLoading && !detail && (
+          {tab !== 'live_samples' && selectedId && detailLoading && !detail && (
             <p className="text-gray-500 text-center py-12">Loading run detail…</p>
           )}
 
-          {detail && (
+          {tab !== 'live_samples' && detail && (
             <>
               {/* Meta strip */}
               <div className="flex flex-wrap items-center gap-3 text-xs text-gray-400">
@@ -290,22 +310,6 @@ export default function BenchmarkPage({ onClose }: BenchmarkPageProps) {
                 {detail.scorecard?.notes && (
                   <span className="italic text-gray-500">{detail.scorecard.notes}</span>
                 )}
-              </div>
-
-              {/* Tabs */}
-              <div className="flex gap-1 bg-gray-800 rounded-lg p-1 w-fit">
-                {tabs.map((t) => (
-                  <button
-                    key={t.id}
-                    type="button"
-                    onClick={() => setTab(t.id)}
-                    className={`px-4 py-1.5 rounded-md text-sm transition-colors ${
-                      tab === t.id ? 'bg-amber-600 text-white' : 'text-gray-400 hover:text-white'
-                    }`}
-                  >
-                    {t.label}
-                  </button>
-                ))}
               </div>
 
               {tab === 'raw_vs' && detail && (

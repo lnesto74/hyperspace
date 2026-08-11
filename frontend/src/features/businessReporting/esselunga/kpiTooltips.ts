@@ -16,9 +16,10 @@ export const FRESCO_TOOLTIPS = {
   stopping: 'Of the rebuilt visits to this counter, the share that were a pause rather than a walk-past. A pause means staying at least the stopping threshold.',
   crossings: 'Raw LiDAR track entries into this department. The tracker loses and re-acquires a shopper roughly once per visit, so this is well above the number of actual visits.',
   dwellVisits: 'Rebuilt visits that lasted at least the stopping threshold — the shopper paused at this counter rather than walking past.',
-  avgDwell: 'Typical length of a stop at this counter, shown as median to 75th percentile. It is an estimate rebuilt from tracker fragments and is a lower bound: a visit still running when the tracker loses the shopper for good is cut short.',
+  avgDwell: 'Category dwell: time spent within ~2 m of this counter’s zones (median–p75). Episodes tolerate short exits (gap) and optionally stitch brief gaps. Uses raw perception IDs by default.',
+  engagement: 'Shelf-face engagement: time inside the painted ROI or within ~0.5 m of it. Nested inside category dwell — shorter and closer to the fixture.',
   passThrough: 'Rebuilt visits that ended before the stopping threshold — crossed the counter without stopping.',
-  episodes: 'The perception feed holds an identity for about 13 seconds on average, so one visit arrives as several fragments. Fragments in the same zone are rejoined when the gap and the re-entry distance say it is the same shopper. A figure near 1 means the tracker held on; near 2 means it lost the shopper once per visit.',
+  episodes: 'Number of category visits reconstructed for this counter in the period. When the sensor briefly loses a person, nearby segments may be rejoined into one visit.',
   queue: 'Share of visits detected in the queue zone vs browsing at the service counter.',
   abandon: 'Queue sessions where the shopper left before being served.',
 };

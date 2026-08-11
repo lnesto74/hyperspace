@@ -16,6 +16,10 @@ import {
   normalizeVisitSessionConfig,
   DEFAULT_VISIT_SESSION_CONFIG,
 } from '../config/visitSessionConfig.js';
+import {
+  normalizeCategoryPresenceConfig,
+  DEFAULT_CATEGORY_PRESENCE_CONFIG,
+} from '../config/categoryPresenceConfig.js';
 
 function normalizeDwgTransformJson(value) {
   if (!value) return null;
@@ -685,6 +689,58 @@ export default function venuesRoutes(db, { mqttService, io, visualTrackService }
     } catch (error) {
       console.error('Update visit session config error:', error);
       res.status(500).json({ error: 'Failed to update visit session config' });
+    }
+  });
+
+  // ============================================
+  // Category dwell / shelf engagement geometry
+  // ============================================
+  router.get('/:id/category-presence-config', (req, res) => {
+    try {
+      const venue = venueQueries.getById(db, req.params.id);
+      if (!venue) return res.status(404).json({ error: 'Venue not found' });
+      const transformJson = parseDwgTransform(venue.dwg_transform_json);
+      const saved = transformJson.category_presence || null;
+      res.json({
+        venueId: venue.id,
+        categoryPresence: saved
+          ? normalizeCategoryPresenceConfig(saved)
+          : { ...DEFAULT_CATEGORY_PRESENCE_CONFIG, _defaults: true },
+      });
+    } catch (error) {
+      console.error('Get category presence config error:', error);
+      res.status(500).json({ error: 'Failed to read category presence config' });
+    }
+  });
+
+  router.patch('/:id/category-presence-config', (req, res) => {
+    try {
+      const venueId = req.params.id;
+      const venue = venueQueries.getById(db, venueId);
+      if (!venue) return res.status(404).json({ error: 'Venue not found' });
+
+      const incoming = req.body?.categoryPresence ?? req.body?.category_presence;
+      const cleared = incoming === null;
+      const normalized = cleared ? null : normalizeCategoryPresenceConfig(incoming);
+
+      const existing = parseDwgTransform(venue.dwg_transform_json);
+      const nextJson = {
+        ...existing,
+        category_presence: normalized
+          ? { ...normalized, updated_at: new Date().toISOString() }
+          : null,
+      };
+      if (!normalized) delete nextJson.category_presence;
+
+      db.prepare(`
+        UPDATE venues SET dwg_transform_json = ?, updated_at = datetime('now')
+        WHERE id = ?
+      `).run(JSON.stringify(nextJson), venueId);
+
+      res.json({ success: true, venueId, categoryPresence: normalized });
+    } catch (error) {
+      console.error('Update category presence config error:', error);
+      res.status(500).json({ error: 'Failed to update category presence config' });
     }
   });
 

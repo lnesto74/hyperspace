@@ -465,39 +465,125 @@ function drawPage1Lower(doc, journey, y) {
   return Math.max(leftY, rightY, y);
 }
 
+/**
+ * Customer-facing wireframe: shelf → engagement strip → category dwell halo.
+ * Radii come from journey.categoryPresence (venue settings) or defaults.
+ */
+function drawDwellGeometryLegend(doc, y, presence) {
+  const dM = Number(presence?.categoryDwellRadiusM) || 2.0;
+  const eM = Number(presence?.engagementRadiusM) || 0.5;
+  const boxH = 72;
+  const x0 = MARGIN;
+  const w = CONTENT_W;
+
+  doc.roundedRect(x0, y, w, boxH, 3).fillColor(PANEL).fill();
+  doc.font('Helvetica-Bold').fontSize(7).fillColor(INK)
+    .text('How we measure time at a category', x0 + 10, y + 7, { width: w - 20, lineBreak: false });
+
+  const shelfX = x0 + 14;
+  const shelfW = 22;
+  const bandY = y + 22;
+  const bandH = 28;
+  const aisleStart = shelfX + shelfW;
+  const scaleW = 210;
+  const pxPerM = scaleW / Math.max(dM * 1.25, 0.1);
+  const engW = Math.max(10, eM * pxPerM);
+  const dwellW = Math.max(engW + 12, dM * pxPerM);
+
+  doc.rect(shelfX, bandY, shelfW, bandH).fillColor('#374151').fill();
+  doc.font('Helvetica').fontSize(5.5).fillColor(MUTED)
+    .text('SHELF', shelfX - 2, bandY - 8, { width: shelfW + 4, align: 'center', lineBreak: false });
+
+  doc.save();
+  doc.rect(aisleStart, bandY, dwellW, bandH)
+    .fillColor('#e0f2fe').fillOpacity(0.55).fill()
+    .strokeColor(ACCENT).lineWidth(1).dash(2.5, { space: 1.5 })
+    .strokeOpacity(1).stroke();
+  doc.undash();
+  doc.restore();
+
+  doc.rect(aisleStart, bandY, engW, bandH).fillColor('#7dd3fc').fillOpacity(0.85).fill();
+  doc.fillOpacity(1);
+
+  const aX = aisleStart + engW * 0.45;
+  const bX = aisleStart + engW + (dwellW - engW) * 0.55;
+  const cX = aisleStart + dwellW + 28;
+  const cy = bandY + bandH / 2;
+
+  doc.circle(aX, cy, 4.5).fillColor(ACCENT).fill();
+  doc.font('Helvetica-Bold').fontSize(6).fillColor('#fff')
+    .text('A', aX - 2, cy - 2.5, { width: 6, align: 'center', lineBreak: false });
+  doc.circle(bX, cy, 4.5).fillColor('#fff').strokeColor('#94a3b8').lineWidth(0.8).fillAndStroke();
+  doc.font('Helvetica-Bold').fontSize(6).fillColor(INK)
+    .text('B', bX - 2, cy - 2.5, { width: 6, align: 'center', lineBreak: false });
+  doc.circle(cX, cy, 4.5).fillColor('#94a3b8').fill();
+  doc.font('Helvetica-Bold').fontSize(6).fillColor('#fff')
+    .text('C', cX - 2, cy - 2.5, { width: 6, align: 'center', lineBreak: false });
+
+  doc.font('Helvetica').fontSize(5.5).fillColor(MUTED)
+    .text(`${eM.toFixed(1)} m engagement`, aisleStart, bandY + bandH + 3, { width: engW + 40, lineBreak: false })
+    .text(`${dM.toFixed(1)} m category dwell`, aisleStart + engW + 4, bandY + bandH + 3, {
+      width: dwellW, lineBreak: false,
+    });
+
+  const noteX = aisleStart + dwellW + 48;
+  doc.font('Helvetica').fontSize(6.5).fillColor(INK)
+    .text(
+      `A pick/read (engagement) · B decide nearby (category dwell) · C pass-by\n`
+      + `Engagement is nested inside category dwell — leaving the shelf face does not end dwell.`,
+      noteX,
+      bandY - 2,
+      { width: x0 + w - noteX - 10, lineGap: 1.5 },
+    );
+
+  return y + boxH + 8;
+}
+
 function drawFresco(doc, journey, y) {
   const depts = (journey.fresco?.departments || []).filter((d) => d.visits > 0);
   if (!depts.length) return y;
 
-  const next = sectionTitle(
+  const presence = journey.categoryPresence || {};
+  const dM = Number(presence.categoryDwellRadiusM) || 2.0;
+  const eM = Number(presence.engagementRadiusM) || 0.5;
+
+  let next = sectionTitle(
     doc,
     'Piazza del Fresco',
     y,
-    'Counter zones — how many crossings became a stop, and for how long. Visits are '
-    + 'rebuilt by rejoining tracker fragments, so dwell is a lower bound; stopping rate '
-    + 'is the sturdier comparison between counters.',
+    `Counter zones — stopping rate, category dwell (within ${dM.toFixed(1)} m), `
+    + `and shelf-face engagement (within ${eM.toFixed(1)} m or inside the zone).`,
   );
+
+  next = drawDwellGeometryLegend(doc, next, presence);
 
   const dwellCell = (d) => {
     if (!d.dwellReliable || d.medianDwellSec == null) return '—';
     if (d.p75DwellSec != null && d.p75DwellSec > d.medianDwellSec) {
-      return `${d.medianDwellSec}-${d.p75DwellSec}s`;
+      return `${Math.round(d.medianDwellSec)}-${Math.round(d.p75DwellSec)}s`;
     }
-    return `${d.medianDwellSec}s`;
+    return `${Math.round(d.medianDwellSec)}s`;
+  };
+  const engCell = (d) => {
+    if (!d.engagementReliable || d.medianEngagementSec == null) return '—';
+    if (d.p75EngagementSec != null && d.p75EngagementSec > d.medianEngagementSec) {
+      return `${Math.round(d.medianEngagementSec)}-${Math.round(d.p75EngagementSec)}s`;
+    }
+    return `${Math.round(d.medianEngagementSec)}s`;
   };
 
   return table(doc, {
     y: next,
-    headers: ['Department', 'Crossings', 'Visits', 'Stops', 'Stopping', 'Typical dwell', 'In queue'],
-    widths: [0.26, 0.12, 0.11, 0.11, 0.12, 0.16, 0.12],
+    headers: ['Department', 'Crossings', 'Stops', 'Stopping', 'Category dwell', 'Engagement', 'In queue'],
+    widths: [0.22, 0.11, 0.1, 0.11, 0.16, 0.15, 0.15],
     align: ['left', 'right', 'right', 'right', 'right', 'right', 'right'],
     rows: depts.map((d) => [
       d.label,
       num(d.visits),
-      num(d.episodes ?? 0),
       d.reportable ? num(d.dwellVisits ?? 0) : '—',
       d.reportable ? `${d.stoppingPct ?? d.browsingPct}%` : '—',
       dwellCell(d),
+      engCell(d),
       d.hasQueueZones ? `${d.waitingPct}%` : '—',
     ]),
   });
@@ -508,12 +594,14 @@ function drawAisles(doc, journey, y) {
   const thresholdSec = journey.metricThresholds?.dwellSec ?? 5;
   const rankSec = journey.metricThresholds?.engagementRankSec ?? 15;
 
+  const dM = Number(journey.categoryPresence?.categoryDwellRadiusM) || 2.0;
   let next = sectionTitle(
     doc,
     'Aisles and categories',
     y,
-    `Stopping power counts a pause of ${thresholdSec}s per Esselunga's specification; `
-    + `engagement counts ${rankSec}s, which is what ranks one fixture against another`,
+    `Stopping power counts a pause of ${thresholdSec}s; `
+    + `category dwell is time within ${dM.toFixed(1)} m of the shelf category. `
+    + `Fixture ranking still uses the ${rankSec}s engagement hold threshold.`,
   );
 
   const stats = [

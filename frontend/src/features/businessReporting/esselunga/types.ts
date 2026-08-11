@@ -108,7 +108,16 @@ export interface FrescoDepartment {
   p75DwellSec?: number | null;
   /** False when there are too few episodes for a duration to mean anything. */
   dwellReliable?: boolean;
-  dwellUnavailableReason?: 'quantised_durations' | 'too_few_episodes' | 'too_few_crossings' | 'no_data' | null;
+  dwellUnavailableReason?: 'quantised_durations' | 'too_few_episodes' | 'too_few_crossings' | 'too_few_presence_episodes' | 'no_data' | null;
+  /** category_halo = 2 m geometry clock; polygon_episode = legacy fragment stitch. */
+  dwellMetric?: 'category_halo' | 'polygon_episode';
+  /** Shelf-face engagement (≤0.5 m / inside ROI). */
+  avgEngagementSec?: number;
+  medianEngagementSec?: number | null;
+  p75EngagementSec?: number | null;
+  engagementEpisodes?: number;
+  engagementReliable?: boolean;
+  presenceIdentityMode?: 'raw' | 'track_key';
   /** False when the counter has too few crossings to report rates at all. */
   reportable?: boolean;
   engagementRatePct?: number;
@@ -230,12 +239,23 @@ export interface ExecutiveHeadline {
   text: string;
 }
 
+export interface CategoryPresenceConfig {
+  categoryDwellRadiusM: number;
+  engagementRadiusM: number;
+  dwellGapS: number;
+  dwellStitchS: number;
+  engagementGapS?: number;
+  identityMode?: 'raw' | 'track_key';
+}
+
 export interface EsselungaJourneyPayload {
   variant: ExecutiveVariant;
   venueId: string;
   range: { startTs: number; endTs: number };
   generatedAt: number;
   metricThresholds?: MetricThresholds;
+  /** Geometry clocks for category dwell / shelf engagement (venue settings). */
+  categoryPresence?: CategoryPresenceConfig;
   storeHours?: {
     openingHour: number;
     closingHour: number;

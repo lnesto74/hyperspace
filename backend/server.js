@@ -29,6 +29,7 @@ import EdgeCaptureService from './services/EdgeCaptureService.js';
 import BenchmarkRunService from './services/BenchmarkRunService.js';
 import BenchmarkCoverageService from './services/BenchmarkCoverageService.js';
 import BenchmarkJobService from './services/BenchmarkJobService.js';
+import LiveTrackSampleService from './services/LiveTrackSampleService.js';
 import benchmarkRoutes from './routes/benchmark.js';
 import venuesRoutes from './routes/venues.js';
 import lidarsRoutes from './routes/lidars.js';
@@ -597,11 +598,13 @@ const benchmarkCoverageService = new BenchmarkCoverageService({
   db,
 });
 const benchmarkJobService = new BenchmarkJobService();
+const liveTrackSampleService = new LiveTrackSampleService({ db });
 app.use('/api/benchmark', benchmarkRoutes({
   benchmarkRunService,
   benchmarkCoverageService,
   benchmarkJobService,
   replayService,
+  liveTrackSampleService,
 }));
 app.use('/api/lidars', lidarsRoutes(lidarConnectionManager, tailscaleService, mockGenerator));
 app.use('/api/models', modelsRoutes(db));

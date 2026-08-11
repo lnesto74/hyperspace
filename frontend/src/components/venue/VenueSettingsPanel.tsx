@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { X, Settings, Save, Building2, Users, Clock, Activity, DoorOpen, Route } from 'lucide-react'
+import { X, Settings, Save, Building2, Users, Clock, Activity, DoorOpen, Route, Target } from 'lucide-react'
 import { API_BASE } from '../../config/api'
 
 interface VisitSessionConfig {
@@ -37,6 +37,41 @@ const TRACK_KEY_MODES: { value: VisitSessionConfig['trackKeyMode']; label: strin
     value: 'exact',
     label: 'Exact track key only',
     hint: 'No stitching — each fragment stays separate (debug / strict).',
+  },
+]
+
+interface CategoryPresenceConfig {
+  categoryDwellRadiusM: number
+  engagementRadiusM: number
+  dwellGapS: number
+  dwellStitchS: number
+  engagementGapS: number
+  dwellMinDurationS: number
+  engagementMinDurationS: number
+  identityMode: 'raw' | 'track_key'
+}
+
+const DEFAULT_CATEGORY_PRESENCE: CategoryPresenceConfig = {
+  categoryDwellRadiusM: 2.0,
+  engagementRadiusM: 0.5,
+  dwellGapS: 3,
+  dwellStitchS: 8,
+  engagementGapS: 1,
+  dwellMinDurationS: 2,
+  engagementMinDurationS: 0.5,
+  identityMode: 'raw',
+}
+
+const IDENTITY_MODES: { value: CategoryPresenceConfig['identityMode']; label: string; hint: string }[] = [
+  {
+    value: 'raw',
+    label: 'Raw perception ID (recommended)',
+    hint: 'Safer while live reconciler over-merges. Engagement and category dwell use original_perception_id.',
+  },
+  {
+    value: 'track_key',
+    label: 'Reconciled track key',
+    hint: 'Uses live luca / track_key. Can inflate clocks if identities glue across the store.',
   },
 ]
 
@@ -87,6 +122,7 @@ export default function VenueSettingsPanel({
   })
   const [roiOptions, setRoiOptions] = useState<RoiOption[]>([])
   const [visitSession, setVisitSession] = useState<VisitSessionConfig>(DEFAULT_VISIT_SESSION)
+  const [categoryPresence, setCategoryPresence] = useState<CategoryPresenceConfig>(DEFAULT_CATEGORY_PRESENCE)
   const [calibrationPct, setCalibrationPct] = useState<string>('')
   const [saving, setSaving] = useState(false)
   const [loading, setLoading] = useState(true)
@@ -94,10 +130,11 @@ export default function VenueSettingsPanel({
   const fetchSettings = useCallback(async () => {
     setLoading(true)
     try {
-      const [venueRes, roiRes, sessionRes] = await Promise.all([
+      const [venueRes, roiRes, sessionRes, presenceRes] = await Promise.all([
         fetch(`${API_BASE}/api/venues/${venueId}`),
         fetch(`${API_BASE}/api/venues/${venueId}/roi?all=true`),
         fetch(`${API_BASE}/api/venues/${venueId}/visit-session-config`),
+        fetch(`${API_BASE}/api/venues/${venueId}/category-presence-config`),
       ])
       if (venueRes.ok) {
         const data = await venueRes.json()
@@ -126,6 +163,10 @@ export default function VenueSettingsPanel({
             ? String(Math.round(vs.calibrationConversionRate * 100))
             : ''
         )
+      }
+      if (presenceRes.ok) {
+        const data = await presenceRes.json()
+        setCategoryPresence({ ...DEFAULT_CATEGORY_PRESENCE, ...(data.categoryPresence || {}) })
       }
     } catch (err) {
       console.error('Failed to fetch venue settings:', err)
@@ -162,6 +203,11 @@ export default function VenueSettingsPanel({
               calibrationConversionRate: calibration,
             },
           }),
+        }),
+        fetch(`${API_BASE}/api/venues/${venueId}/category-presence-config`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ categoryPresence }),
         }),
       ])
       onSaved?.()
@@ -512,6 +558,118 @@ export default function VenueSettingsPanel({
                     onChange={(e) => setCalibrationPct(e.target.value)}
                     className="w-full px-2 py-1.5 bg-gray-800 border border-gray-600 rounded text-white text-sm"
                   />
+                </div>
+              </div>
+
+              {/* Category dwell / shelf engagement */}
+              <div className="space-y-3 p-3 bg-amber-900/20 border border-amber-700/40 rounded-lg">
+                <div className="flex items-center gap-2">
+                  <Target className="w-4 h-4 text-amber-400" />
+                  <label className="text-sm font-medium text-white">Category dwell & engagement</label>
+                </div>
+                <p className="text-xs text-gray-500">
+                  Geometry clocks for fresco and aisle category KPIs. Category dwell = time within a halo of the ROI;
+                  engagement = time at the shelf face (inside ROI or very close).
+                </p>
+
+                <div className="space-y-1">
+                  <label className="text-[10px] text-gray-400">Category dwell radius (m)</label>
+                  <p className="text-[10px] text-gray-600 mb-1">
+                    How far from the painted category ROI still counts as browsing that category.
+                  </p>
+                  <select
+                    value={String(categoryPresence.categoryDwellRadiusM)}
+                    onChange={(e) => setCategoryPresence(c => ({
+                      ...c,
+                      categoryDwellRadiusM: parseFloat(e.target.value),
+                    }))}
+                    className="w-full px-2 py-1.5 bg-gray-800 border border-gray-600 rounded text-white text-sm"
+                  >
+                    {[1.5, 2.0, 2.5].map((v) => (
+                      <option key={v} value={String(v)}>{v.toFixed(1)} m</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-[10px] text-gray-400">Engagement radius (m)</label>
+                  <p className="text-[10px] text-gray-600 mb-1">
+                    Shelf-face distance (also counts when inside the ROI). 0 = painted polygon only.
+                  </p>
+                  <select
+                    value={String(categoryPresence.engagementRadiusM)}
+                    onChange={(e) => setCategoryPresence(c => ({
+                      ...c,
+                      engagementRadiusM: parseFloat(e.target.value),
+                    }))}
+                    className="w-full px-2 py-1.5 bg-gray-800 border border-gray-600 rounded text-white text-sm"
+                  >
+                    {[0, 0.5, 1.0].map((v) => (
+                      <option key={v} value={String(v)}>{v.toFixed(1)} m</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-[10px] text-gray-400">Dwell gap (seconds)</label>
+                  <p className="text-[10px] text-gray-600 mb-1">
+                    Must stay outside the dwell halo this long before an episode closes.
+                  </p>
+                  <select
+                    value={String(categoryPresence.dwellGapS)}
+                    onChange={(e) => setCategoryPresence(c => ({
+                      ...c,
+                      dwellGapS: parseInt(e.target.value, 10),
+                    }))}
+                    className="w-full px-2 py-1.5 bg-gray-800 border border-gray-600 rounded text-white text-sm"
+                  >
+                    {[2, 3, 5].map((v) => (
+                      <option key={v} value={String(v)}>{v} s</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-[10px] text-gray-400">Dwell stitch (seconds)</label>
+                  <p className="text-[10px] text-gray-600 mb-1">
+                    Merge back-to-back dwell episodes if the gap is shorter.
+                  </p>
+                  <select
+                    value={String(categoryPresence.dwellStitchS)}
+                    onChange={(e) => setCategoryPresence(c => ({
+                      ...c,
+                      dwellStitchS: parseInt(e.target.value, 10),
+                    }))}
+                    className="w-full px-2 py-1.5 bg-gray-800 border border-gray-600 rounded text-white text-sm"
+                  >
+                    {[
+                      { v: 0, label: 'Off' },
+                      { v: 5, label: '5 s' },
+                      { v: 8, label: '8 s (default)' },
+                      { v: 12, label: '12 s' },
+                    ].map(({ v, label }) => (
+                      <option key={v} value={String(v)}>{label}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-[10px] text-gray-400">Identity for KPIs</label>
+                  <select
+                    value={categoryPresence.identityMode}
+                    onChange={(e) => setCategoryPresence(c => ({
+                      ...c,
+                      identityMode: e.target.value as CategoryPresenceConfig['identityMode'],
+                    }))}
+                    className="w-full px-2 py-1.5 bg-gray-800 border border-gray-600 rounded text-white text-sm"
+                  >
+                    {IDENTITY_MODES.map(m => (
+                      <option key={m.value} value={m.value}>{m.label}</option>
+                    ))}
+                  </select>
+                  <p className="text-[10px] text-gray-600">
+                    {IDENTITY_MODES.find(m => m.value === categoryPresence.identityMode)?.hint}
+                  </p>
                 </div>
               </div>
 

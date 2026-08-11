@@ -12,8 +12,40 @@ export default function benchmarkRoutes({
   benchmarkCoverageService,
   benchmarkJobService,
   replayService,
+  liveTrackSampleService,
 }) {
   const router = Router();
+
+  /** Live DB samples: tracks that touched a category ROI, raw vs reconciled polylines. */
+  router.get('/live-samples/categories', (req, res) => {
+    try {
+      if (!liveTrackSampleService) return res.status(503).json({ error: 'Live samples unavailable' });
+      const venueId = String(req.query.venueId || '');
+      if (!venueId) return res.status(400).json({ error: 'venueId required' });
+      res.json({ venueId, categories: liveTrackSampleService.listCategories(venueId) });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  router.get('/live-samples', (req, res) => {
+    try {
+      if (!liveTrackSampleService) return res.status(503).json({ error: 'Live samples unavailable' });
+      const venueId = String(req.query.venueId || '');
+      const category = String(req.query.category || '');
+      const start = Number(req.query.start);
+      const end = Number(req.query.end);
+      const limit = req.query.limit != null ? Number(req.query.limit) : 12;
+      const sort = String(req.query.sort || 'longest');
+      const mode = String(req.query.mode || 'reconciled');
+      const payload = liveTrackSampleService.getSamples({
+        venueId, category, start, end, limit, sort, mode,
+      });
+      res.json(payload);
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  });
 
   // Canva screenshot page — under /api/* so Caddy already proxies to backend (no Caddyfile change needed)
   router.get('/story-strip', (_req, res) => {
