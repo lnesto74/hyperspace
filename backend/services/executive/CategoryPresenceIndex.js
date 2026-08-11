@@ -166,9 +166,21 @@ function summarizeEpisodes(episodes) {
   };
 }
 
+const EMPTY_SUMMARY = Object.freeze({
+  episodes: 0, meanSec: 0, medianSec: 0, p75Sec: 0, totalSec: 0, reliable: false,
+});
+
 const EMPTY = Object.freeze({
-  dwell: { episodes: 0, meanSec: 0, medianSec: 0, p75Sec: 0, totalSec: 0, reliable: false },
-  engagement: { episodes: 0, meanSec: 0, medianSec: 0, p75Sec: 0, totalSec: 0, reliable: false },
+  /** All 2 m halo episodes (including aisle grazes). */
+  dwell: { ...EMPTY_SUMMARY },
+  /**
+   * Category dwell among stops only — a stop is a dwell episode that reached
+   * the shelf face (engagement radius / inside ROI) at least once.
+   */
+  dwellAmongEngaged: { ...EMPTY_SUMMARY },
+  engagement: { ...EMPTY_SUMMARY },
+  /** % of category-dwell episodes that reached engagement. */
+  stoppingEngPct: null,
   identityMode: 'raw',
   sampleTracks: 0,
 });
@@ -229,7 +241,12 @@ export function buildCategoryPresenceIndex({
       const series = [];
       for (const s of samples) {
         const d = distToUnion(s.x, s.z, polys);
-        series.push({ t: s.t, d, inDwell: d <= cfg.categoryDwellRadiusM, inEng: d <= cfg.engagementRadiusM });
+        series.push({
+          t: s.t,
+          d,
+          inDwell: d <= cfg.categoryDwellRadiusM,
+          inEng: d <= cfg.engagementRadiusM,
+        });
       }
       // Skip tracks that never entered the dwell halo
       if (!series.some((s) => s.inDwell)) continue;
@@ -239,6 +256,8 @@ export function buildCategoryPresenceIndex({
       const engSeries = series.map((s) => ({ t: s.t, inside: s.inEng }));
 
       for (const e of extractEpisodes(dwellSeries, cfg.dwellGapS, cfg.dwellMinDurationS, cfg.dwellStitchS)) {
+        // Stop = this category-dwell visit reached the shelf face at least once.
+        e.hadEng = series.some((s) => s.inEng && s.t >= e.t0 && s.t <= e.t1);
         dwellEps.push(e);
       }
       for (const e of extractEpisodes(engSeries, cfg.engagementGapS, cfg.engagementMinDurationS, 0)) {
@@ -246,9 +265,16 @@ export function buildCategoryPresenceIndex({
       }
     }
 
+    const engagedDwell = dwellEps.filter((e) => e.hadEng);
+    const stoppingEngPct = dwellEps.length
+      ? Math.round((engagedDwell.length / dwellEps.length) * 1000) / 10
+      : null;
+
     byDept.set(dept.key, {
       dwell: summarizeEpisodes(dwellEps),
+      dwellAmongEngaged: summarizeEpisodes(engagedDwell),
       engagement: summarizeEpisodes(engEps),
+      stoppingEngPct,
       identityMode: cfg.identityMode,
       sampleTracks,
       config: {

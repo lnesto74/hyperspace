@@ -13,13 +13,13 @@ export const HERO_KPI_TOOLTIPS: Record<string, string> = {
 };
 
 export const FRESCO_TOOLTIPS = {
-  stopping: 'Of the rebuilt visits to this counter, the share that were a pause rather than a walk-past. A pause means staying at least the stopping threshold.',
+  stopping: 'Share of category visits (within ~2 m of the counter) that also reached the shelf face (~0.5 m or inside the painted zone). Aisle grazes without approaching the fixture do not count as stops.',
   crossings: 'Raw LiDAR track entries into this department. The tracker loses and re-acquires a shopper roughly once per visit, so this is well above the number of actual visits.',
-  dwellVisits: 'Rebuilt visits that lasted at least the stopping threshold — the shopper paused at this counter rather than walking past.',
-  avgDwell: 'Category dwell: time spent within ~2 m of this counter’s zones (median–p75). Episodes tolerate short exits (gap) and optionally stitch brief gaps. Uses raw perception IDs by default.',
-  engagement: 'Shelf-face engagement: time inside the painted ROI or within ~0.5 m of it. Nested inside category dwell — shorter and closer to the fixture.',
-  passThrough: 'Rebuilt visits that ended before the stopping threshold — crossed the counter without stopping.',
-  episodes: 'Number of category visits reconstructed for this counter in the period. When the sensor briefly loses a person, nearby segments may be rejoined into one visit.',
+  dwellVisits: 'Category visits that reached the shelf face — close enough to engage, not only walking nearby in the aisle.',
+  avgDwell: 'Median time within ~2 m of this counter, counted only among visits that reached the shelf face. One typical value. Lower bound if the tracker drops the shopper mid-visit.',
+  engagement: 'Median time at the shelf face (inside the painted ROI or within ~0.5 m). Nested inside category dwell — shorter and closer to the fixture.',
+  passThrough: 'Category visits that stayed in the ~2 m halo but never reached the shelf face.',
+  episodes: 'Number of category visits (2 m halo episodes) for this counter in the period.',
   queue: 'Share of visits detected in the queue zone vs browsing at the service counter.',
   abandon: 'Queue sessions where the shopper left before being served.',
 };

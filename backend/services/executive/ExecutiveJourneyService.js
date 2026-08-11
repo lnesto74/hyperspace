@@ -690,43 +690,52 @@ function buildFrescoDepartments(classifiedRois, ctx) {
     const hasQueueZones = ids.queueIds.length > 0;
     const deptUnique = uniqueByDept.get(dept) ?? stats.uniqueVisitors;
 
-    // Legacy polygon-fragment episodes (still used for stopping / pass-through).
+    // Legacy polygon-fragment episodes — fallback if presence sample is thin.
     const episodes = episodeStats.statsFor(allIds);
     const reportable = stats.visits >= MIN_CROSSINGS_FOR_DEPT_METRICS;
 
     const presenceStats = presence.statsFor(dept);
-    const dwell = presenceStats.dwell;
+    const dwellAll = presenceStats.dwell;
+    // Headline category dwell = among visits that reached the shelf face.
+    const dwellStops = presenceStats.dwellAmongEngaged || dwellAll;
     const engagement = presenceStats.engagement;
-    // Prefer geometric category dwell; fall back to legacy polygon episodes.
-    const usePresence = dwell.episodes >= 15;
-    const dwellReliable = reportable && (usePresence ? dwell.reliable : episodes.reliable);
+    const usePresence = dwellAll.episodes >= 15;
+    const dwellReliable = reportable && (usePresence
+      ? (dwellStops.reliable || dwellStops.episodes >= 15)
+      : episodes.reliable);
 
-    const stoppingPct = episodes.episodes > 0
-      ? episodes.stoppingPct
-      : (stats.visits > 0 ? pct(stats.dwellVisits, stats.visits) : 0);
+    // Stopping = share of 2 m category visits that got to the shelf face.
+    const stoppingPct = usePresence && presenceStats.stoppingEngPct != null
+      ? presenceStats.stoppingEngPct
+      : (episodes.episodes > 0
+        ? episodes.stoppingPct
+        : (stats.visits > 0 ? pct(stats.dwellVisits, stats.visits) : 0));
     const passThroughPct = reportable
       ? Math.max(0, Math.round((100 - stoppingPct) * 10) / 10)
       : null;
 
     const medianDwellSec = dwellReliable
-      ? Math.round(usePresence ? dwell.medianSec : episodes.medianStopSec)
+      ? Math.round(usePresence ? dwellStops.medianSec : episodes.medianStopSec)
       : null;
     const p75DwellSec = dwellReliable
-      ? Math.round(usePresence ? dwell.p75Sec : episodes.p75StopSec)
+      ? Math.round(usePresence ? dwellStops.p75Sec : episodes.p75StopSec)
       : null;
     const meanDwellSec = dwellReliable
-      ? Math.round(usePresence ? dwell.meanSec : episodes.meanStopSec)
+      ? Math.round(usePresence ? dwellStops.meanSec : episodes.meanStopSec)
       : 0;
 
     return {
       id: dept,
       label: ids.displayLabel || FRESCO_DEPT_LABELS[dept] || dept.replace(/_/g, ' '),
       visits: stats.visits,
-      dwellVisits: reportable ? episodes.stops : 0,
+      // Stops = category-dwell visits that reached engagement (shelf face).
+      dwellVisits: reportable
+        ? (usePresence ? dwellStops.episodes : episodes.stops)
+        : 0,
       engagementVisits: stats.engagementVisits,
       uniqueVisitors: deptUnique,
 
-      episodes: usePresence ? dwell.episodes : episodes.episodes,
+      episodes: usePresence ? dwellAll.episodes : episodes.episodes,
       fragmentsPerEpisode: episodes.fragmentsPerEpisode,
       medianDwellSec,
       p75DwellSec,
@@ -735,14 +744,14 @@ function buildFrescoDepartments(classifiedRois, ctx) {
         : (reportable
           ? (usePresence ? 'too_few_presence_episodes' : episodes.unreliableReason)
           : 'too_few_crossings'),
-      // Category dwell (2 m halo) — headline "dwell" on fresco cards / PDF.
+      // Category dwell among engaged visits — card shows median only.
       avgDwellSec: meanDwellSec,
       avgDwellMin: meanDwellSec ? Math.round((meanDwellSec / 60) * 10) / 10 : 0,
       dwellReliable,
-      dwellMetric: usePresence ? 'category_halo' : 'polygon_episode',
+      dwellMetric: usePresence ? 'category_halo_engaged' : 'polygon_episode',
       reportable,
 
-      // Shelf-face engagement (0.5 m / inside ROI).
+      // Shelf-face engagement (0.5 m / inside ROI) — unchanged population.
       avgEngagementSec: engagement.episodes >= 15 ? Math.round(engagement.meanSec) : 0,
       medianEngagementSec: engagement.episodes >= 15 ? Math.round(engagement.medianSec) : null,
       p75EngagementSec: engagement.episodes >= 15 ? Math.round(engagement.p75Sec) : null,

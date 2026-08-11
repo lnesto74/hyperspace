@@ -598,7 +598,7 @@ export default function EsselungaExecutiveViewport({
       <SectionCard
         id="fresco"
         title="2 · Piazza del Fresco"
-        subtitle={`Service counters: stopping rate says who paused; category dwell is time within ~${(journey.categoryPresence?.categoryDwellRadiusM ?? 2).toFixed(1)} m of the counter; engagement is time at the shelf face (~${(journey.categoryPresence?.engagementRadiusM ?? 0.5).toFixed(1)} m). Hover the ? next to category dwell for a diagram.`}
+        subtitle={`Stopping = got to the shelf face (~${(journey.categoryPresence?.engagementRadiusM ?? 0.5).toFixed(1)} m). Category dwell = median time within ~${(journey.categoryPresence?.categoryDwellRadiusM ?? 2).toFixed(1)} m among those stops. Engagement = median time at the shelf face. Hover the ? next to category dwell for a diagram.`}
       >
         {fresco.departments.length === 0 ? (
           <p className="text-xs text-gray-400 py-4 text-center">

@@ -551,24 +551,19 @@ function drawFresco(doc, journey, y) {
     doc,
     'Piazza del Fresco',
     y,
-    `Counter zones — stopping rate, category dwell (within ${dM.toFixed(1)} m), `
-    + `and shelf-face engagement (within ${eM.toFixed(1)} m or inside the zone).`,
+    `Stopping = reached the shelf face (within ${eM.toFixed(1)} m). `
+    + `Category dwell = median time within ${dM.toFixed(1)} m among those stops. `
+    + `Engagement = median time at the shelf face.`,
   );
 
   next = drawDwellGeometryLegend(doc, next, presence);
 
   const dwellCell = (d) => {
     if (!d.dwellReliable || d.medianDwellSec == null) return '—';
-    if (d.p75DwellSec != null && d.p75DwellSec > d.medianDwellSec) {
-      return `${Math.round(d.medianDwellSec)}-${Math.round(d.p75DwellSec)}s`;
-    }
     return `${Math.round(d.medianDwellSec)}s`;
   };
   const engCell = (d) => {
     if (!d.engagementReliable || d.medianEngagementSec == null) return '—';
-    if (d.p75EngagementSec != null && d.p75EngagementSec > d.medianEngagementSec) {
-      return `${Math.round(d.medianEngagementSec)}-${Math.round(d.p75EngagementSec)}s`;
-    }
     return `${Math.round(d.medianEngagementSec)}s`;
   };
 

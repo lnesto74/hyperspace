@@ -158,15 +158,12 @@ export function FrescoDepartmentCard({
   bg: string;
   Icon: ComponentType<{ className?: string; style?: CSSProperties }>;
 }) {
+  // Single median on the card — p75 stays in the API/tooltip for analysts.
   const dwellLabel = dwellReliable && medianDwellSec != null
-    ? (p75DwellSec != null && p75DwellSec > medianDwellSec
-      ? `${formatDwellDuration(medianDwellSec)}–${formatDwellDuration(p75DwellSec)}`
-      : formatDwellDuration(medianDwellSec))
+    ? formatDwellDuration(medianDwellSec)
     : '—';
   const engagementLabel = engagementReliable && medianEngagementSec != null
-    ? (p75EngagementSec != null && p75EngagementSec > medianEngagementSec
-      ? `${formatDwellDuration(medianEngagementSec)}–${formatDwellDuration(p75EngagementSec)}`
-      : formatDwellDuration(medianEngagementSec))
+    ? formatDwellDuration(medianEngagementSec)
     : '—';
   const stopPct = stoppingPct == null ? null : Math.min(100, stoppingPct);
 

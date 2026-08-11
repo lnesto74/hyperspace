@@ -184,11 +184,10 @@ export function DwellGeometryHelp({
             compact
           />
           <p className="mt-2 text-[10px] leading-snug text-gray-400">
-            <span className="text-sky-300">Engagement</span> is time at the shelf face
-            (inside the zone or within {eM.toFixed(1)} m).{' '}
-            <span className="text-sky-200">Category dwell</span> is time within {dM.toFixed(1)} m
-            of the category — browsing nearby still counts. Leaving the shelf face does not end
-            category dwell; a short gap outside ({gapS}s) closes it.
+            <span className="text-sky-300">A</span> reaches the shelf face (a stop).{' '}
+            <span className="text-sky-200">B</span> is nearby in the aisle (category visit, not a stop).{' '}
+            <span className="text-gray-300">C</span> is a pass-by. Stopping % = A among A+B.
+            Category dwell on the card is the median time within {dM.toFixed(1)} m among stops only.
           </p>
         </div>
       )}
