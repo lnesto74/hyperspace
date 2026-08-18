@@ -194,6 +194,16 @@ const EMPTY = Object.freeze({
  * @param {Array<{ key: string, roiIds: string[] }>} opts.departments
  * @param {object} [opts.config]
  */
+/** Same shape as a real index, with no episodes — used when the window is too
+ *  wide to scan track_positions (a 7-day Treviglio pull is ~2M rows per dept). */
+export function emptyCategoryPresenceIndex(identityMode = 'raw') {
+  return {
+    statsFor() {
+      return { ...EMPTY, identityMode };
+    },
+  };
+}
+
 export function buildCategoryPresenceIndex({
   db, venueId, startTs, endTs, departments, config,
 }) {

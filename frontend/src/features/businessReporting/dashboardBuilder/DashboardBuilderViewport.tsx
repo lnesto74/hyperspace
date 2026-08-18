@@ -33,6 +33,7 @@ import {
 import WidgetRenderer, { type DashboardDataContext } from './WidgetRenderer';
 import type { DashboardItem, DashboardLayout, WidgetId, WidgetKind } from './types';
 import { MAX_MAP_TILES } from './types';
+import { sourcesKeyForLayout } from './sources';
 
 const KIND_FILTERS: Array<WidgetKind | 'all'> = ['all', 'kpi', 'chart', 'map', 'table', 'insight'];
 
@@ -52,12 +53,15 @@ export default function DashboardBuilderViewport({
   data,
   readOnly = false,
   fixedLayout = null,
+  onSourcesNeeded,
 }: {
   data: DashboardDataContext;
   /** Public share — canvas only, no library / inspector / edit chrome. */
   readOnly?: boolean;
   /** Published layout snapshot (overrides localStorage). */
   fixedLayout?: DashboardLayout | null;
+  /** Fired when the set of reporting personas this board needs changes. */
+  onSourcesNeeded?: (key: string) => void;
 }) {
   const { token: authToken, isSuperadmin } = useAuth();
   const [layout, setLayout] = useState<DashboardLayout | null>(
@@ -83,6 +87,10 @@ export default function DashboardBuilderViewport({
   useEffect(() => {
     if (fixedLayout) setLayout(fixedLayout);
   }, [fixedLayout]);
+
+  useEffect(() => {
+    onSourcesNeeded?.(sourcesKeyForLayout(layout));
+  }, [layout, onSourcesNeeded]);
 
   const library = useMemo(() => {
     const q = query.trim().toLowerCase();

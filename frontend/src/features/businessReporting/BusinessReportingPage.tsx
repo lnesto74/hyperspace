@@ -38,6 +38,12 @@ import DashboardBuilderViewport from './dashboardBuilder/DashboardBuilderViewpor
 import { CUSTOM_DASHBOARD_PERSONA } from './dashboardBuilder/types';
 import type { DashboardLayout } from './dashboardBuilder/types';
 import type { DashboardDataContext } from './dashboardBuilder/WidgetRenderer';
+import { getActiveLayout } from './dashboardBuilder/storage';
+import {
+  personasNeededForLayout,
+  sourcesKeyForLayout,
+  type CustomBoardPersonaId,
+} from './dashboardBuilder/sources';
 
 type TimeRange = '1h' | '24h' | '7d' | '30d' | 'custom';
 
@@ -127,6 +133,9 @@ export default function BusinessReportingPage({ onClose, publicDashboard = false
   const previewAbortRef = useRef<AbortController | null>(null);
   const previewSeqRef = useRef(0);
   const esselungaMetricsRef = useRef<MetricThresholdSettings | null>(null);
+  const [customSourcesKey, setCustomSourcesKey] = useState(
+    () => sourcesKeyForLayout(getActiveLayout()),
+  );
 
   useEffect(() => {
     if (!publicDashboard) return;
@@ -310,15 +319,31 @@ export default function BusinessReportingPage({ onClose, publicDashboard = false
         }
       };
 
-      // Custom board pulls Ops + Executive + Esselunga so mixed tiles have data.
+      // Only fetch personas the tiles actually use. Store Director is journey-only;
+      // the old triple fetch is what timed out 7-day opens on that board.
       if (selectedPersonaId === CUSTOM_DASHBOARD_PERSONA && !isPreview) {
-        const [exec, ops, ess] = await Promise.all([
-          fetchPersona('executive'),
-          fetchPersona('store-manager', { grain: opsGrain }),
-          fetchPersona(ESSELUNGA_PERSONA, { variant: esselungaVariant }),
-        ]);
-        setKpiValues({ ...(ops.kpis || {}), ...(exec.kpis || {}) });
+        const layout = publicCustomLayout ?? getActiveLayout();
+        let needed = personasNeededForLayout(layout);
+        if (!needed.length) needed = ['esselunga-executive'];
+
+        const extraFor = (id: CustomBoardPersonaId): Record<string, string> => {
+          if (id === 'store-manager') return { grain: opsGrain };
+          if (id === ESSELUNGA_PERSONA) return { variant: esselungaVariant };
+          return {};
+        };
+
+        const results = await Promise.all(
+          needed.map(async (id) => [id, await fetchPersona(id, extraFor(id))] as const),
+        );
+        const byId = Object.fromEntries(results) as Record<string, {
+          kpis?: Record<string, number | null>;
+          supporting?: Record<string, unknown>;
+        }>;
+        const exec = byId.executive || {};
+        const ops = byId['store-manager'] || {};
+        const ess = byId[ESSELUNGA_PERSONA] || {};
         const journey = ess.supporting?.esselungaJourney as EsselungaJourneyPayload | undefined;
+        setKpiValues({ ...(ops.kpis || {}), ...(exec.kpis || {}), ...(ess.kpis || {}) });
         setSupporting({
           ...(exec.supporting || {}),
           operationsConsole: ops.supporting?.operationsConsole,
@@ -433,7 +458,7 @@ export default function BusinessReportingPage({ onClose, publicDashboard = false
 
   useEffect(() => {
     fetchData();
-  }, [selectedVenueId, selectedPersonaId, selectedTimeRange, selectedCategoryId, opsGrain, esselungaVariant]);
+  }, [selectedVenueId, selectedPersonaId, selectedTimeRange, selectedCategoryId, opsGrain, esselungaVariant, customSourcesKey]);
 
   const handleTimeRangeChange = (rangeId: TimeRange) => {
     setSelectedTimeRange(rangeId);
@@ -682,6 +707,7 @@ export default function BusinessReportingPage({ onClose, publicDashboard = false
                   data={customDashboardData}
                   readOnly={isPublicCustomBoard}
                   fixedLayout={publicCustomLayout}
+                  onSourcesNeeded={setCustomSourcesKey}
                 />
               ) : loading ? null : showMeasurementAudit ? (
                 <ZoneAuditViewport

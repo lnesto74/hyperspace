@@ -30,6 +30,7 @@ import {
 import { buildZoneEpisodeIndex } from './ZoneEpisodeIndex.js';
 import {
   buildCategoryPresenceIndex,
+  emptyCategoryPresenceIndex,
   loadCategoryPresenceConfigForVenue,
 } from './CategoryPresenceIndex.js';
 
@@ -453,6 +454,51 @@ function buildRoiStatsIndex(db, venueId, startTs, endTs, metricThresholds) {
   };
 }
 
+const MIN_STORE_DWELL_MS = 30 * 1000;
+const MAX_STORE_DWELL_MS = 90 * 60 * 1000;
+
+/** Per-track shopping time from zone_visits — no session stitch, one GROUP BY. */
+function fetchShoppingDwellFromVisits(db, venueId, startTs, endTs, shoppingRoiIds) {
+  if (!shoppingRoiIds?.length) {
+    return {
+      reliable: false,
+      sessionCount: 0,
+      avgStoreDwellMin: 0,
+      medianStoreDwellMin: 0,
+      dwellP25Min: null,
+      dwellP75Min: null,
+      method: 'shopping_zone_sum',
+    };
+  }
+  const ph = shoppingRoiIds.map(() => '?').join(',');
+  const rows = safeQueryAll(db, `
+    SELECT SUM(duration_ms) AS shop_ms
+    FROM zone_visits
+    WHERE venue_id = ? AND start_time >= ? AND start_time < ?
+      AND roi_id IN (${ph})
+      AND track_key NOT LIKE '%cashier%'
+    GROUP BY track_key
+    HAVING shop_ms >= ? AND shop_ms <= ?
+  `, [venueId, startTs, endTs, ...shoppingRoiIds, MIN_STORE_DWELL_MS, MAX_STORE_DWELL_MS]);
+
+  const minutes = rows
+    .map((r) => (r.shop_ms || 0) / 60000)
+    .filter((m) => m > 0)
+    .sort((a, b) => a - b);
+  const n = minutes.length;
+  const pick = (p) => (n ? minutes[Math.min(n - 1, Math.max(0, Math.floor((n - 1) * p)))] : 0);
+  const avg = n ? minutes.reduce((s, m) => s + m, 0) / n : 0;
+  return {
+    reliable: n >= 10,
+    sessionCount: n,
+    avgStoreDwellMin: Math.round(avg * 10) / 10,
+    medianStoreDwellMin: Math.round(pick(0.5) * 10) / 10,
+    dwellP25Min: n ? Math.round(pick(0.25) * 10) / 10 : null,
+    dwellP75Min: n ? Math.round(pick(0.75) * 10) / 10 : null,
+    method: 'shopping_zone_sum',
+  };
+}
+
 /**
  * Exact distinct-visitor counts for several ROI groups in a single scan.
  * Summing per-ROI distinct counts would double-count a shopper who visits two
@@ -511,9 +557,15 @@ function createJourneyContext(db, venueId, startTs, endTs, metricThresholds, epi
   };
 
   // Category dwell / engagement (2 m halo / 0.5 m face) — deferred until fresco.
+  // Wide windows skip the raw-position walk: each department scans
+  // track_positions, and a 7-day Treviglio range is ~2M rows per department.
+  // Zone-visit / episode clocks already cover those tiles.
   let presenceIndex = null;
   let presenceDeptKeys = null;
   const categoryPresence = (departments) => {
+    if (endTs - startTs > COMPARISON_MAX_SPAN_MS) {
+      return emptyCategoryPresenceIndex();
+    }
     const signature = departments
       .map((d) => `${d.key}=${[...(d.roiIds || [])].sort().join('.')}`)
       .join('|');
@@ -1771,7 +1823,11 @@ export function computeExecutiveJourney(db, venueId, startTs, endTs, variant = '
   const ingressUnique = footfall.directUnique;
   const totalVisitors = footfall.totalVisitors;
 
-  const sessionAnalytics = thresholdPreview
+  // Session stitch walks every zone_visit in JS. Fine for 24h; on 7d it is the
+  // remaining timeout after the track_positions scans were removed. Headline
+  // dwell then comes from a single grouped SQL pass instead.
+  const wideWindow = endTs - startTs > COMPARISON_MAX_SPAN_MS;
+  const sessionAnalytics = thresholdPreview || wideWindow
     ? null
     : computeExecutiveSessionAnalytics(
       db,
@@ -1784,15 +1840,18 @@ export function computeExecutiveJourney(db, venueId, startTs, endTs, variant = '
       metricThresholds,
       footfall,
     );
-  const dwellStats = sessionAnalytics?.storeDwell ?? {
-    reliable: false,
-    avgStoreDwellMin: 0,
-    medianStoreDwellMin: 0,
-    dwellP25Min: null,
-    dwellP75Min: null,
-    sessionCount: 0,
-    method: 'preview_skip',
-  };
+  const dwellStats = sessionAnalytics?.storeDwell
+    ?? (wideWindow && !thresholdPreview
+      ? fetchShoppingDwellFromVisits(db, venueId, startTs, endTs, shoppingRoiIds)
+      : {
+        reliable: false,
+        avgStoreDwellMin: 0,
+        medianStoreDwellMin: 0,
+        dwellP25Min: null,
+        dwellP75Min: null,
+        sessionCount: 0,
+        method: 'preview_skip',
+      });
 
   const erp = fetchErpForRange(db, venueId, startTs, endTs);
   const mediaKpis = fetchMediaKpis(db, venueId, startTs, endTs);

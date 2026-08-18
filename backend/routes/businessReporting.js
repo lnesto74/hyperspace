@@ -953,8 +953,15 @@ function storeOccupancySnapshotsSql() {
   `;
 }
 
+/** Same 36h cut as the executive comparison: beyond that, raw track_positions
+ *  occupancy (four full-table scans) is what times out a 7-day Store request. */
+const PERCEPTION_OCCUPANCY_MAX_SPAN_MS = 36 * 60 * 60 * 1000;
+
 function fetchStoreShopperKpis(db, venueId, startTs, endTs, openingHour, closingHour) {
-  if (perceptionFramesAvailable(db, venueId, startTs, endTs)) {
+  if (
+    endTs - startTs <= PERCEPTION_OCCUPANCY_MAX_SPAN_MS
+    && perceptionFramesAvailable(db, venueId, startTs, endTs)
+  ) {
     const row = safeQuery(db, `
       SELECT
         MAX(frame_count) as peakOccupancy,
