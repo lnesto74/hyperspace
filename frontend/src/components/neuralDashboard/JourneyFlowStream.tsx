@@ -9,8 +9,7 @@
  */
 
 import { useEffect, useState, useRef, useMemo } from 'react'
-import { useTracksRef, useLiveMetricsRef } from '../../context/TrackingContext'
-import { countLiveFrameTracks, selectLiveOccupancyTracks } from '../../lib/frameOccupancy'
+import { useTracksRef } from '../../context/TrackingContext'
 import { useRoi } from '../../context/RoiContext'
 import AnimatedNumber from './AnimatedNumber'
 import Tooltip from './Tooltip'
@@ -95,7 +94,6 @@ const MAX_VISIBLE_ROWS = 8
 
 export default function JourneyFlowStream() {
   const tracksRef = useTracksRef()
-  const liveMetricsRef = useLiveMetricsRef()
   const { regions } = useRoi()
   const regionsRef = useRef(regions)
   regionsRef.current = regions
@@ -141,9 +139,7 @@ export default function JourneyFlowStream() {
         arrived: 0, exploring: 0, interested: 0, buying: 0, exiting: 0
       }
       
-      const frameOcc = liveMetricsRef.current.frameOccupancy
-      const liveTracks = selectLiveOccupancyTracks(tracksRef.current, frameOcc)
-      liveTracks.forEach(track => {
+      tracksRef.current.forEach(track => {
         activeIds.add(track.id)
         const pos = track.venuePosition
         const vel = typeof track.velocity === 'number' && !isNaN(track.velocity) ? track.velocity : 0
@@ -246,11 +242,7 @@ export default function JourneyFlowStream() {
     return `${Math.floor(sec / 60)}:${String(Math.floor(sec % 60)).padStart(2, '0')}`
   }
   
-  const totalActive = countLiveFrameTracks(
-    tracksRef.current,
-    liveMetricsRef.current.liveFrameTs,
-    liveMetricsRef.current.frameOccupancy,
-  )
+  const totalActive = Object.values(stateCounts).reduce((a, b) => a + b, 0)
   
   return (
     <div className="h-full flex flex-col p-3 font-mono text-[11px]">

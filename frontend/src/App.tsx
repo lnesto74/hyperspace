@@ -557,9 +557,6 @@ function MainApp() {
   
   const handleDismissLanding = () => {
     setShowLanding(false)
-    // Same surface as the toolbar Business Reporting button: Esselunga
-    // Executive + flow field, with live tracks already starting below.
-    setViewModeInternal('businessReporting')
   }
   
   // ── AUTO-RELOAD VENUE WHEN RETURNING FROM DWG IMPORTER ──

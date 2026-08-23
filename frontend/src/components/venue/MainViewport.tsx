@@ -8,8 +8,7 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import { Hand, Move3D, RotateCcw, Save, Download, Layers, Eye, EyeOff, Move, RotateCw } from 'lucide-react'
 import { useVenue } from '../../context/VenueContext'
 import { useLidar } from '../../context/LidarContext'
-import { useTrackingActions, useTracking, useTracksRef, useLiveMetricsRef, useVtlModeRef, useReconcileLiveRef } from '../../context/TrackingContext'
-import { selectLiveOccupancyTracks } from '../../lib/frameOccupancy'
+import { useTrackingActions, useTracking, useTracksRef, useVtlModeRef, useReconcileLiveRef } from '../../context/TrackingContext'
 import { sanitizeTrailPoints } from '../../lib/trackTrail'
 import { trackDisplayLabel } from '../../lib/trackDisplayLabel'
 import { useRoi } from '../../context/RoiContext'
@@ -788,14 +787,9 @@ export default function MainViewport({
   const { venue, objects, selectedObjectId, selectedObjectIds, hoveredObjectId, selectObject, selectObjects, hoverObject, updateObject, removeObject, removeObjects, snapToGrid, copySelectedObjects, pasteObjects } = useVenue()
   const { placements, selectedPlacementId, selectPlacement, updatePlacement, removePlacement, getDeviceById } = useLidar()
   const tracksRef = useTracksRef()
-  const liveMetricsRef = useLiveMetricsRef()
-  const { storyReplayActive, mqttReplayActive, isReplayMode: trackingReplayMode } = useTracking()
+  const { storyReplayActive } = useTracking()
   const storyReplayActiveRef = useRef(storyReplayActive)
   storyReplayActiveRef.current = storyReplayActive
-  const mqttReplayActiveRef = useRef(mqttReplayActive)
-  mqttReplayActiveRef.current = mqttReplayActive
-  const isReplayModeRef = useRef(isReplayMode || trackingReplayMode)
-  isReplayModeRef.current = isReplayMode || trackingReplayMode
   const storyModeActiveRef = useRef(false)
   const storyPickModeRef = useRef(false)
   const [storyPickMode, setStoryPickMode] = useState(false)
@@ -4574,14 +4568,7 @@ export default function MainViewport({
         emptyTracksSinceRef.current = null
       }
 
-      const occupancy = liveMetricsRef.current.frameOccupancy
-      const replayOrStory = isReplayModeRef.current || mqttReplayActiveRef.current || storyReplayActiveRef.current
-      let allTracks = tracksRef.current
-      let liveFiltered = false
-      if (!replayOrStory && occupancy > 0 && allTracks.size > occupancy + 4) {
-        allTracks = selectLiveOccupancyTracks(allTracks, occupancy)
-        liveFiltered = true
-      }
+      const allTracks = tracksRef.current
       const refCount = allTracks.size
       // Never throttle below ~20fps — old 200ms interval made live tracks feel frozen.
       syncIntervalMs = refCount > RENDER_EMERGENCY_THRESHOLD ? 50 : 33
@@ -4596,8 +4583,8 @@ export default function MainViewport({
       const currentTracking = trackingRef.current
       const now = Date.now()
       const SEZ_LABEL_DURATION_MS = 60 * 1000
-      const hideDelayMs = liveFiltered ? 120 : (continuityMode ? 800 : TRACK_HIDE_DELAY_MS)
-      const graceMs = liveFiltered ? 400 : (continuityMode ? 3500 : TRACK_GRACE_MS)
+      const hideDelayMs = continuityMode ? 800 : TRACK_HIDE_DELAY_MS
+      const graceMs = continuityMode ? 3500 : TRACK_GRACE_MS
 
       diagSyncCount++
       const meshCount = trackMeshesRef.current.size
