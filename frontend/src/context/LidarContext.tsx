@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useCallback, useEffect, ReactNode } from 'react'
+import { createContext, useContext, useState, useCallback, ReactNode } from 'react'
 import { LidarDevice, LidarPlacement, LidarStatus, Vector3 } from '../types'
 import { useToast } from './ToastContext'
 import { useVenue } from './VenueContext'
@@ -146,10 +146,6 @@ export function LidarProvider({ children }: { children: ReactNode }) {
   const getPlacementByDeviceId = useCallback((deviceId: string) => {
     return placements.find(p => p.deviceId === deviceId)
   }, [placements])
-
-  useEffect(() => {
-    scanDevices()
-  }, [])
 
   return (
     <LidarContext.Provider value={{

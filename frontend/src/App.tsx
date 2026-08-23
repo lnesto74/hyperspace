@@ -53,6 +53,7 @@ import DemoLinksModal from './components/admin/DemoLinksModal'
 
 // App view mode context
 type ViewMode = 'main' | 'planogram' | 'dwgImporter' | 'lidarPlanner' | 'edgeCommissioning' | 'doohAnalytics' | 'doohEffectiveness' | 'businessReporting' | 'profitRadar' | 'benchmark' | 'dailyDebrief'
+export type FloorViz = 'flow' | 'tracks'
 const ViewModeContext = createContext<{
   mode: ViewMode
   setMode: (m: ViewMode) => void
@@ -60,6 +61,8 @@ const ViewModeContext = createContext<{
   setLaunchPadOpen: (open: boolean) => void
   neuralDashboardEnabled: boolean
   setNeuralDashboardEnabled: (enabled: boolean) => void
+  floorViz: FloorViz
+  setFloorViz: (v: FloorViz) => void
 }>({
   mode: 'main',
   setMode: () => {},
@@ -67,6 +70,8 @@ const ViewModeContext = createContext<{
   setLaunchPadOpen: () => {},
   neuralDashboardEnabled: false,
   setNeuralDashboardEnabled: () => {},
+  floorViz: 'tracks',
+  setFloorViz: () => {},
 })
 export const useViewMode = () => useContext(ViewModeContext)
 
@@ -552,6 +557,9 @@ function MainApp() {
   
   const handleDismissLanding = () => {
     setShowLanding(false)
+    // Same surface as the toolbar Business Reporting button: Esselunga
+    // Executive + flow field, with live tracks already starting below.
+    setViewModeInternal('businessReporting')
   }
   
   // ── AUTO-RELOAD VENUE WHEN RETURNING FROM DWG IMPORTER ──
@@ -637,7 +645,16 @@ function MainApp() {
   }, [loadVenue])
   
   return (
-    <ViewModeContext.Provider value={{ mode: viewMode, setMode: setViewMode, launchPadOpen, setLaunchPadOpen, neuralDashboardEnabled, setNeuralDashboardEnabled }}>
+    <ViewModeContext.Provider value={{
+      mode: viewMode,
+      setMode: setViewMode,
+      launchPadOpen,
+      setLaunchPadOpen,
+      neuralDashboardEnabled,
+      setNeuralDashboardEnabled,
+      floorViz: viewMode === 'businessReporting' ? 'flow' : 'tracks',
+      setFloorViz: (v) => setViewMode(v === 'flow' ? 'businessReporting' : 'main'),
+    }}>
       <PlanogramProvider>
         <StoryNarrativeLayout>
         <GlobalHeatmapModal />

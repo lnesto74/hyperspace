@@ -34,6 +34,7 @@ import ZoneAuditViewport from './components/ZoneAuditViewport';
 import type { EsselungaJourneyPayload, ExecutiveVariant, MetricThresholdSettings } from './esselunga/types';
 import type { DoohScreenMarker } from '../../components/shared/FloorPlanMiniMap';
 import { getDemoVenueId, getDemoLinkType, getDemoPublishedLayout } from '../../config/demo';
+import FloorVizToggle from '../../components/layout/FloorVizToggle';
 import DashboardBuilderViewport from './dashboardBuilder/DashboardBuilderViewport';
 import { CUSTOM_DASHBOARD_PERSONA } from './dashboardBuilder/types';
 import type { DashboardLayout } from './dashboardBuilder/types';
@@ -115,9 +116,9 @@ export default function BusinessReportingPage({ onClose, publicDashboard = false
   const [selectedPersonaId, setSelectedPersonaId] = useState<string>(
     publicDashboard
       ? (getDemoLinkType() === 'custom-dashboard' ? CUSTOM_DASHBOARD_PERSONA : ESSELUNGA_PERSONA)
-      : PERSONAS[0].id,
+      : ESSELUNGA_PERSONA,
   );
-  const [selectedTimeRange, setSelectedTimeRange] = useState<TimeRange>('24h');
+  const [selectedTimeRange, setSelectedTimeRange] = useState<TimeRange>('1h');
   const [opsGrain, setOpsGrain] = useState<TimelineGrain>('hour');
   const [kpiValues, setKpiValues] = useState<Record<string, number | null>>({});
   const [supporting, setSupporting] = useState<Record<string, unknown>>({});
@@ -220,7 +221,7 @@ export default function BusinessReportingPage({ onClose, publicDashboard = false
 
   useEffect(() => {
     if (!isSuperadmin && selectedPersonaId === AUDIT_PERSONA) {
-      setSelectedPersonaId(PERSONAS[0].id);
+      setSelectedPersonaId(ESSELUNGA_PERSONA);
     }
   }, [isSuperadmin, selectedPersonaId]);
 
@@ -603,6 +604,8 @@ export default function BusinessReportingPage({ onClose, publicDashboard = false
         </div>
 
         <div className="flex items-center gap-2 flex-shrink-0">
+          {!publicDashboard && <FloorVizToggle />}
+
           {!publicDashboard && (
             <>
               <Building2 className="w-3.5 h-3.5 text-gray-400 hidden sm:block" />

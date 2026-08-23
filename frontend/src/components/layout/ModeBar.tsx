@@ -3,6 +3,7 @@ import { useState, useEffect, useRef } from 'react'
 import { useViewMode } from '../../App'
 import { useVenue } from '../../context/VenueContext'
 import { API_BASE } from '../../config/api'
+import FloorVizToggle from './FloorVizToggle'
 
 type AppMode = 'setup' | 'edit' | 'live'
 
@@ -13,7 +14,7 @@ interface VenueOption {
   depth?: number
 }
 
-export default function ModeBar() {
+export default function ModeBar({ hideFloorViz = false }: { hideFloorViz?: boolean }) {
   const { mode, setMode, launchPadOpen, setLaunchPadOpen } = useViewMode()
   const { venue, loadVenue, venueList, updateVenue } = useVenue()
   const [showVenueDropdown, setShowVenueDropdown] = useState(false)
@@ -233,8 +234,9 @@ export default function ModeBar() {
         })}
       </div>
 
-      {/* Right: Spacer or future actions */}
-      <div className="w-[180px]" />
+      <div className="min-w-[180px] flex justify-end">
+        {!hideFloorViz && <FloorVizToggle />}
+      </div>
     </div>
   )
 }

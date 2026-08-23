@@ -1,6 +1,7 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
-import { HelpCircle, Maximize2, Wind, Map } from 'lucide-react';
+import { HelpCircle, Maximize2, Wind, Map, Radio } from 'lucide-react';
+import { useViewMode } from '../../../App';
 import type { ActivityTimeline, ActivityTimelineSet, HeatmapCategoryRow } from './types';
 import HeatmapEmbedPreview from '../../../components/heatmap/HeatmapEmbedPreview';
 import FlowFieldEmbed from '../../../components/flowfield/FlowFieldEmbed';
@@ -493,6 +494,7 @@ export function ExecutivePulseBand({
 }) {
   const [hoverCat, setHoverCat] = useState<string | null>(null);
   const [vizMode, setVizMode] = useState<FloorVizMode>('flow');
+  const { setFloorViz } = useViewMode();
   const topCats = heatmapCategories.slice(0, 8);
 
   const hoveredRow = hoverCat
@@ -554,6 +556,16 @@ export function ExecutivePulseBand({
             >
               <Wind className="w-3.5 h-3.5" />
               Flow field
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={false}
+              onClick={() => setFloorViz('tracks')}
+              className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-md transition-colors text-gray-400 hover:text-gray-200 border border-transparent"
+            >
+              <Radio className="w-3.5 h-3.5" />
+              Live tracks
             </button>
           </div>
           <div className="flex items-center gap-3 px-3 py-2 rounded-xl bg-gray-900/60 border border-gray-700/50">
@@ -624,7 +636,10 @@ export function ExecutivePulseBand({
           }`}
         >
           {vizMode === 'flow' ? (
-            <FlowFieldEmbed className="absolute inset-0 rounded-br-2xl" />
+            <FlowFieldEmbed
+              className="absolute inset-0 rounded-br-2xl"
+              venueId={venueId}
+            />
           ) : heatmapCategories.length > 0 ? (
             <>
               <HeatmapEmbedPreview

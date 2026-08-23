@@ -207,7 +207,7 @@ export default function AppShell({ onOpenDwgImporter, onOpenEdgeCommissioning, s
       {/* Main Content Area with ModeBar + 3D Viewport */}
       <div className="flex-1 min-w-0 flex flex-col overflow-hidden">
         {/* Mode Bar - Setup/Edit/Live toggle + Venue selector */}
-        <ModeBar />
+        <ModeBar hideFloorViz={showLanding} />
         
         {/* 3D Viewport + optional KPI focus rail */}
         <div className="flex-1 relative overflow-hidden flex flex-row min-h-0">
