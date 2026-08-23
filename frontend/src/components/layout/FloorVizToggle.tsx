@@ -2,8 +2,8 @@ import { Radio, Wind } from 'lucide-react'
 import { useViewMode } from '../../App'
 
 /**
- * Persistent Flow field ↔ Live tracks switch.
- * Default after landing is flow field; this control stays available in both views.
+ * Flow field ↔ Live tracks switch. Shown only after Enter Workspace
+ * (ModeBar hides it while the landing overlay is up).
  */
 export default function FloorVizToggle({ className = '' }: { className?: string }) {
   const { floorViz, setFloorViz } = useViewMode()

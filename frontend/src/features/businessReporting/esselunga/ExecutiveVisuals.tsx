@@ -494,7 +494,7 @@ export function ExecutivePulseBand({
 }) {
   const [hoverCat, setHoverCat] = useState<string | null>(null);
   const [vizMode, setVizMode] = useState<FloorVizMode>('flow');
-  const { setFloorViz } = useViewMode();
+  const { setMode, setFloorViz } = useViewMode();
   const topCats = heatmapCategories.slice(0, 8);
 
   const hoveredRow = hoverCat
@@ -561,7 +561,10 @@ export function ExecutivePulseBand({
               type="button"
               role="tab"
               aria-selected={false}
-              onClick={() => setFloorViz('tracks')}
+              onClick={() => {
+                setFloorViz('tracks')
+                setMode('main')
+              }}
               className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-md transition-colors text-gray-400 hover:text-gray-200 border border-transparent"
             >
               <Radio className="w-3.5 h-3.5" />

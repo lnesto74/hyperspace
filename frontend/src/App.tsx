@@ -444,6 +444,7 @@ function MainApp() {
     isPublicReportingDemo() ? 'businessReporting' : 'main',
   )
   const [showLanding, setShowLanding] = useState(() => !isDemo())
+  const [floorViz, setFloorViz] = useState<FloorViz>('tracks')
   const [launchPadOpen, setLaunchPadOpen] = useState(false)
   const [neuralDashboardEnabled, setNeuralDashboardEnabled] = useState(false)
 
@@ -557,6 +558,7 @@ function MainApp() {
   
   const handleDismissLanding = () => {
     setShowLanding(false)
+    setFloorViz('flow')
   }
   
   // ── AUTO-RELOAD VENUE WHEN RETURNING FROM DWG IMPORTER ──
@@ -649,8 +651,8 @@ function MainApp() {
       setLaunchPadOpen,
       neuralDashboardEnabled,
       setNeuralDashboardEnabled,
-      floorViz: viewMode === 'businessReporting' ? 'flow' : 'tracks',
-      setFloorViz: (v) => setViewMode(v === 'flow' ? 'businessReporting' : 'main'),
+      floorViz,
+      setFloorViz,
     }}>
       <PlanogramProvider>
         <StoryNarrativeLayout>

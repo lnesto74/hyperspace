@@ -9,6 +9,7 @@ import MainViewport from '../venue/MainViewport'
 import type { CaptureScreenshotFn } from '../venue/MainViewport'
 import TimelineReplay from '../timeline/TimelineReplay'
 import LandingExperience from '../landing/LandingExperience'
+import FlowFieldEmbed from '../flowfield/FlowFieldEmbed'
 import { NeuralDashboard } from '../neuralDashboard'
 import MatchingTunerPanel from '../matching/MatchingTunerPanel'
 import TrajectoryQualityPanel from '../matching/TrajectoryQualityPanel'
@@ -86,7 +87,8 @@ export default function AppShell({ onOpenDwgImporter, onOpenEdgeCommissioning, s
   const { selectedPlacementId, placements } = useLidar()
   const { dwgLayoutId: selectedDwgLayoutId } = useDwg()
   const { intentFieldEnabled, setIntentFieldEnabled } = useProfitRadar()
-  const { launchPadOpen: lpOpen, setLaunchPadOpen: setLpOpen, neuralDashboardEnabled, setNeuralDashboardEnabled } = useViewMode()
+  const { launchPadOpen: lpOpen, setLaunchPadOpen: setLpOpen, neuralDashboardEnabled, setNeuralDashboardEnabled, floorViz } = useViewMode()
+  const [flowFieldMounted, setFlowFieldMounted] = useState(false)
   const { showKPIOverlays, regions } = useRoi()
 
   const [storyModeActive, setStoryModeActive] = useState(false)
@@ -96,6 +98,12 @@ export default function AppShell({ onOpenDwgImporter, onOpenEdgeCommissioning, s
     const t = window.setTimeout(() => window.dispatchEvent(new Event('resize')), 50)
     return () => window.clearTimeout(t)
   }, [showKpiRail])
+
+  // Mount the flow-field iframe only after Enter Workspace (never on landing).
+  // Keep it mounted when the customer flips to Live tracks so the splash does not restart.
+  useEffect(() => {
+    if (!showLanding && floorViz === 'flow') setFlowFieldMounted(true)
+  }, [showLanding, floorViz])
   
   // Determine if we're in DWG venue mode
   const isDwgMode = activeTab === 'venueDwg' && selectedDwgLayoutId !== null
@@ -228,6 +236,20 @@ export default function AppShell({ onOpenDwgImporter, onOpenEdgeCommissioning, s
             onCaptureReady={(fn) => setCaptureScreenshot(() => fn)}
           />
         </NeuralDashboard>
+
+        {flowFieldMounted && (
+          <div
+            className={`absolute inset-0 z-20 ${
+              !showLanding && floorViz === 'flow' ? '' : 'invisible pointer-events-none'
+            }`}
+          >
+            <FlowFieldEmbed
+              showExpand={false}
+              venueId={venue?.id}
+              title="People-flow field"
+            />
+          </div>
+        )}
 
         {/* Intent Field Overlay (Profit Radar) - only show in default mode */}
         {!neuralDashboardEnabled && <IntentFieldOverlay />}
