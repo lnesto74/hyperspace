@@ -25,7 +25,25 @@ export function filterLiveFrameTracks<T extends Track>(
   for (const [key, track] of tracks) {
     if (isTrackInLiveFrame(track, liveFrameTs)) filtered.set(key, track)
   }
-  return filtered.size > 0 ? filtered : tracks
+  return filtered
+}
+
+/**
+ * Live floor dots must match occupancy, not aggregator TTL ghosts.
+ * Perception IDs churn; the aggregator keeps them 6–15s → hundreds of frozen dots.
+ */
+export function selectLiveOccupancyTracks<T extends Track>(
+  tracks: Map<string, T>,
+  occupancy: number,
+): Map<string, T> {
+  if (tracks.size === 0 || !(occupancy > 0)) return tracks
+  const slack = Math.min(4, Math.max(2, Math.ceil(occupancy * 0.15)))
+  const cap = occupancy + slack
+  if (tracks.size <= cap) return tracks
+  const ranked = [...tracks.entries()].sort(
+    (a, b) => (b[1].timestamp ?? 0) - (a[1].timestamp ?? 0),
+  )
+  return new Map(ranked.slice(0, cap))
 }
 
 export function countLiveFrameTracks(

@@ -1,7 +1,9 @@
 import { EventEmitter } from 'events';
 
 const EMIT_INTERVAL_MS = 100; // 10 fps — sufficient for smooth visualization, halves event loop load
-const TRACK_TTL_MS = 6000; // 6 seconds (raw bypass)
+const TRACK_TTL_MS = 6000; // 6 seconds (raw bypass) — keep for prune/re-ID, do not emit this old
+/** Socket snapshots are the live frame only. Older IDs stay in the map for prune/re-ID. */
+const LIVE_SNAPSHOT_MAX_AGE_MS = 400;
 /** Live reconciler: hold stable IDs through lost + re-ID gaps (active_to_lost + reid_max_gap). */
 const RECONCILER_TRACK_TTL_MS = 15000;
 const MAX_TRAIL_LENGTH = 100; // ~10 seconds of trail at 10Hz
@@ -193,8 +195,11 @@ export class TrackAggregator extends EventEmitter {
 
     const tracksBatch = [];
     
+    const now = Date.now();
     for (const [trackKey, entry] of this.tracks) {
       if (this.replayIsolateLive && !trackKey.startsWith('replay-')) continue;
+      const isReplay = trackKey.startsWith('replay-');
+      if (!isReplay && now - entry.lastUpdate > LIVE_SNAPSHOT_MAX_AGE_MS) continue;
       tracksBatch.push({
         ...entry.track,
         trail: entry.trail,
