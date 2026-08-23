@@ -16,9 +16,15 @@ export const REGIME_CATEGORIES = [
   { id: 4, key: 'two_way_aisle', label: 'Two-way aisle', color: '#34d399' },
 ];
 
-export async function loadField(url) {
-  const res = await fetch(url, { cache: 'no-store' });
-  const { meta, cells } = await res.json();
+export async function loadField(urlOrPayload) {
+  const { meta, cells } = typeof urlOrPayload === 'string'
+    ? await (async () => {
+        const res = await fetch(urlOrPayload, { cache: 'no-store' });
+        if (!res.ok) throw new Error(`field HTTP ${res.status}`);
+        return res.json();
+      })()
+    : urlOrPayload;
+  if (!meta || !Array.isArray(cells)) throw new Error('invalid field payload');
   const B = meta.bins;
 
   let i0 = Infinity, i1 = -Infinity, j0 = Infinity, j1 = -Infinity;
@@ -287,10 +293,11 @@ export async function loadField(url) {
  * red, and "nothing much happens here" stays neutral. A sequential ramp cannot
  * express this — zero would land in the middle of the hue range and dominate.
  */
-export function divergingRamp(t) {
+export function divergingRamp(t, punch = false) {
   const v = Math.max(-1, Math.min(1, t));
-  const m = Math.pow(Math.abs(v), 0.65);
-  const h = v < 0 ? 0.52 : 0.02;
+  const m = Math.pow(Math.abs(v), punch ? 0.40 : 0.65);
+  const h = v < 0 ? 0.52 : 0.985;
+  if (punch) return { h, s: 0.62 + 0.38 * m, l: 0.32 + 0.28 * m };
   return { h, s: 0.15 + 0.75 * m, l: 0.16 + 0.42 * m };
 }
 

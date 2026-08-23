@@ -10,6 +10,7 @@ import type { CaptureScreenshotFn } from '../venue/MainViewport'
 import TimelineReplay from '../timeline/TimelineReplay'
 import LandingExperience from '../landing/LandingExperience'
 import FlowFieldEmbed from '../flowfield/FlowFieldEmbed'
+import type { FlowFieldHandle } from '../flowfield/FlowFieldEmbed'
 import { NeuralDashboard } from '../neuralDashboard'
 import MatchingTunerPanel from '../matching/MatchingTunerPanel'
 import TrajectoryQualityPanel from '../matching/TrajectoryQualityPanel'
@@ -89,6 +90,9 @@ export default function AppShell({ onOpenDwgImporter, onOpenEdgeCommissioning, s
   const { intentFieldEnabled, setIntentFieldEnabled } = useProfitRadar()
   const { launchPadOpen: lpOpen, setLaunchPadOpen: setLpOpen, neuralDashboardEnabled, setNeuralDashboardEnabled, floorViz } = useViewMode()
   const [flowFieldMounted, setFlowFieldMounted] = useState(false)
+  const flowFieldRef = useRef<FlowFieldHandle>(null)
+  const [flowStoryOn, setFlowStoryOn] = useState(false)
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const { showKPIOverlays, regions } = useRoi()
 
   const [storyModeActive, setStoryModeActive] = useState(false)
@@ -104,6 +108,20 @@ export default function AppShell({ onOpenDwgImporter, onOpenEdgeCommissioning, s
   useEffect(() => {
     if (!showLanding && floorViz === 'flow') setFlowFieldMounted(true)
   }, [showLanding, floorViz])
+
+  // After Enter Workspace, start with the left tab section folded so the field
+  // has the same room as Business Reporting. The chevron stays; they can reopen it.
+  useEffect(() => {
+    if (!showLanding && floorViz === 'flow') setSidebarCollapsed(true)
+    if (floorViz !== 'flow') setFlowStoryOn(false)
+  }, [showLanding, floorViz])
+
+  // Opening the workspace sidebar must not stack two fat left rails.
+  useEffect(() => {
+    if (floorViz === 'flow' && !sidebarCollapsed) {
+      flowFieldRef.current?.setControlsCollapsed(true)
+    }
+  }, [floorViz, sidebarCollapsed])
   
   // Determine if we're in DWG venue mode
   const isDwgMode = activeTab === 'venueDwg' && selectedDwgLayoutId !== null
@@ -138,9 +156,6 @@ export default function AppShell({ onOpenDwgImporter, onOpenEdgeCommissioning, s
   // Timeline replay state
   const [showTimeline, setShowTimeline] = useState(false)
   const [replayTimestamp, setReplayTimestamp] = useState<number | null>(null)
-  
-  // Sidebar collapsed state
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
 
   // Story Mode toggle (lives in the footer for consistency). Listen for the
   // overlay's active state to highlight the toggle and auto-collapse the
@@ -199,8 +214,12 @@ export default function AppShell({ onOpenDwgImporter, onOpenEdgeCommissioning, s
         {/* Collapse/Expand toggle button */}
         <button
           onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
-          className={`absolute top-1/2 -translate-y-1/2 z-50 flex items-center justify-center w-5 h-10 bg-panel-bg border border-border-dark rounded-r-md hover:bg-gray-700 transition-all ${
+          className={`absolute z-50 flex items-center justify-center w-5 h-10 bg-panel-bg border border-border-dark rounded-r-md hover:bg-gray-700 transition-all ${
             sidebarCollapsed ? 'left-0' : 'left-[280px]'
+          } ${
+            floorViz === 'flow' && sidebarCollapsed
+              ? 'top-2'
+              : 'top-1/2 -translate-y-1/2'
           }`}
           title={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
         >
@@ -244,9 +263,11 @@ export default function AppShell({ onOpenDwgImporter, onOpenEdgeCommissioning, s
             }`}
           >
             <FlowFieldEmbed
-              showExpand={false}
+              ref={flowFieldRef}
               venueId={venue?.id}
               title="People-flow field"
+              startCollapsed
+              onStoryChange={setFlowStoryOn}
             />
           </div>
         )}
@@ -638,13 +659,16 @@ export default function AppShell({ onOpenDwgImporter, onOpenEdgeCommissioning, s
               <LayoutGrid className="w-3.5 h-3.5" />
             </button>
             <button
-              onClick={() => window.dispatchEvent(new CustomEvent('hyperspace:story-mode-toggle'))}
+              onClick={() => {
+                if (floorViz === 'flow') flowFieldRef.current?.toggleStory()
+                else window.dispatchEvent(new CustomEvent('hyperspace:story-mode-toggle'))
+              }}
               className={`p-1.5 rounded transition-colors ${
-                storyModeActive
+                (floorViz === 'flow' ? flowStoryOn : storyModeActive)
                   ? 'bg-blue-600 text-white'
                   : 'text-gray-400 hover:text-white hover:bg-gray-700'
               }`}
-              title="Story Mode (guided demo)"
+              title={floorViz === 'flow' ? 'Story Mode (people-flow field)' : 'Story Mode (guided demo)'}
             >
               <Film className="w-3.5 h-3.5" />
             </button>

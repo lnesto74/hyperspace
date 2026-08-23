@@ -1,28 +1,59 @@
-import { useEffect, useMemo, useState } from 'react';
+import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Maximize2, X } from 'lucide-react';
+
+export type FlowFieldHandle = {
+  setControlsCollapsed: (on: boolean) => void
+  toggleStory: () => void
+}
 
 /**
  * Embeds the Windy-style people-flow prototype (Three.js + left control bar)
  * into dashboards. Kept as an iframe so the visualisation options stay identical
  * to the standalone prototype. Expand opens the full page (non-embed) overlay.
  */
-export default function FlowFieldEmbed({
-  className = '',
-  title = 'People-flow field',
-  showExpand = true,
-}: {
+const FlowFieldEmbed = forwardRef<FlowFieldHandle, {
   className?: string;
   title?: string;
   /** Show the Full screen control (default true). */
   showExpand?: boolean;
-}) {
+  venueId?: string;
+  /** Start with the in-iframe control rail folded (workspace stage). */
+  startCollapsed?: boolean;
+  onStoryChange?: (on: boolean) => void;
+}>(function FlowFieldEmbed({
+  className = '',
+  title = 'People-flow field',
+  showExpand = true,
+  venueId,
+  startCollapsed = false,
+  onStoryChange,
+}, ref) {
   const [fullscreen, setFullscreen] = useState(false);
-  // Bust once per mount so a redeployed field_prod.json is picked up, without
-  // reloading the iframe on every parent re-render.
-  const cacheBust = useMemo(() => Date.now(), []);
-  const embedSrc = `/flowfield/index.html?embed=1&t=${cacheBust}`;
-  const fullSrc = `/flowfield/index.html?t=${cacheBust}`;
+  const iframeRef = useRef<HTMLIFrameElement>(null);
+
+  const post = (data: Record<string, unknown>) => {
+    iframeRef.current?.contentWindow?.postMessage(data, window.location.origin);
+  };
+
+  useImperativeHandle(ref, () => ({
+    setControlsCollapsed: (on) => post({ type: 'ff-controls-collapsed', on }),
+    toggleStory: () => post({ type: 'ff-story-toggle' }),
+  }), []);
+
+  // Stable src — Date.now() on every mount restarted the iframe (and the
+  // splash) whenever the dashboard re-rendered the tile.
+  const embedSrc = useMemo(() => {
+    const q = new URLSearchParams({ embed: '1', v: 'holistic-67' });
+    if (venueId) q.set('venue', venueId);
+    if (startCollapsed) q.set('collapsed', '1');
+    return `/flowfield/index.html?${q}`;
+  }, [venueId, startCollapsed]);
+  const fullSrc = useMemo(() => {
+    const q = new URLSearchParams({ v: 'holistic-67' });
+    if (venueId) q.set('venue', venueId);
+    return `/flowfield/index.html?${q}`;
+  }, [venueId]);
 
   useEffect(() => {
     if (!fullscreen) return;
@@ -38,10 +69,20 @@ export default function FlowFieldEmbed({
     };
   }, [fullscreen]);
 
+  useEffect(() => {
+    const onMsg = (e: MessageEvent) => {
+      if (e.origin !== window.location.origin) return;
+      if (e.data?.type === 'ff-story-chrome') onStoryChange?.(!!e.data.on);
+    };
+    window.addEventListener('message', onMsg);
+    return () => window.removeEventListener('message', onMsg);
+  }, [onStoryChange]);
+
   return (
     <>
       <div className={`relative h-full w-full ${className}`}>
         <iframe
+          ref={iframeRef}
           title={title}
           src={embedSrc}
           className="absolute inset-0 block w-full h-full border-0 bg-black"
@@ -95,4 +136,6 @@ export default function FlowFieldEmbed({
       )}
     </>
   );
-}
+});
+
+export default FlowFieldEmbed;
