@@ -899,6 +899,7 @@ export default function BusinessReportingPage({ onClose, publicDashboard = false
                   <ClienteMedioDashboard
                     payload={dailyKpi}
                     venueName={selectedVenueName}
+                    dark
                   />
                 ) : (
                   <ClienteMedioEmpty day={kpiDay} />
@@ -913,6 +914,7 @@ export default function BusinessReportingPage({ onClose, publicDashboard = false
                   journey={esselungaJourney}
                   dailyKpi={dailyKpi}
                   dailyKpiRange={dailyKpiRange}
+                  kpiDay={kpiDay}
                   venueId={selectedVenueId!}
                   venueName={selectedVenueName}
                   variant={esselungaVariant}

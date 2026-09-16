@@ -10,6 +10,7 @@ import {
   buildClienteMedioView,
   formatNextJob,
   mergeBehaviour,
+  todayRome,
   type DisplayTile,
 } from './adapter';
 import {
@@ -91,12 +92,18 @@ function KpiTiles({ tiles, testId }: { tiles: DisplayTile[]; testId: string }) {
   );
 }
 
-export function ClienteMedioEmpty({ day }: { day: string }) {
+export function ClienteMedioEmpty({ day, dark = true }: { day: string; dark?: boolean }) {
+  const today = todayRome();
+  const stillOpen = day >= today;
   return (
-    <div className="cm-root" data-testid="cliente-medio-empty">
+    <div className="cm-root" data-theme={dark ? 'dark' : 'light'} data-testid="cliente-medio-empty">
       <div className="cm-empty">
         <h2>Non ancora calcolato per questo giorno</h2>
-        <p>Il {day} non è in daily_kpi. I giorni calcolati partono dal 14 settembre 2026 — scegline uno dal selettore in alto. Il job gira ogni notte alle 04:30 UTC sul parquet raw del giorno precedente.</p>
+        {stillOpen ? (
+          <p>Il {day} non è ancora chiuso. Il job legge il parquet raw del giorno precedente ogni notte alle 04:30 UTC — non riusiamo i KPI live di zone_visits.</p>
+        ) : (
+          <p>Il {day} non è in daily_kpi. I giorni calcolati partono dal 14 settembre 2026 — scegline uno dal selettore in alto. Il job gira ogni notte alle 04:30 UTC sul parquet raw del giorno precedente.</p>
+        )}
         <p style={{ marginTop: 8 }}>{formatNextJob()}</p>
       </div>
     </div>
@@ -106,7 +113,7 @@ export function ClienteMedioEmpty({ day }: { day: string }) {
 export default function ClienteMedioDashboard({
   payload,
   venueName = 'Treviglio',
-  dark = false,
+  dark = true,
 }: {
   payload: DailyKpiPayload;
   venueName?: string;

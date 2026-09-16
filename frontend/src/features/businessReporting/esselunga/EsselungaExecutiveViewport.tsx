@@ -36,11 +36,14 @@ import { useHeatmap } from '../../../context/HeatmapContext';
 import type { DailyKpiPayload, DailyKpiRangeDay } from '../dailyKpi/types';
 import { DailyExecutiveSections } from '../dailyKpi/DailyExecutiveSections';
 import { buildHeadline, buildHeadlineKpis } from '../dailyKpi/viewModel';
+import { ClienteMedioEmpty } from './clienteMedio/ClienteMedioDashboard';
 
 interface EsselungaExecutiveViewportProps {
   journey: EsselungaJourneyPayload;
   dailyKpi?: DailyKpiPayload | null;
   dailyKpiRange?: DailyKpiRangeDay[];
+  /** Selected calendar day (Europe/Rome). Used when daily_kpi is missing. */
+  kpiDay?: string;
   venueId: string;
   venueName: string;
   variant: ExecutiveVariant;
@@ -214,6 +217,7 @@ export default function EsselungaExecutiveViewport({
   journey,
   dailyKpi = null,
   dailyKpiRange = [],
+  kpiDay,
   venueId,
   venueName,
   variant,
@@ -545,7 +549,7 @@ export default function EsselungaExecutiveViewport({
               In negozio ora {liveOccupancy.count}
             </span>
           )}
-          {!dailyKpi && (
+          {!dailyKpi && variant !== 'live' && (
             <>
               <span className="px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400">{taxonomy.fresco} fresco</span>
               <span className="px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-400">{taxonomy.aisles} aisles</span>
@@ -555,6 +559,9 @@ export default function EsselungaExecutiveViewport({
         </div>
       </div>
 
+      {variant === 'live' && !dailyKpi ? (
+        <ClienteMedioEmpty day={kpiDay || ''} />
+      ) : (
       <ExecutiveHeader
         headline={dailyKpi ? buildHeadline(dailyKpi, dailyKpiRange) : journey.headline}
         venueName={venueName}
@@ -562,13 +569,14 @@ export default function EsselungaExecutiveViewport({
         generatedAtLabel={generatedAtLabel}
         kpis={headlineKpis}
       />
+      )}
 
       {dailyKpi && (
         <DailyExecutiveSections payload={dailyKpi} rangeDays={dailyKpiRange} />
       )}
 
       {/* What to act on */}
-      {!dailyKpi && insights.length > 0 && (
+      {!dailyKpi && variant !== 'live' && insights.length > 0 && (
         <div
           className="grid gap-2"
           style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))' }}
@@ -592,7 +600,7 @@ export default function EsselungaExecutiveViewport({
       )}
 
       {/* Legacy journey (zone_visits). Hidden once daily_kpi is present. */}
-      {!dailyKpi && rhythmTimelines && (
+      {!dailyKpi && variant !== 'live' && rhythmTimelines && (
         <ExecutivePulseBand
           venueId={venueId}
           venueName={venueName}
@@ -606,7 +614,7 @@ export default function EsselungaExecutiveViewport({
         />
       )}
 
-      {!dailyKpi && <SectionCard
+      {!dailyKpi && variant !== 'live' && <SectionCard
         id="entrance"
         title="1 · Entrance"
         subtitle="Who came in, counted where trajectories cross the entrance line. These three signals are measured independently, so they do not divide into one another."
@@ -614,7 +622,7 @@ export default function EsselungaExecutiveViewport({
         <JourneySignalsPanel signals={signals} />
       </SectionCard>}
 
-      {!dailyKpi && <SectionCard
+      {!dailyKpi && variant !== 'live' && <SectionCard
         id="fresco"
         title="2 · Piazza del Fresco"
         subtitle={`Stopping = got to the shelf face (~${(journey.categoryPresence?.engagementRadiusM ?? 0.5).toFixed(1)} m). Category dwell = median time within ~${(journey.categoryPresence?.categoryDwellRadiusM ?? 2).toFixed(1)} m among those stops. Engagement = median time at the shelf face. Hover the ? next to category dwell for a diagram.`}
@@ -662,7 +670,7 @@ export default function EsselungaExecutiveViewport({
         )}
       </SectionCard>}
 
-      {!dailyKpi && <SectionCard
+      {!dailyKpi && variant !== 'live' && <SectionCard
         id="aisles"
         title="3 · Aisles & categories"
         subtitle={`Shelf zones grouped by the category they carry. A stop is a pause of ${metricThresholds?.dwellSec ?? dwellSec} seconds or more, which is Esselunga's own definition of stopping power.`}
@@ -779,7 +787,7 @@ export default function EsselungaExecutiveViewport({
         </div>
       </SectionCard>}
 
-      {!dailyKpi && <SectionCard
+      {!dailyKpi && variant !== 'live' && <SectionCard
         id="checkout"
         title="4 · Checkout"
         subtitle="Queue sessions by channel. A session starts when a shopper joins the queue zone and ends when they leave it, so the wait is time queuing rather than time at the till."
@@ -831,7 +839,7 @@ export default function EsselungaExecutiveViewport({
         that decide what the numbers mean, and an executive reading the page
         should meet the answer before the instrument.
       */}
-      {!dailyKpi && <div className="rounded-xl border border-gray-700/60 bg-gray-800/30 overflow-hidden">
+      {!dailyKpi && variant !== 'live' && <div className="rounded-xl border border-gray-700/60 bg-gray-800/30 overflow-hidden">
         <button
           type="button"
           onClick={() => setMetricsOpen(v => !v)}
