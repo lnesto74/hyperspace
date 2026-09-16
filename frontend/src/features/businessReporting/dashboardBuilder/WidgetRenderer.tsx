@@ -42,6 +42,8 @@ import type { DoohScreenMarker } from '../../../components/shared/FloorPlanMiniM
 import { getCategoryVisual } from '../operationsConsole/categoryVisuals';
 import type { WidgetId } from './types';
 import { getWidget } from './registry';
+import type { DailyKpiPayload, DailyKpiRangeDay } from '../dailyKpi/types';
+import { buildHeadline, buildHeadlineKpis, departmentMinutes, firstDepartment, queueBySlot, queueLanes, slotSeries, checkRows } from '../dailyKpi/viewModel';
 
 export interface DashboardDataContext {
   venueId: string;
@@ -66,6 +68,8 @@ export interface DashboardDataContext {
   executiveHighlights: ExecutiveHighlights;
   operationsConsole?: OperationsConsoleData | null;
   journey?: EsselungaJourneyPayload | null;
+  dailyKpi?: DailyKpiPayload | null;
+  dailyKpiRange?: DailyKpiRangeDay[];
   heatmapTimeframe: 'day' | 'week' | 'month';
   opsGrain?: TimelineGrain;
   onOpsGrainChange?: (grain: TimelineGrain) => void;
@@ -111,6 +115,106 @@ function Empty({ label }: { label: string }) {
   );
 }
 
+function DailyKpiSlice({ widgetId, payload }: { widgetId: WidgetId; payload: DailyKpiPayload }) {
+  if (widgetId === 'store-rhythm-v2') {
+    const slots = slotSeries(payload);
+    const max = Math.max(1, ...slots.map((s) => s.entrances || 0));
+    return (
+      <div className="flex items-end gap-1 h-24">
+        {slots.map((s) => (
+          <div key={s.slot} className="flex-1 flex flex-col items-center gap-0.5">
+            <div className="w-full h-16 flex items-end bg-gray-900/50 rounded">
+              <div className="w-full bg-cyan-500/70 rounded-t" style={{ height: `${((s.entrances || 0) / max) * 100}%` }} />
+            </div>
+            <span className="text-[9px] text-gray-400">{s.slot}</span>
+          </div>
+        ))}
+      </div>
+    );
+  }
+  if (widgetId === 'department-minutes') {
+    const rows = departmentMinutes(payload);
+    const max = Math.max(0.01, ...rows.filter((d) => d.minutes != null).map((d) => d.minutes as number));
+    return (
+      <div className="space-y-1">
+        {rows.map((d) => (
+          <div key={d.dept} className="flex items-center gap-2 text-[11px]">
+            <span className="w-36 truncate text-gray-300">{d.dept}</span>
+            {d.zeroObservation ? (
+              <span className="text-amber-300">nessuna osservazione — da verificare</span>
+            ) : (
+              <>
+                <div className="flex-1 h-1.5 bg-gray-900 rounded">
+                  <div className={`h-full rounded ${d.dept === 'Corsie / fuori zona' ? 'bg-violet-400' : 'bg-sky-400'}`} style={{ width: `${((d.minutes || 0) / max) * 100}%` }} />
+                </div>
+                <span className="tabular-nums text-gray-200 w-10 text-right">{d.minutes?.toFixed(2)}</span>
+              </>
+            )}
+          </div>
+        ))}
+      </div>
+    );
+  }
+  if (widgetId === 'first-department') {
+    const first = firstDepartment(payload);
+    return (
+      <div className="space-y-1">
+        {first.map((f) => (
+          <div key={f.dst} className="flex justify-between text-[11px] text-gray-300">
+            <span>{f.dst}</span>
+            <span className="tabular-nums">{Math.round(f.share * 100)}%</span>
+          </div>
+        ))}
+      </div>
+    );
+  }
+  if (widgetId === 'queue-by-slot') {
+    const slots = queueBySlot(payload);
+    return (
+      <div className="space-y-1 text-[11px] text-gray-300">
+        {slots.map((s) => (
+          <div key={s.slot} className="flex justify-between">
+            <span>{s.slot}</span>
+            <span className="tabular-nums">coda {s.wait?.toFixed(2) ?? '—'} · servizio {s.service?.toFixed(2) ?? '—'}</span>
+          </div>
+        ))}
+      </div>
+    );
+  }
+  if (widgetId === 'queue-by-lane') {
+    const lanes = queueLanes(payload).filter((l) => l.roi_group === 'CHECKOUT_QUEUE');
+    return (
+      <table className="w-full text-[11px] text-gray-300">
+        <tbody>
+          {lanes.map((l) => (
+            <tr key={String(l.lane)}>
+              <td className="py-0.5">Cassa {String(l.lane)}</td>
+              <td className="py-0.5 text-right tabular-nums">{Number(l.WAITING || 0).toFixed(1)} min</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    );
+  }
+  if (widgetId === 'behaviour-mix') {
+    const row = payload.kpis.find((k) => k.kpi_id === 'behaviour_share');
+    if (!row || row.status === 'unreliable') {
+      return <p className="text-[11px] text-gray-500" title={row?.status_reason || undefined}>— non calcolato</p>;
+    }
+    return <pre className="text-[10px] text-gray-400 whitespace-pre-wrap">{JSON.stringify(row.payload, null, 0)}</pre>;
+  }
+  const checks = checkRows(payload);
+  return (
+    <ul className="space-y-1 text-[11px]">
+      {checks.map((c) => (
+        <li key={c.check_id} className={c.passed ? 'text-emerald-400' : 'text-rose-400'}>
+          {c.passed ? 'pass' : 'fail'} · {c.check_id}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 function WidgetLoader({ title }: { title?: string }) {
   return (
     <div className="h-full min-h-[100px] flex flex-col items-center justify-center gap-2 rounded-lg border border-gray-700/70 bg-gray-900/40 px-3">
@@ -122,11 +226,16 @@ function WidgetLoader({ title }: { title?: string }) {
   );
 }
 
-function Shell({ title, children }: { title: string; children: ReactNode }) {
+function Shell({ title, legacy, children }: { title: string; legacy?: boolean; children: ReactNode }) {
   return (
     <div className="h-full rounded-lg border border-gray-700/80 bg-gray-800/40 overflow-hidden flex flex-col">
       <div className="px-3 py-1.5 border-b border-gray-700/60 flex-shrink-0">
         <span className="text-[11px] font-medium text-gray-300">{title}</span>
+        {legacy && (
+          <p className="text-[10px] text-amber-300/90 mt-0.5">
+            Calcolo precedente, basato su zone_visits / queue_sessions. Da dismettere.
+          </p>
+        )}
       </div>
       <div className="p-2 flex-1 min-h-0 overflow-auto">{children}</div>
     </div>
@@ -138,6 +247,7 @@ function shouldShowLoader(widgetId: WidgetId, ctx: DashboardDataContext): boolea
   if (!ctx.loading) return false;
   const def = getWidget(widgetId);
   if (def.needsJourney) return !ctx.journey;
+  if (def.needsDailyKpi) return !ctx.dailyKpi;
   if (def.needsOps) return !ctx.operationsConsole;
   // Shared strips / maps: keep prior content on refresh; spinner only on first load.
   const hasKpis = Object.keys(ctx.kpiValues || {}).length > 0;
@@ -532,6 +642,32 @@ export default function WidgetRenderer({
             <RingGauge value={ces} max={100} label="CES" color="#a78bfa" size={72} />
             <RingGauge value={eal} max={100} label="EAL" color="#38bdf8" size={72} />
           </div>
+        </Shell>
+      );
+    }
+    case 'esselunga-headline-v2': {
+      if (!ctx.dailyKpi) return <Empty label="daily_kpi non ancora calcolato per questo giorno." />;
+      return (
+        <ExecutiveHeader
+          headline={buildHeadline(ctx.dailyKpi, ctx.dailyKpiRange)}
+          venueName={ctx.venueName}
+          rangeLabel={ctx.dailyKpi.day}
+          generatedAtLabel={ctx.dailyKpi.day}
+          kpis={buildHeadlineKpis(ctx.dailyKpi, ctx.dailyKpiRange)}
+        />
+      );
+    }
+    case 'store-rhythm-v2':
+    case 'department-minutes':
+    case 'queue-by-lane':
+    case 'queue-by-slot':
+    case 'first-department':
+    case 'behaviour-mix':
+    case 'daily-checks': {
+      if (!ctx.dailyKpi) return <Empty label="daily_kpi non ancora calcolato per questo giorno." />;
+      return (
+        <Shell title={def.name}>
+          <DailyKpiSlice widgetId={widgetId} payload={ctx.dailyKpi} />
         </Shell>
       );
     }

@@ -20,7 +20,15 @@ export type WidgetId =
   | 'fresco-department-cards'
   | 'aisle-stat-stack'
   | 'checkout-panel'
-  | 'media-ring-gauges';
+  | 'media-ring-gauges'
+  | 'esselunga-headline-v2'
+  | 'store-rhythm-v2'
+  | 'department-minutes'
+  | 'queue-by-lane'
+  | 'queue-by-slot'
+  | 'first-department'
+  | 'behaviour-mix'
+  | 'daily-checks';
 
 export type WidgetKind = 'kpi' | 'chart' | 'map' | 'table' | 'insight';
 
@@ -29,7 +37,8 @@ export type WidgetSource =
   | 'Shelf & Category'
   | 'PEBLE'
   | 'Executive Summary'
-  | 'Esselunga Executive';
+  | 'Esselunga Executive'
+  | 'daily-kpi';
 
 /** Grid span in a 12-column layout. */
 export interface WidgetSize {
@@ -65,6 +74,10 @@ export interface WidgetDefinition {
   needsJourney?: boolean;
   /** Needs operations console payload. */
   needsOps?: boolean;
+  /** Needs the daily raw-LiDAR KPI payload (not the live summary). */
+  needsDailyKpi?: boolean;
+  /** Previous computation (zone_visits / queue_sessions). Still selectable. */
+  legacy?: boolean;
   superadminOnly?: boolean;
 }
 

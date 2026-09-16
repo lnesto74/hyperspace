@@ -399,7 +399,7 @@ export default function DashboardBuilderViewport({
               ))}
             </div>
             <div className="space-y-1.5">
-              {library.map((w) => {
+              {library.filter((w) => !w.legacy).map((w) => {
                 const usedCount = usedOnBoard.get(w.id) || 0;
                 const onBoard = usedCount > 0;
                 return (
@@ -443,6 +443,27 @@ export default function DashboardBuilderViewport({
                   </div>
                 );
               })}
+              {library.some((w) => w.legacy) && (
+                <div className="pt-2 mt-1 border-t border-gray-700/60">
+                  <div className="text-[10px] font-semibold uppercase tracking-wider text-amber-300/80 px-1 mb-1">Legacy</div>
+                  {library.filter((w) => w.legacy).map((w) => {
+                    const usedCount = usedOnBoard.get(w.id) || 0;
+                    return (
+                      <div
+                        key={w.id}
+                        draggable
+                        onDragStart={(e) => onDragStartLibrary(e, w.id)}
+                        className="rounded-md border border-amber-900/40 bg-amber-950/10 px-2 py-1.5 mb-1 cursor-grab"
+                      >
+                        <div className="text-[11px] text-gray-200 truncate">{w.name}</div>
+                        <div className="text-[10px] text-gray-500 line-clamp-2">{w.description}</div>
+                        {usedCount > 0 && <div className="text-[9px] text-cyan-300">On board ×{usedCount}</div>}
+                        <button type="button" onClick={() => addWidget(w.id)} className="text-[10px] text-cyan-400 mt-0.5">Add</button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           </aside>
         )}
@@ -512,6 +533,11 @@ export default function DashboardBuilderViewport({
                       </div>
                     )}
                     <div className="h-full" style={{ minHeight: rowHeightPx(item.rowSpan) - 4 }}>
+                      {def.legacy && (
+                        <p className="text-[10px] text-amber-300/90 px-2 py-1 bg-amber-950/40 border-b border-amber-900/40">
+                          Calcolo precedente, basato su zone_visits / queue_sessions. Da dismettere.
+                        </p>
+                      )}
                       <WidgetRenderer widgetId={item.widgetId} ctx={data} />
                     </div>
                     {canEdit && (

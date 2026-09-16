@@ -216,7 +216,8 @@ export default function BusinessReportingPage({ onClose, publicDashboard = false
   const showCustomDashboard = isCustomDashboard && !!selectedVenueId;
 
   useEffect(() => {
-    if (!showEsselungaExecutive || !selectedVenueId) {
+    const needDaily = showEsselungaExecutive || (showCustomDashboard && customSourcesKey.includes('daily-kpi'));
+    if (!needDaily || !selectedVenueId) {
       setDailyKpi(null);
       setDailyKpiRange([]);
       return;
@@ -255,7 +256,7 @@ export default function BusinessReportingPage({ onClose, publicDashboard = false
       }
     })();
     return () => { cancelled = true; };
-  }, [showEsselungaExecutive, selectedVenueId, selectedTimeRange]);
+  }, [showEsselungaExecutive, showCustomDashboard, customSourcesKey, selectedVenueId, selectedTimeRange]);
 
   // Gated in three places on purpose: the rail hides it, this refuses to render
   // it, and the API routes reject the request. A hidden button is not access
@@ -598,6 +599,8 @@ export default function BusinessReportingPage({ onClose, publicDashboard = false
       executiveHighlights,
       operationsConsole,
       journey: esselungaJourney,
+      dailyKpi,
+      dailyKpiRange,
       heatmapTimeframe,
       opsGrain,
       onOpsGrainChange: setOpsGrain,
@@ -617,7 +620,7 @@ export default function BusinessReportingPage({ onClose, publicDashboard = false
     kpiValues, periodDeltas, topCategories, deadZones, topZones, zoneUtilThresholdPct, topCampaigns,
     underperformingCampaigns, campaignRanking, doohScreens, supporting.dataWindowStartTs,
     supporting.dataWindowEndTs, executivePillars, executiveHighlights, operationsConsole,
-    esselungaJourney, heatmapTimeframe, opsGrain, loading, handleCategoryHeatmap,
+    esselungaJourney, dailyKpi, dailyKpiRange, heatmapTimeframe, opsGrain, loading, handleCategoryHeatmap,
     openHeatmapForCategory, openHeatmapModal,
   ]);
 

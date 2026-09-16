@@ -1,10 +1,11 @@
 import { DASHBOARD_TEMPLATES } from '../templates';
-import { personasNeededForLayout } from '../sources';
+import { layoutNeedsDailyKpi, personasNeededForLayout } from '../sources';
 
 describe('personasNeededForLayout', () => {
-  it('Store Director only needs the Esselunga journey', () => {
+  it('Store Director v2 does not fetch the live Esselunga summary', () => {
     const tpl = DASHBOARD_TEMPLATES.find((t) => t.id === 'tpl-store-director');
-    expect(personasNeededForLayout(tpl as never)).toEqual(['esselunga-executive']);
+    expect(personasNeededForLayout(tpl as never)).toEqual([]);
+    expect(layoutNeedsDailyKpi(tpl as never)).toBe(true);
   });
 
   it('Ops day board needs Pulse + Executive, not Esselunga', () => {

@@ -26,6 +26,9 @@ export function personasNeededForLayout(
   for (const item of layout?.items || []) {
     const def = getWidget(item.widgetId);
     if (def.needsJourney) needed.add('esselunga-executive');
+    if (def.needsDailyKpi) {
+      // daily_kpi is fetched separately; do not pull the live journey summary.
+    }
     if (def.needsOps) needed.add('store-manager');
     if (EXECUTIVE_WIDGETS.has(item.widgetId)) needed.add('executive');
     if (item.widgetId === 'category-visits-panel') needsCategoryBars = true;
@@ -39,6 +42,11 @@ export function personasNeededForLayout(
   return [...needed];
 }
 
+export function layoutNeedsDailyKpi(layout: DashboardLayout | null | undefined): boolean {
+  return (layout?.items || []).some((item) => getWidget(item.widgetId)?.needsDailyKpi);
+}
+
 export function sourcesKeyForLayout(layout: DashboardLayout | null | undefined): string {
-  return personasNeededForLayout(layout).slice().sort().join(',');
+  const personas = personasNeededForLayout(layout).slice().sort().join(',');
+  return layoutNeedsDailyKpi(layout) ? `${personas}|daily-kpi` : personas;
 }
