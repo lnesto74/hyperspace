@@ -38,7 +38,7 @@ function Explore({ onClick, children }: { onClick?: () => void; children: string
 
 function Pulse({ items }: { items: PulseMetric[] }) {
   return (
-    <div className="grid grid-cols-2 xl:grid-cols-4 gap-x-8 gap-y-6">
+    <div className="grid grid-cols-2 lg:grid-cols-4 gap-x-8 gap-y-6">
       {items.map((m) => (
         <div key={m.id} className="min-w-0">
           <div className="flex items-center gap-1.5 mb-1">
@@ -171,7 +171,7 @@ export default function ExecutiveCanvas({
         <Pulse items={model.pulse} />
       </section>
 
-      <div className="grid gap-6 xl:grid-cols-[minmax(0,1.7fr)_minmax(260px,1fr)]">
+      <div className="grid gap-6 lg:grid-cols-[minmax(0,1.7fr)_minmax(240px,0.9fr)]">
         <section id="ex-journey">
           <div className="flex items-end justify-between gap-3 mb-4">
             <div>
