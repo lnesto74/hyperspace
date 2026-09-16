@@ -1,0 +1,12 @@
+# pulled day data (600 MB parquet + DB exports) and the DuckDB scratch store are not committed
+__pycache__/
+data/
+out/*/jl.duckdb
+out/*/jl.duckdb.wal
+out/**/*.png
+out/**/*.parquet
+out/**/*.npz
+out/**/*.pptx
+out/**/*.html
+out/**/pres/
+logs/

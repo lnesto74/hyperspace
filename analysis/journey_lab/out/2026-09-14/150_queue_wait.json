@@ -1,0 +1,523 @@
+{
+ "day": "2026-09-14",
+ "params": {
+  "speed_walk_mps": 0.5,
+  "fixed_s": 600,
+  "near_m": 1.2,
+  "near_s": 60
+ },
+ "entrances": {
+  "08-10": 336,
+  "10-12": 424,
+  "12-14": 308,
+  "14-16": 277,
+  "16-18": 422,
+  "18-20": 410,
+  "giorno": 2177
+ },
+ "fixed_spots": [
+  {
+   "id": "person-14526956",
+   "mx": 61.04,
+   "mz": 26.59,
+   "dur_s": 13129.3,
+   "src": "long_visit"
+  },
+  {
+   "id": "person-13578098",
+   "mx": 61.04,
+   "mz": 26.6,
+   "dur_s": 5966.1,
+   "src": "long_visit"
+  },
+  {
+   "id": "person-11348727",
+   "mx": 61.04,
+   "mz": 26.6,
+   "dur_s": 4709.1,
+   "src": "static_phantom"
+  },
+  {
+   "id": "person-14045740",
+   "mx": 61.04,
+   "mz": 26.6,
+   "dur_s": 3285.6,
+   "src": "static_phantom"
+  },
+  {
+   "id": "person-15523642",
+   "mx": 61.05,
+   "mz": 26.6,
+   "dur_s": 1868.4,
+   "src": "static_phantom"
+  },
+  {
+   "id": "person-13446165",
+   "mx": 61.04,
+   "mz": 26.6,
+   "dur_s": 1584.3,
+   "src": "static_phantom"
+  },
+  {
+   "id": "person-16136853",
+   "mx": 61.04,
+   "mz": 26.6,
+   "dur_s": 1535.3,
+   "src": "static_phantom"
+  },
+  {
+   "id": "person-14298716",
+   "mx": 61.06,
+   "mz": 26.62,
+   "dur_s": 1217.8,
+   "src": "long_visit"
+  },
+  {
+   "id": "person-14441518",
+   "mx": 61.04,
+   "mz": 26.6,
+   "dur_s": 1033.1,
+   "src": "static_phantom"
+  },
+  {
+   "id": "person-15873873",
+   "mx": 61.04,
+   "mz": 26.6,
+   "dur_s": 1010.9,
+   "src": "long_visit"
+  },
+  {
+   "id": "person-16081920",
+   "mx": 61.07,
+   "mz": 26.61,
+   "dur_s": 875.6,
+   "src": "long_visit"
+  },
+  {
+   "id": "person-15446196",
+   "mx": 61.06,
+   "mz": 26.57,
+   "dur_s": 718.7,
+   "src": "static_phantom"
+  },
+  {
+   "id": "person-15712845",
+   "mx": 61.15,
+   "mz": 26.63,
+   "dur_s": 697.0,
+   "src": "static_phantom"
+  },
+  {
+   "id": "person-14391637",
+   "mx": 61.04,
+   "mz": 26.6,
+   "dur_s": 670.2,
+   "src": "long_visit"
+  }
+ ],
+ "per_lane": [
+  {
+   "roi_group": "CHECKOUT_QUEUE",
+   "lane": 1,
+   "FIXED": 0.0,
+   "TRANSIT": 5.62,
+   "WAITING": 21.6,
+   "TOTAL": 27.22,
+   "per_entrance_before": 0.013,
+   "per_entrance_after": 0.01,
+   "mean_people_waiting": 0.03
+  },
+  {
+   "roi_group": "CHECKOUT_QUEUE",
+   "lane": 2,
+   "FIXED": 0.0,
+   "TRANSIT": 30.9,
+   "WAITING": 32.23,
+   "TOTAL": 63.13,
+   "per_entrance_before": 0.029,
+   "per_entrance_after": 0.015,
+   "mean_people_waiting": 0.04
+  },
+  {
+   "roi_group": "CHECKOUT_QUEUE",
+   "lane": 3,
+   "FIXED": 0.0,
+   "TRANSIT": 24.05,
+   "WAITING": 30.61,
+   "TOTAL": 54.66,
+   "per_entrance_before": 0.025,
+   "per_entrance_after": 0.014,
+   "mean_people_waiting": 0.04
+  },
+  {
+   "roi_group": "CHECKOUT_QUEUE",
+   "lane": 4,
+   "FIXED": 390.58,
+   "TRANSIT": 48.3,
+   "WAITING": 76.99,
+   "TOTAL": 515.87,
+   "per_entrance_before": 0.237,
+   "per_entrance_after": 0.035,
+   "mean_people_waiting": 0.11
+  },
+  {
+   "roi_group": "CHECKOUT_QUEUE",
+   "lane": 5,
+   "FIXED": 0.0,
+   "TRANSIT": 63.48,
+   "WAITING": 258.21,
+   "TOTAL": 321.69,
+   "per_entrance_before": 0.148,
+   "per_entrance_after": 0.119,
+   "mean_people_waiting": 0.36
+  },
+  {
+   "roi_group": "CHECKOUT_QUEUE",
+   "lane": 6,
+   "FIXED": 0.0,
+   "TRANSIT": 30.49,
+   "WAITING": 133.6,
+   "TOTAL": 164.09,
+   "per_entrance_before": 0.075,
+   "per_entrance_after": 0.061,
+   "mean_people_waiting": 0.19
+  },
+  {
+   "roi_group": "CHECKOUT_QUEUE",
+   "lane": 7,
+   "FIXED": 0.0,
+   "TRANSIT": 65.44,
+   "WAITING": 216.65,
+   "TOTAL": 282.09,
+   "per_entrance_before": 0.13,
+   "per_entrance_after": 0.1,
+   "mean_people_waiting": 0.3
+  },
+  {
+   "roi_group": "CHECKOUT_QUEUE",
+   "lane": 8,
+   "FIXED": 0.0,
+   "TRANSIT": 20.33,
+   "WAITING": 10.78,
+   "TOTAL": 31.11,
+   "per_entrance_before": 0.014,
+   "per_entrance_after": 0.005,
+   "mean_people_waiting": 0.01
+  },
+  {
+   "roi_group": "CHECKOUT_QUEUE",
+   "lane": 9,
+   "FIXED": 0.0,
+   "TRANSIT": 11.96,
+   "WAITING": 54.91,
+   "TOTAL": 66.87,
+   "per_entrance_before": 0.031,
+   "per_entrance_after": 0.025,
+   "mean_people_waiting": 0.08
+  },
+  {
+   "roi_group": "CHECKOUT_QUEUE",
+   "lane": 10,
+   "FIXED": 0.0,
+   "TRANSIT": 24.49,
+   "WAITING": 137.87,
+   "TOTAL": 162.36,
+   "per_entrance_before": 0.075,
+   "per_entrance_after": 0.063,
+   "mean_people_waiting": 0.19
+  },
+  {
+   "roi_group": "CHECKOUT_QUEUE",
+   "lane": 11,
+   "FIXED": 0.0,
+   "TRANSIT": 54.87,
+   "WAITING": 38.13,
+   "TOTAL": 93.0,
+   "per_entrance_before": 0.043,
+   "per_entrance_after": 0.018,
+   "mean_people_waiting": 0.05
+  },
+  {
+   "roi_group": "CHECKOUT_QUEUE",
+   "lane": 12,
+   "FIXED": 0.0,
+   "TRANSIT": 59.79,
+   "WAITING": 85.21,
+   "TOTAL": 145.0,
+   "per_entrance_before": 0.067,
+   "per_entrance_after": 0.039,
+   "mean_people_waiting": 0.12
+  },
+  {
+   "roi_group": "CHECKOUT_QUEUE",
+   "lane": 13,
+   "FIXED": 0.0,
+   "TRANSIT": 87.92,
+   "WAITING": 195.93,
+   "TOTAL": 283.85,
+   "per_entrance_before": 0.13,
+   "per_entrance_after": 0.09,
+   "mean_people_waiting": 0.27
+  },
+  {
+   "roi_group": "CHECKOUT_SERVICE",
+   "lane": 2,
+   "FIXED": 0.0,
+   "TRANSIT": 0.0,
+   "WAITING": 0.1,
+   "TOTAL": 0.1,
+   "per_entrance_before": 0.0,
+   "per_entrance_after": 0.0,
+   "mean_people_waiting": 0.0
+  },
+  {
+   "roi_group": "CHECKOUT_SERVICE",
+   "lane": 3,
+   "FIXED": 0.0,
+   "TRANSIT": 0.0,
+   "WAITING": 0.35,
+   "TOTAL": 0.35,
+   "per_entrance_before": 0.0,
+   "per_entrance_after": 0.0,
+   "mean_people_waiting": 0.0
+  },
+  {
+   "roi_group": "CHECKOUT_SERVICE",
+   "lane": 4,
+   "FIXED": 0.0,
+   "TRANSIT": 0.87,
+   "WAITING": 10.07,
+   "TOTAL": 10.94,
+   "per_entrance_before": 0.005,
+   "per_entrance_after": 0.005,
+   "mean_people_waiting": 0.01
+  },
+  {
+   "roi_group": "CHECKOUT_SERVICE",
+   "lane": 5,
+   "FIXED": 0.0,
+   "TRANSIT": 4.41,
+   "WAITING": 363.71,
+   "TOTAL": 368.12,
+   "per_entrance_before": 0.169,
+   "per_entrance_after": 0.167,
+   "mean_people_waiting": 0.51
+  },
+  {
+   "roi_group": "CHECKOUT_SERVICE",
+   "lane": 6,
+   "FIXED": 0.0,
+   "TRANSIT": 0.43,
+   "WAITING": 16.11,
+   "TOTAL": 16.54,
+   "per_entrance_before": 0.008,
+   "per_entrance_after": 0.007,
+   "mean_people_waiting": 0.02
+  },
+  {
+   "roi_group": "CHECKOUT_SERVICE",
+   "lane": 7,
+   "FIXED": 0.0,
+   "TRANSIT": 0.55,
+   "WAITING": 143.03,
+   "TOTAL": 143.58,
+   "per_entrance_before": 0.066,
+   "per_entrance_after": 0.066,
+   "mean_people_waiting": 0.2
+  },
+  {
+   "roi_group": "CHECKOUT_SERVICE",
+   "lane": 10,
+   "FIXED": 0.0,
+   "TRANSIT": 0.71,
+   "WAITING": 54.85,
+   "TOTAL": 55.56,
+   "per_entrance_before": 0.026,
+   "per_entrance_after": 0.025,
+   "mean_people_waiting": 0.08
+  },
+  {
+   "roi_group": "CHECKOUT_SERVICE",
+   "lane": 11,
+   "FIXED": 0.0,
+   "TRANSIT": 0.2,
+   "WAITING": 3.49,
+   "TOTAL": 3.69,
+   "per_entrance_before": 0.002,
+   "per_entrance_after": 0.002,
+   "mean_people_waiting": 0.0
+  },
+  {
+   "roi_group": "CHECKOUT_SERVICE",
+   "lane": 12,
+   "FIXED": 0.0,
+   "TRANSIT": 5.41,
+   "WAITING": 165.26,
+   "TOTAL": 170.67,
+   "per_entrance_before": 0.078,
+   "per_entrance_after": 0.076,
+   "mean_people_waiting": 0.23
+  },
+  {
+   "roi_group": "CHECKOUT_SERVICE",
+   "lane": 13,
+   "FIXED": 0.0,
+   "TRANSIT": 2.06,
+   "WAITING": 31.44,
+   "TOTAL": 33.5,
+   "per_entrance_before": 0.015,
+   "per_entrance_after": 0.014,
+   "mean_people_waiting": 0.04
+  }
+ ],
+ "per_slot": [
+  {
+   "roi_group": "CHECKOUT_QUEUE",
+   "slot": "08-10",
+   "FIXED": 0.0,
+   "TRANSIT": 84.952,
+   "WAITING": 160.38,
+   "entrances": 336,
+   "before": 0.73,
+   "after": 0.48
+  },
+  {
+   "roi_group": "CHECKOUT_QUEUE",
+   "slot": "10-12",
+   "FIXED": 99.435,
+   "TRANSIT": 78.625,
+   "WAITING": 231.402,
+   "entrances": 424,
+   "before": 0.97,
+   "after": 0.55
+  },
+  {
+   "roi_group": "CHECKOUT_QUEUE",
+   "slot": "12-14",
+   "FIXED": 250.288,
+   "TRANSIT": 89.578,
+   "WAITING": 231.397,
+   "entrances": 308,
+   "before": 1.85,
+   "after": 0.75
+  },
+  {
+   "roi_group": "CHECKOUT_QUEUE",
+   "slot": "14-16",
+   "FIXED": 0.0,
+   "TRANSIT": 71.36,
+   "WAITING": 105.257,
+   "entrances": 277,
+   "before": 0.64,
+   "after": 0.38
+  },
+  {
+   "roi_group": "CHECKOUT_QUEUE",
+   "slot": "16-18",
+   "FIXED": 0.0,
+   "TRANSIT": 87.843,
+   "WAITING": 196.607,
+   "entrances": 422,
+   "before": 0.67,
+   "after": 0.47
+  },
+  {
+   "roi_group": "CHECKOUT_QUEUE",
+   "slot": "18-20",
+   "FIXED": 40.852,
+   "TRANSIT": 115.28,
+   "WAITING": 367.693,
+   "entrances": 410,
+   "before": 1.28,
+   "after": 0.9
+  },
+  {
+   "roi_group": "CHECKOUT_SERVICE",
+   "slot": "08-10",
+   "FIXED": 0.0,
+   "TRANSIT": 2.103,
+   "WAITING": 121.358,
+   "entrances": 336,
+   "before": 0.37,
+   "after": 0.36
+  },
+  {
+   "roi_group": "CHECKOUT_SERVICE",
+   "slot": "10-12",
+   "FIXED": 0.0,
+   "TRANSIT": 3.087,
+   "WAITING": 204.562,
+   "entrances": 424,
+   "before": 0.49,
+   "after": 0.48
+  },
+  {
+   "roi_group": "CHECKOUT_SERVICE",
+   "slot": "12-14",
+   "FIXED": 0.0,
+   "TRANSIT": 2.768,
+   "WAITING": 198.508,
+   "entrances": 308,
+   "before": 0.65,
+   "after": 0.64
+  },
+  {
+   "roi_group": "CHECKOUT_SERVICE",
+   "slot": "14-16",
+   "FIXED": 0.0,
+   "TRANSIT": 1.712,
+   "WAITING": 44.603,
+   "entrances": 277,
+   "before": 0.17,
+   "after": 0.16
+  },
+  {
+   "roi_group": "CHECKOUT_SERVICE",
+   "slot": "16-18",
+   "FIXED": 0.0,
+   "TRANSIT": 1.69,
+   "WAITING": 79.943,
+   "entrances": 422,
+   "before": 0.19,
+   "after": 0.19
+  },
+  {
+   "roi_group": "CHECKOUT_SERVICE",
+   "slot": "18-20",
+   "FIXED": 0.0,
+   "TRANSIT": 3.28,
+   "WAITING": 139.432,
+   "entrances": 410,
+   "before": 0.35,
+   "after": 0.34
+  }
+ ],
+ "waiting_visit_duration_quantiles": {
+  "CHECKOUT_QUEUE": [
+   3.3,
+   5.6,
+   14.0,
+   24.5
+  ],
+  "CHECKOUT_SERVICE": [
+   3.3,
+   14.975,
+   29.9,
+   54.17499999999986
+  ]
+ },
+ "kpi": {
+  "CHECKOUT_QUEUE": {
+   "before_min_per_entrance": 1.016,
+   "fixed": 0.179,
+   "transit": 0.242,
+   "after_min_per_entrance": 0.594
+  },
+  "CHECKOUT_SERVICE": {
+   "before_min_per_entrance": 0.369,
+   "fixed": 0.0,
+   "transit": 0.007,
+   "after_min_per_entrance": 0.362
+  }
+ }
+}

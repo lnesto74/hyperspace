@@ -47,6 +47,7 @@ import {
   fetchErpForRange,
   ensureErpTable,
 } from '../services/executive/VenueErpStore.js';
+import { loadDailyKpi, loadDailyKpiRange, persistDailyKpi } from '../services/dailyKpi/store.js';
 
 const erpUpload = multer({
   storage: multer.memoryStorage(),
@@ -140,6 +141,72 @@ const MAX_RANGE_MS = 30 * 24 * 60 * 60 * 1000;
 // is linear in a table growing by roughly a third of a million rows a day. Seven
 // days is the point past which it stops feeling interactive.
 const AUDIT_MAX_RANGE_MS = 7 * 24 * 60 * 60 * 1000;
+
+/**
+ * GET /api/reporting/daily-kpi — one venue/day from the raw-LiDAR job.
+ */
+router.get('/daily-kpi', (req, res) => {
+  try {
+    const { venueId, day } = req.query;
+    if (!venueId || !day) {
+      return res.status(400).json({ error: 'venueId and day are required' });
+    }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) {
+      return res.status(400).json({ error: 'day must be YYYY-MM-DD' });
+    }
+    let payload = loadDailyKpi(db, venueId, day);
+    if (!payload) {
+      const reportDir = process.env.DAILY_KPI_REPORT || '/data/hyperspace/reports/daily-kpi';
+      const jsonPath = path.join(reportDir, venueId, `${day}.json`);
+      if (fs.existsSync(jsonPath)) {
+        payload = JSON.parse(fs.readFileSync(jsonPath, 'utf8'));
+      }
+    }
+    if (!payload) {
+      return res.status(404).json({ error: 'daily_kpi not computed for this day' });
+    }
+    res.json(payload);
+  } catch (err) {
+    console.error('[BusinessReporting] daily-kpi error:', err);
+    res.status(500).json({ error: 'Failed to load daily KPI' });
+  }
+});
+
+router.get('/daily-kpi/range', (req, res) => {
+  try {
+    const { venueId, from, to } = req.query;
+    if (!venueId || !from || !to) {
+      return res.status(400).json({ error: 'venueId, from and to are required' });
+    }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) {
+      return res.status(400).json({ error: 'from/to must be YYYY-MM-DD' });
+    }
+    res.json({ venueId, from, to, days: loadDailyKpiRange(db, venueId, from, to) });
+  } catch (err) {
+    console.error('[BusinessReporting] daily-kpi/range error:', err);
+    res.status(500).json({ error: 'Failed to load daily KPI range' });
+  }
+});
+
+router.post('/daily-kpi/ingest', (req, res) => {
+  try {
+    const token = process.env.DAILY_KPI_TOKEN;
+    const header = (req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+    const alt = req.headers['x-daily-kpi-token'];
+    const ok = (token && (header === token || alt === token))
+      || (req.user && req.user.role === 'superadmin');
+    if (!ok) return res.status(401).json({ error: 'Authentication required' });
+    const payload = req.body;
+    if (!payload?.venue_id || !payload?.day || !Array.isArray(payload.kpis)) {
+      return res.status(400).json({ error: 'invalid daily_kpi payload' });
+    }
+    persistDailyKpi(db, payload);
+    res.json({ ok: true, venueId: payload.venue_id, day: payload.day, kpis: payload.kpis.length });
+  } catch (err) {
+    console.error('[BusinessReporting] daily-kpi ingest error:', err);
+    res.status(500).json({ error: 'Failed to ingest daily KPI' });
+  }
+});
 
 /**
  * GET /api/reporting/personas - List available personas

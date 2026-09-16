@@ -1,0 +1,602 @@
+{
+ "day": "2026-09-14",
+ "entrances": {
+  "08-10": 336,
+  "10-12": 424,
+  "12-14": 308,
+  "14-16": 277,
+  "16-18": 422,
+  "18-20": 410,
+  "giorno": 2177
+ },
+ "person_minutes_in_store": {
+  "12-14": 8094.548333333334,
+  "14-16": 7099.286666666667,
+  "16-18": 8530.026666666667,
+  "18-20": 10232.68,
+  "08-10": 7902.406666666667,
+  "10-12": 9356.466666666667,
+  "giorno": 51215.41500000001
+ },
+ "mean_visit_min": {
+  "08-10": 23.519067460317462,
+  "10-12": 22.067138364779876,
+  "12-14": 26.281001082251084,
+  "14-16": 25.629193742478943,
+  "16-18": 20.213333333333335,
+  "18-20": 24.957756097560978,
+  "giorno": 23.525684428112086
+ },
+ "minutes_per_customer_by_department": {
+  "08-10": {
+   "Ingresso": 0.06,
+   "Frutta": 0.5,
+   "Verdura": 0.62,
+   "Bakery & Breakfast": 0.49,
+   "Carne": 0.34,
+   "Pesce": 0.16,
+   "Latticini": 0.42,
+   "Acqua": 0.04,
+   "Bar": 0.38,
+   "Surgelati": 0.46,
+   "Scaffali senza categoria": 2.89,
+   "Corsie / fuori zona": 16.32,
+   "Coda cassa": 0.48,
+   "Cassa (servizio)": 0.36,
+   "TOTALE (Little)": 23.52
+  },
+  "10-12": {
+   "Ingresso": 0.06,
+   "Frutta": 0.54,
+   "Verdura": 0.57,
+   "Bakery & Breakfast": 0.68,
+   "Carne": 0.35,
+   "Pesce": 0.17,
+   "Latticini": 0.42,
+   "Acqua": 0.02,
+   "Bar": 0.15,
+   "Surgelati": 0.66,
+   "Scaffali senza categoria": 2.77,
+   "Corsie / fuori zona": 14.65,
+   "Coda cassa": 0.55,
+   "Cassa (servizio)": 0.48,
+   "TOTALE (Little)": 22.07
+  },
+  "12-14": {
+   "Ingresso": 0.05,
+   "Frutta": 0.49,
+   "Verdura": 0.62,
+   "Bakery & Breakfast": 0.52,
+   "Carne": 0.31,
+   "Pesce": 0.15,
+   "Latticini": 0.36,
+   "Acqua": 0.02,
+   "Bar": 0.25,
+   "Surgelati": 0.46,
+   "Scaffali senza categoria": 2.86,
+   "Corsie / fuori zona": 18.79,
+   "Coda cassa": 0.75,
+   "Cassa (servizio)": 0.64,
+   "TOTALE (Little)": 26.28
+  },
+  "14-16": {
+   "Ingresso": 0.06,
+   "Frutta": 0.43,
+   "Verdura": 0.52,
+   "Bakery & Breakfast": 0.56,
+   "Carne": 0.47,
+   "Pesce": 0.17,
+   "Latticini": 0.46,
+   "Acqua": 0.03,
+   "Bar": 0.21,
+   "Surgelati": 0.49,
+   "Scaffali senza categoria": 4.31,
+   "Corsie / fuori zona": 17.39,
+   "Coda cassa": 0.38,
+   "Cassa (servizio)": 0.16,
+   "TOTALE (Little)": 25.63
+  },
+  "16-18": {
+   "Ingresso": 0.05,
+   "Frutta": 0.56,
+   "Verdura": 0.64,
+   "Bakery & Breakfast": 0.47,
+   "Carne": 0.36,
+   "Pesce": 0.12,
+   "Latticini": 0.41,
+   "Acqua": 0.01,
+   "Bar": 0.15,
+   "Surgelati": 0.6,
+   "Scaffali senza categoria": 2.6,
+   "Corsie / fuori zona": 13.59,
+   "Coda cassa": 0.47,
+   "Cassa (servizio)": 0.19,
+   "TOTALE (Little)": 20.21
+  },
+  "18-20": {
+   "Ingresso": 0.06,
+   "Frutta": 0.63,
+   "Verdura": 0.61,
+   "Bakery & Breakfast": 0.69,
+   "Carne": 0.48,
+   "Pesce": 0.2,
+   "Latticini": 0.55,
+   "Acqua": 0.03,
+   "Bar": 0.1,
+   "Surgelati": 0.75,
+   "Scaffali senza categoria": 3.28,
+   "Corsie / fuori zona": 16.36,
+   "Coda cassa": 0.9,
+   "Cassa (servizio)": 0.34,
+   "TOTALE (Little)": 24.96
+  },
+  "giorno": {
+   "Ingresso": 0.06,
+   "Frutta": 0.53,
+   "Verdura": 0.6,
+   "Bakery & Breakfast": 0.57,
+   "Carne": 0.38,
+   "Pesce": 0.16,
+   "Latticini": 0.44,
+   "Acqua": 0.02,
+   "Bar": 0.2,
+   "Surgelati": 0.58,
+   "Scaffali senza categoria": 3.06,
+   "Corsie / fuori zona": 15.97,
+   "Coda cassa": 0.59,
+   "Cassa (servizio)": 0.36,
+   "TOTALE (Little)": 23.53
+  }
+ },
+ "reach_upper_bound_ids_per_entrance": {
+  "Acqua": 0.22,
+  "Bakery & Breakfast": 4.47,
+  "Bar": 2.26,
+  "Carne": 2.1,
+  "Cassa (servizio)": 1.05,
+  "Coda cassa": 5.02,
+  "Frutta": 4.3,
+  "Ingresso": 1.0,
+  "Latticini": 2.43,
+  "Pesce": 0.87,
+  "Scaffali senza categoria": 19.11,
+  "Surgelati": 3.32,
+  "Verdura": 3.45
+ },
+ "transitions_top": [
+  {
+   "src": "Bakery & Breakfast",
+   "dst": "Scaffali senza categoria",
+   "n": 9454.0,
+   "measured": 9060.0,
+   "inferred": 394.0
+  },
+  {
+   "src": "Scaffali senza categoria",
+   "dst": "Bakery & Breakfast",
+   "n": 9164.0,
+   "measured": 8760.0,
+   "inferred": 404.0
+  },
+  {
+   "src": "Coda cassa",
+   "dst": "Cassa (servizio)",
+   "n": 1948.0,
+   "measured": 1900.0,
+   "inferred": 48.0
+  },
+  {
+   "src": "Verdura",
+   "dst": "Frutta",
+   "n": 1732.0,
+   "measured": 1610.0,
+   "inferred": 122.0
+  },
+  {
+   "src": "Frutta",
+   "dst": "Verdura",
+   "n": 1688.0,
+   "measured": 1575.0,
+   "inferred": 113.0
+  },
+  {
+   "src": "Cassa (servizio)",
+   "dst": "Coda cassa",
+   "n": 1421.0,
+   "measured": 1389.0,
+   "inferred": 32.0
+  },
+  {
+   "src": "Ingresso",
+   "dst": "Frutta",
+   "n": 449.0,
+   "measured": 383.0,
+   "inferred": 66.0
+  },
+  {
+   "src": "Latticini",
+   "dst": "Scaffali senza categoria",
+   "n": 200.0,
+   "measured": 185.0,
+   "inferred": 15.0
+  },
+  {
+   "src": "Scaffali senza categoria",
+   "dst": "Latticini",
+   "n": 197.0,
+   "measured": 176.0,
+   "inferred": 21.0
+  },
+  {
+   "src": "Pesce",
+   "dst": "Carne",
+   "n": 195.0,
+   "measured": 169.0,
+   "inferred": 26.0
+  },
+  {
+   "src": "Verdura",
+   "dst": "Scaffali senza categoria",
+   "n": 195.0,
+   "measured": 193.0,
+   "inferred": 2.0
+  },
+  {
+   "src": "Latticini",
+   "dst": "Carne",
+   "n": 152.0,
+   "measured": 136.0,
+   "inferred": 16.0
+  },
+  {
+   "src": "Carne",
+   "dst": "Acqua",
+   "n": 99.0,
+   "measured": 99.0,
+   "inferred": null
+  },
+  {
+   "src": "Scaffali senza categoria",
+   "dst": "Coda cassa",
+   "n": 84.0,
+   "measured": 70.0,
+   "inferred": 14.0
+  },
+  {
+   "src": "Surgelati",
+   "dst": "Scaffali senza categoria",
+   "n": 81.0,
+   "measured": 68.0,
+   "inferred": 13.0
+  },
+  {
+   "src": "Carne",
+   "dst": "Pesce",
+   "n": 77.0,
+   "measured": 71.0,
+   "inferred": 6.0
+  },
+  {
+   "src": "Frutta",
+   "dst": "Scaffali senza categoria",
+   "n": 73.0,
+   "measured": 70.0,
+   "inferred": 3.0
+  },
+  {
+   "src": "Scaffali senza categoria",
+   "dst": "Frutta",
+   "n": 65.0,
+   "measured": 54.0,
+   "inferred": 11.0
+  },
+  {
+   "src": "Coda cassa",
+   "dst": "Scaffali senza categoria",
+   "n": 65.0,
+   "measured": 59.0,
+   "inferred": 6.0
+  },
+  {
+   "src": "Scaffali senza categoria",
+   "dst": "Ingresso",
+   "n": 54.0,
+   "measured": 52.0,
+   "inferred": 2.0
+  },
+  {
+   "src": "Carne",
+   "dst": "Latticini",
+   "n": 54.0,
+   "measured": 47.0,
+   "inferred": 7.0
+  },
+  {
+   "src": "Acqua",
+   "dst": "Carne",
+   "n": 54.0,
+   "measured": 53.0,
+   "inferred": 1.0
+  },
+  {
+   "src": "Surgelati",
+   "dst": "Acqua",
+   "n": 37.0,
+   "measured": 35.0,
+   "inferred": 2.0
+  },
+  {
+   "src": "Scaffali senza categoria",
+   "dst": "Surgelati",
+   "n": 36.0,
+   "measured": 32.0,
+   "inferred": 4.0
+  },
+  {
+   "src": "Ingresso",
+   "dst": "Verdura",
+   "n": 35.0,
+   "measured": 23.0,
+   "inferred": 12.0
+  },
+  {
+   "src": "Frutta",
+   "dst": "Latticini",
+   "n": 30.0,
+   "measured": 7.0,
+   "inferred": 23.0
+  },
+  {
+   "src": "Scaffali senza categoria",
+   "dst": "Verdura",
+   "n": 27.0,
+   "measured": 24.0,
+   "inferred": 3.0
+  },
+  {
+   "src": "Latticini",
+   "dst": "Pesce",
+   "n": 22.0,
+   "measured": 13.0,
+   "inferred": 9.0
+  },
+  {
+   "src": "Latticini",
+   "dst": "Frutta",
+   "n": 22.0,
+   "measured": 9.0,
+   "inferred": 13.0
+  },
+  {
+   "src": "Carne",
+   "dst": "Bakery & Breakfast",
+   "n": 18.0,
+   "measured": 13.0,
+   "inferred": 5.0
+  },
+  {
+   "src": "Bakery & Breakfast",
+   "dst": "Carne",
+   "n": 17.0,
+   "measured": 16.0,
+   "inferred": 1.0
+  },
+  {
+   "src": "Frutta",
+   "dst": "Ingresso",
+   "n": 16.0,
+   "measured": 11.0,
+   "inferred": 5.0
+  },
+  {
+   "src": "Carne",
+   "dst": "Scaffali senza categoria",
+   "n": 14.0,
+   "measured": 9.0,
+   "inferred": 5.0
+  },
+  {
+   "src": "Frutta",
+   "dst": "Surgelati",
+   "n": 13.0,
+   "measured": 9.0,
+   "inferred": 4.0
+  },
+  {
+   "src": "Ingresso",
+   "dst": "Scaffali senza categoria",
+   "n": 10.0,
+   "measured": 7.0,
+   "inferred": 3.0
+  },
+  {
+   "src": "Pesce",
+   "dst": "Latticini",
+   "n": 9.0,
+   "measured": 9.0,
+   "inferred": null
+  },
+  {
+   "src": "Acqua",
+   "dst": "Surgelati",
+   "n": 7.0,
+   "measured": 6.0,
+   "inferred": 1.0
+  },
+  {
+   "src": "Scaffali senza categoria",
+   "dst": "Carne",
+   "n": 5.0,
+   "measured": 2.0,
+   "inferred": 3.0
+  },
+  {
+   "src": "Coda cassa",
+   "dst": "Surgelati",
+   "n": 3.0,
+   "measured": 3.0,
+   "inferred": null
+  },
+  {
+   "src": "Acqua",
+   "dst": "Scaffali senza categoria",
+   "n": 1.0,
+   "measured": 1.0,
+   "inferred": null
+  }
+ ],
+ "transition_share_measured": 0.94911051212938,
+ "estimated_order": [
+  [
+   "Ingresso",
+   0.0
+  ],
+  [
+   "Frutta",
+   0.177
+  ],
+  [
+   "Verdura",
+   0.184
+  ],
+  [
+   "Latticini",
+   0.338
+  ],
+  [
+   "Pesce",
+   0.342
+  ],
+  [
+   "Surgelati",
+   0.346
+  ],
+  [
+   "Bakery & Breakfast",
+   0.359
+  ],
+  [
+   "Scaffali senza categoria",
+   0.36
+  ],
+  [
+   "Carne",
+   0.362
+  ],
+  [
+   "Acqua",
+   0.377
+  ],
+  [
+   "Coda cassa",
+   0.95
+  ],
+  [
+   "Cassa (servizio)",
+   1.0
+  ]
+ ],
+ "pairwise_net_flow": {
+  "Acqua -> Carne": {
+   "a_to_b": 54,
+   "b_to_a": 99,
+   "net_share_forward": 0.35
+  },
+  "Bakery & Breakfast -> Scaffali senza categoria": {
+   "a_to_b": 9454,
+   "b_to_a": 9164,
+   "net_share_forward": 0.51
+  },
+  "Carne -> Latticini": {
+   "a_to_b": 54,
+   "b_to_a": 152,
+   "net_share_forward": 0.26
+  },
+  "Carne -> Pesce": {
+   "a_to_b": 77,
+   "b_to_a": 195,
+   "net_share_forward": 0.28
+  },
+  "Cassa (servizio) -> Coda cassa": {
+   "a_to_b": 1421,
+   "b_to_a": 1948,
+   "net_share_forward": 0.42
+  },
+  "Coda cassa -> Scaffali senza categoria": {
+   "a_to_b": 65,
+   "b_to_a": 84,
+   "net_share_forward": 0.44
+  },
+  "Frutta -> Ingresso": {
+   "a_to_b": 16,
+   "b_to_a": 449,
+   "net_share_forward": 0.03
+  },
+  "Frutta -> Latticini": {
+   "a_to_b": 30,
+   "b_to_a": 22,
+   "net_share_forward": 0.58
+  },
+  "Frutta -> Scaffali senza categoria": {
+   "a_to_b": 73,
+   "b_to_a": 65,
+   "net_share_forward": 0.53
+  },
+  "Frutta -> Verdura": {
+   "a_to_b": 1688,
+   "b_to_a": 1732,
+   "net_share_forward": 0.49
+  },
+  "Ingresso -> Scaffali senza categoria": {
+   "a_to_b": 10,
+   "b_to_a": 54,
+   "net_share_forward": 0.16
+  },
+  "Latticini -> Scaffali senza categoria": {
+   "a_to_b": 200,
+   "b_to_a": 197,
+   "net_share_forward": 0.5
+  },
+  "Scaffali senza categoria -> Surgelati": {
+   "a_to_b": 36,
+   "b_to_a": 81,
+   "net_share_forward": 0.31
+  },
+  "Scaffali senza categoria -> Verdura": {
+   "a_to_b": 27,
+   "b_to_a": 195,
+   "net_share_forward": 0.12
+  }
+ },
+ "first_department_after_entrance": [
+  {
+   "dst": "Frutta",
+   "n": 449.0
+  },
+  {
+   "dst": "Verdura",
+   "n": 35.0
+  },
+  {
+   "dst": "Scaffali senza categoria",
+   "n": 10.0
+  }
+ ],
+ "last_department_before_queue(excluding cashier-internal)": [
+  {
+   "src": "Scaffali senza categoria",
+   "n": 84.0
+  },
+  {
+   "src": "Surgelati",
+   "n": 1.0
+  }
+ ],
+ "cashier_internal_transitions_service_to_queue": 1421,
+ "departments_with_zero_observations": [
+  "Salumi",
+  "Gastronomia",
+  "Pane"
+ ],
+ "queue_wait_method": "150_queue_wait.py: waiting = visits with mean speed < 0.5 m/s, excluding fixed objects (>= 600 s) and their fragments"
+}

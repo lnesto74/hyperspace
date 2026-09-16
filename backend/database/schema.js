@@ -1,6 +1,7 @@
 import Database from 'better-sqlite3';
 import { mkdirSync, existsSync, statSync } from 'fs';
 import { dirname } from 'path';
+import { ensureDailyKpiTables } from '../services/dailyKpi/schema.js';
 
 const DB_PATH = process.env.DB_PATH || './database/hyperspace.db';
 
@@ -1291,6 +1292,8 @@ export function initDatabase() {
   } catch (e) {
     // Index may already exist
   }
+
+  ensureDailyKpiTables(db);
 
   console.log('📦 Database initialized');
   return db;

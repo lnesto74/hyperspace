@@ -1,0 +1,147 @@
+{
+  "venue_id": "55fdd53b-3298-4355-97c0-b4e789b11d06",
+  "venue_name": "TREVIGLIO Schematico",
+  "device": "lidar-edge-001",
+  "timezone": "Europe/Rome",
+  "store_hours_local": [
+    "08:00",
+    "20:00"
+  ],
+  "perception_transform": {
+    "input_frame": "ros_rep103",
+    "origin_m": {
+      "x": 21.5,
+      "z": 24
+    },
+    "rotation_deg": -39,
+    "axis_map": {
+      "px": "x",
+      "py": "z"
+    },
+    "axis_sign": {
+      "x": 1,
+      "z": 1
+    },
+    "scale": 1
+  },
+  "parquet_axis_note": "parquet x = perception X, parquet z = perception Y (floor), parquet y = height. ros_rep103 sign flip (floor_z = -perception Y) is NOT applied in parquet.",
+  "dwell_threshold_s": 20,
+  "engagement_threshold_s": 60,
+  "expected_sample_interval_ms": 100,
+  "tracklet_split_gap_ms": 2000,
+  "phantom_filter": {
+    "min_path_m": 1.0,
+    "min_extent_m": 0.5,
+    "min_duration_s": 1.0,
+    "static_duration_s": 600,
+    "static_extent_m": 3.0,
+    "suspect_duration_s": 300,
+    "suspect_extent_m": 1.5,
+    "max_median_speed_m_s": 3.5,
+    "_note": "PHANTOM_STATIC = alive >= static_duration_s within a static_extent_m box (fixtures, jittering ghosts, staff at a station). STATIC_SUSPECT = alive >= suspect_duration_s within suspect_extent_m. PHANTOM_MICRO = never moved (path<min_path_m and extent<min_extent_m). FLICKER_SHORT = shorter than min_duration_s. Only VALID ids enter journey analytics. Luca 2026-09-16: STATIC_SUSPECT (5 min in 1.5 m) are customers waiting at served counters -> keep them in journeys.",
+    "suspect_is_customer": true
+  },
+  "invalid_days": [
+    "2026-08-31",
+    "2026-09-01",
+    "2026-09-02",
+    "2026-09-10",
+    "2026-09-11"
+  ],
+  "partial_days": [
+    "2026-08-05",
+    "2026-08-22"
+  ],
+  "vendor": {
+    "publish_confirm_delay_s": 3.0,
+    "_note": "Luca 2026-09-16: vendor waits ~3 s before publishing a new id -> back-date each birth by 3 s when reasoning about entry time. No 30 s reset exists: 30 s deaths are tracker losses."
+  },
+  "exit_region": {
+    "_note": "No EXIT ROI in the twin. Luca 2026-09-16: customers leave to the right (east) of the checkouts, then down (south-east lobby).",
+    "polygon_venue_m": [
+      [
+        67,
+        18
+      ],
+      [
+        76,
+        18
+      ],
+      [
+        76,
+        66
+      ],
+      [
+        50,
+        66
+      ],
+      [
+        50,
+        62
+      ],
+      [
+        67,
+        62
+      ]
+    ]
+  },
+  "_data_policy": "All journey analytics run on the raw 10 Hz LiDAR feed (parquet/JSONL). track_positions (10 s samples) and zone_visits are benchmarks only, never inputs.",
+  "topology": {
+    "min_traffic_s": 3.0,
+    "fixture_buffer_m": 0.15,
+    "snap_max_m": 1.5
+  },
+  "association": {
+    "min_time_gap_s": -3.0,
+    "max_time_gap_s": 12.0,
+    "max_path_distance_m": 8.0,
+    "max_required_speed_mps": 2.0,
+    "tau_time_s": 6.0,
+    "lambda_path_m": 2.0,
+    "speed_soft_mps": 0.8,
+    "moving_speed_mps": 0.3,
+    "weights": {
+      "time": 0.2,
+      "path": 0.3,
+      "speed": 0.1,
+      "velocity": 0.0,
+      "heading": 0.0,
+      "zone": 0.05,
+      "occlusion": 0.0,
+      "existing": 0.05,
+      "topology": 0.0,
+      "stature": 0.3
+    },
+    "min_score": 0.55,
+    "min_margin": 0.1,
+    "window_s": 30,
+    "_note": "Operating point chosen on the blind artificial-fragmentation validation (95_validate/96_score_lab, 2026-09-14): precision ~0.90 on judgeable links, recall ~0.50 (0.55 for gaps <= 12 s). Heading, vendor velocity, occlusion prior and topology ratio carried no measurable information once walkable distance and stature were in; their weights are 0 but the components are still computed and stored for the debugger. min_time_gap < 0 allows the ~3 s vendor confirmation overlap.",
+    "path_mode": "plain",
+    "sigma_h_m": 0.12,
+    "sigma_bh_m": 0.3,
+    "max_walk_mps": 1.5,
+    "high_confidence_min": 0.75
+  },
+  "known_uncovered_rois": [
+    "Pane",
+    "Salumi",
+    "Gastronomia"
+  ],
+  "checkout_fixed_object": {
+    "fixed_s": 600,
+    "near_m": 1.2,
+    "near_s": 60,
+    "speed_walk_mps": 0.5,
+    "_note": "Copied from 150_queue_wait.py. Daily KPIs exclude any id with a visit >= fixed_s in one checkout ROI, plus any visit >= near_s whose mean position is within near_m of such a spot. Do not change without recording here."
+  },
+  "daily_kpi_checks": {
+    "little_max_rel_err": 0.01,
+    "visit_min_lo": 10,
+    "visit_min_hi": 60,
+    "phantom_share_lo": 0.10,
+    "phantom_share_hi": 0.35,
+    "fixed_queue_share_max": 0.05,
+    "max_gap_s": 60,
+    "_note": "Recorded 2026-09-16 from TREVIGLIO_STRATEGIA_KPI_AFFIDABILI.md §2. Thresholds, not new values."
+  }
+}
