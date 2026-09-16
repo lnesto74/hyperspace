@@ -1,4 +1,4 @@
-import { Store, ShoppingBag, Monitor, TrendingUp, Landmark, Microscope, LayoutDashboard } from 'lucide-react';
+import { Store, ShoppingBag, Monitor, TrendingUp, Landmark, Microscope, LayoutDashboard, Users } from 'lucide-react';
 import { useAuth } from '../../../context/AuthContext';
 import { visiblePersonas } from '../personas';
 import { CUSTOM_DASHBOARD_PERSONA } from '../dashboardBuilder/types';
@@ -11,6 +11,7 @@ function getPersonaIcon(iconName: string) {
     case 'TrendingUp': return TrendingUp;
     case 'Landmark': return Landmark;
     case 'Microscope': return Microscope;
+    case 'Users': return Users;
     default: return Store;
   }
 }

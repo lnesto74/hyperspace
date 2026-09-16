@@ -96,6 +96,7 @@ def assemble(day: str, venue_id: str, lab_out: Path, cfg: dict, extras: dict | N
         "service": "150: WAITING person-minutes in CHECKOUT_SERVICE ÷ entrances",
         "queue_decomp": "150: FIXED / TRANSIT / WAITING person-minutes per checkout lane",
         "first_dept": "110: transitions out of Ingresso (MEASURED within-id + INFERRED links when present)",
+        "checkout_passages": "45: distinct ids with a raw visit in CHECKOUT_SERVICE during store hours",
         "quality": "41_ids_phantoms.py class counts on the raw 10 Hz archive during store hours",
         "zero": "110: departments in roi_dept with zero raw visits",
     }
@@ -190,6 +191,26 @@ def assemble(day: str, venue_id: str, lab_out: Path, cfg: dict, extras: dict | N
             top_share = share
     kpis.append(_kpi("first_department_after_entrance", "giorno", _round(top_share, 3),
                      "share", "MEASURED", methods["first_dept"], payload=first_payload))
+
+    d45 = lab_out / "45_raw_visits.json"
+    checkout_ids = None
+    if d45.exists():
+        raw45 = _jload(d45)
+        svc = next((g for g in (raw45.get("raw_visits_by_group") or [])
+                    if g.get("roi_group") == "CHECKOUT_SERVICE"), None)
+        if svc and svc.get("raw_ids") is not None:
+            checkout_ids = int(svc["raw_ids"])
+    if checkout_ids is None:
+        reach = (d110.get("reach_upper_bound_ids_per_entrance") or {}).get("Cassa (servizio)")
+        if reach is not None and ent.get("giorno"):
+            checkout_ids = int(round(float(reach) * float(ent["giorno"])))
+            kpis.append(_kpi("checkout_passages", "giorno", checkout_ids, "count", "ESTIMATED",
+                             "110: reach_upper_bound Cassa (servizio) × ingressi"))
+        else:
+            kpis.append(_not_computed("checkout_passages", "not_computed: 45_raw_visits.json missing"))
+    else:
+        kpis.append(_kpi("checkout_passages", "giorno", checkout_ids, "count", "MEASURED",
+                         methods["checkout_passages"]))
 
     kpis.append(_not_computed("choice_index_by_dept", "not_computed: stationary-time share needs a dedicated 10 Hz pass"))
     if d120.exists():

@@ -30,6 +30,8 @@ import ExecutiveSummaryViewport, {
   type PeriodDeltas,
 } from './components/ExecutiveSummaryViewport';
 import EsselungaExecutiveViewport from './esselunga/EsselungaExecutiveViewport';
+import ClienteMedioDashboard, { ClienteMedioEmpty } from './esselunga/clienteMedio/ClienteMedioDashboard';
+import { yesterdayRome } from './esselunga/clienteMedio/adapter';
 import ZoneAuditViewport from './components/ZoneAuditViewport';
 import type { EsselungaJourneyPayload, ExecutiveVariant, MetricThresholdSettings } from './esselunga/types';
 import type { DailyKpiPayload, DailyKpiRangeDay } from './dailyKpi/types';
@@ -94,6 +96,7 @@ const ZONE_MAP_PERSONAS = new Set(['merchandising']);
 const PEBLE_MAP_PERSONAS = new Set(['retail-media']);
 const EXECUTIVE_PERSONAS = new Set(['executive']);
 const ESSELUNGA_PERSONA = 'esselunga-executive';
+const CLIENTE_MEDIO_PERSONA = 'esselunga-cliente-medio';
 const AUDIT_PERSONA = 'measurement-audit';
 
 interface BusinessReportingPageProps {
@@ -132,6 +135,7 @@ export default function BusinessReportingPage({ onClose, publicDashboard = false
   const [esselungaVariant, setEsselungaVariant] = useState<ExecutiveVariant>('live');
   const [dailyKpi, setDailyKpi] = useState<DailyKpiPayload | null>(null);
   const [dailyKpiRange, setDailyKpiRange] = useState<DailyKpiRangeDay[]>([]);
+  const [clienteMedioDay, setClienteMedioDay] = useState(yesterdayRome);
   const [metricPreviewLoading, setMetricPreviewLoading] = useState(false);
   const previewAbortRef = useRef<AbortController | null>(null);
   const previewSeqRef = useRef(0);
@@ -213,10 +217,13 @@ export default function BusinessReportingPage({ onClose, publicDashboard = false
   );
 
   const showEsselungaExecutive = selectedPersonaId === ESSELUNGA_PERSONA && !!selectedVenueId;
+  const showClienteMedio = selectedPersonaId === CLIENTE_MEDIO_PERSONA && !!selectedVenueId;
   const showCustomDashboard = isCustomDashboard && !!selectedVenueId;
 
   useEffect(() => {
-    const needDaily = showEsselungaExecutive || (showCustomDashboard && customSourcesKey.includes('daily-kpi'));
+    const needDaily = showEsselungaExecutive
+      || showClienteMedio
+      || (showCustomDashboard && customSourcesKey.includes('daily-kpi'));
     if (!needDaily || !selectedVenueId) {
       setDailyKpi(null);
       setDailyKpiRange([]);
@@ -236,6 +243,16 @@ export default function BusinessReportingPage({ onClose, publicDashboard = false
       return r.json() as Promise<DailyKpiPayload>;
     };
     void (async () => {
+      if (showClienteMedio) {
+        setLoading(true);
+        const payload = await load(clienteMedioDay);
+        if (cancelled) return;
+        setDailyKpi(payload);
+        setDailyKpiRange([]);
+        setLoading(false);
+        setError(null);
+        return;
+      }
       const today = romeDay(endTs);
       let payload = await load(today);
       if (!payload) payload = await load(shiftDay(today, -1));
@@ -256,7 +273,7 @@ export default function BusinessReportingPage({ onClose, publicDashboard = false
       }
     })();
     return () => { cancelled = true; };
-  }, [showEsselungaExecutive, showCustomDashboard, customSourcesKey, selectedVenueId, selectedTimeRange]);
+  }, [showEsselungaExecutive, showClienteMedio, showCustomDashboard, customSourcesKey, selectedVenueId, selectedTimeRange, clienteMedioDay]);
 
   // Gated in three places on purpose: the rail hides it, this refuses to render
   // it, and the API routes reject the request. A hidden button is not access
@@ -310,7 +327,7 @@ export default function BusinessReportingPage({ onClose, publicDashboard = false
     // The audit tab is not a KPI persona — it reads the raw-feed forensics and
     // per-zone endpoints itself, and the summary route rejects an id it has no
     // KPI set for.
-    if (selectedPersonaId === AUDIT_PERSONA) {
+    if (selectedPersonaId === AUDIT_PERSONA || selectedPersonaId === CLIENTE_MEDIO_PERSONA) {
       setLoading(false);
       setError(null);
       return;
@@ -666,21 +683,33 @@ export default function BusinessReportingPage({ onClose, publicDashboard = false
             </>
           )}
 
-          <div className="flex bg-gray-700 rounded-md p-0.5">
-            {TIME_RANGES.map(tr => (
-              <button
-                key={tr.id}
-                onClick={() => handleTimeRangeChange(tr.id)}
-                className={`px-2 py-0.5 text-xs rounded transition-colors ${
-                  selectedTimeRange === tr.id
-                    ? 'bg-blue-600 text-white'
-                    : 'text-gray-400 hover:text-white'
-                }`}
-              >
-                {tr.label}
-              </button>
-            ))}
-          </div>
+          {showClienteMedio ? (
+            <label className="flex items-center gap-1.5 text-xs text-gray-300">
+              <span className="hidden sm:inline text-gray-400">Giorno</span>
+              <input
+                type="date"
+                value={clienteMedioDay}
+                onChange={(e) => setClienteMedioDay(e.target.value)}
+                className="bg-gray-700 border border-gray-600 rounded-md px-2 py-1 text-xs text-white"
+              />
+            </label>
+          ) : (
+            <div className="flex bg-gray-700 rounded-md p-0.5">
+              {TIME_RANGES.map(tr => (
+                <button
+                  key={tr.id}
+                  onClick={() => handleTimeRangeChange(tr.id)}
+                  className={`px-2 py-0.5 text-xs rounded transition-colors ${
+                    selectedTimeRange === tr.id
+                      ? 'bg-blue-600 text-white'
+                      : 'text-gray-400 hover:text-white'
+                  }`}
+                >
+                  {tr.label}
+                </button>
+              ))}
+            </div>
+          )}
 
           {selectedPersonaId === 'merchandising' && categories.length > 0 && (
             <select
@@ -763,6 +792,15 @@ export default function BusinessReportingPage({ onClose, publicDashboard = false
                   startTs={auditRange.startTs}
                   endTs={auditRange.endTs}
                 />
+              ) : showClienteMedio ? (
+                dailyKpi && dailyKpi.day === clienteMedioDay ? (
+                  <ClienteMedioDashboard
+                    payload={dailyKpi}
+                    venueName={selectedVenueName}
+                  />
+                ) : (
+                  <ClienteMedioEmpty day={clienteMedioDay} />
+                )
               ) : showEsselungaExecutive ? (
                 esselungaJourney ? (
                 <EsselungaExecutiveViewport

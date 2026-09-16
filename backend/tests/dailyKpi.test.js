@@ -34,6 +34,7 @@ const CONTRACT_KPI_IDS = [
   'minutes_per_customer_by_dept',
   'queue_wait_min_per_entrance', 'service_min_per_entrance',
   'queue_decomposition_per_lane', 'first_department_after_entrance',
+  'checkout_passages',
   'choice_index_by_dept', 'behaviour_share', 'behaviour_mix_by_slot',
   'heat_traffic', 'heat_still', 'zero_observation_rois', 'quality',
 ];

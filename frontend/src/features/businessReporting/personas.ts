@@ -527,6 +527,15 @@ export const PERSONAS: PersonaConfig[] = [
     kpis: esselungaExecutiveKpis,
   },
   {
+    id: 'esselunga-cliente-medio',
+    name: 'Cliente medio',
+    description: 'Il cliente medio di Treviglio — KPI giornalieri dal LiDAR raw.',
+    icon: 'Users',
+    color: '#2a78d6',
+    maxKpis: MAX_KPIS_PER_PERSONA,
+    kpis: [],
+  },
+  {
     id: 'measurement-audit',
     name: 'Measurement Audit',
     description: 'Raw supplier feed vs reconciled tracking, per zone — evidence, not KPIs.',
