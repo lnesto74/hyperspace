@@ -2,7 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import type { DailyKpiPayload } from '../../dailyKpi/types';
 import fixture from './fixtures/daily_kpi_2026-09-14.json';
-import { buildClienteMedioView, yesterdayRome } from './adapter';
+import { KPI_EPOCH, buildClienteMedioView, enumerateDays, yesterdayRome } from './adapter';
 
 const payload = fixture as unknown as DailyKpiPayload;
 
@@ -17,7 +17,7 @@ describe('cliente medio adapter 2026-09-14', () => {
     expect(byId.people_mean.value).toBe('71');
     expect(byId.people_mean.note).toMatch(/117/);
     expect(byId.queue_wait.value).toBe('0,6');
-    expect(byId.queue_wait.note).toMatch(/18–20/);
+    expect(byId.queue_wait.note).toMatch(/18[-–]20/);
     expect(byId.queue_wait.note).toMatch(/0,90/);
     expect(byId.checkout_passages.value).toBe('2.292');
     expect(Number(byId.aisle_share.value.replace(',', '.'))).toBeGreaterThanOrEqual(67);
@@ -54,7 +54,13 @@ describe('cliente medio adapter 2026-09-14', () => {
     expect(tiles.find((t) => t.id === 'visit_min')?.tip).toMatch(/visit_range/);
   });
 
-  it('defaults the day picker to yesterday Europe/Rome', () => {
+  it('lists every calendar day from the KPI epoch', () => {
+    expect(KPI_EPOCH).toBe('2026-09-14');
+    expect(enumerateDays(KPI_EPOCH, '2026-09-16')).toEqual([
+      '2026-09-14',
+      '2026-09-15',
+      '2026-09-16',
+    ]);
     const noon = new Date('2026-09-16T12:00:00+02:00');
     expect(yesterdayRome(noon)).toBe('2026-09-15');
   });

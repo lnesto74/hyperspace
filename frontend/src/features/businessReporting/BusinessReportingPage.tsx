@@ -31,7 +31,11 @@ import ExecutiveSummaryViewport, {
 } from './components/ExecutiveSummaryViewport';
 import EsselungaExecutiveViewport from './esselunga/EsselungaExecutiveViewport';
 import ClienteMedioDashboard, { ClienteMedioEmpty } from './esselunga/clienteMedio/ClienteMedioDashboard';
-import { yesterdayRome } from './esselunga/clienteMedio/adapter';
+import {
+  KPI_EPOCH,
+  enumerateDays,
+  todayRome,
+} from './esselunga/clienteMedio/adapter';
 import ZoneAuditViewport from './components/ZoneAuditViewport';
 import type { EsselungaJourneyPayload, ExecutiveVariant, MetricThresholdSettings } from './esselunga/types';
 import type { DailyKpiPayload, DailyKpiRangeDay } from './dailyKpi/types';
@@ -99,6 +103,57 @@ const ESSELUNGA_PERSONA = 'esselunga-executive';
 const CLIENTE_MEDIO_PERSONA = 'esselunga-cliente-medio';
 const AUDIT_PERSONA = 'measurement-audit';
 
+function KpiDayPicker({
+  value,
+  onChange,
+  ready,
+}: {
+  value: string;
+  onChange: (day: string) => void;
+  ready: string[];
+}) {
+  const today = todayRome();
+  const last = today < KPI_EPOCH ? KPI_EPOCH : today;
+  const days = enumerateDays(KPI_EPOCH, last);
+  const readySet = new Set(ready);
+  return (
+    <div className="flex items-center gap-1.5 min-w-0">
+      <span className="hidden sm:inline text-gray-400 text-xs shrink-0">Giorno</span>
+      <div className="flex bg-gray-700 rounded-md p-0.5 max-w-[46vw] overflow-x-auto">
+        {days.map((d) => {
+          const has = readySet.has(d);
+          const [, m, day] = d.split('-');
+          return (
+            <button
+              key={d}
+              type="button"
+              onClick={() => onChange(d)}
+              title={has ? d : `${d} — non ancora calcolato`}
+              className={`px-2 py-0.5 text-xs rounded whitespace-nowrap transition-colors ${
+                value === d
+                  ? 'bg-blue-600 text-white'
+                  : has
+                    ? 'text-gray-200 hover:text-white'
+                    : 'text-gray-500 hover:text-gray-300'
+              }`}
+            >
+              {`${Number(day)}/${Number(m)}`}
+            </button>
+          );
+        })}
+      </div>
+      <input
+        type="date"
+        min={KPI_EPOCH}
+        max={last}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="bg-gray-700 border border-gray-600 rounded-md px-2 py-1 text-xs text-white"
+      />
+    </div>
+  );
+}
+
 interface BusinessReportingPageProps {
   onClose: () => void;
   /** Customer-facing share link — Esselunga Executive only, no admin chrome */
@@ -135,7 +190,11 @@ export default function BusinessReportingPage({ onClose, publicDashboard = false
   const [esselungaVariant, setEsselungaVariant] = useState<ExecutiveVariant>('live');
   const [dailyKpi, setDailyKpi] = useState<DailyKpiPayload | null>(null);
   const [dailyKpiRange, setDailyKpiRange] = useState<DailyKpiRangeDay[]>([]);
-  const [clienteMedioDay, setClienteMedioDay] = useState(yesterdayRome);
+  const [kpiDay, setKpiDay] = useState(KPI_EPOCH);
+  const [kpiDaysReady, setKpiDaysReady] = useState<string[]>([]);
+  const [dailyKpiResolved, setDailyKpiResolved] = useState(false);
+  const kpiDayTouchedRef = useRef(false);
+  const autoLatestRef = useRef(false);
   const [metricPreviewLoading, setMetricPreviewLoading] = useState(false);
   const previewAbortRef = useRef<AbortController | null>(null);
   const previewSeqRef = useRef(0);
@@ -227,9 +286,11 @@ export default function BusinessReportingPage({ onClose, publicDashboard = false
     if (!needDaily || !selectedVenueId) {
       setDailyKpi(null);
       setDailyKpiRange([]);
+      setDailyKpiResolved(true);
       return;
     }
     let cancelled = false;
+    setDailyKpiResolved(false);
     const { endTs } = (TIME_RANGES.find((t) => t.id === selectedTimeRange) || TIME_RANGES[1]).getRange();
     const romeDay = (ts: number) => new Date(ts).toLocaleDateString('en-CA', { timeZone: 'Europe/Rome' });
     const shiftDay = (day: string, n: number) => {
@@ -243,21 +304,63 @@ export default function BusinessReportingPage({ onClose, publicDashboard = false
       return r.json() as Promise<DailyKpiPayload>;
     };
     void (async () => {
-      if (showClienteMedio) {
-        setLoading(true);
-        const payload = await load(clienteMedioDay);
-        if (cancelled) return;
-        setDailyKpi(payload);
+      const epoch = KPI_EPOCH;
+      const today = romeDay(endTs);
+      const spanFrom = epoch < today ? epoch : today;
+      const availRes = await fetch(
+        `${API_BASE}/api/reporting/daily-kpi/range?venueId=${encodeURIComponent(selectedVenueId)}&from=${spanFrom}&to=${today}`,
+      );
+      const available = availRes.ok
+        ? ((await availRes.json()).days as DailyKpiRangeDay[] || []).map((d) => d.day).filter(Boolean)
+        : [];
+      if (cancelled) return;
+      setKpiDaysReady(available);
+      const latestReady = available.length ? available[available.length - 1] : null;
+
+      if (showEsselungaExecutive && esselungaVariant === 'hq') {
+        setDailyKpi(null);
         setDailyKpiRange([]);
-        setLoading(false);
-        setError(null);
+        setDailyKpiResolved(true);
         return;
       }
-      const today = romeDay(endTs);
+
+      if (showClienteMedio || showEsselungaExecutive) {
+        if (!autoLatestRef.current && latestReady && !kpiDayTouchedRef.current) {
+          autoLatestRef.current = true;
+          if (latestReady !== kpiDay) setKpiDay(latestReady);
+        }
+        const day = kpiDayTouchedRef.current ? kpiDay : (latestReady || kpiDay);
+        if (showClienteMedio) setLoading(true);
+        const payload = await load(day);
+        if (cancelled) return;
+        setDailyKpi(payload);
+        if (payload) {
+          const from = shiftDay(payload.day, -13);
+          const rng = await fetch(
+            `${API_BASE}/api/reporting/daily-kpi/range?venueId=${encodeURIComponent(selectedVenueId)}&from=${from < epoch ? epoch : from}&to=${payload.day}`,
+          );
+          if (cancelled) return;
+          if (rng.ok) {
+            const body = await rng.json();
+            setDailyKpiRange(body.days || []);
+          }
+        } else {
+          setDailyKpiRange([]);
+        }
+        setDailyKpiResolved(true);
+        if (showClienteMedio) {
+          setLoading(false);
+          setError(null);
+        }
+        return;
+      }
+
       let payload = await load(today);
       if (!payload) payload = await load(shiftDay(today, -1));
+      if (!payload && latestReady) payload = await load(latestReady);
       if (cancelled) return;
       setDailyKpi(payload);
+      setDailyKpiResolved(true);
       if (!payload) {
         setDailyKpiRange([]);
         return;
@@ -273,7 +376,7 @@ export default function BusinessReportingPage({ onClose, publicDashboard = false
       }
     })();
     return () => { cancelled = true; };
-  }, [showEsselungaExecutive, showClienteMedio, showCustomDashboard, customSourcesKey, selectedVenueId, selectedTimeRange, clienteMedioDay]);
+  }, [showEsselungaExecutive, showClienteMedio, showCustomDashboard, customSourcesKey, selectedVenueId, selectedTimeRange, kpiDay, esselungaVariant]);
 
   // Gated in three places on purpose: the rail hides it, this refuses to render
   // it, and the API routes reject the request. A hidden button is not access
@@ -683,16 +786,15 @@ export default function BusinessReportingPage({ onClose, publicDashboard = false
             </>
           )}
 
-          {showClienteMedio ? (
-            <label className="flex items-center gap-1.5 text-xs text-gray-300">
-              <span className="hidden sm:inline text-gray-400">Giorno</span>
-              <input
-                type="date"
-                value={clienteMedioDay}
-                onChange={(e) => setClienteMedioDay(e.target.value)}
-                className="bg-gray-700 border border-gray-600 rounded-md px-2 py-1 text-xs text-white"
-              />
-            </label>
+          {showClienteMedio || (showEsselungaExecutive && esselungaVariant === 'live') ? (
+            <KpiDayPicker
+              value={kpiDay}
+              ready={kpiDaysReady}
+              onChange={(day) => {
+                kpiDayTouchedRef.current = true;
+                setKpiDay(day);
+              }}
+            />
           ) : (
             <div className="flex bg-gray-700 rounded-md p-0.5">
               {TIME_RANGES.map(tr => (
@@ -793,16 +895,20 @@ export default function BusinessReportingPage({ onClose, publicDashboard = false
                   endTs={auditRange.endTs}
                 />
               ) : showClienteMedio ? (
-                dailyKpi && dailyKpi.day === clienteMedioDay ? (
+                dailyKpi && dailyKpi.day === kpiDay ? (
                   <ClienteMedioDashboard
                     payload={dailyKpi}
                     venueName={selectedVenueName}
                   />
                 ) : (
-                  <ClienteMedioEmpty day={clienteMedioDay} />
+                  <ClienteMedioEmpty day={kpiDay} />
                 )
               ) : showEsselungaExecutive ? (
-                esselungaJourney ? (
+                !dailyKpiResolved && esselungaVariant === 'live' ? (
+                  <div className="flex items-center justify-center py-8">
+                    <RefreshCw className="w-6 h-6 text-blue-400 animate-spin" />
+                  </div>
+                ) : esselungaJourney ? (
                 <EsselungaExecutiveViewport
                   journey={esselungaJourney}
                   dailyKpi={dailyKpi}

@@ -134,11 +134,35 @@ export function formatDayLongIt(day: string): string {
   return `${weekday.charAt(0).toUpperCase()}${weekday.slice(1)} ${rest}`;
 }
 
+/** First day with a validated daily_kpi payload (Journey Lab + canvas). */
+export const KPI_EPOCH = '2026-09-14';
+
+export function todayRome(now = new Date()): string {
+  return now.toLocaleDateString('en-CA', { timeZone: 'Europe/Rome' });
+}
+
 export function yesterdayRome(now = new Date()): string {
-  const today = now.toLocaleDateString('en-CA', { timeZone: 'Europe/Rome' });
+  const today = todayRome(now);
   const d = new Date(`${today}T12:00:00Z`);
   d.setUTCDate(d.getUTCDate() - 1);
   return d.toISOString().slice(0, 10);
+}
+
+export function shiftDay(day: string, n: number): string {
+  const d = new Date(`${day}T12:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + n);
+  return d.toISOString().slice(0, 10);
+}
+
+export function enumerateDays(from: string, to: string): string[] {
+  const out: string[] = [];
+  if (from > to) return out;
+  let cur = from;
+  while (cur <= to) {
+    out.push(cur);
+    cur = shiftDay(cur, 1);
+  }
+  return out;
 }
 
 export function nextDailyKpiRun(now = new Date()): Date {

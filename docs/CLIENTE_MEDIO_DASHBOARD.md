@@ -2,7 +2,7 @@
 
 Dashboard giornaliera in **Business Reporting → Cliente medio** (`personaId=esselunga-cliente-medio`). Una sola chiamata: `GET /api/reporting/daily-kpi?venueId=&day=`. Nessun ricalcolo in pagina, nessuna lettura di `zone_visits`, `queue_sessions`, `ingress_perimeter_crossings` o `/api/reporting/summary`.
 
-Il selettore giorno parte da ieri (Europe/Rome). Se il giorno manca: *Non ancora calcolato per questo giorno*, con l’orario del job (04:30 UTC). Un KPI con `status=unreliable` si legge come **—**; il motivo sta nel tooltip.
+Il selettore elenca ogni giorno dal 14 settembre 2026 (primo giorno calcolato) e apre sull’ultimo giorno presente in `daily_kpi`. Lo stesso selettore è su **Esselunga Executive → Store Director**. Se il giorno manca: *Non ancora calcolato per questo giorno*, con l’orario del job (04:30 UTC). Un KPI con `status=unreliable` si legge come **—**; il motivo sta nel tooltip.
 
 ## Come leggere ogni carta
 
