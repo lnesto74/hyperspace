@@ -318,7 +318,7 @@ export default function ClienteMedioDashboard({
                 ? stackedH(laneRows, laneSer, (r, k) => {
                   const lane = view.lanes.find((l) => l.lane === r);
                   return lane ? Number(lane[k as keyof typeof lane] || 0) : 0;
-                }, { labelw: 90, rh: 26 })
+                }, { labelw: 100, rh: 30 })
                 : '<svg viewBox="0 0 520 40"></svg>'}
               tableHtml={table(
                 ['Cassa', ...LANE_SER.map((s) => s.label)],
@@ -341,7 +341,7 @@ export default function ClienteMedioDashboard({
               id="c_beh"
               title="Modi di stare in negozio"
               sub={beh?.segments ? `Quota dei ${fint(beh.segments)} tratti di almeno 20 secondi.` : 'Quota dei tratti di almeno 20 secondi.'}
-              svg={hbars(behItems, { dec: 0, unit: ' %', labelw: 150, tipf: (i) => `${i.l}: ${fmt(i.v, 0)} % dei tratti` })}
+              svg={hbars(behItems, { dec: 0, unit: ' %', labelw: 180, tipf: (i) => `${i.l}: ${fmt(i.v, 0)} % dei tratti` })}
               tableHtml={table(
                 ['Modo', 'Quota', 'Durata tipica', 'Percorso tipico'],
                 BEHAVIOUR_SER.map((s) => {
@@ -373,7 +373,7 @@ export default function ClienteMedioDashboard({
               title="Cosa fa la gente in ogni reparto"
               sub="Quota del tempo misurato in ciascuna zona, per modo di comportarsi. Il Bar è banco servito; in Frutta si passa più che scegliere; ai Surgelati e in Verdura si sceglie."
               legendHtml={legend(ser)}
-              svg={stackedH(DEPT_MIX_ORDER, ser, (r, k) => deptMix[r]?.[k] || 0, { labelw: 175, W: 1040, rh: 26 })}
+              svg={stackedH(DEPT_MIX_ORDER, ser, (r, k) => deptMix[r]?.[k] || 0, { labelw: 190, W: 1040, rh: 32 })}
               tableHtml={table(
                 ['Reparto', ...BEHAVIOUR_SER.map((s) => s.label)],
                 DEPT_MIX_ORDER.map((d) => [d, ...BEHAVIOUR_SER.map((sr) => `${fmt(100 * (deptMix[d]?.[sr.key] || 0), 0)} %`)]),
