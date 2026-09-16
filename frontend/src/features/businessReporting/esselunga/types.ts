@@ -232,6 +232,11 @@ export interface HeadlineKpi {
   direction: 'up' | 'down' | 'flat';
   /** Whether the movement is good news — a longer queue is a bigger number and a worse store. */
   good: boolean | null;
+  /** daily_kpi MEASURED / ESTIMATED chip */
+  measureLabel?: 'MEASURED' | 'ESTIMATED';
+  method?: string;
+  status?: 'ok' | 'unreliable';
+  statusReason?: string;
 }
 
 export interface ExecutiveHeadline {

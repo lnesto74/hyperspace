@@ -1,6 +1,10 @@
 /** Plain-language KPI explanations for customer-facing executive dashboard */
 
 export const HERO_KPI_TOOLTIPS: Record<string, string> = {
+  'Ingressi': 'Clienti distinti (id VALID + STATIC_SUSPECT) con una visita grezza nell’ROI ingresso nelle ore di apertura. Non usa zone_visits.',
+  'Durata media della visita': 'Persone-minuto in negozio ÷ ingressi della stessa fascia (legge di Little). Etichetta STIMATO.',
+  'Persone presenti in media': 'Persone-minuto ÷ minuti di apertura (720 per 08:00–20:00). MISURATO. Il massimo è l’occupazione media al minuto se il job l’ha calcolata.',
+  'Attesa in coda per cliente': 'Minuti WAITING in CHECKOUT_QUEUE ÷ ingressi. Esclusi oggetti fissi (≥600 s o frammento entro 1,2 m) e transito (≥0,5 m/s). STIMATO.',
   'Entrants': 'People whose live walking trail crossed the Entrance 1121 gate perimeter (at least one side of the rectangle). Counts every crossing — no dwell filter, no ID merging.',
   'Visitors': 'Legacy estimated unique visitors (zone-inside + proximity recovery). Shown for comparison with the perimeter entrant count.',
   'In store now': 'Live count from the perception frame — shoppers currently detected in the store right now. Updates every 10 seconds.',

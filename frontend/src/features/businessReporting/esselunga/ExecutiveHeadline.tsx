@@ -1,5 +1,6 @@
 import { ArrowDownRight, ArrowUpRight, Minus } from 'lucide-react';
 import type { ExecutiveHeadline, HeadlineKpi } from './types';
+import { MeasureChip } from '../dailyKpi/MeasureChip';
 
 /**
  * The top of the executive report: a verdict sentence, then the numbers it is
@@ -56,12 +57,20 @@ export function ExecutiveHeader({
           style={{ gridTemplateColumns: `repeat(auto-fit, minmax(190px, 1fr))` }}
         >
           {kpis.map(kpi => (
-            <div key={kpi.id} className="px-5 py-4 flex flex-col gap-1.5 min-w-0">
-              <span className="text-xs uppercase tracking-wider text-gray-400 truncate">
-                {kpi.label}
-              </span>
+            <div key={kpi.id} className="px-5 py-4 flex flex-col gap-1.5 min-w-0" title={kpi.method || kpi.hint}>
+              <div className="flex items-center gap-2 min-w-0">
+                <span className="text-xs uppercase tracking-wider text-gray-400 truncate">
+                  {kpi.label}
+                </span>
+                <MeasureChip
+                  label={kpi.measureLabel}
+                  status={kpi.status}
+                  method={kpi.method}
+                  statusReason={kpi.statusReason}
+                />
+              </div>
               <span className="text-3xl font-semibold text-white tabular-nums leading-none">
-                {kpi.display}
+                {kpi.status === 'unreliable' ? '—' : kpi.display}
               </span>
               <DeltaChip kpi={kpi} />
               <span className="text-[13px] text-gray-400 leading-snug">{kpi.hint}</span>

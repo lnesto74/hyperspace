@@ -32,6 +32,7 @@ import ExecutiveSummaryViewport, {
 import EsselungaExecutiveViewport from './esselunga/EsselungaExecutiveViewport';
 import ZoneAuditViewport from './components/ZoneAuditViewport';
 import type { EsselungaJourneyPayload, ExecutiveVariant, MetricThresholdSettings } from './esselunga/types';
+import type { DailyKpiPayload, DailyKpiRangeDay } from './dailyKpi/types';
 import type { DoohScreenMarker } from '../../components/shared/FloorPlanMiniMap';
 import { getDemoVenueId, getDemoLinkType, getDemoPublishedLayout } from '../../config/demo';
 import DashboardBuilderViewport from './dashboardBuilder/DashboardBuilderViewport';
@@ -129,6 +130,8 @@ export default function BusinessReportingPage({ onClose, publicDashboard = false
   const [categoriesExpanded, setCategoriesExpanded] = useState(false);
   const [campaignsExpanded, setCampaignsExpanded] = useState(false);
   const [esselungaVariant, setEsselungaVariant] = useState<ExecutiveVariant>('live');
+  const [dailyKpi, setDailyKpi] = useState<DailyKpiPayload | null>(null);
+  const [dailyKpiRange, setDailyKpiRange] = useState<DailyKpiRangeDay[]>([]);
   const [metricPreviewLoading, setMetricPreviewLoading] = useState(false);
   const previewAbortRef = useRef<AbortController | null>(null);
   const previewSeqRef = useRef(0);
@@ -211,6 +214,48 @@ export default function BusinessReportingPage({ onClose, publicDashboard = false
 
   const showEsselungaExecutive = selectedPersonaId === ESSELUNGA_PERSONA && !!selectedVenueId;
   const showCustomDashboard = isCustomDashboard && !!selectedVenueId;
+
+  useEffect(() => {
+    if (!showEsselungaExecutive || !selectedVenueId) {
+      setDailyKpi(null);
+      setDailyKpiRange([]);
+      return;
+    }
+    let cancelled = false;
+    const { endTs } = (TIME_RANGES.find((t) => t.id === selectedTimeRange) || TIME_RANGES[1]).getRange();
+    const romeDay = (ts: number) => new Date(ts).toLocaleDateString('en-CA', { timeZone: 'Europe/Rome' });
+    const shiftDay = (day: string, n: number) => {
+      const d = new Date(`${day}T12:00:00Z`);
+      d.setUTCDate(d.getUTCDate() + n);
+      return d.toISOString().slice(0, 10);
+    };
+    const load = async (day: string) => {
+      const r = await fetch(`${API_BASE}/api/reporting/daily-kpi?venueId=${encodeURIComponent(selectedVenueId)}&day=${day}`);
+      if (!r.ok) return null;
+      return r.json() as Promise<DailyKpiPayload>;
+    };
+    void (async () => {
+      const today = romeDay(endTs);
+      let payload = await load(today);
+      if (!payload) payload = await load(shiftDay(today, -1));
+      if (cancelled) return;
+      setDailyKpi(payload);
+      if (!payload) {
+        setDailyKpiRange([]);
+        return;
+      }
+      const from = shiftDay(payload.day, -13);
+      const rng = await fetch(
+        `${API_BASE}/api/reporting/daily-kpi/range?venueId=${encodeURIComponent(selectedVenueId)}&from=${from}&to=${payload.day}`,
+      );
+      if (cancelled) return;
+      if (rng.ok) {
+        const body = await rng.json();
+        setDailyKpiRange(body.days || []);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [showEsselungaExecutive, selectedVenueId, selectedTimeRange]);
 
   // Gated in three places on purpose: the rail hides it, this refuses to render
   // it, and the API routes reject the request. A hidden button is not access
@@ -719,6 +764,8 @@ export default function BusinessReportingPage({ onClose, publicDashboard = false
                 esselungaJourney ? (
                 <EsselungaExecutiveViewport
                   journey={esselungaJourney}
+                  dailyKpi={dailyKpi}
+                  dailyKpiRange={dailyKpiRange}
                   venueId={selectedVenueId!}
                   venueName={selectedVenueName}
                   variant={esselungaVariant}
