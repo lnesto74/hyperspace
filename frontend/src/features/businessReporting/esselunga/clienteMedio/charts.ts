@@ -1,4 +1,8 @@
-/** Canvas chart helpers from treviglio_kpi.html — SVG strings, viewBox 520-wide. */
+/** Canvas chart helpers — every chart uses the same Casse-section scale. */
+const CHART_W = 520;
+const CHART_H = 240;
+const ROW_H = 22;
+const ROW_GAP = 8;
 
 export function fmt(v: number, d = 1): string {
   return v.toLocaleString('it-IT', { minimumFractionDigits: d, maximumFractionDigits: d });
@@ -32,11 +36,11 @@ export function table(head: string[], rows: string[][]): string {
 
 export function columns(
   items: BarItem[],
-  { unit = '', dec = 0, color = 'var(--seq-5)', h = 240, tipf }: {
+  { unit = '', dec = 0, color = 'var(--seq-5)', h = CHART_H, tipf }: {
     unit?: string; dec?: number; color?: string; h?: number; tipf?: (it: BarItem) => string;
   } = {},
 ): string {
-  const W = 520, L = 36, R = 12, T = 28, B = 34, n = items.length;
+  const W = CHART_W, L = 36, R = 12, T = 28, B = 34, n = items.length;
   const iw = (W - L - R) / Math.max(n, 1);
   const bw = Math.min(52, iw * 0.62);
   const max = niceMax(Math.max(0, ...items.map((i) => i.v)) * 1.08);
@@ -64,12 +68,12 @@ export function columns(
 
 export function hbars(
   items: BarItem[],
-  { unit = '', dec = 2, h, colorf, tipf, labelw = 150, W = 520 }: {
+  { unit = '', dec = 2, h, colorf, tipf, labelw = 150, W = CHART_W }: {
     unit?: string; dec?: number; h?: number; colorf?: (it: BarItem, i: number) => string;
     tipf?: (it: BarItem) => string; labelw?: number; W?: number;
   } = {},
 ): string {
-  const L = labelw, R = 80, T = 6, rh = 26, gap = 6;
+  const L = labelw, R = 80, T = 6, rh = ROW_H, gap = ROW_GAP;
   const H = h || T + items.length * (rh + gap) + 8;
   const max = Math.max(0.001, ...items.map((i) => i.v));
   const x = (v: number) => L + (W - L - R) * (v / max);
@@ -92,7 +96,7 @@ export function heat(
   get: (r: string, c: string) => number,
   { dec = 2, unit = '' }: { dec?: number; unit?: string } = {},
 ): string {
-  const W = 520, L = 156, T = 24, cw = (W - L - 8) / Math.max(cols.length, 1), ch = 24;
+  const W = CHART_W, L = 156, T = 24, cw = (W - L - 8) / Math.max(cols.length, 1), ch = ROW_H;
   const H = T + rows.length * ch + 8;
   const vals = rows.flatMap((r) => cols.map((c) => get(r, c)));
   const max = Math.max(0.001, ...vals);
@@ -105,7 +109,7 @@ export function heat(
       const k = Math.min(6, Math.floor(6 * Math.sqrt(v / max) + 0.001));
       const dark = k >= 4;
       s += `<rect x="${L + cw * j + 1}" y="${T + i * ch + 1}" width="${cw - 2}" height="${ch - 2}" rx="3" fill="var(${ramp[k]})" data-tip="${esc(`${r} · ${c}: ${fmt(v, dec)}${unit}`)}"/>`
-        + `<text x="${L + cw * j + cw / 2}" y="${T + i * ch + ch / 2 + 4}" text-anchor="middle" style="fill:${dark ? '#fff' : 'var(--ink)'};font-size:11px;pointer-events:none">${fmt(v, dec)}</text>`;
+        + `<text class="${dark ? 'inbar' : 'val'}" x="${L + cw * j + cw / 2}" y="${T + i * ch + ch / 2 + 4}" text-anchor="middle" style="pointer-events:none">${fmt(v, dec)}</text>`;
     });
   });
   return `<svg viewBox="0 0 ${W} ${H}" role="img">${s}</svg>`;
@@ -115,9 +119,9 @@ export function stackedH(
   rows: string[],
   series: SeriesDef[],
   get: (r: string, key: string) => number,
-  { labelw = 160, rh = 22, W = 520 }: { labelw?: number; rh?: number; W?: number } = {},
+  { labelw = 150, rh = ROW_H, W = CHART_W }: { labelw?: number; rh?: number; W?: number } = {},
 ): string {
-  const L = labelw, R = 12, T = 4, gap = 8;
+  const L = labelw, R = 12, T = 4, gap = ROW_GAP;
   const H = T + rows.length * (rh + gap) + 4;
   const x = (v: number) => L + (W - L - R) * v;
   let s = '';
@@ -131,7 +135,7 @@ export function stackedH(
       const x0 = x(acc), x1 = x(acc + v);
       s += `<rect x="${x0 + (acc > 0 ? 1 : 0)}" y="${yy}" width="${Math.max(x1 - x0 - 1, 0)}" height="${rh - 4}" rx="3" fill="var(--c${k + 1})" data-tip="${esc(`${r} · ${sr.label}: ${fmt(100 * v, 0)} %`)}"/>`;
       if (v >= 0.12) {
-        s += `<text x="${(x0 + x1) / 2}" y="${yy + rh / 2 + 2}" text-anchor="middle" style="fill:#fff;font-size:11px;font-weight:600;pointer-events:none">${fmt(100 * v, 0)}%</text>`;
+        s += `<text class="inbar" x="${(x0 + x1) / 2}" y="${yy + rh / 2 + 2}" text-anchor="middle" style="pointer-events:none">${fmt(100 * v, 0)}%</text>`;
       }
       acc += v;
     });
@@ -143,12 +147,12 @@ export function stackedV(
   cols: string[],
   series: SeriesDef[],
   get: (c: string, key: string) => number,
-  { W = 520, h = 250 }: { W?: number; h?: number } = {},
+  { W = CHART_W, h = CHART_H }: { W?: number; h?: number } = {},
 ): string {
-  const L = 40, R = 16, T = 10, B = 32;
+  const L = 36, R = 12, T = 28, B = 34;
   const n = cols.length;
   const iw = (W - L - R) / Math.max(n, 1);
-  const bw = Math.min(88, iw * 0.55);
+  const bw = Math.min(52, iw * 0.62);
   const y = (v: number) => T + (h - T - B) * (1 - v);
   let g = '<g class="grid">';
   for (let k = 0; k <= 4; k++) {
@@ -166,7 +170,7 @@ export function stackedV(
       const y1 = y(acc), y0 = y(acc + v);
       s += `<rect x="${x}" y="${y0 + 1}" width="${bw}" height="${Math.max(y1 - y0 - 2, 0)}" rx="3" fill="var(--c${k + 1})" data-tip="${esc(`${c} · ${sr.label}: ${fmt(100 * v, 0)} %`)}"/>`;
       if (v >= 0.1) {
-        s += `<text x="${x + bw / 2}" y="${(y0 + y1) / 2 + 4}" text-anchor="middle" style="fill:#fff;font-size:12px;font-weight:600;pointer-events:none">${fmt(100 * v, 0)}%</text>`;
+        s += `<text class="inbar" x="${x + bw / 2}" y="${(y0 + y1) / 2 + 4}" text-anchor="middle" style="pointer-events:none">${fmt(100 * v, 0)}%</text>`;
       }
       acc += v;
     });

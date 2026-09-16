@@ -164,7 +164,8 @@
 .cm-root svg text { fill: var(--ink-2); font-size: 12px; }
 .cm-root svg text.lab { fill: var(--ink); font-weight: 500; }
 .cm-root svg text.val { fill: var(--ink); font-weight: 600; font-variant-numeric: tabular-nums; }
-.cm-root svg text.muted { fill: var(--muted); font-size: 11px; }
+.cm-root svg text.muted { fill: var(--muted); font-size: 12px; }
+.cm-root svg text.inbar { fill: #fff; font-size: 12px; font-weight: 600; }
 .cm-root svg .hit { fill: transparent; }
 .cm-root svg rect.bar { rx: 3; }
 

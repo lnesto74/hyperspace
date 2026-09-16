@@ -45,7 +45,7 @@ function ChartCard({
 }) {
   const [showTable, setShowTable] = useState(false);
   return (
-    <div className={`cm-card${id.endsWith('deptmix') || id.endsWith('beh') || id.endsWith('slotmix') ? ' wide' : ''}`} data-card={id}>
+    <div className="cm-card" data-card={id}>
       <div className="ch">
         <div>
           <h3>{title}</h3>
@@ -301,7 +301,7 @@ export default function ClienteMedioDashboard({
               title="Primo reparto dopo l'ingresso"
               sub={`Misurato dentro lo stesso numero di traccia (${ftot ? fint(ftot) : '—'} passaggi diretti).`}
               svg={hbars(fa.map((x) => ({ l: x.dept, v: ftot ? 100 * x.n / ftot : 0 })), {
-                dec: 0, unit: ' %', labelw: 170,
+                dec: 0, unit: ' %',
                 tipf: (i) => `${i.l}: ${fmt(i.v, 0)} % dei primi passaggi`,
               })}
               tableHtml={table(
@@ -318,8 +318,8 @@ export default function ClienteMedioDashboard({
                 ? stackedH(laneRows, laneSer, (r, k) => {
                   const lane = view.lanes.find((l) => l.lane === r);
                   return lane ? Number(lane[k as keyof typeof lane] || 0) : 0;
-                }, { labelw: 90, rh: 22 })
-                : '<svg viewBox="0 0 520 40"></svg>'}
+                }, { labelw: 90 })
+                : '<svg viewBox="0 0 520 240"></svg>'}
               tableHtml={table(
                 ['Cassa', ...LANE_SER.map((s) => s.label)],
                 view.lanes.map((l) => [l.lane, ...LANE_SER.map((s) => `${fmt(100 * l[s.key], 0)} %`)]),
@@ -341,7 +341,7 @@ export default function ClienteMedioDashboard({
               id="c_beh"
               title="Modi di stare in negozio"
               sub={beh?.segments ? `Quota dei ${fint(beh.segments)} tratti di almeno 20 secondi.` : 'Quota dei tratti di almeno 20 secondi.'}
-              svg={hbars(behItems, { dec: 0, unit: ' %', labelw: 200, W: 1040, tipf: (i) => `${i.l}: ${fmt(i.v, 0)} % dei tratti` })}
+              svg={hbars(behItems, { dec: 0, unit: ' %', tipf: (i) => `${i.l}: ${fmt(i.v, 0)} % dei tratti` })}
               tableHtml={table(
                 ['Modo', 'Quota', 'Durata tipica', 'Percorso tipico'],
                 BEHAVIOUR_SER.map((s) => {
@@ -361,7 +361,7 @@ export default function ClienteMedioDashboard({
               title="Mix per fascia oraria"
               sub="Quota dei tratti. Il mix è stabile: cambia quanta gente c'è, non come si comporta."
               legendHtml={legend(ser)}
-              svg={stackedV([...SLOTS], ser, (c, k) => slotMix[c]?.[k] || 0, { W: 1040, h: 280 })}
+              svg={stackedV([...SLOTS], ser, (c, k) => slotMix[c]?.[k] || 0)}
               tableHtml={table(
                 ['Fascia', ...BEHAVIOUR_SER.map((s) => s.label)],
                 SLOTS.map((s) => [s, ...BEHAVIOUR_SER.map((sr) => `${fmt(100 * (slotMix[s]?.[sr.key] || 0), 0)} %`)]),
@@ -373,7 +373,7 @@ export default function ClienteMedioDashboard({
               title="Cosa fa la gente in ogni reparto"
               sub="Quota del tempo misurato in ciascuna zona, per modo di comportarsi. Il Bar è banco servito; in Frutta si passa più che scegliere; ai Surgelati e in Verdura si sceglie."
               legendHtml={legend(ser)}
-              svg={stackedH(DEPT_MIX_ORDER, ser, (r, k) => deptMix[r]?.[k] || 0, { labelw: 170, W: 1040, rh: 22 })}
+              svg={stackedH(DEPT_MIX_ORDER, ser, (r, k) => deptMix[r]?.[k] || 0)}
               tableHtml={table(
                 ['Reparto', ...BEHAVIOUR_SER.map((s) => s.label)],
                 DEPT_MIX_ORDER.map((d) => [d, ...BEHAVIOUR_SER.map((sr) => `${fmt(100 * (deptMix[d]?.[sr.key] || 0), 0)} %`)]),
