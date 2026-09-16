@@ -48,6 +48,7 @@ import {
   ensureErpTable,
 } from '../services/executive/VenueErpStore.js';
 import { loadDailyKpi, loadDailyKpiRange, persistDailyKpi } from '../services/dailyKpi/store.js';
+import { renderDailyKpiPdf, dailyKpiHeadlineUnreliable } from '../services/dailyKpi/renderDailyKpiPdf.js';
 
 const erpUpload = multer({
   storage: multer.memoryStorage(),
@@ -561,68 +562,39 @@ router.get('/esselunga-executive/pdf', (req, res) => {
       return res.status(400).json({ error: 'Time range exceeds maximum of 30 days' });
     }
 
-    const { supporting } = computeEsselungaExecutiveKpis(
-      db, venueId, start, end, variant, mqttService,
-      { dwellThresholdSec, engagementThresholdSec, engagementRankSec, queueFloorSec, thresholdPreview: false },
-    );
-    const journey = supporting.esselungaJourney;
     const venueName = safeQuery(db, 'SELECT name FROM venues WHERE id = ?', [venueId])?.name || 'Venue';
-
-    // Windy-style people-flow appendix. Shipped with the backend image under
-    // assets/flowfield/; opt out with ?includeFlowField=0. Local/dev fallback
-    // keeps the prototypes/ path working outside Docker.
-    let flowFieldShots;
-    const includeFlowField = String(req.query.includeFlowField || '1') !== '0';
-    if (includeFlowField) {
-      const candidates = [
-        path.resolve(process.cwd(), 'assets/flowfield'),
-        path.resolve(process.cwd(), 'prototypes/flowfield/shots'),
-        path.resolve(process.cwd(), '../prototypes/flowfield/shots'),
-      ];
-      for (const shotsDir of candidates) {
-        const manifestPath = path.join(shotsDir, 'report_insights.json');
-        if (!fs.existsSync(manifestPath)) continue;
-        const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
-        flowFieldShots = (manifest.shots || [])
-          .map((s) => ({ ...s, imagePath: path.join(shotsDir, s.file) }))
-          .filter((s) => fs.existsSync(s.imagePath));
-        if (flowFieldShots.length) break;
-      }
+    const romeDay = (ts) => new Date(ts).toLocaleDateString('en-CA', { timeZone: 'Europe/Rome' });
+    const shiftDay = (day, n) => {
+      const d = new Date(`${day}T12:00:00Z`);
+      d.setUTCDate(d.getUTCDate() + n);
+      return d.toISOString().slice(0, 10);
+    };
+    const requestedDay = req.query.day && /^\d{4}-\d{2}-\d{2}$/.test(req.query.day)
+      ? req.query.day
+      : romeDay(end);
+    let daily = loadDailyKpi(db, venueId, requestedDay);
+    if (!daily) daily = loadDailyKpi(db, venueId, shiftDay(requestedDay, -1));
+    if (!daily) {
+      return res.status(409).json({
+        error: 'daily_kpi missing for this day — refusing the legacy zone_visits PDF',
+        day: requestedDay,
+      });
     }
-
-    // Board mode: chapters follow published My-dashboards widgets. Thin boards
-    // fall back to the full Esselunga executive template so customers never get
-    // a near-empty PDF.
-    const mode = String(req.query.mode || 'full');
-    const widgetIds = String(req.query.widgets || '')
-      .split(',')
-      .map((w) => w.trim())
-      .filter(Boolean);
-
-    let doc;
-    let boardScoped = false;
-    if (mode === 'board' && widgetIds.length) {
-      const plan = resolveBoardPdfPlan(widgetIds);
-      if (!plan.thin) {
-        boardScoped = true;
-        doc = renderBoardScopedExecutivePdf(journey, {
-          venueName,
-          flowFieldShots: plan.sections.has('flow') ? flowFieldShots : undefined,
-          sections: plan.sections,
-        });
-      }
+    if (dailyKpiHeadlineUnreliable(daily)) {
+      return res.status(409).json({
+        error: 'daily_kpi headline KPIs are unreliable',
+        day: daily.day,
+        checks: daily.checks,
+      });
     }
-    if (!doc) {
-      doc = renderEsselungaExecutivePdf(journey, { venueName, flowFieldShots });
-    }
-
+    const dailyDoc = renderDailyKpiPdf(daily, { venueName });
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader(
       'Content-Disposition',
-      `attachment; filename="${executivePdfFileName(venueName, journey, { board: boardScoped })}"`,
+      `attachment; filename="esselunga-executive-${daily.day}.pdf"`,
     );
-    doc.pipe(res);
-    doc.end();
+    dailyDoc.pipe(res);
+    dailyDoc.end();
   } catch (err) {
     console.error('❌ Failed to render executive PDF:', err.message);
     if (!res.headersSent) {

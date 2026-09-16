@@ -1,14 +1,11 @@
 #!/usr/bin/env bash
-# Emails the Esselunga executive report for today's trading day, with the PDF
-# attached, and keeps a copy on disk.
+# Emails the Esselunga executive report from daily_kpi only.
+# Fails (non-zero) if the day's daily_kpi is missing or headline KPIs are unreliable.
+# Do not fall back to the old zone_visits computation.
 #
-# The document is rendered by the backend from the same payload the dashboard
-# tab reads, so what management receives each evening is what the store director
-# saw during the day. Nothing is recomputed here.
-#
-# Runs after closing. The window is midnight to now in the venue's timezone,
-# which is the whole trading day once the store is shut.
-set -o pipefail
+# Run after scripts/hyperspace-daily-customer-kpi.sh (04:30 UTC for yesterday,
+# or a same-day run after close).
+set -euo pipefail
 
 CONF=/etc/hyperspace/heartbeat.env
 [ -r "$CONF" ] && . "$CONF"
@@ -22,8 +19,6 @@ env_get() {
 RESEND_API_KEY="${RESEND_API_KEY:-$(env_get RESEND_API_KEY)}"
 RESEND_FROM_EMAIL="${RESEND_FROM_EMAIL:-$(env_get RESEND_FROM_EMAIL)}"
 FROM_EMAIL="${RESEND_FROM_EMAIL:-Hyperspace <ln@ulisse.tech>}"
-# Deliberately separate from ALERT_EMAIL: alarms wake an engineer, this goes to
-# whoever reads the trading numbers.
 REPORT_EMAIL="${REPORT_EMAIL:-${ALERT_EMAIL:-ln@ulisse.tech}}"
 
 VENUE_ID="${VENUE_ID:-55fdd53b-3298-4355-97c0-b4e789b11d06}"
@@ -32,73 +27,74 @@ REPORT_DIR="${REPORT_DIR:-/data/hyperspace/reports}"
 KEEP_DAYS="${REPORT_KEEP_DAYS:-90}"
 TZ_NAME="${VENUE_TZ:-Europe/Rome}"
 
-START=$(( $(TZ="$TZ_NAME" date -d 'today 00:00' +%s) * 1000 ))
-END=$(( $(date +%s) * 1000 ))
-DAY=$(TZ="$TZ_NAME" date +%F)
-
-if [ "$END" -le "$START" ]; then
-  echo "[daily-report] refusing to run: computed an empty window"
-  exit 1
-fi
+DAY="${1:-$(TZ="$TZ_NAME" date +%F)}"
+START=$(( $(TZ="$TZ_NAME" date -d "$DAY 00:00" +%s 2>/dev/null || TZ="$TZ_NAME" date -j -f %Y-%m-%d "$DAY" +%s) * 1000 ))
+END=$(( START + 24 * 60 * 60 * 1000 - 1 ))
 
 mkdir -p "$REPORT_DIR"
 PDF="$REPORT_DIR/esselunga-executive-$DAY.pdf"
 JSON=$(mktemp); trap 'rm -f "$JSON"' EXIT
 
-# ------------------------------------------------------------------- payload
-curl -sS --max-time 120 -o "$JSON" \
-  "$API/api/reporting/summary?personaId=esselunga-executive&venueId=$VENUE_ID&startTs=$START&endTs=$END&variant=hq" \
-  || { echo "[daily-report] summary request failed"; exit 1; }
+curl -sS --max-time 30 -o "$JSON" \
+  "$API/api/reporting/daily-kpi?venueId=$VENUE_ID&day=$DAY" \
+  || { echo "[daily-report] FAILED: daily-kpi request failed"; exit 1; }
+
+if ! python3 - "$JSON" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+if d.get("error") or not d.get("kpis"):
+    print("daily_kpi missing or empty")
+    raise SystemExit(1)
+bad = [k["kpi_id"] for k in d["kpis"]
+       if k.get("slot") == "giorno"
+       and k["kpi_id"] in ("entrances", "visit_min", "people_mean", "queue_wait_min_per_entrance")
+       and k.get("status") != "ok"]
+if bad:
+    print("unreliable headline KPIs:", ",".join(bad))
+    raise SystemExit(1)
+print("daily_kpi ok", d.get("day"))
+PY
+then
+  echo "[daily-report] FAILED: daily_kpi missing or unreliable for $DAY"
+  exit 1
+fi
 
 BODY=$(python3 - "$JSON" <<'PY'
 import json, sys
-
-with open(sys.argv[1]) as fh:
-    d = json.load(fh)
-
-j = (d.get("supporting") or {}).get("esselungaJourney") or {}
-if not j:
-    print("No journey data was returned for this window.")
-    raise SystemExit(0)
-
-lines = [(j.get("headline") or {}).get("text", "No summary available."), ""]
-
-for k in j.get("headlineKpis") or []:
-    delta = ""
-    if k.get("deltaPct") is not None:
-        arrow = "up" if k["direction"] == "up" else "down" if k["direction"] == "down" else "flat"
-        delta = f"  ({arrow} {abs(k['deltaPct'])}% vs last week)"
-    lines.append(f"{k['label']:<18} {k['display']:>10}{delta}")
-
-insights = j.get("insights") or []
-if insights:
-    lines += ["", "What to act on:"]
-    for i in insights[:3]:
-        lines.append(f"  - {i['title']}: {i['message']}")
-        if i.get("action"):
-            lines.append(f"    Action: {i['action']}")
-
-t = (j.get("metricThresholds") or {}).get("dwellSec")
-if t:
-    lines += ["", f"Stopping power counts a pause of {t}s or more, per Esselunga's KPI specification."]
-
-lines += ["", "The attached PDF is the full report."]
+d = json.load(open(sys.argv[1]))
+h = d.get("headline") or {}
+lines = [
+    f"Treviglio {d.get('day')}: {h.get('entrances')} ingressi, visita {h.get('visit_min')} min, "
+    f"{h.get('people_mean')} persone in media, coda {h.get('queue_wait_min_per_entrance')} min/cliente.",
+    "",
+]
+for kid, label in [
+    ("entrances", "Ingressi"),
+    ("visit_min", "Durata visita"),
+    ("people_mean", "Persone medie"),
+    ("queue_wait_min_per_entrance", "Attesa coda"),
+]:
+    row = next((k for k in d.get("kpis") or [] if k["kpi_id"] == kid and k["slot"] == "giorno"), None)
+    if not row:
+        continue
+    lines.append(f"{label:<22} {row.get('value')}  [{row.get('label')}]")
+fails = [c["check_id"] for c in d.get("checks") or [] if not c.get("passed")]
+if fails:
+    lines += ["", "Controlli falliti: " + ", ".join(fails)]
+lines += ["", "The attached PDF is the full report from daily_kpi."]
 print("\n".join(lines))
 PY
 )
 
-# ----------------------------------------------------------------------- pdf
 HTTP=$(curl -sS --max-time 180 -o "$PDF" -w '%{http_code}' \
-  "$API/api/reporting/esselunga-executive/pdf?venueId=$VENUE_ID&startTs=$START&endTs=$END&variant=hq")
+  "$API/api/reporting/esselunga-executive/pdf?venueId=$VENUE_ID&startTs=$START&endTs=$END&day=$DAY")
 
 if [ "$HTTP" != "200" ] || [ ! -s "$PDF" ]; then
-  echo "[daily-report] PDF render failed (HTTP $HTTP)"
+  echo "[daily-report] FAILED: PDF render failed (HTTP $HTTP) — not falling back to the old computation"
   rm -f "$PDF"
   exit 1
 fi
 
-# A PDF that is not a PDF has happened before, via an error page served with a
-# 200. Check the magic rather than trusting the status line.
 if [ "$(head -c 5 "$PDF")" != "%PDF-" ]; then
   echo "[daily-report] rendered file is not a PDF"
   rm -f "$PDF"
@@ -108,10 +104,8 @@ fi
 echo "[daily-report] $DAY · $(du -h "$PDF" | cut -f1)"
 echo "$BODY"
 
-# --------------------------------------------------------------- retention
 find "$REPORT_DIR" -name 'esselunga-executive-*.pdf' -type f -mtime "+$KEEP_DAYS" -delete 2>/dev/null
 
-# ------------------------------------------------------------------- email
 if [ -z "${RESEND_API_KEY:-}" ]; then
   echo "[daily-report] no RESEND_API_KEY configured, not emailing"
   exit 0
