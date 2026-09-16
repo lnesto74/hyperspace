@@ -64,12 +64,12 @@ export function columns(
 
 export function hbars(
   items: BarItem[],
-  { unit = '', dec = 2, h, colorf, tipf, labelw = 150 }: {
+  { unit = '', dec = 2, h, colorf, tipf, labelw = 150, W = 520 }: {
     unit?: string; dec?: number; h?: number; colorf?: (it: BarItem, i: number) => string;
-    tipf?: (it: BarItem) => string; labelw?: number;
+    tipf?: (it: BarItem) => string; labelw?: number; W?: number;
   } = {},
 ): string {
-  const W = 520, L = labelw, R = 80, T = 6, rh = 26, gap = 6;
+  const L = labelw, R = 80, T = 6, rh = 26, gap = 6;
   const H = h || T + items.length * (rh + gap) + 8;
   const max = Math.max(0.001, ...items.map((i) => i.v));
   const x = (v: number) => L + (W - L - R) * (v / max);
@@ -143,11 +143,12 @@ export function stackedV(
   cols: string[],
   series: SeriesDef[],
   get: (c: string, key: string) => number,
+  { W = 520, h = 250 }: { W?: number; h?: number } = {},
 ): string {
-  const W = 520, L = 36, R = 12, T = 10, B = 30, h = 250;
+  const L = 40, R = 16, T = 10, B = 32;
   const n = cols.length;
   const iw = (W - L - R) / Math.max(n, 1);
-  const bw = Math.min(56, iw * 0.6);
+  const bw = Math.min(88, iw * 0.55);
   const y = (v: number) => T + (h - T - B) * (1 - v);
   let g = '<g class="grid">';
   for (let k = 0; k <= 4; k++) {
@@ -165,7 +166,7 @@ export function stackedV(
       const y1 = y(acc), y0 = y(acc + v);
       s += `<rect x="${x}" y="${y0 + 1}" width="${bw}" height="${Math.max(y1 - y0 - 2, 0)}" rx="3" fill="var(--c${k + 1})" data-tip="${esc(`${c} · ${sr.label}: ${fmt(100 * v, 0)} %`)}"/>`;
       if (v >= 0.1) {
-        s += `<text x="${x + bw / 2}" y="${(y0 + y1) / 2 + 4}" text-anchor="middle" style="fill:#fff;font-size:11px;font-weight:600;pointer-events:none">${fmt(100 * v, 0)}%</text>`;
+        s += `<text x="${x + bw / 2}" y="${(y0 + y1) / 2 + 4}" text-anchor="middle" style="fill:#fff;font-size:12px;font-weight:600;pointer-events:none">${fmt(100 * v, 0)}%</text>`;
       }
       acc += v;
     });

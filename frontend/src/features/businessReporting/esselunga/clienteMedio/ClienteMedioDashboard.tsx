@@ -45,7 +45,7 @@ function ChartCard({
 }) {
   const [showTable, setShowTable] = useState(false);
   return (
-    <div className={`cm-card${id.endsWith('deptmix') ? ' wide' : ''}`} data-card={id}>
+    <div className={`cm-card${id.endsWith('deptmix') || id.endsWith('beh') || id.endsWith('slotmix') ? ' wide' : ''}`} data-card={id}>
       <div className="ch">
         <div>
           <h3>{title}</h3>
@@ -341,7 +341,7 @@ export default function ClienteMedioDashboard({
               id="c_beh"
               title="Modi di stare in negozio"
               sub={beh?.segments ? `Quota dei ${fint(beh.segments)} tratti di almeno 20 secondi.` : 'Quota dei tratti di almeno 20 secondi.'}
-              svg={hbars(behItems, { dec: 0, unit: ' %', labelw: 160, tipf: (i) => `${i.l}: ${fmt(i.v, 0)} % dei tratti` })}
+              svg={hbars(behItems, { dec: 0, unit: ' %', labelw: 200, W: 1040, tipf: (i) => `${i.l}: ${fmt(i.v, 0)} % dei tratti` })}
               tableHtml={table(
                 ['Modo', 'Quota', 'Durata tipica', 'Percorso tipico'],
                 BEHAVIOUR_SER.map((s) => {
@@ -361,7 +361,7 @@ export default function ClienteMedioDashboard({
               title="Mix per fascia oraria"
               sub="Quota dei tratti. Il mix è stabile: cambia quanta gente c'è, non come si comporta."
               legendHtml={legend(ser)}
-              svg={stackedV([...SLOTS], ser, (c, k) => slotMix[c]?.[k] || 0)}
+              svg={stackedV([...SLOTS], ser, (c, k) => slotMix[c]?.[k] || 0, { W: 1040, h: 280 })}
               tableHtml={table(
                 ['Fascia', ...BEHAVIOUR_SER.map((s) => s.label)],
                 SLOTS.map((s) => [s, ...BEHAVIOUR_SER.map((sr) => `${fmt(100 * (slotMix[s]?.[sr.key] || 0), 0)} %`)]),
