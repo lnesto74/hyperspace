@@ -37,6 +37,7 @@ import type { DailyKpiPayload, DailyKpiRangeDay } from '../dailyKpi/types';
 import { DailyExecutiveSections } from '../dailyKpi/DailyExecutiveSections';
 import { buildHeadline, buildHeadlineKpis } from '../dailyKpi/viewModel';
 import { ClienteMedioEmpty } from './clienteMedio/ClienteMedioDashboard';
+import ExecutiveCanvas, { type CanvasDetail } from '../executiveCanvas/ExecutiveCanvas';
 
 interface EsselungaExecutiveViewportProps {
   journey: EsselungaJourneyPayload;
@@ -55,6 +56,7 @@ interface EsselungaExecutiveViewportProps {
   metricPreviewLoading?: boolean;
   /** Hide admin-only controls (ERP upload, threshold calibration) on customer share links */
   publicShare?: boolean;
+  onOpenDetail?: (target: CanvasDetail) => void;
 }
 
 const CHANNEL_COLORS: Record<string, string> = {
@@ -227,6 +229,7 @@ export default function EsselungaExecutiveViewport({
   onMetricThresholdsChange,
   metricPreviewLoading = false,
   publicShare = false,
+  onOpenDetail,
 }: EsselungaExecutiveViewportProps) {
   const [erpOpen, setErpOpen] = useState(false);
   const [metricsOpen, setMetricsOpen] = useState(false);
@@ -544,11 +547,6 @@ export default function EsselungaExecutiveViewport({
           <Download className="w-3 h-3" /> Download report
         </button>
         <div className="flex gap-2 text-xs text-gray-400 ml-auto">
-          {dailyKpi && variant === 'live' && (
-            <span className="px-2 py-0.5 rounded-full bg-cyan-500/10 text-cyan-300">
-              In negozio ora {liveOccupancy.count}
-            </span>
-          )}
           {!dailyKpi && variant !== 'live' && (
             <>
               <span className="px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400">{taxonomy.fresco} fresco</span>
@@ -561,6 +559,14 @@ export default function EsselungaExecutiveViewport({
 
       {variant === 'live' && !dailyKpi ? (
         <ClienteMedioEmpty day={kpiDay || ''} />
+      ) : dailyKpi && variant === 'live' ? (
+        <ExecutiveCanvas
+          payload={dailyKpi}
+          rangeDays={dailyKpiRange}
+          venueName={venueName}
+          liveCount={liveOccupancy.count}
+          onOpenDetail={onOpenDetail}
+        />
       ) : (
       <ExecutiveHeader
         headline={dailyKpi ? buildHeadline(dailyKpi, dailyKpiRange) : journey.headline}
@@ -571,7 +577,7 @@ export default function EsselungaExecutiveViewport({
       />
       )}
 
-      {dailyKpi && (
+      {dailyKpi && variant !== 'live' && (
         <DailyExecutiveSections payload={dailyKpi} rangeDays={dailyKpiRange} />
       )}
 

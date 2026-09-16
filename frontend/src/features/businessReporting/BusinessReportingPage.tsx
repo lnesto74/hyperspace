@@ -929,6 +929,17 @@ export default function BusinessReportingPage({ onClose, publicDashboard = false
                   }}
                   metricPreviewLoading={metricPreviewLoading}
                   publicShare={publicDashboard}
+                  onOpenDetail={(target) => {
+                    if (target === 'heatmap') {
+                      openHeatmapModal({ zoneIds: [], venueId: selectedVenueId! });
+                      return;
+                    }
+                    if (target === 'audit') {
+                      if (isSuperadmin) setSelectedPersonaId(AUDIT_PERSONA);
+                      return;
+                    }
+                    setSelectedPersonaId(CLIENTE_MEDIO_PERSONA);
+                  }}
                 />
                 ) : (
                   <div className="text-center py-8 text-gray-400 text-xs">No journey data for this period.</div>
