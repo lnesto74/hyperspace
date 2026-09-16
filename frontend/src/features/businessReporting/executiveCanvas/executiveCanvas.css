@@ -6,53 +6,61 @@
   text-transform: uppercase;
   color: #9ca3af;
 }
+
+/* Journey: 4 columns. Node sits on the shared track at the left of each column. */
 .ex-ribbon {
+  --node: 10px;
+  --gap: 16px;
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 0;
+  column-gap: var(--gap);
   position: relative;
-  padding-top: 22px;
 }
-.ex-stage { min-width: 0; padding: 8px 20px 4px 0; position: relative; z-index: 1; }
-.ex-stage + .ex-stage { padding-left: 20px; }
-.ex-node {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: #22d3ee;
-  box-shadow: 0 0 0 3px rgba(34, 211, 238, 0.16);
-  margin-bottom: 14px;
-}
-.ex-flow {
+.ex-track {
   position: absolute;
-  left: 3px;
-  right: 12%;
-  top: 25px;
+  left: calc(var(--node) / 2);
+  width: calc(75% + var(--gap) * 0.75);
+  top: calc(var(--node) / 2);
   height: 2px;
-  background: linear-gradient(90deg, rgba(34, 211, 238, 0.55), rgba(34, 211, 238, 0.12));
+  margin-top: -1px;
+  background: #22d3ee;
+  opacity: 0.45;
   pointer-events: none;
 }
-.ex-flow::after {
+.ex-track::after {
   content: '';
   position: absolute;
   top: -1px;
   height: 4px;
-  width: 22%;
+  width: 18%;
   border-radius: 999px;
-  background: linear-gradient(90deg, transparent, rgba(34, 211, 238, 0.85), transparent);
+  background: linear-gradient(90deg, transparent, #22d3ee, transparent);
   animation: ex-drift 8s linear infinite;
 }
+.ex-stage {
+  min-width: 0;
+  padding-top: 0;
+}
+.ex-node {
+  width: var(--node);
+  height: var(--node);
+  border-radius: 50%;
+  background: #22d3ee;
+  box-shadow: 0 0 0 4px rgba(34, 211, 238, 0.14);
+  margin-bottom: 16px;
+  position: relative;
+  z-index: 1;
+}
 @keyframes ex-drift {
-  from { transform: translateX(-30%); opacity: 0; }
-  12% { opacity: 1; }
-  88% { opacity: 1; }
-  to { transform: translateX(430%); opacity: 0; }
+  from { transform: translateX(-40%); opacity: 0; }
+  14% { opacity: 1; }
+  86% { opacity: 1; }
+  to { transform: translateX(520%); opacity: 0; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .ex-flow::after { animation: none; display: none; }
+  .ex-track::after { animation: none; display: none; }
 }
 @media (max-width: 900px) {
-  .ex-ribbon { grid-template-columns: 1fr 1fr; gap: 20px 16px; padding-top: 0; }
-  .ex-stage + .ex-stage { padding-left: 0; }
-  .ex-flow { display: none; }
+  .ex-ribbon { grid-template-columns: 1fr 1fr; row-gap: 20px; }
+  .ex-track { display: none; }
 }

@@ -5,17 +5,13 @@ import './executiveCanvas.css';
 
 export type CanvasDetail = 'journey' | 'departments' | 'checkout' | 'audit' | 'heatmap';
 
-const NAV = [
-  { id: 'pulse', label: 'Overview' },
-  { id: 'journey', label: 'Journey' },
-  { id: 'allocation', label: 'Departments' },
-  { id: 'checkout', label: 'Checkout' },
-  { id: 'signals', label: 'Insights' },
-] as const;
-
-function scrollTo(id: string) {
-  document.getElementById(`ex-${id}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-}
+const NAV: Array<{ id: string; label: string; detail: CanvasDetail | null }> = [
+  { id: 'overview', label: 'Overview', detail: null },
+  { id: 'journey', label: 'Journey', detail: 'journey' },
+  { id: 'departments', label: 'Departments', detail: 'departments' },
+  { id: 'checkout', label: 'Checkout', detail: 'checkout' },
+  { id: 'insights', label: 'Insights', detail: 'journey' },
+];
 
 function MeasureDot({ measure, method }: { measure: KpiLabel | null; method?: string }) {
   if (measure === 'MEASURED') {
@@ -89,20 +85,20 @@ function FlowChart({
 }) {
   const vals = flow.map((f) => f.entrances || 0);
   const max = Math.max(1, ...vals);
-  const W = 320, H = 88, L = 4, R = 4, T = 8, B = 20;
+  const W = 360, H = 120, L = 8, R = 8, T = 16, B = 22;
   const n = flow.length;
   const x = (i: number) => L + (i / Math.max(n - 1, 1)) * (W - L - R);
   const y = (v: number) => T + (1 - v / max) * (H - T - B);
   const d = flow.map((f, i) => `${i === 0 ? 'M' : 'L'}${x(i).toFixed(1)},${y(f.entrances || 0).toFixed(1)}`).join(' ');
   const area = `${d} L${x(n - 1).toFixed(1)},${H - B} L${x(0).toFixed(1)},${H - B} Z`;
   return (
-    <svg viewBox={`0 0 ${W} ${H}`} className="w-full h-[88px]" role="img">
-      <path d={area} fill="rgba(34,211,238,0.12)" />
-      <path d={d} fill="none" stroke="#22d3ee" strokeWidth="1.5" />
+    <svg viewBox={`0 0 ${W} ${H}`} className="w-full h-[120px]" role="img">
+      <path d={area} fill="rgba(34,211,238,0.10)" />
+      <path d={d} fill="none" stroke="#22d3ee" strokeWidth="2" />
       {flow.map((f, i) => (
         <g key={f.slot}>
-          <circle cx={x(i)} cy={y(f.entrances || 0)} r={f.slot === peakSlot ? 3 : 2} fill={f.slot === peakSlot ? '#22d3ee' : '#67e8f9'} />
-          <text x={x(i)} y={H - 4} textAnchor="middle" fill="#9ca3af" fontSize="9">{f.slot}</text>
+          <circle cx={x(i)} cy={y(f.entrances || 0)} r={f.slot === peakSlot ? 4 : 3} fill="#22d3ee" />
+          <text x={x(i)} y={H - 4} textAnchor="middle" fill="#9ca3af" fontSize="11">{f.slot}</text>
         </g>
       ))}
     </svg>
@@ -112,13 +108,14 @@ function FlowChart({
 function WaitSpark({ slots, peak }: { slots: Array<{ slot: string; wait: number | null }>; peak: string | null }) {
   const max = Math.max(0.01, ...slots.map((s) => s.wait || 0));
   return (
-    <div className="flex items-end gap-1 h-14">
+    <div className="flex items-end gap-1.5 h-16">
       {slots.map((s) => (
         <div key={s.slot} className="flex-1 flex flex-col items-center gap-1 h-full justify-end" title={`${s.slot}: ${s.wait ?? '—'} min`}>
           <div
             className={`w-full rounded-sm ${s.slot === peak ? 'bg-amber-400' : 'bg-cyan-500/50'}`}
-            style={{ height: `${Math.round(((s.wait || 0) / max) * 100)}%` }}
+            style={{ height: `${Math.max(6, Math.round(((s.wait || 0) / max) * 100))}%` }}
           />
+          <span className="text-[10px] text-gray-500 tabular-nums">{s.slot}</span>
         </div>
       ))}
     </div>
@@ -158,8 +155,15 @@ export default function ExecutiveCanvas({
             <button
               key={n.id}
               type="button"
-              onClick={() => scrollTo(n.id)}
-              className="px-2.5 py-1 text-[11px] uppercase tracking-wider text-gray-400 hover:text-white rounded-md hover:bg-gray-800"
+              aria-current={n.detail == null ? 'page' : undefined}
+              onClick={() => {
+                if (n.detail && onOpenDetail) onOpenDetail(n.detail);
+              }}
+              className={`px-2.5 py-1 text-[11px] uppercase tracking-wider rounded-md ${
+                n.detail == null
+                  ? 'text-white bg-gray-800'
+                  : 'text-gray-400 hover:text-white hover:bg-gray-800'
+              }`}
             >
               {n.label}
             </button>
@@ -180,19 +184,21 @@ export default function ExecutiveCanvas({
             </div>
             <Explore onClick={onOpenDetail ? () => onOpenDetail('journey') : undefined}>Explore full journey →</Explore>
           </div>
-          <div className="relative">
-            <div className="ex-flow" aria-hidden />
-            <div className="ex-ribbon">
-              {model.journey.map((st) => (
-                <div key={st.id} className="ex-stage">
-                  <div className="ex-node" aria-hidden />
-                  <div className="ex-kicker mb-2">{st.label}</div>
-                  <div className="text-[26px] font-semibold text-white tabular-nums leading-none">{st.primary}</div>
-                  {st.secondary && <p className="text-[12px] text-gray-400 mt-1.5 leading-snug">{st.secondary}</p>}
-                </div>
-              ))}
-            </div>
-          </div>
+          <button
+            type="button"
+            className="ex-ribbon text-left w-full"
+            onClick={onOpenDetail ? () => onOpenDetail('journey') : undefined}
+          >
+            <div className="ex-track" aria-hidden />
+            {model.journey.map((st) => (
+              <div key={st.id} className="ex-stage">
+                <div className="ex-node" aria-hidden />
+                <div className="ex-kicker mb-2">{st.label}</div>
+                <div className="text-[26px] font-semibold text-white tabular-nums leading-none">{st.primary}</div>
+                {st.secondary && <p className="text-[12px] text-gray-400 mt-1.5 leading-snug">{st.secondary}</p>}
+              </div>
+            ))}
+          </button>
         </section>
 
         <section id="ex-signals">

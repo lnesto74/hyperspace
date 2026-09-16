@@ -815,7 +815,7 @@ export default function EsselungaExecutiveViewport({
         With no screens reporting, both gauges read zero, and a zero an
         executive cannot act on is worse than an absent section.
       */}
-      {(media.ces > 0 || media.eal > 0) && (
+      {(media.ces > 0 || media.eal > 0) && !(dailyKpi && variant === 'live') && (
       <SectionCard
         id="media"
         title="5 · Retail media"
@@ -1005,8 +1005,8 @@ export default function EsselungaExecutiveViewport({
         )}
       </div>}
 
-      {/* ERP — admin only (hidden on customer public links) */}
-      {!publicShare && (
+      {/* ERP — admin only (hidden on customer public links and the live canvas) */}
+      {!publicShare && !(dailyKpi && variant === 'live') && (
       <div className="rounded-lg border border-gray-700/40 bg-gray-800/20 overflow-hidden">
         <button
           type="button"
@@ -1038,8 +1038,8 @@ export default function EsselungaExecutiveViewport({
       </div>
       )}
 
-      {/* Quick nav anchors */}
-      <div className="flex flex-wrap gap-2 pb-2 text-xs text-gray-400">
+      {/* Quick nav anchors — old section IDs, not the live canvas */}
+      {!(dailyKpi && variant === 'live') && <div className="flex flex-wrap gap-2 pb-2 text-xs text-gray-400">
         {['entrance', 'fresco', 'aisles', 'checkout', 'media'].map(id => (
           <a
             key={id}
@@ -1049,7 +1049,7 @@ export default function EsselungaExecutiveViewport({
             {id} <ArrowRight className="w-2.5 h-2.5" />
           </a>
         ))}
-      </div>
+      </div>}
     </div>
   );
 }
