@@ -17,7 +17,11 @@ VENUE_ID="${VENUE_ID:-55fdd53b-3298-4355-97c0-b4e789b11d06}"
 TZ_NAME="${VENUE_TZ:-Europe/Rome}"
 REPORT_DIR="${DAILY_KPI_REPORT:-/data/hyperspace/reports/daily-kpi}"
 PARQUET_DIR="${DAILY_KPI_PARQUET_DIR:-/data/hyperspace/raw}"
-PYTHON="${DAILY_KPI_PYTHON:-python3}"
+if [ -z "${DAILY_KPI_PYTHON:-}" ] && [ -x "$ROOT/.venv-daily-kpi/bin/python" ]; then
+  PYTHON="$ROOT/.venv-daily-kpi/bin/python"
+else
+  PYTHON="${DAILY_KPI_PYTHON:-python3}"
+fi
 SCRIPT="$ROOT/scripts/daily-customer-kpi.py"
 CFG="$ROOT/analysis/journey_lab/config/treviglio.json"
 
@@ -67,6 +71,15 @@ day="$FROM"
 while [[ "$day" < "$TO" || "$day" == "$TO" ]]; do
   parquet="$PARQUET_DIR/hyperspace-raw-$day.parquet"
   lab_out="$ROOT/analysis/journey_lab/out/$day"
+  roi_dir="$ROOT/analysis/journey_lab/data/$day"
+  if [[ ! -f "$roi_dir/regions_of_interest.csv" ]]; then
+    mkdir -p "$roi_dir"
+    latest=$(ls -1dt "$ROOT/analysis/journey_lab/data/"*/regions_of_interest.csv 2>/dev/null | head -1 || true)
+    if [[ -n "${latest:-}" ]]; then
+      cp "$latest" "$roi_dir/regions_of_interest.csv"
+      echo "[daily-kpi] $day reused ROI CSV from $latest"
+    fi
+  fi
   echo "[daily-kpi] $day parquet=$( [[ -f $parquet ]] && echo yes || echo no )"
 
   args=(--day "$day" --venue "$VENUE_ID" --report "$REPORT_DIR" --cfg "$CFG")
