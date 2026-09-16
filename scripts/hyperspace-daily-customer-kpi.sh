@@ -22,9 +22,12 @@ SCRIPT="$ROOT/scripts/daily-customer-kpi.py"
 CFG="$ROOT/analysis/journey_lab/config/treviglio.json"
 
 env_get() {
+  # grep exits 1 when the key is missing; with `set -e` that aborted the job
+  # before any day ran (prod .env has no DAILY_KPI_TOKEN yet).
   grep -m1 "^$1=" "$ROOT/.env" 2>/dev/null \
     | cut -d= -f2- \
-    | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e "s/^['\"]//" -e "s/['\"]$//"
+    | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e "s/^['\"]//" -e "s/['\"]$//" \
+    || true
 }
 
 TOKEN="${DAILY_KPI_TOKEN:-$(env_get DAILY_KPI_TOKEN)}"
@@ -94,15 +97,35 @@ while [[ "$day" < "$TO" || "$day" == "$TO" ]]; do
   fi
 
   # Persist into the live SQLite via the reporting API when the backend is up.
+  ingested=0
   if [[ -n "${TOKEN:-}" ]]; then
-    curl -sS --max-time 30 -X POST \
+    if curl -sS --max-time 30 -X POST \
       -H "Authorization: Bearer $TOKEN" \
       -H "Content-Type: application/json" \
       --data-binary @"$json" \
-      "$API/api/reporting/daily-kpi/ingest" \
-      && echo "[daily-kpi] ingested $day" \
-      || echo "[daily-kpi] WARN ingest $day failed (JSON is on disk)"
-  else
+      "$API/api/reporting/daily-kpi/ingest"; then
+      echo "[daily-kpi] ingested $day"
+      ingested=1
+    else
+      echo "[daily-kpi] WARN ingest $day failed (JSON is on disk)"
+    fi
+  fi
+  if [[ "$ingested" -eq 0 ]] && command -v docker >/dev/null && docker inspect hyperspace-backend-1 >/dev/null 2>&1; then
+    if docker exec hyperspace-backend-1 node --input-type=module -e "
+      import fs from 'fs';
+      import Database from 'better-sqlite3';
+      import { persistDailyKpi } from './services/dailyKpi/store.js';
+      const p = JSON.parse(fs.readFileSync('/data/reports/daily-kpi/${VENUE_ID}/${day}.json', 'utf8'));
+      const db = new Database('/data/db/hyperspace.db');
+      persistDailyKpi(db, p);
+      console.log('[daily-kpi] ingested via docker', p.day, p.kpis?.length);
+    "; then
+      ingested=1
+    else
+      echo "[daily-kpi] WARN docker ingest $day failed (JSON is on disk)"
+    fi
+  fi
+  if [[ "$ingested" -eq 0 && -z "${TOKEN:-}" ]]; then
     echo "[daily-kpi] WARN no DAILY_KPI_TOKEN; JSON written, SQLite ingest skipped"
   fi
 
