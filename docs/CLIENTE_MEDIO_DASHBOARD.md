@@ -25,13 +25,8 @@ Il selettore elenca ogni giorno dal 14 settembre 2026 (primo giorno calcolato) e
 | Mix per fascia | `behaviour_mix_by_slot` (payload 120) | Mix per fascia oraria | Stessa tassonomia, per fascia. |
 | Mix per reparto | `behaviour_share.dept_mix_time_share` | Cosa fa la gente in ogni reparto | Quota del tempo in zona, per modo. |
 | Zone a zero | `zero_observation_rois` | Da verificare sul posto | Zone del twin senza nessuna osservazione raw. |
-| Osservazioni | `quality.rows` | osservazioni nel giorno | Punti 10 Hz in orario di apertura. |
-| Tracce | `quality.ids` | numeri di traccia emessi dal sensore | Id emessi; sotto, i validi in orario. |
-| Controlli | `daily_kpi_checks` | controlli del giorno superati | Quanti controlli automatici sono passati (Little, visita, fantasmi, zero, fissi, buco di flusso). |
-| Fantasmi | `quality.phantom_rows_pct` | osservazioni di oggetti fermi | Quota tolta prima dei calcoli. |
-| Pulite | `quality` | quota osservazioni pulite | 100 % meno la quota fantasmi. Non è “vita media della traccia” né il conteggio dei link. |
 
-Non mostrati in questa pagina (restano nel payload, non in un tile): vita media di un numero di traccia, ricuciture accettate / precision / recall.
+Non mostrati in questa pagina (restano nel payload): qualità del dato, vita media di un numero di traccia, ricuciture.
 
 ## Note
 

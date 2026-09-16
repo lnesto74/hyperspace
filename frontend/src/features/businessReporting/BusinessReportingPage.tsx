@@ -857,7 +857,7 @@ export default function BusinessReportingPage({ onClose, publicDashboard = false
       </div>
 
       <div className="flex-1 overflow-y-auto">
-        <div className={`mx-auto px-3 py-3 space-y-3 ${showClienteMedio ? 'max-w-[1680px]' : 'max-w-[1600px]'}`}>
+        <div className="max-w-[1600px] mx-auto px-3 py-3 space-y-3">
           {!publicDashboard && (
             <PersonaIconRail
               selectedPersonaId={selectedPersonaId}

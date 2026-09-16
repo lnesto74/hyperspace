@@ -3,7 +3,6 @@ import { MeasureChip } from './MeasureChip';
 import type { DailyKpiPayload, DailyKpiRangeDay } from './types';
 import {
   buildInsights,
-  checkRows,
   departmentMinutes,
   firstDepartment,
   queueBySlot,
@@ -16,15 +15,6 @@ const INSIGHT_COLOR = {
   warn: 'border-amber-500/40 bg-amber-500/10',
   bad: 'border-red-500/40 bg-red-500/10',
   info: 'border-blue-500/40 bg-blue-500/10',
-};
-
-const CHECK_LABEL: Record<string, string> = {
-  little: 'Riconciliazione Little',
-  visit_range: 'Durata visita 10–60 min',
-  phantom_share: 'Quota fantasmi 10–35 %',
-  zero_observation: 'ROI senza osservazioni',
-  fixed_queue: 'Oggetti fissi in coda',
-  stream_gap: 'Buco del flusso raw ≤ 60 s',
 };
 
 export function DailyExecutiveSections({
@@ -40,7 +30,6 @@ export function DailyExecutiveSections({
   const slots = slotSeries(payload);
   const qSlots = queueBySlot(payload);
   const lanes = queueLanes(payload).filter((l) => l.roi_group === 'CHECKOUT_QUEUE');
-  const checks = checkRows(payload);
   const maxEnt = Math.max(1, ...slots.map((s) => s.entrances || 0));
   const maxDept = Math.max(0.01, ...depts.filter((d) => d.minutes != null).map((d) => d.minutes as number));
   const maxFirst = Math.max(0.01, ...first.map((f) => f.share || 0));
@@ -210,19 +199,6 @@ export function DailyExecutiveSections({
             ))}
           </tbody>
         </table>
-      </section>
-
-      <section className="rounded-xl border border-gray-700/60 bg-gray-800/30 p-4">
-        <h2 className="text-sm font-medium text-white mb-2">Controlli del giorno</h2>
-        <ul className="space-y-1">
-          {checks.map((c) => (
-            <li key={c.check_id} className="flex items-start gap-2 text-xs">
-              <span className={c.passed ? 'text-emerald-400' : 'text-rose-400'}>{c.passed ? 'pass' : 'fail'}</span>
-              <span className="text-gray-200">{CHECK_LABEL[c.check_id] || c.check_id}</span>
-              <span className="text-gray-500 truncate" title={c.detail || undefined}>{c.detail}</span>
-            </li>
-          ))}
-        </ul>
       </section>
     </div>
   );

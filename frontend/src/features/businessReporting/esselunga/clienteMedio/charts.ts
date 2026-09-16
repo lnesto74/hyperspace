@@ -32,7 +32,7 @@ export function table(head: string[], rows: string[][]): string {
 
 export function columns(
   items: BarItem[],
-  { unit = '', dec = 0, color = 'var(--seq-5)', h = 280, tipf }: {
+  { unit = '', dec = 0, color = 'var(--seq-5)', h = 240, tipf }: {
     unit?: string; dec?: number; color?: string; h?: number; tipf?: (it: BarItem) => string;
   } = {},
 ): string {
@@ -69,7 +69,7 @@ export function hbars(
     tipf?: (it: BarItem) => string; labelw?: number;
   } = {},
 ): string {
-  const W = 520, L = labelw, R = 86, T = 8, rh = 32, gap = 10;
+  const W = 520, L = labelw, R = 80, T = 6, rh = 26, gap = 6;
   const H = h || T + items.length * (rh + gap) + 8;
   const max = Math.max(0.001, ...items.map((i) => i.v));
   const x = (v: number) => L + (W - L - R) * (v / max);
@@ -92,7 +92,7 @@ export function heat(
   get: (r: string, c: string) => number,
   { dec = 2, unit = '' }: { dec?: number; unit?: string } = {},
 ): string {
-  const W = 520, L = 168, T = 28, cw = (W - L - 8) / Math.max(cols.length, 1), ch = 28;
+  const W = 520, L = 156, T = 24, cw = (W - L - 8) / Math.max(cols.length, 1), ch = 24;
   const H = T + rows.length * ch + 8;
   const vals = rows.flatMap((r) => cols.map((c) => get(r, c)));
   const max = Math.max(0.001, ...vals);
@@ -105,7 +105,7 @@ export function heat(
       const k = Math.min(6, Math.floor(6 * Math.sqrt(v / max) + 0.001));
       const dark = k >= 4;
       s += `<rect x="${L + cw * j + 1}" y="${T + i * ch + 1}" width="${cw - 2}" height="${ch - 2}" rx="3" fill="var(${ramp[k]})" data-tip="${esc(`${r} · ${c}: ${fmt(v, dec)}${unit}`)}"/>`
-        + `<text x="${L + cw * j + cw / 2}" y="${T + i * ch + ch / 2 + 4}" text-anchor="middle" style="fill:${dark ? '#fff' : 'var(--ink)'};font-size:13px;font-weight:600;pointer-events:none">${fmt(v, dec)}</text>`;
+        + `<text x="${L + cw * j + cw / 2}" y="${T + i * ch + ch / 2 + 4}" text-anchor="middle" style="fill:${dark ? '#fff' : 'var(--ink)'};font-size:11px;pointer-events:none">${fmt(v, dec)}</text>`;
     });
   });
   return `<svg viewBox="0 0 ${W} ${H}" role="img">${s}</svg>`;
@@ -115,9 +115,9 @@ export function stackedH(
   rows: string[],
   series: SeriesDef[],
   get: (r: string, key: string) => number,
-  { labelw = 168, rh = 28, W = 520 }: { labelw?: number; rh?: number; W?: number } = {},
+  { labelw = 160, rh = 22, W = 520 }: { labelw?: number; rh?: number; W?: number } = {},
 ): string {
-  const L = labelw, R = 12, T = 6, gap = 10;
+  const L = labelw, R = 12, T = 4, gap = 8;
   const H = T + rows.length * (rh + gap) + 4;
   const x = (v: number) => L + (W - L - R) * v;
   let s = '';
@@ -131,7 +131,7 @@ export function stackedH(
       const x0 = x(acc), x1 = x(acc + v);
       s += `<rect x="${x0 + (acc > 0 ? 1 : 0)}" y="${yy}" width="${Math.max(x1 - x0 - 1, 0)}" height="${rh - 4}" rx="3" fill="var(--c${k + 1})" data-tip="${esc(`${r} · ${sr.label}: ${fmt(100 * v, 0)} %`)}"/>`;
       if (v >= 0.12) {
-        s += `<text x="${(x0 + x1) / 2}" y="${yy + rh / 2 + 4}" text-anchor="middle" style="fill:#fff;font-size:13px;font-weight:700;pointer-events:none">${fmt(100 * v, 0)}%</text>`;
+        s += `<text x="${(x0 + x1) / 2}" y="${yy + rh / 2 + 2}" text-anchor="middle" style="fill:#fff;font-size:11px;font-weight:600;pointer-events:none">${fmt(100 * v, 0)}%</text>`;
       }
       acc += v;
     });
@@ -144,7 +144,7 @@ export function stackedV(
   series: SeriesDef[],
   get: (c: string, key: string) => number,
 ): string {
-  const W = 520, L = 44, R = 12, T = 14, B = 36, h = 300;
+  const W = 520, L = 36, R = 12, T = 10, B = 30, h = 250;
   const n = cols.length;
   const iw = (W - L - R) / Math.max(n, 1);
   const bw = Math.min(56, iw * 0.6);
@@ -165,7 +165,7 @@ export function stackedV(
       const y1 = y(acc), y0 = y(acc + v);
       s += `<rect x="${x}" y="${y0 + 1}" width="${bw}" height="${Math.max(y1 - y0 - 2, 0)}" rx="3" fill="var(--c${k + 1})" data-tip="${esc(`${c} · ${sr.label}: ${fmt(100 * v, 0)} %`)}"/>`;
       if (v >= 0.1) {
-        s += `<text x="${x + bw / 2}" y="${(y0 + y1) / 2 + 5}" text-anchor="middle" style="fill:#fff;font-size:13px;font-weight:700;pointer-events:none">${fmt(100 * v, 0)}%</text>`;
+        s += `<text x="${x + bw / 2}" y="${(y0 + y1) / 2 + 4}" text-anchor="middle" style="fill:#fff;font-size:11px;font-weight:600;pointer-events:none">${fmt(100 * v, 0)}%</text>`;
       }
       acc += v;
     });
