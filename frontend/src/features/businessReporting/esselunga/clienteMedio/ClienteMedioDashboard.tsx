@@ -45,7 +45,7 @@ function ChartCard({
 }) {
   const [showTable, setShowTable] = useState(false);
   return (
-    <div className={`cm-card${id.endsWith('deptmix') || id.endsWith('lanes') ? ' wide' : ''}`} data-card={id}>
+    <div className={`cm-card${id.endsWith('deptmix') ? ' wide' : ''}`} data-card={id}>
       <div className="ch">
         <div>
           <h3>{title}</h3>
