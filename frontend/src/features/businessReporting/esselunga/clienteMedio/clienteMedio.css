@@ -130,12 +130,12 @@
 .cm-root section { margin-top: 32px; }
 .cm-root section > .head { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: baseline; margin-bottom: 6px; }
 .cm-root section > .sub { color: var(--ink-2); max-width: none; margin-bottom: 14px; font-size: 13.5px; line-height: 1.5; }
-.cm-grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); gap: 14px; }
+.cm-grid2 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; align-items: start; }
 .cm-card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px 12px; box-shadow: var(--shadow); min-width: 0; }
-.cm-card.wide { grid-column: 1 / -1; }
+.cm-card.wide { grid-column: auto; }
 .cm-card .ch { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; margin-bottom: 8px; }
 .cm-card .ch p { font-size: 12.5px; color: var(--ink-2); margin-top: 2px; }
-.cm-card svg { width: 100%; height: auto; display: block; font-family: "IBM Plex Sans", system-ui, sans-serif; }
+.cm-card svg { width: 100%; height: auto; display: block; font-family: "IBM Plex Sans", system-ui, sans-serif; max-width: 100%; }
 .cm-card table { width: 100%; border-collapse: collapse; font-size: 12.5px; font-variant-numeric: tabular-nums; }
 .cm-card th, .cm-card td { text-align: right; padding: 6px 8px; border-bottom: 1px solid var(--grid); }
 .cm-card th:first-child, .cm-card td:first-child { text-align: left; }
@@ -161,16 +161,24 @@
 .cm-tip { position: fixed; pointer-events: none; background: var(--ink); color: var(--page); font-size: 12.5px; padding: 6px 9px; border-radius: 6px; box-shadow: 0 4px 14px rgba(0, 0, 0, 0.2); z-index: 9; max-width: 260px; line-height: 1.35; }
 .cm-root svg .grid line { stroke: var(--grid); stroke-width: 1; }
 .cm-root svg .axis { stroke: var(--axis); stroke-width: 1; }
-.cm-root svg text { fill: var(--ink-2); font-size: 12px; }
+.cm-root svg text,
+.cm-root svg text.lab,
+.cm-root svg text.val,
+.cm-root svg text.muted,
+.cm-root svg text.inbar { font-size: 12px; }
+.cm-root svg text { fill: var(--ink-2); }
 .cm-root svg text.lab { fill: var(--ink); font-weight: 500; }
 .cm-root svg text.val { fill: var(--ink); font-weight: 600; font-variant-numeric: tabular-nums; }
-.cm-root svg text.muted { fill: var(--muted); font-size: 12px; }
-.cm-root svg text.inbar { fill: #fff; font-size: 12px; font-weight: 600; }
+.cm-root svg text.muted { fill: var(--muted); }
+.cm-root svg text.inbar { fill: #fff; font-weight: 600; }
 .cm-root svg .hit { fill: transparent; }
 .cm-root svg rect.bar { rx: 3; }
 
 @media (prefers-reduced-motion: no-preference) {
   .cm-tbtn { transition: color 0.15s; }
+}
+@media (max-width: 1100px) {
+  .cm-grid2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (max-width: 600px) {
   .cm-kpi .v { font-size: 22px; }

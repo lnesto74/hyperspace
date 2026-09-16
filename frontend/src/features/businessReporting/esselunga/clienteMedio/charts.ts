@@ -1,7 +1,7 @@
 /** Canvas chart helpers — every chart uses the same Casse-section scale. */
 const CHART_W = 520;
 const CHART_H = 240;
-const ROW_H = 22;
+const ROW_H = 26;
 const ROW_GAP = 8;
 
 export function fmt(v: number, d = 1): string {
@@ -63,7 +63,7 @@ export function columns(
       + `<text class="lab" x="${x + bw / 2}" y="${h - B + 18}" text-anchor="middle">${esc(it.l)}</text>`
       + `<rect class="hit" x="${L + iw * i}" y="${T}" width="${iw}" height="${h - T - B}" data-tip="${tip}"/>`;
   });
-  return `<svg viewBox="0 0 ${W} ${h}" role="img">${g}<line class="axis" x1="${L}" x2="${W - R}" y1="${h - B}" y2="${h - B}"/>${bars}</svg>`;
+  return `<svg viewBox="0 0 ${W} ${h}" role="img" font-size="12">${g}<line class="axis" x1="${L}" x2="${W - R}" y1="${h - B}" y2="${h - B}"/>${bars}</svg>`;
 }
 
 export function hbars(
@@ -87,7 +87,7 @@ export function hbars(
       + `<text class="val" x="${x(it.v) + 6}" y="${yy + rh / 2 + 3}">${fmt(it.v, dec)}${unit}</text>`
       + `<rect class="hit" x="0" y="${yy - 2}" width="${W}" height="${rh + 2}" data-tip="${tip}"/>`;
   });
-  return `<svg viewBox="0 0 ${W} ${H}" role="img">${s}</svg>`;
+  return `<svg viewBox="0 0 ${W} ${H}" role="img" font-size="12">${s}</svg>`;
 }
 
 export function heat(
@@ -112,7 +112,7 @@ export function heat(
         + `<text class="${dark ? 'inbar' : 'val'}" x="${L + cw * j + cw / 2}" y="${T + i * ch + ch / 2 + 4}" text-anchor="middle" style="pointer-events:none">${fmt(v, dec)}</text>`;
     });
   });
-  return `<svg viewBox="0 0 ${W} ${H}" role="img">${s}</svg>`;
+  return `<svg viewBox="0 0 ${W} ${H}" role="img" font-size="12">${s}</svg>`;
 }
 
 export function stackedH(
@@ -140,7 +140,7 @@ export function stackedH(
       acc += v;
     });
   });
-  return `<svg viewBox="0 0 ${W} ${H}" role="img">${s}</svg>`;
+  return `<svg viewBox="0 0 ${W} ${H}" role="img" font-size="12">${s}</svg>`;
 }
 
 export function stackedV(
@@ -176,7 +176,7 @@ export function stackedV(
     });
     s += `<text class="lab" x="${x + bw / 2}" y="${h - B + 18}" text-anchor="middle">${esc(c)}</text>`;
   });
-  return `<svg viewBox="0 0 ${W} ${h}" role="img">${g}<line class="axis" x1="${L}" x2="${W - R}" y1="${h - B}" y2="${h - B}"/>${s}</svg>`;
+  return `<svg viewBox="0 0 ${W} ${h}" role="img" font-size="12">${g}<line class="axis" x1="${L}" x2="${W - R}" y1="${h - B}" y2="${h - B}"/>${s}</svg>`;
 }
 
 export function legend(series: SeriesDef[]): string {
