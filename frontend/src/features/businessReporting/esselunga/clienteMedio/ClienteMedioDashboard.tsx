@@ -199,17 +199,17 @@ export default function ClienteMedioDashboard({
     <div className="cm-root" data-theme={dark ? 'dark' : undefined} ref={rootRef} data-testid="cliente-medio">
       <div className="cm-wrap">
         <header className="cm-header">
-          <div>
+          <div className="cm-header-top">
             <div className="cm-eyebrow">Esselunga · {venueName} · LiDAR</div>
-            <h1>Il cliente medio di {venueName}</h1>
-            <p className="lead">
-              {view.dayLabel}, {view.hours}. Tutto quello che vedi viene dalle osservazioni grezze dei sensori (10 al secondo). Nessuna persona viene seguita: i valori &quot;per cliente&quot; sono tempo totale misurato diviso ingressi misurati.
-            </p>
+            <div className="cm-tags">
+              <span className="cm-tag m">MISURATO = visto dai sensori</span>
+              <span className="cm-tag s">STIMATO = calcolato, indicato ogni volta</span>
+            </div>
           </div>
-          <div className="cm-tags">
-            <span className="cm-tag m">MISURATO = visto dai sensori</span>
-            <span className="cm-tag s">STIMATO = calcolato, indicato ogni volta</span>
-          </div>
+          <h1>Il cliente medio di {venueName}</h1>
+          <p className="lead">
+            {view.dayLabel}, {view.hours}. Tutto quello che vedi viene dalle osservazioni grezze dei sensori (10 al secondo). Nessuna persona viene seguita: i valori &quot;per cliente&quot; sono tempo totale misurato diviso ingressi misurati.
+          </p>
         </header>
 
         <KpiTiles tiles={view.tiles} testId="cm-kpis" />
