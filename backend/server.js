@@ -18,6 +18,7 @@ import VisualTrackService from './services/VisualTrackService.js';
 import { TrajectoryStorageService } from './services/TrajectoryStorageService.js';
 import { KPICalculator } from './services/KPICalculator.js';
 import { EntrancePerimeterTracker } from './services/EntrancePerimeterTracker.js';
+import { startCounterWaitLoop } from './services/dailyKpi/counterWaitLive.js';
 
 import discoveryRoutes from './routes/discovery.js';
 import replayRoutes from './routes/replay.js';
@@ -67,6 +68,10 @@ import DemoSessionService from './services/DemoSessionService.js';
 import createDemoSessionRoutes from './routes/demoSession.js';
 import OpsDispatchService from './services/ops-dispatch/OpsDispatchService.js';
 import createOpsDispatchRoutes from './routes/opsDispatch.js';
+import { FlowFieldDailyService } from './services/FlowFieldDailyService.js';
+import createFlowfieldRoutes from './routes/flowfield.js';
+import { LpmService } from './services/lpm/LpmService.js';
+import createLpmRoutes from './routes/lpm.js';
 import {
   getCheckoutAlertConfig,
   saveCheckoutAlertConfig,
@@ -490,6 +495,14 @@ function ensureVenueLive(venueId) {
     trackAggregator.setRois(rois);
     trackAggregator.start(venueId);
     trackAggregator.setReconcilerLive(mqttService?.isReconcilerEnabled?.(venueId) ?? false);
+    try {
+      const cfgPath = path.join(__dirname, '../analysis/journey_lab/config/treviglio.json');
+      let staffStrips = [];
+      try { staffStrips = JSON.parse(fs.readFileSync(cfgPath, 'utf8')).staff_strips || []; } catch { /* optional */ }
+      startCounterWaitLoop({ db, trackAggregator, venueId, staffStrips });
+    } catch (err) {
+      console.warn('[Live] counter wait loop skipped:', err.message);
+    }
     console.log(`📊 Live pipeline started from ingest for venue ${venueId} (${rois.length} ROIs)`);
   } catch (err) {
     liveVenues.delete(venueId);
@@ -662,6 +675,14 @@ app.use('/api/replay-insights', createReplayInsightRoutes(replayInsightOrchestra
 
 // Ops-dispatch (Telegram) routes — config, onboarding teams, dispatch + public mobile task page
 app.use('/api/ops-dispatch', createOpsDispatchRoutes(db, opsDispatchService, { uploadsDir: UPLOADS_DIR }));
+
+const flowFieldDaily = new FlowFieldDailyService(db);
+app.use('/api/flowfield', createFlowfieldRoutes(flowFieldDaily));
+flowFieldDaily.startNightly();
+const lpmService = new LpmService({ db, flowFieldDaily });
+app.use('/api/lpm', createLpmRoutes(lpmService));
+offlineReconcileService.setLpmService(lpmService);
+if (typeof mqttService?.setLpmService === 'function') mqttService.setLpmService(lpmService);
 console.log(`⏱️ STARTUP: post-replay-insight +${Date.now() - _startupT0}ms`);
 
 // Serve uploaded logos
@@ -1593,6 +1614,7 @@ process.on('SIGINT', () => {
   profitRadarEngine.stop();
   opsDispatchService.stop();
   trajectoryStorage.stop();
+  flowFieldDaily.stopNightly();
   db.close();
   process.exit(0);
 });

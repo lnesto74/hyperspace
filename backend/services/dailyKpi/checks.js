@@ -3,6 +3,8 @@
  * A failed check sets status='unreliable' on every KPI listed here.
  */
 
+import { areasSumEqualsLittle } from './departmentAreas.js';
+
 export const CHECK_DEPENDENCIES = {
   little: ['visit_min', 'minutes_per_customer_by_dept', 'people_mean'],
   visit_range: ['visit_min', 'people_mean'],
@@ -10,6 +12,10 @@ export const CHECK_DEPENDENCIES = {
   zero_observation: ['minutes_per_customer_by_dept', 'zero_observation_rois'],
   fixed_queue: ['queue_wait_min_per_entrance', 'queue_decomposition_per_lane', 'service_min_per_entrance'],
   stream_gap: ['quality', 'presence_per_minute', 'people_max', 'people_mean', 'entrances'],
+  areas_sum_equals_little: ['minutes_per_customer_by_dept_area', 'visit_min'],
+  raster_hash_matches_twin: ['department_area_m2', 'minutes_per_customer_by_dept_area'],
+  counter_band_within_area: ['counter_wait_people_mean', 'minutes_per_customer_by_dept_counter'],
+  recon_gate: ['dept_stay_per_person', 'dept_transitions', 'queue_time_per_person'],
 };
 
 export const DEFAULT_CHECK_THRESHOLDS = {
@@ -26,7 +32,7 @@ export const DEFAULT_CHECK_THRESHOLDS = {
 export function littleRelError(deptMinutes, visitMin) {
   if (visitMin == null || visitMin === 0) return null;
   const parts = Object.entries(deptMinutes || {})
-    .filter(([k]) => k !== 'TOTALE (Little)')
+    .filter(([k]) => k !== 'TOTALE (Little)' && k !== 'Personale (tolto)')
     .reduce((s, [, v]) => s + (Number(v) || 0), 0);
   return Math.abs(parts - visitMin) / visitMin;
 }
@@ -100,6 +106,47 @@ export function evaluateChecks(input, thresholds = DEFAULT_CHECK_THRESHOLDS) {
       detail: `max_gap_s=${gap} (allowed <= ${t.max_gap_s})`,
     });
   }
+
+  if (input.areaTable && input.visitMin != null) {
+    const r = areasSumEqualsLittle(input.areaTable, input.visitMin);
+    checks.push({
+      check_id: 'areas_sum_equals_little',
+      passed: r.passed,
+      detail: JSON.stringify({ parts: r.parts, visit_min: input.visitMin, rel_err: r.rel_err }),
+    });
+  } else {
+    checks.push({
+      check_id: 'areas_sum_equals_little',
+      passed: true,
+      detail: 'skipped (199 not assembled)',
+    });
+  }
+
+  checks.push({
+    check_id: 'raster_hash_matches_twin',
+    passed: input.rasterHashOk !== false,
+    detail: input.rasterHashDetail || (input.rasterHashOk === undefined ? 'skipped' : 'ok'),
+  });
+
+  checks.push({
+    check_id: 'counter_band_within_area',
+    passed: input.counterBandOk !== false,
+    detail: JSON.stringify(input.counterBandDetail || {}),
+  });
+
+  const reconSkipped = input.reconGate === undefined && input.reconPrecision == null;
+  const reconOk = reconSkipped
+    ? true
+    : (input.reconGate !== false
+      && (input.reconPrecision == null || input.reconPrecision >= 0.85)
+      && (input.reconVendor == null || input.reconVendor >= 0.50));
+  checks.push({
+    check_id: 'recon_gate',
+    passed: reconOk,
+    detail: reconSkipped
+      ? 'skipped (190/191 missing)'
+      : JSON.stringify({ precision: input.reconPrecision ?? null, vendor_pairs: input.reconVendor ?? null }),
+  });
 
   return checks;
 }

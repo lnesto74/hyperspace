@@ -142,6 +142,55 @@
     "phantom_share_hi": 0.35,
     "fixed_queue_share_max": 0.05,
     "max_gap_s": 60,
-    "_note": "Recorded 2026-09-16 from TREVIGLIO_STRATEGIA_KPI_AFFIDABILI.md §2. Thresholds, not new values."
+    "areas_little_max_rel_err": 0.01,
+    "recon_blind_precision_min": 0.85,
+    "recon_vendor_pairs_min": 0.50,
+    "_note": "Recorded 2026-09-16 from TREVIGLIO_STRATEGIA_KPI_AFFIDABILI.md §2. Thresholds, not new values. Recon gates from CURSOR_PROMPT_3 2026-09-17."
+  },
+  "department_areas": {
+    "r_area_m": 3.0,
+    "r_banco_m": 1.0,
+    "v_slow_m_s": 0.4,
+    "cell_m": 0.25,
+    "fixture_strip_tol_m": 0.35,
+    "entrance_buffer_m": 1.0,
+    "choice_traverse": 0.25,
+    "choice_worked": 0.4,
+    "_note": "199_department_areas.py. Do not change without store confirmation of R6."
+  },
+  "staff_strips": [
+    {"dept": "Bar", "x0": 27.82, "x1": 36.41, "z0": 56.09, "z1": 57.26},
+    {"dept": "Carne", "x0": 28.02, "x1": 41.33, "z0": 1.55, "z1": 5.55},
+    {"dept": "Pesce", "x0": 5.91, "x1": 11.79, "z0": 1.41, "z1": 5.41}
+  ],
+  "served_counters": {
+    "departments": ["Carne", "Pesce", "Bar", "Gastronomia", "Salumi", "Pane"],
+    "band_m": 2.0,
+    "wait_speed_m_s": 0.3,
+    "stay_gap_s": 5,
+    "served_stay_s": 20,
+    "alert_n": 3,
+    "alert_m_minutes": 2,
+    "alert_clear_minutes": 1,
+    "_note": "201_paths_and_counters.py part B + live alert STEP B."
+  },
+  "checkout_alert": {
+    "n": 4,
+    "m_minutes": 3,
+    "clear_minutes": 1
+  },
+  "adjacency": {
+    "min_stay_s": 3
+  },
+  "flow_field": {
+    "cell_m": 2.0,
+    "min_speed_m_s": 0.3,
+    "min_n": 200,
+    "min_r": 0.3
+  },
+  "reconciliation": {
+    "min_score_precision_floor": 0.85,
+    "vendor_pairs_gate": 0.50,
+    "blind_precision_gate": 0.85
   }
 }

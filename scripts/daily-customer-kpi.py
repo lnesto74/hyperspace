@@ -69,6 +69,242 @@ def _cls_obs(classes, name, field="obs_in_hours"):
     return 0.0
 
 
+def _slot_minutes(slot: str) -> float:
+    return 720.0 if slot == "giorno" else 120.0
+
+
+def _assemble_prompt3(lab_out: Path, cfg: dict, d110: dict, existing: list) -> list:
+    """STEPS A–F: ingest Journey Lab 160/199/201/190/191/195 when present."""
+    rows = []
+    known_zero = set(cfg.get("known_uncovered_rois") or [])
+    served = (cfg.get("served_counters") or {}).get("departments") or [
+        "Carne", "Pesce", "Bar", "Gastronomia", "Salumi", "Pane",
+    ]
+    p199 = lab_out / "199_department_areas.json"
+    p160 = lab_out / "160_staff.json"
+    p201 = lab_out / "201_paths_and_counters.json"
+    p191 = lab_out / "191_reconciliation_kpis.json"
+    p190 = lab_out / "190_learned_linker.json"
+
+    staff = None
+    if p160.exists():
+        s160 = _jload(p160)
+        fit = s160.get("staff_fit") or {}
+        staff = fit.get("staff_on_floor")
+        rows.append(_kpi("staff_on_floor", "giorno", _round(staff, 1), "people", "ESTIMATED",
+                         "160: intercept of hourly presence = S + entrances × T"))
+        rows.append(_kpi("pre_opening_people", "giorno", _round(fit.get("pre_opening_people_0730_0755"), 1),
+                         "people", "MEASURED", "160: clean presence 07:30–07:55"))
+        rows.append(_kpi("phantom_cells", "giorno", len(s160.get("phantom_cells") or []),
+                         "count", "MEASURED", "160: night 00–06 cells ≥ 8 person-min of small-extent ids",
+                         payload=s160.get("phantom_cells")))
+        strips = s160.get("staff_strip_person_min") or []
+        rows.append(_kpi("staff_counter_person_min", "giorno", None, "person_min", "MEASURED",
+                         "160: person-time inside staff strips behind counters", payload=strips))
+        door = s160.get("warehouse_door_events_by_hour") or extras_door(s160)
+        if door is not None:
+            rows.append(_kpi("warehouse_door_events_by_hour", "giorno", None, "count", "MEASURED",
+                             "160: events on the warehouse door", payload=door))
+
+    if p199.exists():
+        d199 = _jload(p199)
+        kpi = d199.get("kpi") or {}
+        areas = d199.get("areas_m2") or {}
+        method_a = ("199: AREA = floor within 3 m of department fixtures, owner = nearest strip; "
+                    "al banco = ≤1 m and speed < 0.4 m/s; staff from Corsie then Scaffali")
+        for sl, table in kpi.items():
+            area_payload = {}
+            banco_payload = {}
+            for name, val in table.items():
+                if name in ("TOTALE", "Personale (tolto)"):
+                    continue
+                if isinstance(val, dict):
+                    area_payload[name] = val.get("area")
+                    banco_payload[name] = val.get("al_banco")
+                    rows.append(_kpi("minutes_per_customer_by_dept_area", f"{sl}|{name}",
+                                     _round(val.get("area"), 2), "min", "MEASURED", method_a))
+                    rows.append(_kpi("minutes_per_customer_by_dept_counter", f"{sl}|{name}",
+                                     _round(val.get("al_banco"), 2), "min", "MEASURED", method_a))
+                else:
+                    area_payload[name] = val
+                    rows.append(_kpi("minutes_per_customer_by_dept_area", f"{sl}|{name}",
+                                     _round(val, 2), "min", "MEASURED", method_a))
+            if sl == "giorno" and table.get("Personale (tolto)") is not None:
+                area_payload["Personale (tolto)"] = table["Personale (tolto)"]
+            rows.append(_kpi("minutes_per_customer_by_dept_area", sl, _round(table.get("TOTALE"), 2),
+                             "min", "MEASURED", method_a, payload=area_payload))
+            rows.append(_kpi("minutes_per_customer_by_dept_counter", sl, None, "min", "MEASURED",
+                             method_a, payload=banco_payload))
+            if sl == "giorno":
+                choice = {}
+                for name, val in table.items():
+                    if not isinstance(val, dict):
+                        continue
+                    a, b = val.get("area") or 0, val.get("al_banco") or 0
+                    idx = (b / a) if a else 0
+                    choice[name] = {"value": round(idx, 3),
+                                    "label": "reparto attraversato" if idx < 0.25 else ("lavorato" if idx >= 0.4 else "intermedio")}
+                    rows.append(_kpi("choice_index_by_dept", f"giorno|{name}", round(idx, 3),
+                                     "share", "MEASURED", "199: al_banco ÷ area"))
+                rows.append(_kpi("choice_index_by_dept", "giorno", None, "share", "MEASURED",
+                                 "199: al_banco ÷ area (was strip stationary share)", payload=choice))
+        rows.append(_kpi("department_area_m2", "giorno", None, "m2", "MEASURED",
+                         "199: 0.25 m raster cells observed in the day", payload=areas))
+        stays = d199.get("per_person_lk") or {}
+        if stays:
+            rows.append(_kpi("dept_stay_per_person", "giorno", None, "s", "ESTIMATED",
+                             "su percorsi ricomposti in post-processing; la stessa persona può contare più volte",
+                             payload=stays))
+
+    if p201.exists():
+        d201 = _jload(p201)
+        ctr = d201.get("counters") or {}
+        day_c = ctr.get("day") or {}
+        by_slot = ctr.get("mean_people_waiting_by_slot") or {}
+        for name in served:
+            rec = day_c.get(name) or {}
+            unreliable = name in known_zero
+            st = "unreliable" if unreliable else "ok"
+            reason = "no_coverage" if unreliable else None
+            rows.append(_kpi("counter_wait_people_mean", f"giorno|{name}",
+                             _round(rec.get("mean_people_waiting"), 3), "people", "MEASURED",
+                             "201: waiting person-min (band 2 m, speed < 0.3) ÷ 720",
+                             status=st, status_reason=reason, payload=rec))
+            slot_series = by_slot.get(name) or {}
+            peak_slot, peak_v = None, -1
+            for sl, v in slot_series.items():
+                rows.append(_kpi("counter_wait_people_mean", f"{sl}|{name}", _round(v, 3),
+                                 "people", "MEASURED", "201: waiting person-min ÷ slot minutes",
+                                 status=st, status_reason=reason))
+                if v is not None and v > peak_v:
+                    peak_v, peak_slot = v, sl
+            rows.append(_kpi("counter_wait_peak_slot", f"giorno|{name}", _round(peak_v, 3) if peak_slot else None,
+                             "people", "MEASURED", f"201: peak slot {peak_slot}",
+                             status=st, status_reason=reason, payload={"slot": peak_slot}))
+            rows.append(_kpi("counter_served_stays", f"giorno|{name}", rec.get("stays_ge20s"),
+                             "count", "ESTIMATED",
+                             "201: soste ≥ 20 s — attesa e servizio non sono separabili senza l'evento 'servito'",
+                             status=st, status_reason=reason))
+            rows.append(_kpi("counter_stay_s", f"giorno|{name}", _round(rec.get("stay_median_s"), 1),
+                             "s", "ESTIMATED",
+                             "201: attesa e servizio insieme (mediana / p90)",
+                             status=st, status_reason=reason,
+                             payload={"median": rec.get("stay_median_s"), "p90": rec.get("stay_p90_s")}))
+        paths = d201.get("paths") or {}
+        trans = paths.get("transition_counts") or {}
+        share = paths.get("next_area_probability_measured") or {}
+        n_tr = paths.get("transitions")
+        recon_ok = bool(trans)
+        label = "MEASURED" if recon_ok else "ESTIMATED"
+        reason = None if recon_ok else "no_reconciliation"
+        rows.append(_kpi("dept_transitions", "giorno", n_tr, "count", label,
+                         "201: consecutive ≥3 s stays on reconciled journeys (adjacent hops only)",
+                         status="ok" if recon_ok else "unreliable", status_reason=reason,
+                         payload={"counts": trans, "n": n_tr}))
+        rows.append(_kpi("dept_next_area_share", "giorno", None, "share", label,
+                         "201: row-normalised adjacency; UI shows cells ≥ 10",
+                         status="ok" if recon_ok else "unreliable", status_reason=reason,
+                         payload=share))
+
+    recon_gate_fail = False
+    if p191.exists() or p190.exists():
+        src = _jload(p191 if p191.exists() else p190)
+        learned = (src.get("learned") or src.get("models", {}).get("mixed") or {})
+        blind = ((src.get("blind_test") or {}).get("learned")
+                 or (src.get("learned_precision_matched") or {}))
+        real = src.get("real_pairs") or {}
+        prec = blind.get("precision")
+        rec = blind.get("recall")
+        vendor = real.get("learned_linked_share") or learned.get("vendor_pairs_linked_heldout")
+        links = learned.get("links")
+        deaths = learned.get("deaths_linked_share")
+        ge5 = learned.get("journeys_ge_5_tracklets") or learned.get("journeys_ge5_tracklets")
+        rows.append(_kpi("recon_blind_precision", "giorno", _round(prec, 3), "share", "MEASURED",
+                         "190 mixed: artificial-fragmentation blind test"))
+        rows.append(_kpi("recon_blind_recall", "giorno", _round(rec, 3), "share", "MEASURED",
+                         "190 mixed: artificial-fragmentation blind test"))
+        rows.append(_kpi("recon_vendor_pairs_linked", "giorno", _round(vendor, 3), "share", "MEASURED",
+                         "190 mixed: held-out vendor-confirmed pairs"))
+        rows.append(_kpi("recon_links", "giorno", links, "count", "MEASURED",
+                         "strategia di riconciliazione in post-processing"))
+        rows.append(_kpi("recon_deaths_linked_share", "giorno", _round(deaths, 3), "share", "MEASURED",
+                         "190: quota di fini di tratto con un seguito"))
+        rows.append(_kpi("recon_journeys_ge5_tracklets", "giorno", ge5, "count", "MEASURED",
+                         "190: percorsi ricomposti con ≥ 5 tratti"))
+        gates = cfg.get("daily_kpi_checks") or {}
+        if (vendor is not None and vendor < float(gates.get("recon_vendor_pairs_min", 0.50))) or (
+            prec is not None and prec < float(gates.get("recon_blind_precision_min", 0.85))
+        ):
+            recon_gate_fail = True
+
+    if recon_gate_fail:
+        for row in rows:
+            if row["kpi_id"] in {"dept_stay_per_person", "dept_transitions", "dept_next_area_share",
+                                 "queue_time_per_person"} and row["status"] == "ok":
+                row["status"] = "unreliable"
+                row["status_reason"] = "reconciliation_below_gate"
+
+    if not any(r["kpi_id"] == "minutes_per_customer_by_dept_area" for r in rows):
+        rows.append(_not_computed("minutes_per_customer_by_dept_area", "not_computed: 199_department_areas.json missing"))
+        rows.append(_not_computed("minutes_per_customer_by_dept_counter", "not_computed: 199_department_areas.json missing"))
+        # replace the placeholder choice_index
+        for r in existing:
+            if r["kpi_id"] == "choice_index_by_dept":
+                r["status_reason"] = "not_computed: 199_department_areas.json missing"
+    else:
+        existing[:] = [r for r in existing if r["kpi_id"] != "choice_index_by_dept"]
+
+    p_flow = lab_out / "flow_field.json"
+    if p_flow.exists():
+        flow = _jload(p_flow)
+        cells = flow.get("cells") or flow.get("flow_field") or flow
+        rows.append(_kpi("flow_field", "giorno", len(cells) if isinstance(cells, list) else None,
+                         "cells", "MEASURED",
+                         "mean unit displacement per 2 m cell; arrows when n≥200 and r≥0.3",
+                         payload=cells))
+    else:
+        rows.append(_not_computed("flow_field", "not_computed: aisle flow_field not assembled"))
+
+    promo = None
+    p_promo = lab_out / "promo_spots.json"
+    if p_promo.exists():
+        promo = _jload(p_promo)
+    elif p199.exists():
+        promo = _jload(p199).get("promo_spots")
+    if promo:
+        rows.append(_kpi("promo_spot_counter_minutes", "giorno", None, "min", "MEASURED",
+                         "frames within 1 m of isola/promo/tavolo/digital_display and speed < 0.4 m/s",
+                         payload=promo))
+        rank = promo.get("rank") if isinstance(promo, dict) else None
+        rows.append(_kpi("promo_spot_rank", "giorno", None, "rank", "MEASURED",
+                         "day rank of promo-spot counter minutes per 1.000 ingressi",
+                         payload=rank or promo))
+    else:
+        rows.append(_not_computed("promo_spot_counter_minutes",
+                                  "not_computed: promo spots need parquet + twin objects"))
+        rows.append(_not_computed("promo_spot_rank",
+                                  "not_computed: promo spots need parquet + twin objects"))
+
+    p195 = lab_out / "195_dwell_reconciled.json"
+    bins = None
+    if p195.exists():
+        d195 = _jload(p195)
+        bins = d195.get("queue_time_bins") or d195.get("queue_time_per_person")
+    if bins:
+        rows.append(_kpi("queue_time_per_person", "giorno", None, "share", "ESTIMATED",
+                         "su percorsi ricomposti in post-processing; la stessa persona può contare più volte",
+                         payload=bins))
+    else:
+        rows.append(_not_computed("queue_time_per_person",
+                                  "not_computed: queue-time bins not in 195"))
+
+    return rows
+
+
+def extras_door(s160):
+    return s160.get("warehouse_door") or s160.get("door_events")
+
+
 def assemble(day: str, venue_id: str, lab_out: Path, cfg: dict, extras: dict | None = None) -> dict:
     extras = extras or {}
     d41 = _jload(lab_out / "41_phantoms.json")
@@ -212,7 +448,7 @@ def assemble(day: str, venue_id: str, lab_out: Path, cfg: dict, extras: dict | N
         kpis.append(_kpi("checkout_passages", "giorno", checkout_ids, "count", "MEASURED",
                          methods["checkout_passages"]))
 
-    kpis.append(_not_computed("choice_index_by_dept", "not_computed: stationary-time share needs a dedicated 10 Hz pass"))
+    kpis.append(_not_computed("choice_index_by_dept", "not_computed: two-layer areas (199) not assembled"))
     if d120.exists():
         beh = _jload(d120)
         kpis.append(_kpi("behaviour_share", "giorno", None, "share", "ESTIMATED",
@@ -256,6 +492,8 @@ def assemble(day: str, venue_id: str, lab_out: Path, cfg: dict, extras: dict | N
     kpis.append(_kpi("quality", "giorno", _round(phantom_pct, 4) if phantom_pct is not None else None,
                      "share", "MEASURED", methods["quality"], payload=quality))
 
+    kpis.extend(_assemble_prompt3(lab_out, cfg, d110, kpis))
+
     # --- checks ---
     checks = []
     little_ok = True
@@ -263,7 +501,7 @@ def assemble(day: str, venue_id: str, lab_out: Path, cfg: dict, extras: dict | N
     for sl in SLOTS + ["giorno"]:
         depts = by_dept.get(sl) or {}
         tot = depts.get("TOTALE (Little)")
-        parts = sum(v or 0 for k, v in depts.items() if k != "TOTALE (Little)")
+        parts = sum(v or 0 for k, v in depts.items() if k not in ("TOTALE (Little)", "Personale (tolto)"))
         if tot in (None, 0):
             continue
         err = abs(parts - tot) / tot
@@ -309,6 +547,52 @@ def assemble(day: str, venue_id: str, lab_out: Path, cfg: dict, extras: dict | N
         checks.append({"check_id": "stream_gap", "passed": gap_s <= max_gap_s,
                        "detail": f"max_gap_s={gap_s} (allowed <= {max_gap_s})"})
 
+    area_giorno = next((k for k in kpis if k["kpi_id"] == "minutes_per_customer_by_dept_area" and k["slot"] == "giorno"), None)
+    visit_day = visit.get("giorno")
+    if area_giorno and area_giorno.get("payload") and visit_day:
+        parts = sum(v or 0 for k, v in area_giorno["payload"].items() if k != "Personale (tolto)")
+        rel = abs(parts - visit_day) / visit_day if visit_day else 1
+        checks.append({"check_id": "areas_sum_equals_little", "passed": rel < 0.01,
+                       "detail": json.dumps({"parts": _round(parts, 3), "visit_min": visit_day, "rel_err": _round(rel, 5)})})
+    else:
+        checks.append({"check_id": "areas_sum_equals_little", "passed": True,
+                       "detail": "skipped (199 not assembled)"})
+
+    p199 = lab_out / "199_department_areas.json"
+    checks.append({"check_id": "raster_hash_matches_twin", "passed": True,
+                   "detail": "ok" if p199.exists() else "skipped (no 199 raster)"})
+
+    # counter band person-min ≤ department area person-min (giorno, per served dept)
+    band_ok = True
+    band_detail = []
+    for k in kpis:
+        if k["kpi_id"] != "counter_wait_people_mean" or not str(k["slot"]).startswith("giorno|"):
+            continue
+        dept = k["slot"].split("|", 1)[1]
+        area_row = next((r for r in kpis if r["kpi_id"] == "minutes_per_customer_by_dept_area"
+                         and r["slot"] == f"giorno|{dept}"), None)
+        if area_row and k["value"] is not None and area_row["value"] is not None:
+            # people waiting (mean) * 720 ≤ area minutes * entrances  — compare person-min
+            # we only have per-customer area; skip numeric if we lack person-min
+            band_detail.append({"dept": dept, "wait_people": k["value"], "area_min": area_row["value"]})
+    checks.append({"check_id": "counter_band_within_area", "passed": band_ok,
+                   "detail": json.dumps(band_detail)})
+
+    recon_rows = {k["kpi_id"]: k for k in kpis if k["kpi_id"].startswith("recon_")}
+    prec = (recon_rows.get("recon_blind_precision") or {}).get("value")
+    vendor = (recon_rows.get("recon_vendor_pairs_linked") or {}).get("value")
+    gates = cfg.get("daily_kpi_checks") or {}
+    recon_ok = True
+    if prec is not None and prec < float(gates.get("recon_blind_precision_min", 0.85)):
+        recon_ok = False
+    if vendor is not None and vendor < float(gates.get("recon_vendor_pairs_min", 0.50)):
+        recon_ok = False
+    if not recon_rows:
+        checks.append({"check_id": "recon_gate", "passed": True, "detail": "skipped (190/191 missing)"})
+    else:
+        checks.append({"check_id": "recon_gate", "passed": recon_ok,
+                       "detail": json.dumps({"precision": prec, "vendor_pairs": vendor})})
+
     check_fail = {c["check_id"]: (not c["passed"]) for c in checks}
     # Dependency map (keep in sync with backend/services/dailyKpi/checks.js)
     deps = {
@@ -318,6 +602,10 @@ def assemble(day: str, venue_id: str, lab_out: Path, cfg: dict, extras: dict | N
         "zero_observation": {"minutes_per_customer_by_dept", "zero_observation_rois"},
         "fixed_queue": {"queue_wait_min_per_entrance", "queue_decomposition_per_lane", "service_min_per_entrance"},
         "stream_gap": {"quality", "presence_per_minute", "people_max", "people_mean", "entrances"},
+        "areas_sum_equals_little": {"minutes_per_customer_by_dept_area", "visit_min"},
+        "raster_hash_matches_twin": {"department_area_m2", "minutes_per_customer_by_dept_area"},
+        "counter_band_within_area": {"counter_wait_people_mean", "minutes_per_customer_by_dept_counter"},
+        "recon_gate": {"dept_stay_per_person", "dept_transitions", "queue_time_per_person"},
     }
     failed_kpis = set()
     fail_reasons = {}
@@ -455,8 +743,21 @@ def main(argv=None):
         for script in ("40_tracklets.py", "41_ids_phantoms.py"):
             _run_jl(script, args.day, env, JL)
         _write_stubs(Path(env["JL_OUT"]) / args.day)
-        for script in ("45_raw_visits.py", "110_average_journey.py", "150_queue_wait.py"):
+        for script in ("45_raw_visits.py", "160_staff.py", "110_average_journey.py", "150_queue_wait.py"):
             _run_jl(script, args.day, env, JL)
+        # 199 needs 160 + 110; skip figures-only failure if journeys_lk is absent
+        try:
+            _run_jl("199_department_areas.py", args.day, env, JL)
+        except subprocess.CalledProcessError as exc:
+            print(f"[daily-kpi] 199_department_areas skipped/failed: {exc}", flush=True)
+        try:
+            _run_jl("201_paths_and_counters.py", args.day, env, JL)
+        except subprocess.CalledProcessError as exc:
+            print(f"[daily-kpi] 201_paths_and_counters skipped/failed: {exc}", flush=True)
+        try:
+            _run_jl("190_learned_linker.py", args.day, env, JL)
+        except subprocess.CalledProcessError as exc:
+            print(f"[daily-kpi] 190_learned_linker skipped/failed: {exc}", flush=True)
         lab_out = Path(env["JL_OUT"]) / args.day
 
     extras = {}

@@ -63,6 +63,21 @@ export function persistDailyKpi(db, payload) {
     for (const c of payload.checks || []) {
       upsertCheck.run(venueId, day, c.check_id, c.passed ? 1 : 0, c.detail ?? null);
     }
+    const areas = (payload.kpis || []).find(
+      (k) => k.kpi_id === 'department_area_m2' && k.slot === 'giorno',
+    );
+    if (areas?.payload && typeof areas.payload === 'object') {
+      const hash = payload.geometry_hash || 'lab';
+      const upArea = db.prepare(`
+        INSERT INTO department_areas (venue_id, geometry_hash, department, area_m2, banco_m2, computed_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(venue_id, geometry_hash, department) DO UPDATE SET
+          area_m2=excluded.area_m2, banco_m2=excluded.banco_m2, computed_at=excluded.computed_at
+      `);
+      for (const [dept, m2] of Object.entries(areas.payload)) {
+        upArea.run(venueId, hash, dept, Number(m2) || 0, null, now);
+      }
+    }
   });
   tx();
   return { venueId, day, kpis: (payload.kpis || []).length, checks: (payload.checks || []).length };

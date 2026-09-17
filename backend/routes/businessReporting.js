@@ -49,6 +49,7 @@ import {
 } from '../services/executive/VenueErpStore.js';
 import { loadDailyKpi, loadDailyKpiRange, persistDailyKpi } from '../services/dailyKpi/store.js';
 import { renderDailyKpiPdf, dailyKpiHeadlineUnreliable } from '../services/dailyKpi/renderDailyKpiPdf.js';
+import { counterAlertTracker } from '../services/dailyKpi/counterAlerts.js';
 
 const erpUpload = multer({
   storage: multer.memoryStorage(),
@@ -206,6 +207,23 @@ router.post('/daily-kpi/ingest', (req, res) => {
   } catch (err) {
     console.error('[BusinessReporting] daily-kpi ingest error:', err);
     res.status(500).json({ error: 'Failed to ingest daily KPI' });
+  }
+});
+
+router.get('/alerts', (req, res) => {
+  try {
+    const venueId = req.query.venueId;
+    if (!venueId) return res.status(400).json({ error: 'venueId is required' });
+    const snap = counterAlertTracker.snapshot(venueId);
+    res.json({
+      venueId,
+      counter_wait_people_now: snap.counters,
+      queue_wait_people_now: snap.lanes,
+      alerts: snap.alerts,
+    });
+  } catch (err) {
+    console.error('[BusinessReporting] alerts error:', err);
+    res.status(500).json({ error: 'Failed to load alerts' });
   }
 });
 
