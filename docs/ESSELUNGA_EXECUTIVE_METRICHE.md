@@ -11,7 +11,7 @@ Le tre superfici (tab Esselunga Executive, template Store Director v2, PDF seral
 | Superficie | Endpoint |
 |---|---|
 | Tab Esselunga Executive | `GET /api/reporting/daily-kpi?venueId=&day=` |
-| Store Director v2 | stesso payload, widget `*-v2` / `department-minutes` / … |
+| Store Director v2 | stesso payload, widget `*-v2` / `department-minutes-v2` / … |
 | PDF | `GET /api/reporting/esselunga-executive/pdf` — **solo** `daily_kpi`; 409 se manca o headline `unreliable` |
 | Trend | `GET /api/reporting/daily-kpi/range?venueId=&from=&to=` |
 
@@ -29,12 +29,24 @@ Soglie in `analysis/journey_lab/config/treviglio.json` (`phantom_filter`, `check
 | `people_max` | MEASURED | Max occupazione media al minuto (parquet); `not_computed` se assente | `phantom_share`, `stream_gap` |
 | `presence_per_minute` | MEASURED | Serie 1 min; `not_computed` senza parquet | `phantom_share`, `stream_gap` |
 | `entrances_per_15min` | MEASURED | Serie 15 min; `not_computed` senza parquet | — |
-| `minutes_per_customer_by_dept` | ESTIMATED | Persone-minuto nel reparto ÷ ingressi della fascia. Include Corsie / fuori zona, Scaffali senza categoria, Coda cassa, Cassa (servizio) | `little`, `zero_observation` |
+| `minutes_per_customer_by_dept` | ESTIMATED | **Legacy (16/09/2026):** strisce 1,5 m. Solo widget `department-minutes-legacy`. | `little`, `zero_observation` |
+| `minutes_per_customer_by_dept_area` | MEASURED | Pavimento entro 3 m dai banchi del reparto, proprietario = striscia più vicina; personale tolto da Corsie poi Scaffali | `areas_sum_equals_little`, `raster_hash_matches_twin` |
+| `minutes_per_customer_by_dept_counter` | MEASURED | Dentro l’area, ≤ 1 m e velocità &lt; 0,4 m/s | `counter_band_within_area` |
+| `department_area_m2` | MEASURED | Celle 0,25 m osservate nel giorno | `raster_hash_matches_twin` |
+| `choice_index_by_dept` | MEASURED | al banco ÷ area. &lt; 0,25 attraversato, ≥ 0,4 lavorato | — |
+| `staff_on_floor` | ESTIMATED | Intercetta della presenza oraria = S + ingressi × T (160) | — |
+| `staff_counter_person_min` | MEASURED | Tempo nelle strisce dietro i banchi | — |
+| `counter_wait_people_mean` | MEASURED | Persone-minuto in fascia 2 m, velocità &lt; 0,3 m/s, ÷ minuti di fascia | `counter_band_within_area` |
+| `counter_served_stays` / `counter_stay_s` | ESTIMATED | Soste ≥ 20 s; attesa e servizio insieme | — |
+| `dept_transitions` / `dept_next_area_share` | MEASURED o ESTIMATED | Salti adiacenti ≥ 3 s sui percorsi ricomposti | `recon_gate` |
+| `dept_stay_per_person` | ESTIMATED | Persone per ingresso e sosta, su percorsi ricomposti | `recon_gate` |
+| `flow_field` | MEASURED | Vettore medio per cella 2 m | — |
+| `promo_spot_counter_minutes` / `promo_spot_rank` | MEASURED | Tempo al banco su isola/promo/tavolo/display | — |
+| `recon_blind_precision` / `recon_vendor_pairs_linked` | MEASURED | Qualità della strategia di riconciliazione in post-processing | `recon_gate` |
 | `queue_wait_min_per_entrance` | ESTIMATED | WAITING person-min in CHECKOUT_QUEUE ÷ ingressi. Esclusi FIXED (≥600 s o frammento ≤1,2 m) e TRANSIT (≥0,5 m/s) | `fixed_queue` |
 | `service_min_per_entrance` | ESTIMATED | Stesso, CHECKOUT_SERVICE | `fixed_queue` |
 | `queue_decomposition_per_lane` | MEASURED | FIXED / TRANSIT / WAITING person-min per cassa | `fixed_queue` |
 | `first_department_after_entrance` | MEASURED | Transizioni da Ingresso (within-id + link inferiti se presenti) | — |
-| `choice_index_by_dept` | MEASURED | Quota tempo fermo < 0,3 m/s; oggi spesso `not_computed` | — |
 | `behaviour_share` / `behaviour_mix_by_slot` | ESTIMATED | `120_behaviour_clusters.py`; se troppo pesante: `unreliable` / `not_computed` | — |
 | `heat_traffic` / `heat_still` | MEASURED | Griglia 1 m; `not_computed` se assente | — |
 | `zero_observation_rois` | MEASURED | Reparti in `roi_dept` senza visite grezze | `zero_observation` |
@@ -52,12 +64,16 @@ Classi id (41, invariate): `PHANTOM_STATIC` ≥600 s in box 3 m; `STATIC_SUSPECT
 | `zero_observation` | nessun ROI/reparto a zero fuori da `known_uncovered_rois` (Pane, Salumi, Gastronomia) | `minutes_per_customer_by_dept`, `zero_observation_rois` |
 | `fixed_queue` | contaminazione FIXED residua nel KPI < 5 % (il KPI usa solo WAITING) | coda / servizio / decomposizione |
 | `stream_gap` | buco raw ≤ 60 s in orario (skip in assemble-only) | occupancy / ingressi / quality |
+| `areas_sum_equals_little` | \|Σ minuti area − visit_min\| &lt; 1 % | `minutes_per_customer_by_dept_area`, `visit_min` |
+| `raster_hash_matches_twin` | hash ROI + oggetti = raster | `department_area_m2`, area minutes |
+| `counter_band_within_area` | minuti in fascia banco ≤ minuti area | attesa banco, al banco |
+| `recon_gate` | vendor pairs ≥ 0,50 e precisione cieca ≥ 0,85 | KPIs per-persona |
 
 Un tile `unreliable` si mostra come **—** con `status_reason` in tooltip. Non si interpola.
 
 ### 0.3 Accettazione 2026-09-14 Treviglio (`55fdd53b-3298-4355-97c0-b4e789b11d06`)
 
-Ingressi 2177 ± 1 %; visit_min 23,5 ± 0,2; people_mean 71 ± 1; people_max 117 ± 2 (parquet); coda 0,59 ± 0,02 (fascia 18–20: 0,90 ± 0,03); servizio 0,36 ± 0,02; Verdura 0,60 / Surgelati 0,58 / Frutta 0,53 / Corsie 16,0 (± 0,03); primo reparto Frutta 91 %; zero = {Pane, Salumi, Gastronomia}. Test: `backend/tests/dailyKpi.test.js` (assemble sempre; parquet skip se assente).
+Dopo pulizia personale (14/09): ingressi 1948 ± 1 %; visit_min 17,6 ± 0,3; people_mean 48 ± 1 (person-min clienti ÷ 720); coda 0,64 ± 0,02 (18–20: 1,01 ± 0,03); servizio 0,40 ± 0,02. Aree: Scaffali s.c. 6,69 / 2,91; Frutta 1,63 / 0,60; Surgelati 1,54 / 0,74; Latticini 1,32 / 0,48; Bakery 1,21 / 0,39; Carne 1,13 / 0,32; Verdura 0,88 / 0,44; Ingresso/casse 1,92; Corsie 0 dopo lo staff. Attesa banco: Carne 0,33, Pesce 0,43, Bar 0,58. Transizioni 21.620; Frutta→Verdura 0,94. Riconciliazione: P 0,89 / vendor 0,68. Test: `backend/tests/dailyKpi.test.js` + `dailyKpiPrompt3.test.js`.
 
 ---
 

@@ -32,11 +32,14 @@ const CONTRACT_KPI_IDS = [
   'entrances', 'visit_min', 'people_mean', 'people_max',
   'presence_per_minute', 'entrances_per_15min',
   'minutes_per_customer_by_dept',
+  'minutes_per_customer_by_dept_area', 'minutes_per_customer_by_dept_counter',
+  'department_area_m2',
   'queue_wait_min_per_entrance', 'service_min_per_entrance',
   'queue_decomposition_per_lane', 'first_department_after_entrance',
   'checkout_passages',
   'choice_index_by_dept', 'behaviour_share', 'behaviour_mix_by_slot',
   'heat_traffic', 'heat_still', 'zero_observation_rois', 'quality',
+  'staff_on_floor', 'counter_wait_people_mean', 'dept_transitions',
 ];
 
 function memoryDb() {
@@ -207,32 +210,61 @@ describe('assemble 2026-09-14 Treviglio from Journey Lab JSON', () => {
     }
 
     const pick = (id, slot = 'giorno') => payload.kpis.find((k) => k.kpi_id === id && k.slot === slot);
-    expect(pick('entrances').value).toBeGreaterThanOrEqual(2177 * 0.99);
-    expect(pick('entrances').value).toBeLessThanOrEqual(2177 * 1.01);
+    expect(pick('entrances').value).toBeGreaterThanOrEqual(1948 * 0.99);
+    expect(pick('entrances').value).toBeLessThanOrEqual(1948 * 1.01);
     expect(pick('entrances').label).toBe('MEASURED');
-    expect(pick('visit_min').value).toBeGreaterThanOrEqual(23.3);
-    expect(pick('visit_min').value).toBeLessThanOrEqual(23.7);
+    expect(pick('visit_min').value).toBeGreaterThanOrEqual(17.3);
+    expect(pick('visit_min').value).toBeLessThanOrEqual(17.9);
     expect(pick('visit_min').label).toBe('ESTIMATED');
-    expect(pick('people_mean').value).toBeGreaterThanOrEqual(70);
-    expect(pick('people_mean').value).toBeLessThanOrEqual(72);
+    expect(pick('people_mean').value).toBeGreaterThanOrEqual(47);
+    expect(pick('people_mean').value).toBeLessThanOrEqual(49);
     expect(pick('people_mean').label).toBe('MEASURED');
-    expect(pick('queue_wait_min_per_entrance').value).toBeGreaterThanOrEqual(0.57);
-    expect(pick('queue_wait_min_per_entrance').value).toBeLessThanOrEqual(0.61);
+    expect(pick('queue_wait_min_per_entrance').value).toBeGreaterThanOrEqual(0.62);
+    expect(pick('queue_wait_min_per_entrance').value).toBeLessThanOrEqual(0.66);
     expect(pick('queue_wait_min_per_entrance').label).toBe('ESTIMATED');
-    expect(pick('queue_wait_min_per_entrance', '18-20').value).toBeGreaterThanOrEqual(0.87);
-    expect(pick('queue_wait_min_per_entrance', '18-20').value).toBeLessThanOrEqual(0.93);
-    expect(pick('service_min_per_entrance').value).toBeGreaterThanOrEqual(0.34);
-    expect(pick('service_min_per_entrance').value).toBeLessThanOrEqual(0.38);
+    expect(pick('queue_wait_min_per_entrance', '18-20').value).toBeGreaterThanOrEqual(0.98);
+    expect(pick('queue_wait_min_per_entrance', '18-20').value).toBeLessThanOrEqual(1.04);
+    expect(pick('service_min_per_entrance').value).toBeGreaterThanOrEqual(0.38);
+    expect(pick('service_min_per_entrance').value).toBeLessThanOrEqual(0.42);
 
     const verdura = pick('minutes_per_customer_by_dept', 'giorno|Verdura');
     const surg = pick('minutes_per_customer_by_dept', 'giorno|Surgelati');
     const frutta = pick('minutes_per_customer_by_dept', 'giorno|Frutta');
     const corsie = pick('minutes_per_customer_by_dept', 'giorno|Corsie / fuori zona');
-    expect(verdura.value).toBeCloseTo(0.60, 2);
-    expect(surg.value).toBeCloseTo(0.58, 2);
-    expect(frutta.value).toBeCloseTo(0.53, 2);
-    expect(corsie.value).toBeGreaterThanOrEqual(15.97);
-    expect(corsie.value).toBeLessThanOrEqual(16.03);
+    expect(verdura.value).toBeCloseTo(0.66, 2);
+    expect(surg.value).toBeCloseTo(0.63, 2);
+    expect(frutta.value).toBeCloseTo(0.58, 2);
+    expect(corsie.value).toBeGreaterThanOrEqual(9.6);
+    expect(corsie.value).toBeLessThanOrEqual(10.0);
+
+    const area = (dept) => pick('minutes_per_customer_by_dept_area', `giorno|${dept}`);
+    const banco = (dept) => pick('minutes_per_customer_by_dept_counter', `giorno|${dept}`);
+    expect(area('Frutta').value).toBeCloseTo(1.63, 1);
+    expect(area('Surgelati').value).toBeCloseTo(1.54, 1);
+    expect(area('Latticini').value).toBeCloseTo(1.32, 1);
+    expect(area('Bakery & Breakfast').value).toBeCloseTo(1.21, 1);
+    expect(area('Carne').value).toBeCloseTo(1.13, 1);
+    expect(area('Verdura').value).toBeCloseTo(0.88, 1);
+    expect(area('Scaffali senza categoria').value).toBeCloseTo(6.69, 1);
+    expect(area('Ingresso, casse, retro banchi').value).toBeCloseTo(1.92, 1);
+    expect(area('Corsie / fuori zona').value).toBeCloseTo(0.0, 1);
+    expect(banco('Surgelati').value).toBeCloseTo(0.74, 1);
+    expect(banco('Frutta').value).toBeCloseTo(0.60, 1);
+    expect(area('Frutta').label).toBe('MEASURED');
+    expect(pick('minutes_per_customer_by_dept').label).toBe('ESTIMATED');
+    expect(pick('choice_index_by_dept', 'giorno|Surgelati').value).toBeGreaterThan(0.4);
+    expect(pick('staff_on_floor').value).toBeGreaterThanOrEqual(11);
+    expect(pick('staff_on_floor').value).toBeLessThanOrEqual(15);
+    expect(pick('counter_wait_people_mean', 'giorno|Carne').value).toBeCloseTo(0.33, 1);
+    expect(pick('counter_wait_people_mean', 'giorno|Pesce').value).toBeCloseTo(0.43, 1);
+    expect(pick('counter_wait_people_mean', 'giorno|Bar').value).toBeCloseTo(0.58, 1);
+    expect(pick('dept_transitions').value).toBeGreaterThan(21620 * 0.9);
+    expect(pick('dept_transitions').value).toBeLessThan(21620 * 1.1);
+    const share = pick('dept_next_area_share').payload;
+    expect(share.Frutta.Verdura).toBeCloseTo(0.94, 1);
+    expect(share.Verdura.Frutta).toBeCloseTo(0.68, 1);
+    expect(pick('recon_blind_precision').value).toBeCloseTo(0.89, 1);
+    expect(pick('recon_vendor_pairs_linked').value).toBeCloseTo(0.68, 1);
 
     const first = pick('first_department_after_entrance');
     expect(first.payload[0].dst).toBe('Frutta');
@@ -258,7 +290,7 @@ describe('assemble 2026-09-14 Treviglio from Journey Lab JSON', () => {
     const db = memoryDb();
     persistDailyKpi(db, payload);
     const loaded = loadDailyKpi(db, VENUE, DAY);
-    expect(loaded.headline.entrances).toBe(2177);
+    expect(loaded.headline.entrances).toBe(1948);
     db.close();
   });
 });
@@ -281,9 +313,9 @@ describe('acceptance on parquet (skipped unless present)', () => {
     ], { encoding: 'utf8' });
     expect(run.status, run.stderr).toBe(0);
     const payload = JSON.parse(fs.readFileSync(path.join(report, VENUE, `${DAY}.json`), 'utf8'));
-    expect(payload.headline.entrances).toBeGreaterThanOrEqual(2155);
-    expect(payload.headline.visit_min).toBeGreaterThanOrEqual(23.3);
-    expect(payload.headline.people_mean).toBeGreaterThanOrEqual(70);
-    expect(payload.headline.queue_wait_min_per_entrance).toBeGreaterThanOrEqual(0.57);
+    expect(payload.headline.entrances).toBeGreaterThanOrEqual(1928);
+    expect(payload.headline.visit_min).toBeGreaterThanOrEqual(17.3);
+    expect(payload.headline.people_mean).toBeGreaterThanOrEqual(47);
+    expect(payload.headline.queue_wait_min_per_entrance).toBeGreaterThanOrEqual(0.62);
   });
 });

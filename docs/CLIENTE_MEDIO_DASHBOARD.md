@@ -13,11 +13,17 @@ Il selettore elenca ogni giorno dal 14 settembre 2026 (primo giorno calcolato) e
 | Presenza | `people_mean` (+ `people_max`) | persone in negozio in media | Persone-minuto ÷ 720 minuti di apertura. Il massimo è l’occupazione media al minuto, se il parquet è stato letto. |
 | Coda | `queue_wait_min_per_entrance` | coda per cliente | Tempo WAITING in zona coda ÷ ingressi. Transito e oggetti fermi esclusi. |
 | Passaggi in cassa | `checkout_passages` | passaggi in cassa | Id distinti visti nella zona servizio. |
-| Tempo fuori zona | `minutes_per_customer_by_dept` (Corsie) | % del tempo fuori da ogni zona | Corsie = tempo in negozio − tempo in ROI, poi ÷ ingressi. |
+| Ortofrutta | `minutes_per_customer_by_dept_area` Frutta+Verdura | in ortofrutta per cliente | Area 3 m; nota «di cui X al banco». |
 | Ingressi per fascia | `entrances` per slot | Ingressi per fascia oraria | Stesso conteggio, sulle sei fasce 08–20. |
 | Visita per fascia | `visit_min` per slot | Durata media della visita | Little per fascia (persone-minuto della fascia ÷ ingressi della fascia). |
-| Minuti per zona | `minutes_per_customer_by_dept` | Minuti per cliente, giorno intero | Tempo misurato in ogni zona ÷ ingressi del giorno. La barra scura è il fuori-zona. |
-| Heatmap | `minutes_per_customer_by_dept` per slot | Minuti per cliente per fascia oraria | Stesso rapporto, zona × fascia. |
+| Minuti due livelli | `minutes_per_customer_by_dept_area` / `_counter` | Minuti per cliente per reparto | `hbars2`: scuro = al banco, chiaro = resto area. Tabella con persone/ingresso* e sosta mediana*. |
+| Heatmap area | `minutes_per_customer_by_dept_area` per slot | Minuti nell'area per fascia | Stesso rapporto, reparto × fascia. |
+| Heatmap banco | `minutes_per_customer_by_dept_counter` per slot | Minuti al banco per fascia | Solo fermo/lento entro 1 m. |
+| Attesa banchi | `counter_wait_people_mean` | Attesa ai banchi serviti | Persone in media per fascia; sosta med/p90 e clienti serviti*. |
+| Dove va dopo | `dept_next_area_share` | Matrice | Celle ≥ 10 transizioni. Non è un percorso multi-passo. |
+| Direzione | `flow_field` | Frecce sul piano | n ≥ 200 e r ≥ 0,3. |
+| Testate e promo | `promo_spot_counter_minutes` | Ranked bars | min / 1.000 ingressi. |
+| Persone per reparto | `dept_stay_per_person` | chip STIMATO | Solo se la strategia di riconciliazione in post-processing passa i gate. |
 | Coda per fascia | `queue_wait_min_per_entrance` / `service_min_per_entrance` | Coda cassa: minuti per cliente | Coda e servizio, minuti per cliente e per fascia. |
 | Primo reparto | `first_department_after_entrance` | Primo reparto dopo l'ingresso | Passaggi misurati dentro lo stesso numero di traccia, in uscita dall’ingresso. |
 | Attesa per cassa | `queue_decomposition_per_lane` | Attesa per cassa | Quota del tempo per corsia: in attesa / in transito / oggetto fermo. |
