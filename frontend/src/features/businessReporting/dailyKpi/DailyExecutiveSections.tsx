@@ -3,8 +3,11 @@ import { MeasureChip } from './MeasureChip';
 import type { DailyKpiPayload, DailyKpiRangeDay } from './types';
 import {
   buildInsights,
+  counterWaitRows,
   departmentMinutes,
+  departmentMinutesArea,
   firstDepartment,
+  promoSpotRows,
   queueBySlot,
   queueLanes,
   slotSeries,
@@ -20,18 +23,24 @@ const INSIGHT_COLOR = {
 export function DailyExecutiveSections({
   payload,
   rangeDays = [],
+  liveAlerts = [],
 }: {
   payload: DailyKpiPayload;
   rangeDays?: DailyKpiRangeDay[];
+  liveAlerts?: Array<{ type?: string; counter?: string; people?: number; minutes?: number }>;
 }) {
   const insights = buildInsights(payload, rangeDays);
   const depts = departmentMinutes(payload);
+  const areaDepts = departmentMinutesArea(payload);
+  const counters = counterWaitRows(payload);
+  const promos = promoSpotRows(payload);
   const first = firstDepartment(payload);
   const slots = slotSeries(payload);
   const qSlots = queueBySlot(payload);
   const lanes = queueLanes(payload).filter((l) => l.roi_group === 'CHECKOUT_QUEUE');
   const maxEnt = Math.max(1, ...slots.map((s) => s.entrances || 0));
   const maxDept = Math.max(0.01, ...depts.filter((d) => d.minutes != null).map((d) => d.minutes as number));
+  const maxArea = Math.max(0.01, ...areaDepts.filter((d) => d.area != null).map((d) => d.area as number));
   const maxFirst = Math.max(0.01, ...first.map((f) => f.share || 0));
   const maxWait = Math.max(0.01, ...qSlots.map((s) => s.wait || 0), ...qSlots.map((s) => s.service || 0));
 
@@ -44,6 +53,16 @@ export function DailyExecutiveSections({
 
   return (
     <div className="space-y-4">
+      {liveAlerts.map((al) => (
+        <div key={`${al.type}-${al.counter}`} className={`rounded-lg border p-3 ${INSIGHT_COLOR.bad}`}>
+          <div className="flex items-center gap-1.5 mb-1">
+            <Lightbulb className="w-3 h-3 text-amber-400 shrink-0" />
+            <span className="text-xs font-medium text-white">
+              Coda al banco {al.counter}: {al.people} persone da {al.minutes} minuti
+            </span>
+          </div>
+        </div>
+      ))}
       {insights.length > 0 && (
         <div className="grid gap-2" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))' }}>
           {insights.map((ins) => (
@@ -89,13 +108,15 @@ export function DailyExecutiveSections({
       <section className="rounded-xl border border-gray-700/60 bg-gray-800/30 p-4">
         <div className="flex items-center gap-2 mb-1">
           <h2 className="text-sm font-medium text-white">Minuti per cliente per reparto</h2>
-          <MeasureChip label="ESTIMATED" method="persone-minuto nel reparto ÷ ingressi della fascia" />
+          <MeasureChip label="MEASURED" method="area = pavimento entro 3 m; al banco = ≤1 m e velocità < 0,4 m/s" />
         </div>
         <p className="text-[12px] text-gray-400 mb-3">
-          Sostituisce Stopping power, Engagement, Pass-through, Penetration e Bypass. Corsie / fuori zona è lì dove il cliente è visibile ma fuori dai ROI.
+          Due livelli misurati. Scuro = al banco; chiaro = resto dell’area. I minuti a striscia 1,5 m restano solo nei widget legacy.
         </p>
         <div className="space-y-1.5">
-          {depts.map((d) => (
+          {(areaDepts.length ? areaDepts : depts.map((d) => ({
+            dept: d.dept, area: d.minutes, banco: null, zeroObservation: d.zeroObservation, status: d.status, statusReason: d.statusReason,
+          }))).map((d) => (
             <div key={d.dept} className="flex items-center gap-2 text-xs">
               <span className="w-44 shrink-0 text-gray-300 truncate">{d.dept}</span>
               {d.zeroObservation ? (
@@ -104,13 +125,19 @@ export function DailyExecutiveSections({
                 <span className="text-gray-500" title={d.statusReason || undefined}>—</span>
               ) : (
                 <>
-                  <div className="flex-1 h-2 bg-gray-900 rounded overflow-hidden">
+                  <div className="flex-1 h-2 bg-gray-900 rounded overflow-hidden flex">
                     <div
-                      className={`h-full rounded ${d.dept === 'Corsie / fuori zona' ? 'bg-violet-400' : 'bg-sky-400'}`}
-                      style={{ width: `${Math.round(((d.minutes || 0) / maxDept) * 100)}%` }}
+                      className="h-full bg-sky-700"
+                      style={{ width: `${Math.round(((d.banco || 0) / maxArea) * 100)}%` }}
+                    />
+                    <div
+                      className={`h-full ${d.dept.startsWith('Corsie') ? 'bg-violet-400' : 'bg-sky-400'}`}
+                      style={{ width: `${Math.round((Math.max((d.area || 0) - (d.banco || 0), 0) / maxArea) * 100)}%` }}
                     />
                   </div>
-                  <span className="w-12 text-right tabular-nums text-gray-200">{d.minutes?.toFixed(2)}</span>
+                  <span className="w-16 text-right tabular-nums text-gray-200">
+                    {d.area?.toFixed(2)}{d.banco != null ? ` / ${d.banco.toFixed(2)}` : ''}
+                  </span>
                 </>
               )}
             </div>
@@ -144,23 +171,64 @@ export function DailyExecutiveSections({
             <thead>
               <tr className="text-gray-400 text-left">
                 <th className="py-1 font-medium">Reparto</th>
-                <th className="py-1 font-medium">Minuti / cliente</th>
+                <th className="py-1 font-medium">Nell’area</th>
+                <th className="py-1 font-medium">Al banco</th>
                 <th className="py-1 font-medium">Indice di scelta</th>
               </tr>
             </thead>
             <tbody>
-              {depts.filter((d) => !['Ingresso', 'Corsie / fuori zona', 'Coda cassa', 'Cassa (servizio)', 'Scaffali senza categoria'].includes(d.dept)).map((d) => (
+              {(areaDepts.length ? areaDepts : depts.map((d) => ({
+                dept: d.dept, area: d.minutes, banco: null, choice: null, choiceLabel: null,
+                zeroObservation: d.zeroObservation,
+              }))).filter((d) => !['Ingresso', 'Ingresso, casse, retro banchi', 'Corsie / fuori zona', 'Coda cassa', 'Cassa (servizio)', 'Scaffali senza categoria'].includes(d.dept)).map((d) => (
                 <tr key={d.dept} className="border-t border-gray-800">
                   <td className="py-1.5 text-gray-200">{d.dept}</td>
                   <td className="py-1.5 tabular-nums text-gray-300">
-                    {d.zeroObservation ? 'nessuna osservazione — da verificare' : (d.minutes?.toFixed(2) ?? '—')}
+                    {d.zeroObservation ? 'nessuna osservazione — da verificare' : (d.area?.toFixed(2) ?? '—')}
                   </td>
-                  <td className="py-1.5 text-gray-500">—</td>
+                  <td className="py-1.5 tabular-nums text-gray-300">{d.banco != null ? d.banco.toFixed(2) : '—'}</td>
+                  <td className="py-1.5 text-gray-400">
+                    {d.choice != null ? `${d.choice.toFixed(2)}${d.choiceLabel ? ` · ${d.choiceLabel}` : ''}` : '—'}
+                  </td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
+      </section>
+
+      <section className="rounded-xl border border-gray-700/60 bg-gray-800/30 p-4">
+        <div className="flex items-center gap-2 mb-1">
+          <h2 className="text-sm font-medium text-white">Banchi serviti</h2>
+          <MeasureChip label="MEASURED" method="fascia 2 m, velocità < 0,3 m/s; sosta ≥ 20 s = cliente servito (attesa+servizio)" />
+        </div>
+        <table className="w-full text-xs">
+          <thead>
+            <tr className="text-gray-400 text-left">
+              <th className="py-1 font-medium">Banco</th>
+              <th className="py-1 font-medium">Persone in media</th>
+              <th className="py-1 font-medium">Picco</th>
+              <th className="py-1 font-medium">Soste ≥ 20 s</th>
+              <th className="py-1 font-medium">Sosta med. / p90</th>
+            </tr>
+          </thead>
+          <tbody>
+            {counters.map((c) => (
+              <tr key={c.dept} className="border-t border-gray-800 text-gray-300">
+                <td className="py-1.5">{c.dept}</td>
+                <td className="py-1.5 tabular-nums">{c.status === 'unreliable' ? '—' : (c.mean?.toFixed(2) ?? '—')}</td>
+                <td className="py-1.5 tabular-nums">{c.peakSlot ? `${c.peakSlot} · ${c.peak?.toFixed(2)}` : '—'}</td>
+                <td className="py-1.5 tabular-nums">{c.stays ?? '—'}</td>
+                <td className="py-1.5 tabular-nums">{c.median != null ? `${c.median.toFixed(0)} / ${c.p90?.toFixed(0) ?? '—'} s` : '—'}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {promos.length > 0 && (
+          <p className="text-[11px] text-gray-500 mt-2">
+            Top testate: {promos.slice(0, 3).map((p) => p.name).join(', ')}.
+          </p>
+        )}
       </section>
 
       <section className="rounded-xl border border-gray-700/60 bg-gray-800/30 p-4">

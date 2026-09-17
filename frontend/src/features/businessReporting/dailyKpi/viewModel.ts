@@ -150,7 +150,114 @@ export function buildInsights(payload: DailyKpiPayload, rangeDays: DailyKpiRange
       });
     }
   }
-  return cards.slice(0, 3);
+  const served = ['Carne', 'Pesce', 'Bar'];
+  for (const name of served) {
+    if (cards.length >= 4) break;
+    const row = pickKpi(payload, 'counter_wait_people_mean', `giorno|${name}`);
+    const peak = pickKpi(payload, 'counter_wait_peak_slot', `giorno|${name}`);
+    if (row?.status === 'ok' && row.value != null && row.value >= 0.5) {
+      const slot = (peak?.payload as { slot?: string } | undefined)?.slot;
+      cards.push({
+        id: `counter-${name}`,
+        severity: row.value >= 0.7 ? 'warn' : 'info',
+        title: `Attesa al banco ${name}`,
+        message: `${row.value.toFixed(2)} persone in media. ${slot ? `Picco in fascia ${slot}.` : ''}`.trim(),
+        action: 'Attesa e servizio non sono separabili senza l’evento «servito».',
+      });
+    }
+  }
+  return cards.slice(0, 4);
+}
+
+export interface DeptAreaRow {
+  dept: string;
+  area: number | null;
+  banco: number | null;
+  choice: number | null;
+  choiceLabel: string | null;
+  status: DailyKpiRow['status'];
+  statusReason?: string | null;
+  zeroObservation: boolean;
+}
+
+export function departmentMinutesArea(payload: DailyKpiPayload): DeptAreaRow[] {
+  const zero = new Set((pickKpi(payload, 'zero_observation_rois')?.payload as string[]) || []);
+  const areaRow = pickKpi(payload, 'minutes_per_customer_by_dept_area', 'giorno');
+  const choiceRow = pickKpi(payload, 'choice_index_by_dept', 'giorno');
+  const areaMap = (areaRow?.payload && typeof areaRow.payload === 'object')
+    ? areaRow.payload as Record<string, number>
+    : {};
+  const choiceMap = (choiceRow?.payload && typeof choiceRow.payload === 'object')
+    ? choiceRow.payload as Record<string, { value?: number; label?: string } | number>
+    : {};
+  const order = [
+    'Frutta', 'Verdura', 'Surgelati', 'Bakery & Breakfast', 'Latticini',
+    'Carne', 'Pesce', 'Bar', 'Pane', 'Salumi', 'Gastronomia', 'Acqua',
+    'Scaffali senza categoria', 'Corsie / fuori zona', 'Ingresso, casse, retro banchi',
+  ];
+  const keys = [...new Set([...order, ...Object.keys(areaMap)])];
+  return keys
+    .filter((d) => d !== 'Personale (tolto)' && (d in areaMap || zero.has(d) || pickKpi(payload, 'minutes_per_customer_by_dept_area', `giorno|${d}`)))
+    .map((dept) => {
+      const keyed = pickKpi(payload, 'minutes_per_customer_by_dept_area', `giorno|${dept}`);
+      const banco = pickKpi(payload, 'minutes_per_customer_by_dept_counter', `giorno|${dept}`);
+      const ch = pickKpi(payload, 'choice_index_by_dept', `giorno|${dept}`);
+      const rawChoice = choiceMap[dept];
+      const choiceVal = ch?.value ?? (typeof rawChoice === 'number' ? rawChoice : rawChoice?.value ?? null);
+      const choiceLab = typeof rawChoice === 'object' && rawChoice?.label
+        ? rawChoice.label
+        : (choiceVal == null ? null : (choiceVal < 0.25 ? 'reparto attraversato' : choiceVal >= 0.4 ? 'lavorato' : 'intermedio'));
+      return {
+        dept,
+        area: zero.has(dept) ? null : (keyed?.value ?? (typeof areaMap[dept] === 'number' ? areaMap[dept] : null)),
+        banco: banco?.value ?? null,
+        choice: choiceVal,
+        choiceLabel: choiceLab,
+        status: zero.has(dept) ? 'ok' : (keyed?.status ?? areaRow?.status ?? 'unreliable'),
+        statusReason: keyed?.status_reason ?? areaRow?.status_reason,
+        zeroObservation: zero.has(dept),
+      };
+    });
+}
+
+export function counterWaitRows(payload: DailyKpiPayload): Array<{
+  dept: string;
+  mean: number | null;
+  peak: number | null;
+  peakSlot: string | null;
+  stays: number | null;
+  median: number | null;
+  p90: number | null;
+  status: DailyKpiRow['status'];
+}> {
+  const names = ['Carne', 'Pesce', 'Bar', 'Gastronomia', 'Salumi', 'Pane'];
+  return names.map((dept) => {
+    const mean = pickKpi(payload, 'counter_wait_people_mean', `giorno|${dept}`);
+    const peak = pickKpi(payload, 'counter_wait_peak_slot', `giorno|${dept}`);
+    const stays = pickKpi(payload, 'counter_served_stays', `giorno|${dept}`);
+    const stay = pickKpi(payload, 'counter_stay_s', `giorno|${dept}`);
+    const p = (stay?.payload && typeof stay.payload === 'object') ? stay.payload as { median?: number; p90?: number } : {};
+    return {
+      dept,
+      mean: mean?.value ?? null,
+      peak: peak?.value ?? null,
+      peakSlot: (peak?.payload as { slot?: string } | undefined)?.slot ?? null,
+      stays: stays?.value ?? null,
+      median: p.median ?? stay?.value ?? null,
+      p90: p.p90 ?? null,
+      status: mean?.status ?? 'unreliable',
+    };
+  });
+}
+
+export function promoSpotRows(payload: DailyKpiPayload): Array<{ name: string; minutes: number; per1000?: number; department?: string }> {
+  const row = pickKpi(payload, 'promo_spot_counter_minutes');
+  const raw = row?.payload;
+  if (Array.isArray(raw)) return raw as Array<{ name: string; minutes: number; per1000?: number; department?: string }>;
+  if (raw && typeof raw === 'object' && Array.isArray((raw as { spots?: unknown }).spots)) {
+    return (raw as { spots: Array<{ name: string; minutes: number; per1000?: number; department?: string }> }).spots;
+  }
+  return [];
 }
 
 export interface DeptMinuteRow {

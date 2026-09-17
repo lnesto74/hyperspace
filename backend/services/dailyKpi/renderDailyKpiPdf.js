@@ -70,18 +70,28 @@ export function renderDailyKpiPdf(payload, { venueName = 'Treviglio' } = {}) {
   });
 
   y += 86;
-  doc.fillColor('#111827').fontSize(12).text('Minuti per cliente per reparto', M, y);
+  doc.fillColor('#111827').fontSize(12).text('Minuti per cliente per reparto (area / al banco)', M, y);
   y += 16;
+  const areaRow = pick(payload, 'minutes_per_customer_by_dept_area', 'giorno');
   const deptRow = pick(payload, 'minutes_per_customer_by_dept', 'giorno');
   const zero = new Set(pick(payload, 'zero_observation_rois')?.payload || []);
-  const depts = Object.entries((deptRow?.payload && typeof deptRow.payload === 'object') ? deptRow.payload : {});
+  const areaMap = (areaRow?.payload && typeof areaRow.payload === 'object') ? areaRow.payload : {};
+  const depts = Object.entries(Object.keys(areaMap).length
+    ? areaMap
+    : ((deptRow?.payload && typeof deptRow.payload === 'object') ? deptRow.payload : {}));
   depts.forEach(([name, val]) => {
-    if (y > 760) return;
-    doc.fillColor('#374151').fontSize(8).text(name, M, y, { width: 160 });
+    if (y > 760 || name === 'Personale (tolto)') return;
+    const banco = pick(payload, 'minutes_per_customer_by_dept_counter', `giorno|${name}`);
+    doc.fillColor('#374151').fontSize(8).text(name, M, y, { width: 150 });
     if (zero.has(name)) {
-      doc.fillColor('#b45309').text('nessuna osservazione — da verificare', M + 170, y);
+      doc.fillColor('#b45309').text('nessuna osservazione — da verificare', M + 160, y);
     } else {
-      doc.fillColor('#111827').text(Number(val).toFixed(2), M + 170, y);
+      const area = typeof val === 'number' ? val : val?.area;
+      const b = banco?.value ?? (typeof val === 'object' ? val?.al_banco : null);
+      doc.fillColor('#111827').text(
+        `${Number(area ?? 0).toFixed(2)}${b != null ? `  /  ${Number(b).toFixed(2)}` : ''}`,
+        M + 160, y,
+      );
     }
     y += 12;
   });
@@ -117,11 +127,38 @@ export function renderDailyKpiPdf(payload, { venueName = 'Treviglio' } = {}) {
     y2 += 12;
   }
   y2 += 10;
+  doc.fontSize(10).fillColor('#111827').text('Banchi serviti', M, y2);
+  y2 += 14;
+  for (const name of ['Carne', 'Pesce', 'Bar', 'Gastronomia', 'Salumi', 'Pane']) {
+    const mean = pick(payload, 'counter_wait_people_mean', `giorno|${name}`);
+    const stays = pick(payload, 'counter_served_stays', `giorno|${name}`);
+    const stay = pick(payload, 'counter_stay_s', `giorno|${name}`);
+    doc.fontSize(8).fillColor('#374151')
+      .text(`${name}  persone ${shown(mean, 2)}  soste ${stays?.value ?? '—'}  med ${shown(stay, 0)} s`, M, y2);
+    y2 += 12;
+  }
+  y2 += 8;
+  doc.fontSize(10).fillColor('#111827').text('Testate e promo (top 10)', M, y2);
+  y2 += 14;
+  const promo = pick(payload, 'promo_spot_counter_minutes')?.payload;
+  const spots = Array.isArray(promo) ? promo : (promo?.spots || []);
+  if (!spots.length) {
+    doc.fontSize(8).fillColor('#9ca3af').text('non calcolato', M, y2);
+    y2 += 12;
+  } else {
+    spots.slice(0, 10).forEach((s) => {
+      doc.fontSize(8).fillColor('#374151')
+        .text(`${s.name || s.object_id}: ${(s.per1000 ?? s.minutes ?? 0).toFixed(1)} min / 1.000`, M, y2);
+      y2 += 11;
+    });
+  }
+  y2 += 8;
   doc.fontSize(10).fillColor('#111827').text('Piazza del Fresco', M, y2);
   y2 += 14;
-  depts.filter(([n]) => !['Ingresso', 'Corsie / fuori zona', 'Coda cassa', 'Cassa (servizio)', 'Scaffali senza categoria'].includes(n))
+  depts.filter(([n]) => !['Ingresso', 'Ingresso, casse, retro banchi', 'Corsie / fuori zona', 'Coda cassa', 'Cassa (servizio)', 'Scaffali senza categoria', 'Personale (tolto)'].includes(n))
     .forEach(([name, val]) => {
-      const line = zero.has(name) ? 'nessuna osservazione — da verificare' : Number(val).toFixed(2);
+      const area = typeof val === 'number' ? val : val?.area;
+      const line = zero.has(name) ? 'nessuna osservazione — da verificare' : Number(area ?? 0).toFixed(2);
       doc.fontSize(8).fillColor('#374151').text(`${name}: ${line}`, M, y2);
       y2 += 12;
     });

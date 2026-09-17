@@ -16,7 +16,9 @@ export const DASHBOARD_TEMPLATES: Omit<DashboardLayout, 'updatedAt'>[] = [
     items: [
       item('esselunga-headline-v2', 12, 1),
       item('store-rhythm-v2', 12, 2),
-      item('department-minutes', 12, 2),
+      item('department-minutes-v2', 12, 2),
+      item('counter-wait', 6, 2),
+      item('adjacency-matrix', 6, 2),
       item('first-department', 6, 2),
       item('queue-by-slot', 6, 2),
       item('queue-by-lane', 6, 2),

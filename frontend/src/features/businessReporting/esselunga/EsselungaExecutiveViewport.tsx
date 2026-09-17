@@ -357,6 +357,23 @@ export default function EsselungaExecutiveViewport({
     };
   }, [variant, venueId]);
 
+  const [liveAlerts, setLiveAlerts] = useState<Array<{ type?: string; counter?: string; people?: number; minutes?: number }>>([]);
+  useEffect(() => {
+    if (!venueId) return;
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const res = await fetch(`${API_BASE}/api/reporting/alerts?venueId=${encodeURIComponent(venueId)}`);
+        if (!res.ok || cancelled) return;
+        const data = await res.json();
+        setLiveAlerts(Array.isArray(data.alerts) ? data.alerts : []);
+      } catch { /* keep last */ }
+    };
+    void poll();
+    const id = window.setInterval(() => void poll(), LIVE_OCCUPANCY_POLL_MS);
+    return () => { cancelled = true; window.clearInterval(id); };
+  }, [venueId]);
+
   const dwellReliable = overview.avgStoreDwellReliable !== false
     && (overview.medianStoreDwellMin ?? overview.avgStoreDwellMin) > 0;
 
@@ -578,7 +595,7 @@ export default function EsselungaExecutiveViewport({
       )}
 
       {dailyKpi && variant !== 'live' && (
-        <DailyExecutiveSections payload={dailyKpi} rangeDays={dailyKpiRange} />
+        <DailyExecutiveSections payload={dailyKpi} rangeDays={dailyKpiRange} liveAlerts={liveAlerts} />
       )}
 
       {/* What to act on */}

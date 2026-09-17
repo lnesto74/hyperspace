@@ -20,6 +20,7 @@ import { BarChart3, X } from 'lucide-react'
 import { useXRay } from '../neuralDashboard/NeuralDashboard'
 import { XRayModeSystem } from './xrayModeSystem'
 import { API_BASE } from '../../config/api'
+import CounterQueueAlertHud from '../../features/businessReporting/dailyKpi/CounterQueueAlertHud'
 import {
   fetchRoiCategoryLabel,
   resolveRoiCategorySync,
@@ -6816,6 +6817,8 @@ export default function MainViewport({
             <div className="text-gray-500 text-[10px] mt-1 truncate">ID: {hoveredObjectTooltip.id.slice(0, 8)}</div>
           </div>
         )}
+
+        <CounterQueueAlertHud venueId={venue?.id} />
 
         {/* Floating Layers Panel - Top Left */}
         <div className="absolute top-14 left-3 z-10">

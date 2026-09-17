@@ -66,6 +66,35 @@ export function columns(
   return `<svg viewBox="0 0 ${W} ${h}" role="img" font-size="12">${g}<line class="axis" x1="${L}" x2="${W - R}" y1="${h - B}" y2="${h - B}"/>${bars}</svg>`;
 }
 
+export type StackedBarItem = { l: string; a: number; b: number; area?: number };
+
+/** Stacked horizontal bars: dark = al banco, light = resto dell'area. */
+export function hbars2(
+  items: StackedBarItem[],
+  { unit = '', dec = 2, labelw = 150, tipf, W = CHART_W }: {
+    unit?: string; dec?: number; labelw?: number;
+    tipf?: (it: StackedBarItem) => string; W?: number;
+  } = {},
+): string {
+  const L = labelw, R = 80, T = 6, rh = ROW_H, gap = ROW_GAP;
+  const H = T + items.length * (rh + gap) + 8;
+  const max = Math.max(0.001, ...items.map((i) => (i.a || 0) + (i.b || 0)));
+  const x = (v: number) => (W - L - R) * (v / max);
+  let s = '';
+  items.forEach((it, i) => {
+    const yy = T + i * (rh + gap);
+    const wa = Math.max(x(it.a || 0), 0);
+    const wb = Math.max(x(it.b || 0), 0);
+    const tip = esc(tipf ? tipf(it) : `${it.l}: ${fmt((it.a || 0) + (it.b || 0), dec)}${unit}`);
+    s += `<text class="lab" x="${L - 8}" y="${yy + rh / 2 + 4}" text-anchor="end">${esc(it.l)}</text>`
+      + `<rect class="bar" x="${L}" y="${yy}" width="${Math.max(wa, 1)}" height="${rh - 6}" fill="var(--seq-6)"/>`
+      + `<rect class="bar" x="${L + wa}" y="${yy}" width="${Math.max(wb, 1)}" height="${rh - 6}" fill="var(--seq-3)"/>`
+      + `<text class="val" x="${L + wa + wb + 6}" y="${yy + rh / 2 + 3}">${fmt((it.a || 0) + (it.b || 0), dec)}${unit}</text>`
+      + `<rect class="hit" x="0" y="${yy - 2}" width="${W}" height="${rh + 2}" data-tip="${tip}"/>`;
+  });
+  return `<svg viewBox="0 0 ${W} ${H}" role="img" font-size="12">${s}</svg>`;
+}
+
 export function hbars(
   items: BarItem[],
   { unit = '', dec = 2, h, colorf, tipf, labelw = 150, W = CHART_W }: {

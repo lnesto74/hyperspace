@@ -26,6 +26,14 @@ export const HEAT_DEPTS = DEPT_ORDER.filter(
   (d) => !d.startsWith('Corsie') && d !== 'Ingresso' && d !== 'Acqua',
 );
 
+export const AREA_DEPT_ORDER = [
+  'Scaffali senza categoria', 'Frutta', 'Surgelati', 'Latticini',
+  'Bakery & Breakfast', 'Carne', 'Verdura', 'Bar', 'Pesce', 'Acqua',
+  'Gastronomia', 'Salumi', 'Pane',
+];
+
+export const SERVED_COUNTERS = ['Carne', 'Pesce', 'Bar', 'Gastronomia', 'Salumi', 'Pane'];
+
 export const BEHAVIOUR_SER = [
   { key: 'Fermo a scaffale (sceglie)', label: 'Sceglie a scaffale' },
   { key: 'Al banco servito', label: 'Al banco servito' },
@@ -91,6 +99,16 @@ export type ClienteMedioView = {
   behaviourReason: string | null;
   checksPassed: number;
   checksTotal: number;
+  minutesArea: Record<string, Record<string, number>>;
+  minutesBanco: Record<string, Record<string, number>>;
+  deptStays: Record<string, { persons_per_entrance?: number; stay_median_s?: number }>;
+  reconOk: boolean;
+  counterWait: Record<string, Record<string, number | null>>;
+  counterStay: Record<string, { median?: number; p90?: number; stays?: number }>;
+  adjacency: Record<string, Record<string, number>>;
+  transitions: number | null;
+  promoSpots: Array<{ name: string; minutes: number; per1000?: number; department?: string }>;
+  flowField: Array<{ x: number; z: number; angle: number; r: number; n: number }>;
 };
 
 const DASH = '—';
@@ -223,6 +241,40 @@ function parseBehaviour(row: DailyKpiRow | undefined): BehaviourView | null {
   };
 }
 
+function minutesKeyed(
+  payload: DailyKpiPayload,
+  kpiId: string,
+): Record<string, Record<string, number>> {
+  const out: Record<string, Record<string, number>> = {};
+  const giorno = pickKpi(payload, kpiId, 'giorno');
+  const giornoMap = (giorno?.payload && typeof giorno.payload === 'object')
+    ? giorno.payload as Record<string, number>
+    : {};
+  const depts = new Set([...AREA_DEPT_ORDER, 'Corsie / fuori zona', 'Ingresso, casse, retro banchi', ...Object.keys(giornoMap)]);
+  for (const dept of depts) {
+    out[dept] = {};
+    for (const sl of [...SLOTS, 'giorno'] as const) {
+      const keyed = pickKpi(payload, kpiId, `${sl}|${dept}`);
+      if (ok(keyed)) {
+        out[dept][sl] = keyed.value as number;
+        continue;
+      }
+      const slotRow = pickKpi(payload, kpiId, sl);
+      const map = (slotRow?.payload && typeof slotRow.payload === 'object')
+        ? slotRow.payload as Record<string, number>
+        : {};
+      const raw = map[dept];
+      if (typeof raw === 'number') out[dept][sl] = raw;
+      else if (raw && typeof raw === 'object' && 'area' in (raw as object)) {
+        const rec = raw as { area?: number; al_banco?: number };
+        if (kpiId.endsWith('_counter') && rec.al_banco != null) out[dept][sl] = rec.al_banco;
+        else if (rec.area != null) out[dept][sl] = rec.area;
+      }
+    }
+  }
+  return out;
+}
+
 function minutesMatrix(payload: DailyKpiPayload): Record<string, Record<string, number>> {
   const out: Record<string, Record<string, number>> = {};
   const giorno = pickKpi(payload, 'minutes_per_customer_by_dept', 'giorno');
@@ -275,8 +327,17 @@ export function buildClienteMedioView(payload: DailyKpiPayload): ClienteMedioVie
   const wait = pickKpi(payload, 'queue_wait_min_per_entrance');
   const passages = pickKpi(payload, 'checkout_passages');
   const minutes = minutesMatrix(payload);
+  const minutesArea = minutesKeyed(payload, 'minutes_per_customer_by_dept_area');
+  const minutesBanco = minutesKeyed(payload, 'minutes_per_customer_by_dept_counter');
   const corsie = minutes['Corsie / fuori zona']?.giorno;
   const visitDay = ok(visit) ? visit.value as number : null;
+  const fruttaA = pickKpi(payload, 'minutes_per_customer_by_dept_area', 'giorno|Frutta');
+  const verduraA = pickKpi(payload, 'minutes_per_customer_by_dept_area', 'giorno|Verdura');
+  const fruttaB = pickKpi(payload, 'minutes_per_customer_by_dept_counter', 'giorno|Frutta');
+  const verduraB = pickKpi(payload, 'minutes_per_customer_by_dept_counter', 'giorno|Verdura');
+  const hasAreas = ok(fruttaA) || ok(verduraA);
+  const orto = (ok(fruttaA) ? fruttaA.value : 0) + (ok(verduraA) ? verduraA.value : 0);
+  const ortoBanco = (ok(fruttaB) ? fruttaB.value : 0) + (ok(verduraB) ? verduraB.value : 0);
   const hours = payload.store_hours_local
     ? `${payload.store_hours_local[0]}–${payload.store_hours_local[1]}`
     : '08:00–20:00';
@@ -336,15 +397,25 @@ export function buildClienteMedioView(payload: DailyKpiPayload): ClienteMedioVie
       note: 'tracce viste nella zona servizio',
       tip: tipFor(passages, 'Id distinti con una visita raw in CHECKOUT_SERVICE.'),
     },
-    {
-      id: 'aisle_share',
-      kpiId: 'minutes_per_customer_by_dept',
-      value: visitDay && corsie != null ? fmt(100 * corsie / visitDay, 0) : DASH,
-      unit: visitDay && corsie != null ? '%' : undefined,
-      label: 'del tempo fuori da ogni zona',
-      note: 'corsie e scaffali senza ROI',
-      tip: tipFor(pickKpi(payload, 'minutes_per_customer_by_dept'), 'Corsie = tempo in negozio − tempo in ROI, ÷ ingressi.'),
-    },
+    hasAreas && orto > 0
+      ? {
+        id: 'ortofrutta',
+        kpiId: 'minutes_per_customer_by_dept_area',
+        value: fmt(orto, 1),
+        unit: 'min',
+        label: 'in ortofrutta per cliente',
+        note: `di cui ${fmt(ortoBanco, 1)} al banco, a scegliere`,
+        tip: tipFor(fruttaA, 'Frutta + Verdura, minuti nell’area ÷ ingressi. Al banco = entro 1 m, fermo o lento.'),
+      }
+      : {
+        id: 'aisle_share',
+        kpiId: 'minutes_per_customer_by_dept',
+        value: visitDay && corsie != null ? fmt(100 * corsie / visitDay, 0) : DASH,
+        unit: visitDay && corsie != null ? '%' : undefined,
+        label: 'del tempo fuori da ogni zona',
+        note: 'corsie e scaffali senza ROI',
+        tip: tipFor(pickKpi(payload, 'minutes_per_customer_by_dept'), 'Corsie = tempo in negozio − tempo in ROI, ÷ ingressi.'),
+      },
   ];
 
   const qualityRow = pickKpi(payload, 'quality');
@@ -427,6 +498,49 @@ export function buildClienteMedioView(payload: DailyKpiPayload): ClienteMedioVie
     ? (behRow?.status_reason || 'Mix comportamentale non calcolato per questo giorno.')
     : null;
 
+  const stayRow = pickKpi(payload, 'dept_stay_per_person');
+  const deptStays = (stayRow?.payload && typeof stayRow.payload === 'object')
+    ? stayRow.payload as ClienteMedioView['deptStays']
+    : {};
+  const reconPrec = pickKpi(payload, 'recon_blind_precision');
+  const reconVendor = pickKpi(payload, 'recon_vendor_pairs_linked');
+  const reconOk = stayRow?.status === 'ok'
+    && (reconPrec?.value == null || (reconPrec.value as number) >= 0.85)
+    && (reconVendor?.value == null || (reconVendor.value as number) >= 0.50);
+
+  const counterWait: Record<string, Record<string, number | null>> = {};
+  const counterStay: ClienteMedioView['counterStay'] = {};
+  for (const name of SERVED_COUNTERS) {
+    counterWait[name] = {};
+    for (const sl of [...SLOTS, 'giorno'] as const) {
+      const row = pickKpi(payload, 'counter_wait_people_mean', `${sl}|${name}`);
+      counterWait[name][sl] = ok(row) ? row.value : null;
+    }
+    const stay = pickKpi(payload, 'counter_stay_s', `giorno|${name}`);
+    const served = pickKpi(payload, 'counter_served_stays', `giorno|${name}`);
+    const p = (stay?.payload && typeof stay.payload === 'object')
+      ? stay.payload as { median?: number; p90?: number }
+      : {};
+    counterStay[name] = { median: p.median, p90: p.p90, stays: served?.value ?? undefined };
+  }
+
+  const adjRow = pickKpi(payload, 'dept_next_area_share');
+  const adjacency = (adjRow?.payload && typeof adjRow.payload === 'object')
+    ? adjRow.payload as Record<string, Record<string, number>>
+    : {};
+  const transRow = pickKpi(payload, 'dept_transitions');
+  const promoRow = pickKpi(payload, 'promo_spot_counter_minutes');
+  const promoRaw = promoRow?.payload;
+  const promoSpots: ClienteMedioView['promoSpots'] = Array.isArray(promoRaw)
+    ? (promoRaw as ClienteMedioView['promoSpots'])
+    : (promoRaw && typeof promoRaw === 'object' && Array.isArray((promoRaw as { spots?: unknown }).spots)
+      ? (promoRaw as { spots: ClienteMedioView['promoSpots'] }).spots
+      : []);
+  const flowRow = pickKpi(payload, 'flow_field');
+  const flowField = Array.isArray(flowRow?.payload)
+    ? flowRow!.payload as ClienteMedioView['flowField']
+    : [];
+
   return {
     day: payload.day,
     dayLabel: formatDayLongIt(payload.day),
@@ -446,6 +560,16 @@ export function buildClienteMedioView(payload: DailyKpiPayload): ClienteMedioVie
     behaviourReason,
     checksPassed,
     checksTotal,
+    minutesArea,
+    minutesBanco,
+    deptStays,
+    reconOk,
+    counterWait,
+    counterStay,
+    adjacency,
+    transitions: transRow?.value ?? (transRow?.payload as { n?: number } | undefined)?.n ?? null,
+    promoSpots,
+    flowField,
   };
 }
 

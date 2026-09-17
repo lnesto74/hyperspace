@@ -43,7 +43,7 @@ import { getCategoryVisual } from '../operationsConsole/categoryVisuals';
 import type { WidgetId } from './types';
 import { getWidget } from './registry';
 import type { DailyKpiPayload, DailyKpiRangeDay } from '../dailyKpi/types';
-import { buildHeadline, buildHeadlineKpis, departmentMinutes, firstDepartment, queueBySlot, queueLanes, slotSeries, checkRows } from '../dailyKpi/viewModel';
+import { buildHeadline, buildHeadlineKpis, counterWaitRows, departmentMinutes, departmentMinutesArea, firstDepartment, pickKpi, promoSpotRows, queueBySlot, queueLanes, slotSeries, checkRows } from '../dailyKpi/viewModel';
 
 export interface DashboardDataContext {
   venueId: string;
@@ -132,7 +132,7 @@ function DailyKpiSlice({ widgetId, payload }: { widgetId: WidgetId; payload: Dai
       </div>
     );
   }
-  if (widgetId === 'department-minutes') {
+  if (widgetId === 'department-minutes' || widgetId === 'department-minutes-legacy') {
     const rows = departmentMinutes(payload);
     const max = Math.max(0.01, ...rows.filter((d) => d.minutes != null).map((d) => d.minutes as number));
     return (
@@ -152,6 +152,96 @@ function DailyKpiSlice({ widgetId, payload }: { widgetId: WidgetId; payload: Dai
             )}
           </div>
         ))}
+      </div>
+    );
+  }
+  if (widgetId === 'department-minutes-v2') {
+    const rows = departmentMinutesArea(payload);
+    const max = Math.max(0.01, ...rows.filter((d) => d.area != null).map((d) => d.area as number));
+    return (
+      <div className="space-y-1">
+        {rows.map((d) => (
+          <div key={d.dept} className="flex items-center gap-2 text-[11px]">
+            <span className="w-36 truncate text-gray-300">{d.dept}</span>
+            {d.zeroObservation ? (
+              <span className="text-amber-300">nessuna osservazione — da verificare</span>
+            ) : (
+              <>
+                <div className="flex-1 h-1.5 bg-gray-900 rounded flex overflow-hidden">
+                  <div className="h-full bg-sky-700" style={{ width: `${((d.banco || 0) / max) * 100}%` }} />
+                  <div className="h-full bg-sky-400" style={{ width: `${(Math.max((d.area || 0) - (d.banco || 0), 0) / max) * 100}%` }} />
+                </div>
+                <span className="tabular-nums text-gray-200 w-14 text-right">{d.area?.toFixed(2)}</span>
+              </>
+            )}
+          </div>
+        ))}
+      </div>
+    );
+  }
+  if (widgetId === 'counter-wait') {
+    return (
+      <table className="w-full text-[11px] text-gray-300">
+        <tbody>
+          {counterWaitRows(payload).map((c) => (
+            <tr key={c.dept}>
+              <td className="py-0.5">{c.dept}</td>
+              <td className="py-0.5 text-right tabular-nums">{c.status === 'unreliable' ? '—' : (c.mean?.toFixed(2) ?? '—')}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    );
+  }
+  if (widgetId === 'adjacency-matrix') {
+    const row = pickKpi(payload, 'dept_next_area_share');
+    const share = (row?.payload && typeof row.payload === 'object') ? row.payload as Record<string, Record<string, number>> : {};
+    const depts = Object.keys(share).slice(0, 8);
+    if (!depts.length) return <p className="text-[11px] text-gray-500">Matrice non disponibile.</p>;
+    return (
+      <div className="overflow-x-auto">
+        <table className="text-[10px] text-gray-300">
+          <thead><tr><th /><th className="px-1">{depts.join(' · ')}</th></tr></thead>
+          <tbody>
+            {depts.map((a) => (
+              <tr key={a}>
+                <td className="pr-2 text-gray-400">{a}</td>
+                <td className="tabular-nums">{depts.map((b) => (share[a]?.[b] ? share[a][b].toFixed(2) : '·')).join('  ')}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    );
+  }
+  if (widgetId === 'flow-arrows') {
+    const row = pickKpi(payload, 'flow_field');
+    if (!row || row.status === 'unreliable') return <p className="text-[11px] text-gray-500">Campo di direzione non calcolato.</p>;
+    const n = Array.isArray(row.payload) ? row.payload.length : 0;
+    return <p className="text-[11px] text-gray-300">{n} celle con direzione media.</p>;
+  }
+  if (widgetId === 'promo-spots') {
+    const spots = promoSpotRows(payload);
+    if (!spots.length) return <p className="text-[11px] text-gray-500">Testate e promo non calcolate.</p>;
+    return (
+      <div className="space-y-1 text-[11px] text-gray-300">
+        {spots.slice(0, 8).map((s) => (
+          <div key={s.name} className="flex justify-between">
+            <span className="truncate mr-2">{s.name}</span>
+            <span className="tabular-nums">{(s.per1000 ?? s.minutes).toFixed(1)}</span>
+          </div>
+        ))}
+      </div>
+    );
+  }
+  if (widgetId === 'reconciliation-quality') {
+    const p = pickKpi(payload, 'recon_blind_precision');
+    const v = pickKpi(payload, 'recon_vendor_pairs_linked');
+    return (
+      <div className="text-[11px] text-gray-300 space-y-1">
+        <div>Precisione cieca: {p?.value != null ? p.value.toFixed(2) : '—'}</div>
+        <div>Coppie vendor: {v?.value != null ? v.value.toFixed(2) : '—'}</div>
+        <div className="text-gray-500">strategia di riconciliazione in post-processing</div>
       </div>
     );
   }
@@ -659,6 +749,13 @@ export default function WidgetRenderer({
     }
     case 'store-rhythm-v2':
     case 'department-minutes':
+    case 'department-minutes-legacy':
+    case 'department-minutes-v2':
+    case 'counter-wait':
+    case 'adjacency-matrix':
+    case 'flow-arrows':
+    case 'promo-spots':
+    case 'reconciliation-quality':
     case 'queue-by-lane':
     case 'queue-by-slot':
     case 'first-department':
