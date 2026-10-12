@@ -1,0 +1,26 @@
+.media-inspector{position:absolute;z-index:35;left:18px;top:75px;width:300px;max-height:calc(100% - 165px);overflow:auto;padding:18px;background:rgba(14,24,31,.96);border:1px solid #91b8c538;border-radius:16px;box-shadow:0 18px 65px #0006;color:#dce9ee;font:12px/1.45 Inter,system-ui,sans-serif;scrollbar-width:thin;pointer-events:auto;box-sizing:border-box}.media-inspector[hidden]{display:none}.media-inspector h2{font-size:21px;line-height:1.2;font-weight:500;margin:10px 0}.media-head{display:flex;justify-content:space-between;align-items:center}.media-head small{font-size:9px;letter-spacing:.16em;color:#9edce7}.media-subtitle{color:#b3c9d2;margin:0 0 14px}.media-inspector button,.media-inspector input,.media-inspector select{font:inherit;color:inherit;background:#182b36;border:1px solid #42606d70;border-radius:6px;padding:7px;box-sizing:border-box}.media-inspector button{cursor:pointer}.media-inspector button[aria-pressed=true]{background:#9edce720;border-color:#9edce78c;color:#c8f0f6}.media-inspector select{width:100%}.media-buttons{display:flex;flex-wrap:wrap;gap:5px;margin:9px 0}.media-buttons button{font-size:10px;padding:7px}.media-grid{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin:12px 0}.media-inspector label{display:flex;flex-direction:column;gap:5px;font-size:10px;color:#adc0c9}.media-inspector input{width:100%;min-width:0}.media-stat{display:flex;justify-content:space-between;gap:10px;margin:7px 0}.media-stat strong{font-weight:500;color:#b7eaf0}.media-note{font-size:10px;color:#93a9b6;margin:8px 0}.media-warning{font-size:11px;color:#e6bd94}.media-inspector details{border-top:1px solid #738d9d30;padding-top:10px;margin-top:12px}.media-inspector summary{cursor:pointer;margin-bottom:8px;color:#b9ced6}.media-inspector button:focus-visible,.media-inspector input:focus-visible,.media-inspector select:focus-visible{outline:2px solid #b7eaf0;outline-offset:2px}@media(max-width:800px){.media-inspector{left:8px;top:65px;width:270px;max-height:calc(100% - 170px)}}
+
+/* Use the existing contextual inspector slot; keep the store canvas unobstructed. */
+html.hx .media-inspector{position:fixed;left:auto;right:16px;top:calc(var(--top) + 14px);bottom:46px;width:var(--insp);max-height:none;border-radius:16px;z-index:35}
+html.hx-media-active .hx-inspector{visibility:hidden;pointer-events:none}
+html.hx-media-active .hx-kpistrip,html.hx-media-active .hx-anchor-card,html.hx-media-active .hx-anchor-leader{display:none!important}
+html.hx.hx-media-active .hx-main{right:calc(var(--insp) + 32px)}
+html.hx-media-active .hx-tags,html.hx-media-active .hx-overlay,html.hx-media-active .hx-paint{visibility:hidden;pointer-events:none}
+@media(max-width:980px){html.hx .media-inspector{top:auto;left:10px;right:10px;bottom:12px;width:auto;max-height:46vh}html.hx.hx-media-active .hx-main{right:16px}}
+html.hx .media-inspector button{width:auto;margin:0;text-transform:none}
+html.hx .media-inspector .media-head button{width:28px;height:28px;padding:0;margin-left:auto}
+html.hx .media-inspector .media-buttons{display:flex;flex-wrap:wrap}
+
+.media-inspector .media-compact-toggle{display:none}
+@media(max-width:980px){
+  html.hx .media-inspector{max-height:40vh}
+  html.hx .media-inspector .media-head{position:sticky;top:-18px;padding:9px 0;background:#0e181f;z-index:2}
+  html.hx .media-inspector .media-head .media-compact-toggle{display:block;flex-shrink:0;white-space:nowrap;width:auto;height:auto;margin-left:auto;padding:6px 10px}
+  html.hx .media-inspector .media-head button:last-child{margin-left:8px}
+  html.hx .media-inspector.is-compact{padding:5px 14px;max-height:none}
+  html.hx .media-inspector.is-compact>:not(.media-head){display:none}
+  html.hx.hx-media-active .hx-main{bottom:calc(40vh + 24px)}
+  html.hx.hx-media-active.hx-media-compact .hx-main{bottom:80px}
+  html.hx.hx-media-active:not(.hx-media-compact) .hx-title,
+  html.hx.hx-media-active:not(.hx-media-compact) .hx-stage>.hx-stage-top{display:none}
+}

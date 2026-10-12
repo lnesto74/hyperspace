@@ -1,0 +1,59 @@
+{
+  "case": "local MP4 campaign preview accepted after video.play()",
+  "inspector": "IN-STORE MEDIA\nMinimise\n×\nWhere the screen is visible\n\nGeometric opportunity to see. Attention is not measured.\n\nDigital Display 1118\nDigital Display 1118 (copy)\n\n89020b8c · X 48.08 / Z 60.07 m · source yaw 90°\n\nBusiness\nOperations / Lab\nClose-up\nContext\nTop\n3D visibility\nOcclusion\nFlow context\nHorizontal angle °\nMaximum distance m\nViewable floor ≈\n65.9 m²\nBlocked floor ≈\n0.2 m²\n\nSampled at 1.60 m eye height · 0.25 m grid. Any of 9 screen samples clear; partial visibility included. Range arcs: 2 m.\n\nMove test viewer\nClear sight line\nBlocked sight line\n\nTEST VIEWER · outside distance · 0/9 screen rays clear\n\nWhat-if placement · hypothetical\nCampaign & evidence\n\ntotem-campaign-smoke.mp4 · local preview\n\nCampaign files stay in this browser. No reference photograph is baked into the asset.\n\nSource: registered venue CAD. Heights, 55-inch enclosure, front direction, angles and eye heights require site/manufacturer confirmation. Grid coverage is approximate; unknown transparent fixtures are treated as solid.\n\nObserved positions: unavailable · no validated trajectory window connected.\n\nPotential exposure events: unavailable. Flow particles are context, never shoppers, gaze or impressions.",
+  "media": {
+    "device": "89020b8c-d9d0-428b-9a7b-e62e1e25f123",
+    "pose": {
+      "id": "89020b8c-d9d0-428b-9a7b-e62e1e25f123",
+      "cadIndex": 1117,
+      "name": "Digital Display 1118",
+      "x": 48.08,
+      "z": 60.07,
+      "yaw": 1.5707963267948966,
+      "originalPolygon": [
+        [
+          48.13,
+          59.32
+        ],
+        [
+          48.13,
+          60.82
+        ],
+        [
+          48.03,
+          60.82
+        ],
+        [
+          48.03,
+          59.32
+        ]
+      ]
+    },
+    "settings": {
+      "horizontal": 120,
+      "vertical": 100,
+      "minDistance": 0.5,
+      "maxDistance": 8,
+      "eyeMin": 1.2,
+      "eyeMax": 1.8,
+      "eyeHeight": 1.6,
+      "resolution": 0.25,
+      "occlusion": true,
+      "legibilityDistance": null
+    },
+    "currentArea": 65.9375,
+    "proposedArea": 65.9375,
+    "calculationMs": 68.40000003576279,
+    "workerMs": 55.30000001192093,
+    "busy": false,
+    "collisionIds": [],
+    "eye": {
+      "x": 49.960211536442486,
+      "z": 48.78389014631657,
+      "y": 1.6
+    },
+    "eyeResult": {
+      "reason": "outside distance"
+    }
+  }
+}

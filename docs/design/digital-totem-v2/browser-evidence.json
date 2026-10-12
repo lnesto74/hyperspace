@@ -1,0 +1,198 @@
+[
+  {
+    "case": "hypothetical 180-degree rotation; Shelf 1122 blocks 9/9 rays",
+    "media": {
+      "device": "a51574e5-33c4-4616-b093-73a3faea27cd",
+      "pose": {
+        "id": "a51574e5-33c4-4616-b093-73a3faea27cd",
+        "cadIndex": 1118,
+        "name": "Digital Display 1118 (copy)",
+        "x": 22.18,
+        "z": 60.019999999999996,
+        "yaw": 3.141592653589793,
+        "originalPolygon": [
+          [
+            21.43,
+            59.97
+          ],
+          [
+            22.93,
+            59.97
+          ],
+          [
+            22.93,
+            60.07
+          ],
+          [
+            21.43,
+            60.07
+          ]
+        ]
+      },
+      "settings": {
+        "horizontal": 120,
+        "vertical": 100,
+        "minDistance": 0.5,
+        "maxDistance": 8,
+        "eyeMin": 1.2,
+        "eyeMax": 1.8,
+        "eyeHeight": 1.6,
+        "resolution": 0.25,
+        "occlusion": true,
+        "legibilityDistance": null
+      },
+      "currentArea": 62.8125,
+      "proposedArea": 64,
+      "calculationMs": 194.5999999642372,
+      "workerMs": 127.19999998807907,
+      "busy": false,
+      "collisionIds": [],
+      "eye": {
+        "x": 15.375,
+        "z": 55.875,
+        "y": 1.6
+      },
+      "eyeResult": {
+        "reason": "obstructed",
+        "clear": 0
+      }
+    },
+    "renderer": {
+      "loaded": [
+        "Espositori senza categoria",
+        "Tavoli",
+        "Giornali",
+        "Checkout 6",
+        "Checkout 10",
+        "Checkout 11",
+        "Checkout 7",
+        "Checkout 8",
+        "Checkout 9",
+        "Gastronomia",
+        "Checkout 12",
+        "Checkout 13",
+        "Bar",
+        "Frutta e Verdura",
+        "Scaffali senza categoria",
+        "Verdura",
+        "Ingresso",
+        "Salumi",
+        "Pane",
+        "Frutta",
+        "Surgelati"
+      ],
+      "states": {
+        "Espositori senza categoria": "ready",
+        "Tavoli": "ready",
+        "Giornali": "ready",
+        "Checkout 6": "ready",
+        "Checkout 10": "ready",
+        "Checkout 11": "ready",
+        "Checkout 7": "ready",
+        "Checkout 8": "ready",
+        "Checkout 9": "ready",
+        "Gastronomia": "ready",
+        "Checkout 12": "ready",
+        "Checkout 13": "ready",
+        "Bar": "ready",
+        "Scaffali senza categoria": "ready",
+        "Frutta e Verdura": "ready",
+        "Verdura": "ready",
+        "Ingresso": "ready",
+        "Salumi": "ready",
+        "Pane": "ready",
+        "Surgelati": "ready",
+        "Frutta": "ready"
+      },
+      "overviewReady": 31,
+      "overviewStates": {
+        "Carne": "ready",
+        "Acqua": "ready",
+        "Scaffali senza categoria": "ready",
+        "Espositori senza categoria": "ready",
+        "Salumi": "ready",
+        "Pane": "ready",
+        "Tavoli": "ready",
+        "Frutta e Verdura": "ready",
+        "Giornali": "ready",
+        "Bakery & Breakfast": "ready",
+        "Surgelati": "ready",
+        "Checkout 1": "ready",
+        "Checkout 2": "ready",
+        "Checkout 3": "ready",
+        "Checkout 4": "ready",
+        "Checkout 5": "ready",
+        "Checkout 6": "ready",
+        "Checkout 10": "ready",
+        "Checkout 11": "ready",
+        "Checkout 7": "ready",
+        "Checkout 8": "ready",
+        "Checkout 9": "ready",
+        "Frutta": "ready",
+        "Latticini": "ready",
+        "Pesce": "ready",
+        "Gastronomia": "ready",
+        "Verdura": "ready",
+        "Checkout 12": "ready",
+        "Checkout 13": "ready",
+        "Bar": "ready",
+        "Ingresso": "ready"
+      },
+      "fidelity": {
+        "Carne": 0,
+        "Acqua": 0,
+        "Scaffali senza categoria": 1,
+        "Espositori senza categoria": 1,
+        "Salumi": 1,
+        "Pane": 1,
+        "Tavoli": 1,
+        "Frutta e Verdura": 1,
+        "Giornali": 1,
+        "Bakery & Breakfast": 0,
+        "Surgelati": 1,
+        "Checkout 1": 0,
+        "Checkout 2": 0,
+        "Checkout 3": 0,
+        "Checkout 4": 0,
+        "Checkout 5": 0,
+        "Checkout 6": 0,
+        "Checkout 10": 0,
+        "Checkout 11": 0,
+        "Checkout 7": 0,
+        "Checkout 8": 0,
+        "Checkout 9": 0,
+        "Frutta": 1,
+        "Latticini": 0,
+        "Pesce": 0,
+        "Gastronomia": 0,
+        "Verdura": 1,
+        "Checkout 12": 0,
+        "Checkout 13": 0,
+        "Bar": 1,
+        "Ingresso": 1
+      },
+      "cachedAssets": 35,
+      "cageHeight": 2.8,
+      "mode": "3d",
+      "fixtureCount": 113,
+      "revision": 0,
+      "error": null,
+      "cameraMoving": false,
+      "camera": [
+        15.180000000000001,
+        7,
+        49.01999999999999
+      ],
+      "target": [
+        22.18,
+        1.1,
+        57.71999999999999
+      ],
+      "calls": 117,
+      "triangles": 1162606,
+      "geometries": 272,
+      "fps": 60,
+      "cpuMs": 5.15
+    }
+  }
+]

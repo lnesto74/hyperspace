@@ -1,0 +1,22 @@
+{
+  "blender": "5.2.1 LTS",
+  "objects": 46,
+  "exportMeshes": 6,
+  "polygons": 4411,
+  "dimensions": {
+    "width": 0.745,
+    "height": 1.94,
+    "depth": 0.18,
+    "baseWidth": 0.8,
+    "baseDepth": 0.46,
+    "baseHeight": 0.045
+  },
+  "screen": {
+    "width": 0.685,
+    "height": 1.218,
+    "centerY": 1.25,
+    "frontZ": 0.096
+  },
+  "front": "glTF +Z",
+  "units": "metres"
+}

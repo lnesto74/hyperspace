@@ -42,6 +42,7 @@ export async function createRetailTwin({ scene, camera, renderer, layout, fly, h
   const fixturesByCategory=new Map();
   for(const f of manifest.fixtures){if(!fixturesByCategory.has(f.category))fixturesByCategory.set(f.category,[]);fixturesByCategory.get(f.category).push(f);}
   const fidelity=new Map(),assetGeometry=new Map();let loadTick=0,disposed=false;
+  const externalCategories=new Set();
   const baseColors=new Map();const color=new THREE.Color();
   const state={mode:'3d',selection:null,focus:false,reduced:false,frontage:true,context:'pulse',error:null};
   let envelope=0,dim=1,revision=0,hidden=false;
@@ -111,6 +112,7 @@ export async function createRetailTwin({ scene, camera, renderer, layout, fly, h
   }
 
   async function loadCategory(name,level='detail') {
+    if(externalCategories.has(name))return;
     const low=level==='overview',groups=low?overview:loaded,status=low?overviewStates:states;
     if(disposed || groups.has(name) || status.get(name)==='loading' || status.get(name)==='unavailable')return;
     const fixtures=fixturesByCategory.get(name)||[];if(!fixtures.length)return;
@@ -158,6 +160,7 @@ export async function createRetailTwin({ scene, camera, renderer, layout, fly, h
   }
   const api={
     state,manifest,root,
+    externalCategory(name,on=true){if(on)externalCategories.add(name);else externalCategories.delete(name);for(const group of [meshByCategory.get(name),loaded.get(name),overview.get(name)])if(group)group.visible=!on;},
     get bounds(){return ringBounds(rings(state.selection));},
     get assetStatus(){return states.get(category(state.selection)) || 'CAD';},
     select(sel,{animate=true}={}) {
@@ -188,6 +191,7 @@ export async function createRetailTwin({ scene, camera, renderer, layout, fly, h
       loadTick+=dt;const mayLoad=loadTick>.6;if(mayLoad)loadTick=0;
       let pending=[...states.values()].filter(v=>v==='loading').length;
       for(const [name,fixtures] of fixturesByCategory){
+        if(externalCategories.has(name)){for(const group of [meshByCategory.get(name),loaded.get(name),overview.get(name)])if(group)group.visible=false;continue;}
         const selected=name===category(state.selection);
         const near=state.mode!=='top' && fixtures.some(f=>Math.hypot(camera.position.x-f.x,camera.position.y,camera.position.z-f.z)<24);
         const level=state.reduced?0:selected?2:near?1:0;

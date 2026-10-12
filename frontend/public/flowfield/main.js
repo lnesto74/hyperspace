@@ -1,14 +1,16 @@
 import { analyseAreas, rankAreas } from './business-analysis.js?v=report-4';
-import { mountAnalysisWorkspace } from './workspace.js?v=v3-15';
+import { mountAnalysisWorkspace } from './workspace.js?v=v3-17';
 // Lens modes that draw the cyan movement streams (Pulse, Flow Explorer).
 const MOVE_MODES = new Set(['moved', 'flow']);
 const STREAM_MODES = new Set(['moved', 'flow', 'stopped', 'value']);
 import * as THREE from 'three';
 import { OrbitControls } from './vendor/OrbitControls.js';
 import { createRetailTwin } from './retail-twin.js?v=v3-5';
+import { createMediaVisibility } from './media-visibility.js';
 import { mergeFieldPacks } from './period.js?v=v3-5';
 import { contourSegments, observedCells, closedPockets } from './retail-geometry.js?v=v3-10';
 let retailTwin = null;
+let mediaVisibility = null;
 let retailPickListener = null;
 // Dynamic, cache-busted: the field module is edited alongside the extractor and
 // the browser otherwise pins the first version it saw for the whole session.
@@ -4356,6 +4358,7 @@ renderer.domElement.addEventListener('pointerup', (e) => {
   if (!hit) return;
   const x = hit.point.x, z = hit.point.z;
   const now = performance.now();
+  if (document.documentElement.classList.contains('hx') && !params.drawMode && mediaVisibility?.pick(raycaster,x,z)) return;
   if (retailPickListener && document.documentElement.classList.contains('hx') && !params.drawMode) {
     retailPickListener(x, z, retailTwin?.pick(x, z));
     return;
@@ -5886,6 +5889,16 @@ if (!document.documentElement.classList.contains('export')) {
   } catch (e) { console.warn('Retail twin unavailable; keeping calibrated CAD', e); }
 }
 
+if(retailTwin)try {
+  mediaVisibility=await createMediaVisibility({scene,layout,renderer,
+    setContext:active=>{planGroup.visible=!active&&params.showPlan;},
+    getFlow:()=>!!lineMesh.visible,
+    setFlow:on=>{lineMesh.visible=on;const input=document.getElementById('showFlow');if(input)input.checked=on;},
+    fly:(position,target)=>{camAnim={t:0,fromPos:camera.position.clone(),fromTgt:controls.target.clone(),toPos:new THREE.Vector3(position.x,position.y,position.z),toTgt:new THREE.Vector3(target.x,target.y,target.z)};},
+  });
+  retailTwin.externalCategory('Display digitali');
+}catch(e){console.warn('Media visibility unavailable; original display retained',e);}
+
 // Exposed so the scene can be poked from the devtools console while tuning.
 window.flowProto = {
   THREE, scene, camera, controls, params,
@@ -5895,6 +5908,7 @@ window.flowProto = {
   rebuildPhysicsLayers, buildVolume,
   applyHeat, stepHeatPlumes, layersEngine,
   retailTwin,
+  mediaVisibility,
 };
 
 let last = performance.now();
@@ -5932,13 +5946,14 @@ renderer.setAnimationLoop(() => {
     if(flowRibbon) flowRibbon.material.opacity=focus?.38:.8;
     if(lineMesh && MOVE_MODES.has(params.businessMode))lineMesh.material.opacity=focus?.42:.75;
   }
+  mediaVisibility?.update();
   renderer.render(scene, camera);
   analysisFrameListener?.();
   if (retailTwin) {
     retailPerf.frames++;retailPerf.cpu+=performance.now()-now;
     if(now-retailPerf.start>1500) {
       // Read-only diagnostics for local validation, not a business metric.
-      container.dataset.retailDiagnostics=JSON.stringify({ ...retailTwin.diagnostics(), cameraMoving:!!camAnim, calls:renderer.info.render.calls,
+      container.dataset.retailDiagnostics=JSON.stringify({ ...retailTwin.diagnostics(), cameraMoving:!!camAnim, camera:camera.position.toArray(), target:controls.target.toArray(), calls:renderer.info.render.calls,
         triangles:renderer.info.render.triangles, geometries:renderer.info.memory.geometries,
         fps:+(retailPerf.frames*1000/(now-retailPerf.start)).toFixed(1),cpuMs:+(retailPerf.cpu/retailPerf.frames).toFixed(2) });
       container.dataset.retailAssetStatus=retailTwin.assetStatus;
@@ -5969,6 +5984,7 @@ function getBusinessAreas() {
 // The workspace owns navigation and evidence; the existing renderer owns geometry.
 mountAnalysisWorkspace({
   twin: retailTwin,
+  media: mediaVisibility,
   onFloorPick: (fn) => { retailPickListener = fn; },
   project3D: (x,y,z) => {
     const p = new THREE.Vector3(x,y,z).project(camera);

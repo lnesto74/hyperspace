@@ -6,12 +6,13 @@
 // measured on (scripts/daily_kpi/export_area_geometry.py), plus checkout lane ROIs.
 // Renderer: main.js keeps every flow algorithm; this file picks lens, layer, camera.
 
-import { LENSES, LENS, SLOT_TO_SLICE, ICONS } from './lenses.js?v=v3-13';
+import { LENSES, LENS, SLOT_TO_SLICE, ICONS } from './lenses.js?v=v3-17';
 import * as VJ from './visitor-journey.js?v=v3-5';
 import * as VAS from './value-at-stake.js?v=v3-5';
 import * as KN from './kinetic.js?v=v3-14';
 import * as G from './twin-graphics.js?v=v3-5';
 import * as PER from './period.js?v=v3-5';
+import * as MS from './media-sim.js?v=v3-17';
 import { radarAreas } from './value-opportunities.js';
 import { loadExecutiveReport } from './executive-report.js?v=lens-1';
 import { reportRow } from './journey-scorecard.js?v=v3-5';
@@ -88,6 +89,8 @@ export function mountAnalysisWorkspace(api) {
     regFocus: null, // Flow Explorer · Path types: isolate one path type (regime id)
     replay: { day: null, key: '', data: null, status: 'idle', k: null, playing: false, timer: 0, pay: null }, // Service · minute by minute
     wf: { days: [], st: {}, ok: null, timer: 0, applied: '' }, // server day packs (movement, behaviour, checkouts)
+    media: { data: null, status: 'idle', sel: 0, note: '',
+      simq: { data: null, status: 'idle', note: '', spot: 'T1', sku: 'ESS-100031', msg: 'promo', lift: null, days: [0, 1, 2, 3, 4, 5, 6], hours: [7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21], spotSec: 15, weeks: 2, pinned: null } }, // Media lens · digital totems (240_media_pack)
     inspCollapsed: false,
     contours: false, // Astra: 3D scalar isolines on the twin floor (off by default; the v3 contours are drawn by twin-graphics)
   };
@@ -140,6 +143,7 @@ export function mountAnalysisWorkspace(api) {
       h('label', null, h('span', null, 'INSPECT'), h('select', { 'aria-label':'Inspect department', onchange:e=> {
         if(!e.target.value)return;
         const value=e.target.value,area=isExec()?execAreas().find(a=>a.name===value):null;
+        if(value==='Display digitali' && api.media){api.media.open();return;}
         if(area)execSelect(area);
         else if(value.startsWith('Checkout '))select({kind:'lane',id:Number(value.split(' ')[1])});
         else select({kind:'dept',id:value});
@@ -194,6 +198,7 @@ export function mountAnalysisWorkspace(api) {
   }
   function returnToStore() { if(isExec())execSelect(null);else select(null);api.twin?.returnToStore();render(); }
   api.onFloorPick?.((x,z,fixtureCategory)=>{
+    if(fixtureCategory==='Display digitali' && api.media){api.media.open();return;}
     if(isExec()) {
       const a=execAreas().find(a=>a.name===fixtureCategory) || execAreas().find(a=>inRings(x,z,a.polygons.map(outer=>({outer}))));
       if(a){execSelect(a);return;}
@@ -290,6 +295,7 @@ export function mountAnalysisWorkspace(api) {
       .sort((a, b) => b.row[key] - a.row[key]);
   }
   function execSelect(area, opts = {}) {
+    api.media?.close();
     state.sel = area ? { kind: 'roi', id: area.key } : null;
     if (area) {
       const lane=area.kind==='queue'?laneGeom(Number(area.name.match(/\d+/)?.[0])):null;
@@ -311,6 +317,7 @@ export function mountAnalysisWorkspace(api) {
   // The workspace draws selection itself (twin-graphics cage). The renderer's legacy selection
   // (thick stroke + dimmed streams) is only kept for the Behaviour lens, which was built on it.
   function select(sel, { fly = false } = {}) {
+    if(sel?.id!=='Display digitali')api.media?.close();
     state.sel = sel;
     if (!sel) { api.select(null); render(); return; }
     const g = sel.kind === 'dept' ? deptGeom(sel.id) : laneGeom(sel.id);
@@ -330,6 +337,7 @@ export function mountAnalysisWorkspace(api) {
   // ------------------------------------------------------------------ lens / layer / time
   async function setLens(id) {
     if (!LENS[id] || state.busy) return;
+    api.media?.close();
     const prev = state.lens;
     state.lens = id;
     // Keep compatible selections: departments travel between Pulse/Engagement/Opportunities/Live,
@@ -369,8 +377,9 @@ export function mountAnalysisWorkspace(api) {
       api.streams?.(streamGainFor());
       api.contours?.(state.contours);
       applyTint();
-      if (lensChanged) {
+      if (lensChanged && !api.media?.state.selected) {
         if (state.lens === 'service') flyCheckout();
+        else if (state.lens === 'media' && mdData()) flyMedia();
         else if (state.lens === 'flow') api.top();
         else if (state.sel && ['live', 'behaviour'].includes(state.lens)) focusSelection();
         else if (state.lens !== 'compare') api.overview();
@@ -387,6 +396,7 @@ export function mountAnalysisWorkspace(api) {
     if (L === 'engagement') return state.eng.flow ? 0.4 : 0;
     if (L === 'service') return 0.2;
     if (L === 'opportunities') return 0.22;
+    if (L === 'media') return 0.15;
     return 1; // behaviour, live, compare: unchanged
   }
 
@@ -722,6 +732,7 @@ export function mountAnalysisWorkspace(api) {
     render();
     await applyRenderer(false);
     render();
+    if (state.lens === 'media') flyMedia();
   }
 
   async function setSlot(sl) {
@@ -1238,7 +1249,7 @@ export function mountAnalysisWorkspace(api) {
   function buildOverlay() {
     const view = state.vj.view, A = state.areas;
     const f = api.snapshot().field;
-    const key = [fid(f), !!geo.fix, state.eng.iso, state.eng.flow, state.flowCell, state.kfocus, state.regFocus, state.flowSpot, state.kin.status, state.lens, state.econ.effort, JSON.stringify(state.econ.margins), state.econ.basketMargin, state.source, state.execLayer[state.lens], !!state.exec.report, state.layer[state.lens], state.slot, state.sel?.kind, state.sel?.id, !!view, !!A, state.radar.list.length, state.radar.stamp].join('|');
+    const key = [fid(f), !!geo.fix, state.eng.iso, state.eng.flow, state.flowCell, state.kfocus, state.regFocus, state.flowSpot, state.kin.status, state.lens, state.econ.effort, JSON.stringify(state.econ.margins), state.econ.basketMargin, state.source, state.execLayer[state.lens], !!state.exec.report, state.layer[state.lens], state.slot, state.sel?.kind, state.sel?.id, !!view, !!A, state.radar.list.length, state.radar.stamp, state.media.status, state.media.sel, state.media.simq.status, state.media.simq.spot, state.media.simq.sku].join('|');
     if (key === overlayKey) return;
     overlayKey = key; paintKey = '';
     overlay.replaceChildren(); tags.replaceChildren(); shapes = []; pins = []; items = [];
@@ -1247,6 +1258,7 @@ export function mountAnalysisWorkspace(api) {
     const L = state.lens, layer = state.layer[L];
     if (L === 'behaviour') { buildBehaviourOverlay(layer); return; }
     if (L === 'flow') { buildFlowOverlay(layer, f); return; }
+    if (L === 'media') { if (layer === 'simulate') buildSimOverlay(); else buildMediaOverlay(layer); return; }
     if (isExec()) { buildExecOverlay(L); return; }
     const ranked = VJ.rankDepartments(view, state.slot);
     const selDept = state.sel?.kind === 'dept' ? state.sel.id : null;
@@ -2730,6 +2742,355 @@ export function mountAnalysisWorkspace(api) {
     return out;
   }
 
+  // ------------------------------------------------------------------ Media · digital totems (240_media_pack.py)
+  // Audience, placement, near-screen behaviour, department traffic: measured on the LiDAR rows of one day.
+  // Playlists, proof of play, ON/OFF flighting and Esselunga sales: DEMO, generated and flagged as such.
+  const MD_FACE = ['#8FD3FF', '#C3A6FF'];
+  const mdData = () => state.media.data;
+  const mdTot = () => mdData()?.totems?.[state.media.sel] || null;
+  const mdProd = (t) => mdData()?.products?.[t?.product] || null;
+  const mdShort = (p) => (p ? `${p.name} ${p.brand === 'Esselunga' ? 'Esselunga' : p.brand.replace('Esselunga ', '')}` : '');
+  const mdInt = (n) => VJ.fmtInt(n);
+  const mdSign = (x, d = 1) => (x == null ? '—' : `${x >= 0 ? '+' : '−'}${Math.abs(x * 100).toFixed(d)}%`);
+  const mdEuro = (x) => `€${x.toFixed(2)}`;
+  const mdSure = (c) => (c >= 0.999 ? '>99.9%' : pct(c, c >= 0.9 ? 1 : 0));
+  const mdDist = (d) => (d <= 0.5 ? 'inside the department' : `${Math.round(d)} m from the department`);
+  const mdClock = (s) => `${String(Math.floor(s / 3600)).padStart(2, '0')}:${String(Math.floor((s % 3600) / 60)).padStart(2, '0')}`;
+  async function loadMedia() {
+    const M = state.media; if (M.status !== 'idle') return;
+    M.status = 'loading';
+    try {
+      const idx = await fetch('./media/index.json', { cache: 'no-store' }).then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))));
+      const want = state.vj.view?.day;
+      const day = idx.days.includes(want) ? want : idx.days[idx.days.length - 1];
+      M.data = await fetch(`./media/${day}.json`).then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))));
+      M.status = 'ready';
+    } catch (e) { M.status = 'none'; M.note = e.message; }
+    overlayKey = ''; render();
+    if (state.lens === 'media') flyMedia();
+  }
+  function mdBox(x, z, yaw, w = 0.8, d = 0.46) {
+    const a = yaw * Math.PI / 180, n = [Math.sin(a), Math.cos(a)], t = [Math.cos(a), -Math.sin(a)];
+    return [[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([i, j]) => [x + t[0] * i * w / 2 + n[0] * j * d / 2, z + t[1] * i * w / 2 + n[1] * j * d / 2]);
+  }
+  function flyMedia() {
+    if (state.layer.media === 'simulate') { const Q = state.media.simq, s = Q.data?.spots.find((x) => x.id === Q.spot); if (s) api.flyTo(s.x, s.z, 34); return; }
+    const M = mdData(), t = mdTot(); if (!M || !t) return;
+    if (state.layer.media !== 'placement' || !t.moved) { api.flyTo(t.placed.x, t.placed.z, 24); return; }
+    const pts = [[t.placed.x, t.placed.z], [t.original.x, t.original.z]];
+    const xs = pts.map((p) => p[0]), zs = pts.map((p) => p[1]);
+    api.fit?.('oblique', { minX: Math.min(...xs) - 8, maxX: Math.max(...xs) + 8, minZ: Math.min(...zs) - 8, maxZ: Math.max(...zs) + 8, margin: 0.85 });
+  }
+  function selectTotem(k, fly = true) {
+    state.media.sel = k; overlayKey = ''; render();
+    if (fly) flyMedia();
+  }
+  function buildMediaOverlay(layer) {
+    void loadMedia();
+    const M = mdData(); if (!M) return;
+    M.totems.forEach((t, k) => {
+      const sel = k === state.media.sel, p = mdProd(t), o = t.original, q = t.placed;
+      const dim = sel ? 1 : 0.4;
+      // the product's department: where the sale has to happen
+      if (sel) { const s = deptShape(p.dept); if (s) items.push(...outlineOf(s.rings, '#F3C778', { width: 1.4, dash: [5, 4], alpha: 0.85 })); }
+      if (layer === 'placement' && t.moved) {
+        for (const f of t.originalFaces) for (const [x, z, v] of f) if (v > 0) items.push({ t: 'rect', x, z, s: 0.5, color: '#7A92A3', alpha: 0.16 * dim });
+        items.push({ t: 'ring', pts: mdBox(o.x, o.z, o.yaw, 1.5, 0.3), color: '#A8B8C4', width: 1.2, dash: [3, 3], alpha: 0.9 * dim, y: 0.06 });
+        const dx = q.x - o.x, dz = q.z - o.z, L = Math.hypot(dx, dz) || 1;
+        items.push({ t: 'line', pts: [[o.x, o.z], [q.x - dx / L * 1.2, q.z - dz / L * 1.2]], color: '#EAF6FF', width: 1.2, dash: [2, 5], alpha: 0.7 * dim, y: 0.08 });
+        items.push({ t: 'arrow', x: q.x - dx / L * 2.4, z: q.z - dz / L * 2.4, dx: dx / L, dz: dz / L, len: 1.2, color: '#EAF6FF', alpha: 0.9 * dim, width: 1.6 });
+        if (sel) t.candidates.slice(1, 30).forEach((c, i) => items.push({ t: 'rect', x: c[0], z: c[1], s: 0.35, color: '#F3C778', alpha: 0.55 * (1 - i / 30) }));
+      }
+      const vmax = Math.max(1, ...t.faces.flat().map((c) => c[2]));
+      t.faces.forEach((f, fi) => { for (const [x, z, v] of f) if (v > 0) items.push({ t: 'rect', x, z, s: 0.5, color: MD_FACE[fi], alpha: dim * (0.14 + 0.72 * Math.sqrt(v / vmax)) }); });
+      const box = mdBox(q.x, q.z, q.yaw);
+      items.push({ t: 'cage', ring: box, corners: [0, 1, 2, 3], height: 1.94, color: sel ? '#EAF6FF' : '#9FB3C2', width: sel ? 2 : 1.2, fill: 'rgba(143,211,255,0.25)', alpha: sel ? 1 : 0.7 });
+      const a = q.yaw * Math.PI / 180;
+      [1, -1].forEach((sg, fi) => items.push({ t: 'arrow', x: q.x + Math.sin(a) * sg * 0.35, z: q.z + Math.cos(a) * sg * 0.35, dx: Math.sin(a) * sg, dz: Math.cos(a) * sg, len: 1.1, color: MD_FACE[fi], alpha: dim, width: 1.8 }));
+      const A = t.audience, T = t.sales.test;
+      const val = layer === 'placement' ? `${mdInt(A.qualified)} qualified viewers / day${t.moved ? ` · was ${mdInt(A.original.qualified)}` : ''}`
+        : layer === 'audience' ? `${mdInt(A.events)} impressions · AQS ${A.avgAqs}`
+          : layer === 'test' ? `sales ${mdSign(T.lift)} · ${mdSure(T.confidence)} sure (DEMO)`
+            : `CPM ${mdEuro(t.cpm.value)}`;
+      callout(q.x, q.z, `Totem ${k + 1} · ${mdShort(p)}`, val, { tone: sel ? 'sel' : 'quiet', lead: sel, onclick: () => selectTotem(k, false) });
+      if (layer === 'placement' && t.moved && sel) callout(o.x, o.z, 'Previous spot (CAD)', `${mdInt(A.original.qualified)} qualified / day`, { tone: 'quiet', side: 'l' });
+      if (sel && layer === 'test') { const g = deptGeom(p.dept); if (g?.label) callout(g.label[0], g.label[1], `${VJ.deptLabel(p.dept)} · target shelf`, `${p.sku} · ${mdShort(p)} ${p.size}`, { tone: 'quiet' }); }
+    });
+  }
+
+  function mdCanvas(cls = 'hx-md-cv', H = 220) { return h('canvas', { class: cls, width: 680, height: H }); }
+  /** 15' bars through the day: impressions (light) and qualified (solid), ON slots marked underneath. */
+  function drawMdAudience(cv, t) {
+    const c = cv.getContext('2d'), W = cv.width, H = cv.height, S = t.audience.slots, n = S.length, base = H - 40;
+    const mx = Math.max(1, ...S.map((r) => r[0])), bw = (W - 20) / n;
+    c.clearRect(0, 0, W, H); c.font = '17px Inter, system-ui, sans-serif'; c.textAlign = 'center';
+    S.forEach((r, i) => {
+      const x = 10 + i * bw, h1 = (base - 16) * r[0] / mx, h2 = (base - 16) * r[1] / mx;
+      c.fillStyle = 'rgba(143,211,255,.25)'; c.fillRect(x + 1, base - h1, bw - 2, h1);
+      c.fillStyle = '#8FD3FF'; c.fillRect(x + 1, base - h2, bw - 2, h2);
+      if (i % 8 === 0) { c.fillStyle = '#8DA3B3'; c.fillText(mdClock(mdData().slot0 + i * mdData().slotS).slice(0, 2) + 'h', x + bw * 4, H - 8); }
+    });
+    c.textAlign = 'left'; c.fillStyle = '#EEF8FF'; c.fillText(`peak ${mdInt(mx)} impressions in 15'`, 12, 20);
+  }
+  /** DEMO flight of the analysed day: ON/OFF strip, units sold per 15' (advertised SKU), department traffic line. */
+  function drawMdFlight(cv, t) {
+    const c = cv.getContext('2d'), W = cv.width, H = cv.height, on = t.flight, u = t.sales.units, tr = t.dept.traffic, n = on.length;
+    const bw = (W - 20) / n, base = H - 40, mu = Math.max(1, ...u), mt = Math.max(1, ...tr);
+    c.clearRect(0, 0, W, H); c.font = '17px Inter, system-ui, sans-serif'; c.textAlign = 'center';
+    on.forEach((v, i) => {
+      const x = 10 + i * bw;
+      c.fillStyle = v ? '#8FD3FF' : 'rgba(122,146,163,.35)'; c.fillRect(x + 1, base + 6, bw - 2, 8);
+      const hh = (base - 30) * u[i] / mu; c.fillStyle = v ? '#F3C778' : 'rgba(243,199,120,.38)'; c.fillRect(x + 2, base - hh, bw - 4, hh);
+      if (i % 8 === 0) { c.fillStyle = '#8DA3B3'; c.fillText(mdClock(mdData().slot0 + i * mdData().slotS).slice(0, 2) + 'h', x + bw * 4, H - 6); }
+    });
+    c.strokeStyle = 'rgba(238,248,255,.7)'; c.lineWidth = 2; c.beginPath();
+    tr.forEach((v, i) => { const x = 10 + (i + 0.5) * bw, y = base - (base - 30) * v / mt; i ? c.lineTo(x, y) : c.moveTo(x, y); }); c.stroke();
+    c.textAlign = 'left'; c.fillStyle = '#EEF8FF'; c.fillText(`units per 15' · max ${mu}`, 12, 20);
+  }
+  /** Lift estimate and 90% range as the flight goes on (DEMO sales). */
+  function drawMdCurve(cv, t) {
+    const c = cv.getContext('2d'), W = cv.width, H = cv.height, C = t.sales.curve, n = C.length;
+    const lo = Math.min(-0.1, ...C.map((p) => p.lo90)), hi = Math.max(0.2, ...C.map((p) => p.hi90));
+    const X = (i) => 62 + i * (W - 90) / (n - 1), Y = (v) => 20 + (H - 60) * (hi - v) / (hi - lo);
+    c.clearRect(0, 0, W, H); c.font = '17px Inter, system-ui, sans-serif';
+    c.fillStyle = 'rgba(143,211,255,.18)'; c.beginPath();
+    C.forEach((p, i) => (i ? c.lineTo(X(i), Y(p.hi90)) : c.moveTo(X(i), Y(p.hi90))));
+    for (let i = n - 1; i >= 0; i--) c.lineTo(X(i), Y(C[i].lo90)); c.closePath(); c.fill();
+    c.strokeStyle = 'rgba(238,248,255,.5)'; c.setLineDash([5, 5]); c.lineWidth = 1.5; c.beginPath(); c.moveTo(30, Y(0)); c.lineTo(W - 20, Y(0)); c.stroke(); c.setLineDash([]);
+    c.strokeStyle = '#8FD3FF'; c.lineWidth = 3; c.beginPath(); C.forEach((p, i) => (i ? c.lineTo(X(i), Y(p.lift)) : c.moveTo(X(i), Y(p.lift)))); c.stroke();
+    c.textAlign = 'center';
+    C.forEach((p, i) => {
+      c.fillStyle = p.confidence >= 0.9 ? '#81E0A3' : '#8FD3FF'; c.beginPath(); c.arc(X(i), Y(p.lift), 5, 0, Math.PI * 2); c.fill();
+      c.fillStyle = '#8DA3B3'; c.fillText(`${p.day}d`, X(i), H - 14);
+    });
+    c.textAlign = 'left'; c.fillStyle = '#8DA3B3';
+    for (const v of [0, 0.1, 0.2, 0.3].filter((x) => x <= hi)) c.fillText(v ? `+${v * 100}%` : '0%', 0, Y(v) + 6);
+  }
+
+  // ---- Media · Simulate (media/sim.json from 241_media_sim.py; engine in media-sim.js)
+  const SIMC = { reach: '#F3C778' };
+  async function loadSim() {
+    const Q = state.media.simq; if (Q.status !== 'idle') return;
+    Q.status = 'loading';
+    try { Q.data = await fetch('./media/sim.json', { cache: 'no-store' }).then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))); Q.status = 'ready'; }
+    catch (e) { Q.status = 'none'; Q.note = e.message; }
+    overlayKey = ''; render();
+    if (state.lens === 'media' && state.layer.media === 'simulate') flyMedia();
+  }
+  function simRun() {
+    const Q = state.media.simq; if (!Q.data) return null;
+    try { return MS.simulate(Q.data, { spot: Q.spot, sku: Q.sku, msg: Q.msg, days: Q.days, hours: Q.hours, spotSec: Q.spotSec, weeks: Q.weeks, lift: Q.lift }); }
+    catch { return null; }
+  }
+  function simSet(patch, { fly = false } = {}) {
+    Object.assign(state.media.simq, patch); overlayKey = ''; render();
+    const s = state.media.simq.data?.spots.find((x) => x.id === state.media.simq.spot);
+    if (fly && s) api.flyTo(s.x, s.z, 30);
+  }
+  function buildSimOverlay() {
+    void loadSim();
+    const Q = state.media.simq, S = Q.data; if (!S) return;
+    const P = S.catalog.find((p) => p.sku === Q.sku), sp = S.spots.find((s) => s.id === Q.spot);
+    const sh = deptShape(P.dept); if (sh) items.push(...outlineOf(sh.rings, SIMC.reach, { width: 1.6, dash: [5, 4] }));
+    for (const [x, z, r] of S.field[P.dept] || []) items.push({ t: 'rect', x, z, s: 1.5, color: SIMC.reach, alpha: Math.min(0.55, 0.06 + 0.6 * r) });
+    const fc = S.faces[sp.id] || [[], []];
+    fc.forEach((f, fi) => { for (const [x, z] of f) items.push({ t: 'rect', x, z, s: 0.5, color: MD_FACE[fi], alpha: 0.42 }); });
+    items.push({ t: 'cage', ring: mdBox(sp.x, sp.z, sp.yaw), corners: [0, 1, 2, 3], height: 1.94, color: '#EAF6FF', width: 2, fill: 'rgba(143,211,255,0.25)' });
+    const r = simRun();
+    callout(sp.x, sp.z, sp.label, r ? `${mdInt(r.inTarget)} heading to ${VJ.deptLabel(P.dept)} · ×${num(sp.index[S.depts.indexOf(P.dept)], 1)}` : null, { tone: 'sel', lead: true });
+    for (const s of S.spots) {
+      if (s.id === sp.id) continue;
+      const d = S.depts.indexOf(P.dept);
+      addPin(s.x, s.z, h('button', { type: 'button', class: 'hx-sim-pin', title: `${s.label}: viewers ×${num(s.index[d], 1)} more likely than average to reach ${VJ.deptLabel(P.dept)}`, onclick: () => simSet({ spot: s.id }) }, s.kind === 'option' ? s.label.replace('Option ', '') : s.kind === 'cad' ? 'CAD' : `T${s.totem + 1}`));
+    }
+    if (sh?.label) callout(sh.label[0], sh.label[1], VJ.deptLabel(P.dept), P.name, { tone: 'quiet' });
+  }
+  function drawSimHeat(cv, r, S) {
+    const c = cv.getContext('2d'), W = cv.width, H = cv.height, NH = S.h1 - S.h0;
+    const L = 60, T = 30, cw = (W - L - 8) / NH, ch = (H - T - 8) / 7;
+    const mx = Math.max(1e-9, ...r.heat.flat());
+    c.clearRect(0, 0, W, H); c.font = '19px Inter, system-ui, sans-serif';
+    c.fillStyle = '#8DA3B3'; c.textAlign = 'center';
+    for (let k = 0; k < NH; k += 2) c.fillText(`${S.h0 + k}h`, L + (k + 0.5) * cw, 18);
+    c.textAlign = 'right';
+    MS.WEEKDAYS.forEach((d, wd) => {
+      c.fillStyle = '#8DA3B3'; c.fillText(d, L - 8, T + (wd + 0.66) * ch);
+      const est = !MS.daysFor(S, wd).measured;
+      r.heat[wd].forEach((v, k) => {
+        const on = r.days.includes(wd) && r.hours.includes(S.h0 + k);
+        c.globalAlpha = on ? 1 : 0.35;
+        c.fillStyle = `rgba(243,199,120,${(0.08 + 0.92 * Math.sqrt(v / mx)).toFixed(3)})`;
+        c.fillRect(L + k * cw + 1.5, T + wd * ch + 1.5, cw - 3, ch - 3);
+        if (est) { c.strokeStyle = 'rgba(238,248,255,.18)'; c.setLineDash([3, 3]); c.strokeRect(L + k * cw + 2, T + wd * ch + 2, cw - 4, ch - 4); c.setLineDash([]); }
+        if (on) { c.strokeStyle = '#EEF8FF'; c.lineWidth = 1.5; c.strokeRect(L + k * cw + 1.5, T + wd * ch + 1.5, cw - 3, ch - 3); }
+      });
+    });
+    c.globalAlpha = 1;
+  }
+  function inspectSim(pick) {
+    const Q = state.media.simq, S = Q.data;
+    const head = (lead) => ihead('08 · IN-STORE MEDIA', 'Simulate a campaign', { badge: srcBadge(S ? `Measured · ${S.days.length} days of LiDAR · movement model` : 'Loading…', 'Audience and movement measured; sales baseline, message effect and base CPM are assumptions (DEMO).', 'flow'), lead });
+    if (!S) return [head(null), card('hx-empty', h('b', null, Q.status === 'none' ? 'No simulator data' : 'Loading…'), h('p', null, Q.status === 'none' ? `media/sim.json is built by analysis/journey_lab/241_media_sim.py. ${Q.note || ''}` : 'Reading weekday and hour profiles.'))];
+    const r = simRun(); if (!r) return [head(null), card('hx-empty', h('p', null, 'This combination cannot be simulated.'))];
+    const P = r.product, dl = VJ.deptLabel(P.dept);
+    const seg = (opts, cur, on) => h('div', { class: 'hx-seg hx-sim-seg' }, ...opts.map(([v, l]) => h('button', { type: 'button', 'aria-pressed': String(cur === v), onclick: () => on(v) }, l)));
+    const toggle = (arr, v) => (arr.includes(v) ? arr.filter((x) => x !== v) : [...arr, v].sort((a, b) => a - b));
+    const allH = Array.from({ length: S.h1 - S.h0 }, (_, k) => S.h0 + k);
+    const prime = (() => { const v = allH.map((hh, k) => [hh, r.heat.reduce((a, row) => a + row[k], 0)]).sort((a, b) => b[1] - a[1]); return v.slice(0, 5).map((x) => x[0]).sort((a, b) => a - b); })();
+    const spotSel = h('select', { class: 'hx-sim-sel', onchange: (e) => simSet({ spot: e.target.value }, { fly: true }) },
+      ...S.spots.map((s) => h('option', { value: s.id, selected: s.id === Q.spot ? '' : null }, `${s.label}${s.kind === 'option' ? ` (near totem ${s.totem + 1})` : ''}`)));
+    const prodSel = h('select', { class: 'hx-sim-sel', onchange: (e) => simSet({ sku: e.target.value }) },
+      ...S.catalog.map((p) => h('option', { value: p.sku, selected: p.sku === Q.sku ? '' : null }, `${p.name} · ${VJ.deptLabel(p.dept)}`)));
+    const liftIn = h('input', { type: 'range', min: '0', max: '30', step: '1', value: String(Math.round(r.lift * 100)), class: 'hx-sim-range',
+      oninput: (e) => { liftOut.textContent = `${e.target.value}%`; }, onchange: (e) => simSet({ lift: Number(e.target.value) / 100 }) });
+    const liftOut = h('b', null, `${Math.round(r.lift * 100)}%`);
+    const form = card('hx-sim-form',
+      h('label', null, h('small', null, 'Where'), spotSel),
+      h('label', null, h('small', null, 'Product (planogram)'), prodSel),
+      h('label', null, h('small', null, 'Message'), seg(S.messages.map((m) => [m.id, m.label]), Q.msg, (v) => simSet({ msg: v, lift: null }))),
+      h('label', null, h('small', null, 'Effect on viewers who reach the shelf (assumption)'), h('div', { class: 'hx-sim-lift' }, liftIn, liftOut)),
+      h('label', null, h('small', null, 'Days'), h('div', { class: 'hx-sim-chips' }, ...MS.WEEKDAYS.map((d, wd) => h('button', { type: 'button', 'aria-pressed': String(Q.days.includes(wd)), class: MS.daysFor(S, wd).measured ? '' : 'est', title: MS.daysFor(S, wd).measured ? 'measured' : 'no day measured yet: uses the same type of day', onclick: () => simSet({ days: toggle(Q.days, wd) }) }, d)))),
+      h('label', null, h('small', null, 'Hours'), h('div', { class: 'hx-sim-chips hrs' }, ...allH.map((hh) => h('button', { type: 'button', 'aria-pressed': String(Q.hours.includes(hh)), onclick: () => simSet({ hours: toggle(Q.hours, hh) }) }, String(hh).padStart(2, '0')))),
+        h('div', { class: 'hx-sim-quick' }, h('button', { type: 'button', class: 'hx-link', onclick: () => simSet({ hours: allH }) }, 'All day'), h('button', { type: 'button', class: 'hx-link', onclick: () => simSet({ hours: prime }) }, 'Best 5 hours'), h('button', { type: 'button', class: 'hx-link', onclick: () => simSet({ hours: [17, 18, 19] }) }, 'Evening 17–20'))),
+      h('div', { class: 'hx-sim-row' },
+        h('label', null, h('small', null, 'Spot length in the 60 s loop'), seg([[10, '10 s'], [15, '15 s'], [30, '30 s'], [60, '60 s']], Q.spotSec, (v) => simSet({ spotSec: v }))),
+        h('label', null, h('small', null, 'Weeks'), seg([[1, '1'], [2, '2'], [4, '4']], Q.weeks, (v) => simSet({ weeks: v })))));
+    const lead = leadKpi(`VIEWERS HEADING TO ${dl.toUpperCase()} · ${r.weeks} WEEK${r.weeks > 1 ? 'S' : ''}`, mdInt(r.inTarget),
+      `${mdInt(r.seen)} see the spot · ${num(r.index, 1)}× more likely than an average shopper to reach ${dl}`, 'amber');
+    const res = card('', h('div', { class: 'hx-card-h' }, h('b', null, 'What the campaign delivers'), h('small', null, `${P.name} · ${r.message.label}`)),
+      h('div', { class: 'hx-grid3' },
+        stat('Package price', mdEuro(r.price), `${r.days.length} days × ${r.hours.length} h × ${r.weeks} wk`),
+        stat('CPM', mdEuro(r.cpm), 'per 1,000 who see the spot'),
+        stat('In-target CPM', mdEuro(r.inTargetCpm), `per 1,000 heading to ${dl}`)),
+      h('div', { class: 'hx-grid3' },
+        stat('Extra units', `${num(r.extraUnits.lo, 0)}–${num(r.extraUnits.hi, 0)}`, `middle ${num(r.extraUnits.mid, 1)} (DEMO sales)`),
+        stat('Extra revenue', mdEuro(r.extraRevenue.mid), `range ${mdEuro(r.extraRevenue.lo)}–${mdEuro(r.extraRevenue.hi)}`),
+        stat('Revenue ÷ price', `${num(r.roi, 2)}×`, 'for the advertiser')),
+      h('p', { class: 'hx-note' }, `CPM = base ${mdEuro(Q.data.params.baseCpm)} × attention ${num(r.attention, 2)} × relevance ${num(r.relevance, 2)} (capped at 1.5) × time band. Relevance grows with how much more likely the viewers are to reach ${dl}.`));
+    const heat = mdCanvas('hx-md-cv', 300);
+    requestAnimationFrame(() => drawSimHeat(heat, r, S));
+    const heatCard = card('', h('div', { class: 'hx-card-h' }, h('b', null, 'When the target passes'), h('small', null, `viewers heading to ${dl} · white = booked`)), heat,
+      r.estimated.length ? h('p', { class: 'hx-note' }, `${r.estimated.join(', ')}: no such day measured yet, so the same type of day is used (dashed). Measured here: ${S.days.map((d) => VJ.fmtDay(d)).join(', ')}. The server run covers every stored day.`) : null);
+    const proof = card('', h('div', { class: 'hx-card-h' }, h('b', null, 'How the campaign is proven'), h('small', null, 'ON/OFF slots, same totem')),
+      h('ol', { class: 'hx-md-steps' },
+        h('li', null, h('b', null, 'Audience · from day 1. '), 'Who saw the spot and for how long is measured and billed with the proof-of-play log.'),
+        h('li', null, h('b', null, `Direction · about ${r.dirDays ?? '—'} day${r.dirDays === 1 ? '' : 's'}. `), `Do viewers head to ${dl} more often when the spot plays? Measured on the viewers themselves, so the effect is not diluted.`),
+        h('li', null, h('b', null, `Sales of the SKU · ${r.testDays == null ? '—' : r.testDays > 365 ? 'over a year' : `about ${r.testDays} days`} in this store. `), `The extra units are ${pct(r.dilutedLift, 1)} of what the SKU sells in these hours anyway. Sales lift needs several stores or a long flight.`)),
+      h('p', { class: 'hx-note' }, 'Sell on 1 and 2, which the twin proves quickly. Treat 3 as a chain-wide study, not a single-store promise.'));
+    const out = [head(lead), pick, form, res, heatCard, proof];
+    const A = Q.pinned;
+    if (A) {
+      const row = (l, a, b, f, low = false) => h('div', { class: 'hx-sim-cmp-r' }, h('span', null, l), h('b', null, f(a)), h('b', { class: (low ? b < a : b > a) ? 'up' : (low ? b > a : b < a) ? 'down' : '' }, f(b)));
+      out.push(card('', h('div', { class: 'hx-card-h' }, h('b', null, 'A vs now'), h('button', { type: 'button', class: 'hx-link', onclick: () => simSet({ pinned: null }) }, 'Clear A')),
+        h('p', { class: 'hx-note' }, `A: ${A.spot.label} · ${A.product.name} · ${A.days.length} d × ${A.hours.length} h`),
+        h('div', { class: 'hx-sim-cmp' },
+          row('Heading to the shelf', A.inTarget, r.inTarget, mdInt), row('See the spot', A.seen, r.seen, mdInt),
+          row('Package price', A.price, r.price, mdEuro), row('In-target CPM', A.inTargetCpm, r.inTargetCpm, mdEuro, true),
+          row('Extra revenue', A.extraRevenue.mid, r.extraRevenue.mid, mdEuro))));
+    }
+    out.push(h('button', { type: 'button', class: 'hx-ghost wide', onclick: () => simSet({ pinned: r }) }, A ? 'Replace A with this scenario' : 'Keep this as scenario A and compare'));
+    const chk = S.check.filter((c) => c[1] > 0.004);
+    out.push(evidence(
+      h('p', null, `See the spot = impressions × (time in view + spot length) ÷ 60 s loop. Heading to ${dl} = qualified viewers who see it × the probability of reaching ${dl} within ${S.params.horizon_s / 60} minutes.`),
+      h('p', null, `That probability comes from a movement model: where people in each 1.5 m cell are ${S.params.step_s} s later, measured over all days and chained step by step. LiDAR ids break up after a few seconds, so viewers cannot be followed one by one.`),
+      h('p', null, `Check against ids that do survive 30 s (in the department 30 s later, observed vs model): ${chk.map((c) => `${VJ.deptLabel(c[0])} ${pct(c[1], 1)} vs ${pct(c[2], 1)}`).join(' · ')}. The model runs high, so it is scaled by ${num(S.params.calibration, 2)}.`),
+      h('p', null, `DEMO: daily units of each SKU, the message effects (brand 3%, price promo 12%, new product 8% on viewers who reach the shelf) and the €${S.params.baseCpm} base CPM. Replace them with Esselunga sales and your own ON/OFF results.`)));
+    return out;
+  }
+
+  function inspectMedia() {
+    const M = state.media, D = M.data, layer = state.layer.media;
+    if (layer === 'simulate') return inspectSim(null);
+    const head = (title, lead, badge) => ihead('08 · IN-STORE MEDIA', title, { badge, lead });
+    if (!D) {
+      return [head('Digital totems', null, null), card('hx-empty', h('b', null, M.status === 'none' ? 'No media pack' : 'Loading…'),
+        h('p', null, M.status === 'none' ? `The media pack is calculated from the LiDAR rows of one day (analysis/journey_lab/240_media_pack.py). ${M.note || ''}` : 'Reading the totem audience and test file.'))];
+    }
+    const t = mdTot(), p = mdProd(t), A = t.audience, T = t.sales.test, day = VJ.fmtDay(D.day);
+    const meas = srcBadge(`Measured · LiDAR per second · ${day}`, 'Positions once a second from the raw 10 Hz tracks (230_flow_rows). Line of sight against the CAD shelves.', 'flow');
+    const demo = srcBadge('DEMO · playlist, proof of play and sales are generated', 'Replace with the DOOH proof-of-play log and Esselunga sales per 15 minutes to make it real.', 'scenario');
+    const pick = h('div', { class: 'hx-seg hx-md-pick', role: 'group', 'aria-label': 'Totem' }, ...D.totems.map((x, k) => h('button', { type: 'button', 'aria-pressed': String(k === M.sel), onclick: () => selectTotem(k) }, `Totem ${k + 1} · ${mdShort(mdProd(x))}`)));
+    const out = [];
+    if (layer === 'placement') {
+      const gain = A.original.qualified ? A.qualified / A.original.qualified - 1 : null;
+      const dist = Math.hypot(t.placed.x - t.original.x, t.placed.z - t.original.z);
+      out.push(head(`Totem ${M.sel + 1} · where it should stand`, leadKpi('QUALIFIED VIEWERS · PER DAY · BOTH FACES', mdInt(A.qualified),
+        t.moved ? `${mdInt(A.original.qualified)} at the CAD spot · ${gain == null ? '' : gain >= 2 ? `×${Math.round(gain + 1)} after the move` : `${mdSign(gain, 0)} after the move`}` : 'The CAD spot is already among the best.', ''), meas), pick);
+      out.push(card('', h('div', { class: 'hx-card-h' }, h('b', null, t.moved ? `Moved ${Math.round(dist)} m, next to ${VJ.deptLabel(p.dept)}` : 'Kept in place'), h('small', null, 'auto-placement')),
+        h('div', { class: 'hx-md-ba' },
+          h('div', null, h('small', null, 'CAD spot'), h('b', null, mdInt(A.original.qualified)), h('span', null, `qualified / day · ${mdDist(t.original.deptDist)}`)),
+          h('i', { html: ICONS.arrow }),
+          h('div', { class: 'on' }, h('small', null, t.moved ? 'New spot' : 'Spot'), h('b', null, mdInt(A.qualified)), h('span', null, `qualified / day · ${mdDist(t.placed.deptDist)}`))),
+        h('p', { class: 'hx-note' }, t.moved
+          ? `At the CAD spot few people walk towards either face (${mdInt(t.original.ots)} person-seconds a day, against ${mdInt(t.placed.ots)} here). The new spot is on the way to the ${VJ.deptLabel(p.dept)} shelf, where ${mdShort(p)} is sold.`
+          : 'The current spot reaches at least 70% of the best spot found for this product.'),
+        h('p', { class: 'hx-note' }, 'The 3D twin still shows the CAD position. Move the totem in the layout to make the new spot permanent.')));
+      out.push(card('', h('div', { class: 'hx-card-h' }, h('b', null, 'How the spot is chosen'), h('small', null, 'two-sided totem')),
+        h('ol', { class: 'hx-md-steps' },
+          h('li', null, 'Every free spot on the floor is tested (1 m grid, 0.8 × 0.46 m base, not in an aisle under 3.5 m, not at the tills).'),
+          h('li', null, 'Both faces count: people within 0.8–6 m, inside ±55° of a face, walking towards it, with no shelf in between.'),
+          h('li', null, 'The score is multiplied by how close the spot is to the product’s shelf.'),
+          h('li', null, 'The totem stays where it is if that spot reaches 70% of the best one; otherwise it moves. Two totems stay at least 10 m apart.')),
+        h('p', { class: 'hx-note' }, h('span', { class: 'hx-md-k cand' }), 'yellow squares: the next best spots for this totem')));
+    } else if (layer === 'audience') {
+      const cv = mdCanvas();
+      out.push(head(`Totem ${M.sel + 1} · who sees it`, leadKpi('IMPRESSIONS · PER DAY', mdInt(A.events), `${mdInt(A.qualified)} qualified (attention score ≥ 50) · ${mdInt(A.premium)} premium (≥ 70)`), meas), pick);
+      out.push(card('', h('div', { class: 'hx-grid3' },
+        stat('Attention score', String(A.avgAqs), 'average, 0–100'), stat('Time in view', `${A.avgDwell} s`, 'average'),
+        stat('Face A / B', `${Math.round(100 * A.byFace[0] / Math.max(1, A.events))} / ${Math.round(100 * A.byFace[1] / Math.max(1, A.events))}`, '% of impressions'))),
+      card('', h('div', { class: 'hx-card-h' }, h('b', null, 'Through the day'), h('small', null, "per 15' · light = impressions, solid = qualified")), cv));
+      requestAnimationFrame(() => drawMdAudience(cv, t));
+      out.push(card('', h('div', { class: 'hx-card-h' }, h('b', null, 'Proof of play × audience'), h('small', null, 'DEMO playlist')),
+        h('p', null, `${mdInt(A.spotSeen)} impressions overlapped a play of the ${mdShort(p)} spot, for ${mdInt(A.spotSeconds)} seconds of spot on screen while someone was looking.`),
+        h('p', { class: 'hx-note' }, 'This is the number to bill: impressions joined to the proof-of-play log, second by second. Today the log is generated; the totem player’s real log drops in unchanged.')));
+      out.push(evidence(h('p', null, 'Impression: one track id at least 2 s inside a face’s viewing area (0.8–6 m, ±55°), walking towards the screen or standing, with line of sight.'),
+        h('p', null, 'Attention score = 35% time in view beyond a pass-by + 25% closeness + 20% slowing down + 20% facing the screen.'),
+        h('p', null, 'LiDAR ids break up (median life 8 s), so one person can make more than one impression: these are impressions, not people.')));
+    } else if (layer === 'test') {
+      const fl = mdCanvas('hx-md-cv', 230), cu = mdCanvas('hx-md-cv', 230), S = t.shelfStops, aa = t.aa;
+      out.push(head(`Totem ${M.sel + 1} · does it sell?`, leadKpi(`SKU SALES · ${mdShort(p).toUpperCase()} · ON vs OFF`, mdSign(T.lift),
+        `90% range ${mdSign(T.lo90)} to ${mdSign(T.hi90)} · ${mdSure(T.confidence)} sure after ${T.days} days (DEMO sales)`, T.confidence >= 0.9 ? 'pos' : ''), demo), pick);
+      if (t.sales.viewerLift != null) out.push(card('hx-rp-warn', h('p', null, h('b', null, 'What the DEMO assumes. '),
+        `The spot changes the choice of ${pct(t.sales.viewerLift)} of the viewers who reach the shelf. They are only ${pct(t.sales.inTargetShare, 1)} of the people in ${VJ.deptLabel(p.dept)}, so total sales of the SKU move by about ${mdSign(t.sales.plantedLift, 1)}. One store over 28 days cannot separate that from noise: the number above is mostly noise. Prove the direction first (Simulate tab), then sales across stores.`)));
+      out.push(card('', h('div', { class: 'hx-card-h' }, h('b', null, 'The test'), h('small', null, 'one ON and one OFF slot every 30 minutes')),
+        h('p', null, `In each half hour, one 15' slot plays the ${mdShort(p)} spot and the other does not, in random order. Sales of the SKU (per 15', normalised by the people in ${VJ.deptLabel(p.dept)}) are compared between ON and OFF slots.`),
+        fl, h('p', { class: 'hx-note' }, h('span', { class: 'hx-md-k on' }), 'ON slot ', h('span', { class: 'hx-md-k off' }), 'OFF slot · bars: units sold (DEMO) · line: people in the department (measured)')));
+      requestAnimationFrame(() => drawMdFlight(fl, t));
+      out.push(card('', h('div', { class: 'hx-card-h' }, h('b', null, 'Certainty grows with the days'), h('small', null, 'lift and 90% range')),
+        cu, h('p', { class: 'hx-note' }, `One day is not enough (${pct(T.day1.confidence)} sure). At this noise level a +10% effect needs about ${T.daysFor10pct} days of flighting. Control SKU ${p.control.sku} (${p.control.name} ${p.control.size}, same shelf, never advertised): ${mdSign(T.controlAdjusted)} after adjusting.`)));
+      requestAnimationFrame(() => drawMdCurve(cu, t));
+      out.push(card('', h('div', { class: 'hx-card-h' }, h('b', null, 'Measured on the floor'), h('small', null, 'real, same ON/OFF slots')),
+        h('div', { class: 'hx-grid3' },
+          stat('Shelf stops', mdSign(S.lift), `people stopping ≥ 4 s in ${VJ.deptLabel(p.dept)}`),
+          stat('Time in view', `${aa.on.dwell} / ${aa.off.dwell} s`, 'ON / OFF'),
+          stat('Qualified share', `${pct(aa.on.q)} / ${pct(aa.off.q)}`, 'ON / OFF')),
+        h('p', { class: 'hx-note' }, 'The spot did not really play on this day, so these must stay close to zero, and they do: the floor measures are not biased by the slot design. With the real spot running, the same cards show whether people slow down and stop at the shelf.')));
+      out.push(card('', h('div', { class: 'hx-card-h' }, h('b', null, `Playlist · Totem ${M.sel + 1}`), h('small', null, 'DEMO · 60 s loop')),
+        h('div', { class: 'hx-md-pl' }, ...t.playlist.map((v) => h('div', null, h('b', null, v.name), h('span', null, `${v.duration_s} s${v.sku ? ` · ${v.sku}` : ''}${v.existing ? ' · existing video' : ''}`)))),
+        h('p', { class: 'hx-note' }, `ON: product spot 15 s + house spot 45 s. OFF: house spot 45 s + Fidaty 15 s. Proof of play: ${mdInt(t.pop.plays)} plays, ${mdInt(t.pop.spotPlays)} of the product spot, ${t.pop.interrupted} interrupted.`)));
+    } else {
+      const C = t.cpm, rows = t.hours;
+      out.push(head(`Totem ${M.sel + 1} · price and schedule`, leadKpi('CPM · PER 1,000 IMPRESSIONS', mdEuro(C.value), `base ${mdEuro(C.base)} × attention ${C.qi.toFixed(2)} × proven lift ${C.liftMult.toFixed(2)}`, 'pos'), meas), pick);
+      out.push(card('', h('div', { class: 'hx-grid3' },
+        stat('Base CPM', mdEuro(C.base), 'in-store DOOH reference (assumption)'), stat('Attention index', `× ${C.qi.toFixed(2)}`, 'qualified score ÷ 60'),
+        stat('Proven lift', `× ${C.liftMult.toFixed(2)}`, T.confidence >= 0.9 ? `${mdSign(T.lo90)} lower bound` : 'not proven yet: × 1')),
+        h('p', { class: 'hx-note' }, T.confidence >= 0.9
+          ? `The lift multiplier uses the lower end of the 90% range, never the headline number, so the premium survives a sceptical buyer.`
+          : `The test is ${mdSure(T.confidence)} sure: below 90% the price carries no lift premium.`)));
+      const mx = Math.max(1, ...rows.map((r) => r.qual));
+      out.push(card('', h('div', { class: 'hx-card-h' }, h('b', null, 'Recommended schedule'), h('small', null, 'qualified viewers per hour · price at 100% share of voice')),
+        h('div', { class: 'hx-md-hours' }, ...rows.map((r) => h('div', { class: `hx-md-hr ${r.tier}` }, h('small', null, `${String(r.h).padStart(2, '0')}–${String(r.h + 1).padStart(2, '0')}`),
+          h('i', { style: `--w:${(r.qual / mx * 100).toFixed(1)}%` }), h('b', null, mdInt(r.qual)), h('em', null, r.tier), h('span', null, mdEuro(r.price))))),
+        h('p', { class: 'hx-note' }, 'Prime hours (top 30% of qualified viewers) are priced +25%, value hours −20%. Sell the spot where the product’s shoppers actually pass, not by the clock.')));
+      out.push(card('', h('div', { class: 'hx-card-h' }, h('b', null, 'Both totems'), h('small', null, day)),
+        h('div', { class: 'hx-md-cmp' }, ...D.totems.map((x, k) => { const pp = mdProd(x);
+          return h('button', { type: 'button', class: k === M.sel ? 'on' : '', onclick: () => selectTotem(k) }, h('b', null, `Totem ${k + 1} · ${mdShort(pp)}`),
+            h('span', null, `${mdInt(x.audience.qualified)} qualified/day · CPM ${mdEuro(x.cpm.value)} · lift ${mdSign(x.sales.test.lift)} (${mdSure(x.sales.test.confidence)} sure)`)); }))));
+    }
+    out.push(h('p', { class: 'hx-note' }, `Measured: audience, placement, department traffic, shelf stops. DEMO: playlists, proof of play, ON/OFF flight and Esselunga sales of ${D.products.map((x) => `${x.sku} ${mdShort(x)}`).join(' and ')}.`));
+    return out;
+  }
+
   function renderInspector() {
     const v = state.vj.view;
     const L = state.lens;
@@ -2740,6 +3101,7 @@ export function mountAnalysisWorkspace(api) {
     } else if (L === 'flow') body = inspectFlow();
     else if (L === 'behaviour') body = inspectBehaviour(v);
     else if (L === 'live') body = inspectLive();
+    else if (L === 'media') body = inspectMedia();
     else if (!v) body = [h('div', { class: 'hx-kicker' }, LENS[L].kicker), h('h2', null, LENS[L].title), state.vj.origin === 'loading' ? card('', h('p', null, 'Loading Visitor Journey…')) : unavailable(state.vj.note)];
     else if (L === 'pulse') body = [sourceSwitch(), ...inspectPulse(v)];
     else if (L === 'engagement') body = [sourceSwitch(), ...inspectEngagement(v)];
@@ -2779,6 +3141,7 @@ export function mountAnalysisWorkspace(api) {
       service: isExec() ? [['queue', 'Lane queue · weight = avg wait']] : [['queue', layer === 'transit' ? 'Queue area · weight = walk-through' : 'Queue area · weight = waiting share'], ['svcd', 'Till / service band']],
       opportunities: [['scenario', 'Place under review'], ['letter', 'Other places to screen']],
       live: [sel],
+      media: layer === 'simulate' ? [['facea', 'Face A'], ['faceb', 'Face B'], ['reach', 'Chance of reaching the department · 3 min'], ['tgt', 'Product department']] : [['facea', 'Face A · where its viewers are'], ['faceb', 'Face B'], ['tgt', 'Product department'], layer === 'placement' ? ['ghost', 'Previous spot (CAD)'] : null],
     }[L];
         legend.hidden = !items;
     legend.replaceChildren(...(items || []).filter(Boolean).map(([c, t]) => h('span', null, h('i', { class: c }), t)));

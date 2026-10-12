@@ -1,0 +1,300 @@
+TAP version 13
+# Subtest: department frontages use polygon union, not double-counted observations
+ok 1 - department frontages use polygon union, not double-counted observations
+  ---
+  duration_ms: 1.919333
+  ...
+# Subtest: queue rankings exclude service and sensor regions
+ok 2 - queue rankings exclude service and sensor regions
+  ---
+  duration_ms: 0.18075
+  ...
+# Subtest: unsupported or absent presence cannot become a quiet department
+ok 3 - unsupported or absent presence cannot become a quiet department
+  ---
+  duration_ms: 0.210291
+  ...
+# Subtest: balance is signed percentage points and ranks either direction
+ok 4 - balance is signed percentage points and ranks either direction
+  ---
+  duration_ms: 0.193708
+  ...
+# Subtest: operational duration labels keep accumulated time readable
+ok 5 - operational duration labels keep accumulated time readable
+  ---
+  duration_ms: 0.1
+  ...
+# Subtest: PDF reference validates the exact published department and checkout metrics
+ok 6 - PDF reference validates the exact published department and checkout metrics
+  ---
+  duration_ms: 72.958791
+  ...
+# Subtest: unpublished areas and lanes never inherit whole-store values
+ok 7 - unpublished areas and lanes never inherit whole-store values
+  ---
+  duration_ms: 0.996333
+  ...
+# Subtest: comparison excludes low samples and category means from fresco medians
+ok 8 - comparison excludes low samples and category means from fresco medians
+  ---
+  duration_ms: 0.284125
+  ...
+# Subtest: adapter preserves service populations instead of dividing stops by crossings
+ok 9 - adapter preserves service populations instead of dividing stops by crossings
+  ---
+  duration_ms: 0.828084
+  ...
+# Subtest: report reliability gates and missing values survive the adapter
+ok 10 - report reliability gates and missing values survive the adapter
+  ---
+  duration_ms: 1.586084
+  ...
+# Subtest: wrong venue or report window is rejected
+ok 11 - wrong venue or report window is rejected
+  ---
+  duration_ms: 0.429209
+  ...
+# Subtest: loader requests the report service, same window and threshold settings
+ok 12 - loader requests the report service, same window and threshold settings
+  ---
+  duration_ms: 1.183792
+  ...
+# ok six states, shares sum to 1 for store and every slot
+# ok validated against audited 199 and 150 (r >= 0.95)
+# ok fingerprint: Surgelati choose above store, served counters wait above store
+# ok axes are 0..1 and avoidance is moving ÷ (moving + choosing)
+# ok cell lookup: every cell maps back to itself and stateAt is in range
+# ok hotspots are spread out and above the store rate
+# ok value at stake uses measured axes when the kinetic file is given
+# 7 kinetic tests passed
+# mergeKinetic ok
+# Subtest: /Users/lnesto/CascadeProjects/Hyperspace/frontend/public/flowfield/kinetic.test.mjs
+ok 3 - /Users/lnesto/CascadeProjects/Hyperspace/frontend/public/flowfield/kinetic.test.mjs
+  ---
+  duration_ms: 158.606541
+  ...
+# Subtest: front/back, distance, angular and eye-height gates
+ok 14 - front/back, distance, angular and eye-height gates
+  ---
+  duration_ms: 5.665333
+  ...
+# Subtest: rotation and translation preserve visibility in venue coordinates
+ok 15 - rotation and translation preserve visibility in venue coordinates
+  ---
+  duration_ms: 0.78075
+  ...
+# Subtest: shelves block nine rays; low islands permit sight over their tops
+ok 16 - shelves block nine rays; low islands permit sight over their tops
+  ---
+  duration_ms: 5.053917
+  ...
+# Subtest: non-convex prisms, vertical rays, starting inside and behind-target obstacles
+ok 17 - non-convex prisms, vertical rays, starting inside and behind-target obstacles
+  ---
+  duration_ms: 0.172666
+  ...
+# Subtest: footprint reports sampled areas, excludes fixture interiors and clips venue bounds
+ok 18 - footprint reports sampled areas, excludes fixture interiors and clips venue bounds
+  ---
+  duration_ms: 42.476542
+  ...
+# Subtest: invalid controls are rejected rather than producing misleading fields
+ok 19 - invalid controls are rejected rather than producing misleading fields
+  ---
+  duration_ms: 0.629208
+  ...
+# Subtest: trajectory association requires validated metadata and reports only valid samples
+ok 20 - trajectory association requires validated metadata and reports only valid samples
+  ---
+  duration_ms: 0.379417
+  ...
+# Subtest: placement collision includes crossed thin footprints without contained vertices
+ok 21 - placement collision includes crossed thin footprints without contained vertices
+  ---
+  duration_ms: 0.347458
+  ...
+# Subtest: malformed trajectory time windows cannot expose counts
+ok 22 - malformed trajectory time windows cannot expose counts
+  ---
+  duration_ms: 0.173208
+  ...
+# Subtest: double-sided displays use a separately oriented rear screen and count the union once
+ok 23 - double-sided displays use a separately oriented rear screen and count the union once
+  ---
+  duration_ms: 82.356209
+  ...
+# Subtest: continuous floor follows the circular envelope instead of square grid edges
+ok 24 - continuous floor follows the circular envelope instead of square grid edges
+  ---
+  duration_ms: 338.834042
+  ...
+# Subtest: rear field mirrors the front envelope and rotates with the device
+ok 25 - rear field mirrors the front envelope and rotates with the device
+  ---
+  duration_ms: 184.940458
+  ...
+# Subtest: smoothing preserves shelf cutouts and real occlusion rather than filling through them
+ok 26 - smoothing preserves shelf cutouts and real occlusion rather than filling through them
+  ---
+  duration_ms: 107.269208
+  ...
+# Subtest: weeks are Monday–Sunday, months are calendar months
+ok 27 - weeks are Monday–Sunday, months are calendar months
+  ---
+  duration_ms: 3.055583
+  ...
+# Subtest: merged packs add counts and keep step-weighted speed
+ok 28 - merged packs add counts and keep step-weighted speed
+  ---
+  duration_ms: 0.733084
+  ...
+# Subtest: two copies of a day combine to the same per-entrant numbers and twice the entrants
+ok 29 - two copies of a day combine to the same per-entrant numbers and twice the entrants
+  ---
+  duration_ms: 26.818125
+  ...
+# Subtest: a day still calculating is polled until ready
+ok 30 - a day still calculating is polled until ready
+  ---
+  duration_ms: 7.094625
+  ...
+# Subtest: selection excludes ROI holes and keeps disjoint mapped components
+ok 31 - selection excludes ROI holes and keeps disjoint mapped components
+  ---
+  duration_ms: 1.503375
+  ...
+# Subtest: contours follow scalar levels and never bridge unobserved grid vertices
+ok 32 - contours follow scalar levels and never bridge unobserved grid vertices
+  ---
+  duration_ms: 0.610042
+  ...
+# Subtest: raw coverage is not the blurred or dilated support mask
+ok 33 - raw coverage is not the blurred or dilated support mask
+  ---
+  duration_ms: 1.941834
+  ...
+# Subtest: fixture placements retain exact CAD vertices and mapped Frutta shelf IDs
+ok 34 - fixture placements retain exact CAD vertices and mapped Frutta shelf IDs
+  ---
+  duration_ms: 29.855917
+  ...
+# Subtest: closedPockets finds floor fenced in by a ring of fixtures, not the open floor
+ok 35 - closedPockets finds floor fenced in by a ring of fixtures, not the open floor
+  ---
+  duration_ms: 9.463958
+  ...
+# ok simplified ring keeps the area within 4 % and drops the raster staircase
+# ok corners are few and spread out
+# ok frontage edges lie on CAD fixtures and are a fraction of the band outline
+# ok contours never enter unsupported cells
+# ok point in rings respects holes
+# 5 geometry tests passed
+# Subtest: /Users/lnesto/CascadeProjects/Hyperspace/frontend/public/flowfield/twin-graphics.test.mjs
+ok 8 - /Users/lnesto/CascadeProjects/Hyperspace/frontend/public/flowfield/twin-graphics.test.mjs
+  ---
+  duration_ms: 132.912875
+  ...
+# Subtest: recovery model is the backend one, unchanged
+ok 37 - recovery model is the backend one, unchanged
+  ---
+  duration_ms: 5.475875
+  ...
+# Subtest: category margins match layers.js
+ok 38 - category margins match layers.js
+  ---
+  duration_ms: 1.218458
+  ...
+# Subtest: many areas, not one till; departments without a shelf reading are left out
+ok 39 - many areas, not one till; departments without a shelf reading are left out
+  ---
+  duration_ms: 3.181667
+  ...
+# Subtest: assumptions move the money, not the behaviour
+ok 40 - assumptions move the money, not the behaviour
+  ---
+  duration_ms: 1.542542
+  ...
+# Subtest: rejects wrong venue and excludes synthetic, stale, unmapped and unknown provenance
+ok 41 - rejects wrong venue and excludes synthetic, stale, unmapped and unknown provenance
+  ---
+  duration_ms: 0.734042
+  ...
+# Subtest: one scenario per ROI; defaults never become priced opportunities
+ok 42 - one scenario per ROI; defaults never become priced opportunities
+  ---
+  duration_ms: 0.188541
+  ...
+# Subtest: flow screening excludes queues and absent observations; does not manufacture economics
+ok 43 - flow screening excludes queues and absent observations; does not manufacture economics
+  ---
+  duration_ms: 0.102791
+  ...
+# Subtest: engine marks generated shelf fillers synthetic and observed rules timestamped
+ok 44 - engine marks generated shelf fillers synthetic and observed rules timestamped
+  ---
+  duration_ms: 1.230125
+  ...
+# Subtest: zero recovery stays zero instead of a forced positive impact band
+ok 45 - zero recovery stays zero instead of a forced positive impact band
+  ---
+  duration_ms: 2.9795
+  ...
+# Subtest: headline matches the audited acceptance set
+ok 46 - headline matches the audited acceptance set
+  ---
+  duration_ms: 0.561792
+  ...
+# Subtest: department minutes are the 199 two-layer areas
+ok 47 - department minutes are the 199 two-layer areas
+  ---
+  duration_ms: 0.477833
+  ...
+# Subtest: visit composition sums back to the visit
+ok 48 - visit composition sums back to the visit
+  ---
+  duration_ms: 0.190375
+  ...
+# Subtest: checkout lanes rank by waiting person-minutes (5, 7, 13), never by the retired PDF
+ok 49 - checkout lanes rank by waiting person-minutes (5, 7, 13), never by the retired PDF
+  ---
+  duration_ms: 0.121875
+  ...
+# Subtest: a row that failed a check is unavailable, not a softer number
+ok 50 - a row that failed a check is unavailable, not a softer number
+  ---
+  duration_ms: 0.092708
+  ...
+# Subtest: venue and day mismatches fail closed
+ok 51 - venue and day mismatches fail closed
+  ---
+  duration_ms: 0.106584
+  ...
+# Subtest: durations read like Visitor Journey
+ok 52 - durations read like Visitor Journey
+  ---
+  duration_ms: 0.054625
+  ...
+# Subtest: raw dwell sums, speed and headings are step-weighted, not cell-weighted
+ok 53 - raw dwell sums, speed and headings are step-weighted, not cell-weighted
+  ---
+  duration_ms: 0.845
+  ...
+# Subtest: missing presence and empty selections are unavailable, not zero activity
+ok 54 - missing presence and empty selections are unavailable, not zero activity
+  ---
+  duration_ms: 0.066875
+  ...
+# Subtest: opposing directions survive; stationary presence adds no heading
+ok 55 - opposing directions survive; stationary presence adds no heading
+  ---
+  duration_ms: 0.068125
+  ...
+1..55
+# tests 55
+# suites 0
+# pass 55
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 758.680042

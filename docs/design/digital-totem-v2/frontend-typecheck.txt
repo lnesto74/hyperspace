@@ -1,0 +1,231 @@
+src/App.tsx(3,28): error TS6133: 'useTracking' is declared but its value is never read.
+src/components/checkout/CheckoutManagerModal.tsx(3,45): error TS6133: 'AlertTriangle' is declared but its value is never read.
+src/components/checkout/CheckoutManagerModal.tsx(4,56): error TS6133: 'Eye' is declared but its value is never read.
+src/components/checkout/CheckoutManagerModal.tsx(5,24): error TS6133: 'ChevronRight' is declared but its value is never read.
+src/components/checkout/CheckoutManagerModal.tsx(164,10): error TS6133: 'localTimers' is declared but its value is never read.
+src/components/dooh/AttributionShelfPicker.tsx(45,5): error TS2322: Type '{ x?: number | undefined; y?: number | undefined; z?: number | undefined; } | undefined' is not assignable to type '{ x: number; y: number; z: number; } | undefined'.
+  Type '{ x?: number | undefined; y?: number | undefined; z?: number | undefined; }' is not assignable to type '{ x: number; y: number; z: number; }'.
+    Types of property 'x' are incompatible.
+      Type 'number | undefined' is not assignable to type 'number'.
+        Type 'undefined' is not assignable to type 'number'.
+src/components/dooh/DoohAnalyticsPage.tsx(204,25): error TS6133: 'setCustomStartTs' is declared but its value is never read.
+src/components/dooh/DoohAnalyticsPage.tsx(205,23): error TS6133: 'setCustomEndTs' is declared but its value is never read.
+src/components/dooh/DoohCharts.tsx(1,1): error TS6192: All imports in import declaration are unused.
+src/components/dooh/DoohScreenZones.tsx(37,3): error TS6133: 'position' is declared but its value is never read.
+src/components/dooh/DoohScreenZones.tsx(96,5): error TS2339: Property 'group' does not exist on type 'JSX.IntrinsicElements'.
+src/components/dooh/DoohScreenZones.tsx(98,7): error TS2339: Property 'mesh' does not exist on type 'JSX.IntrinsicElements'.
+src/components/dooh/DoohScreenZones.tsx(103,9): error TS2339: Property 'meshBasicMaterial' does not exist on type 'JSX.IntrinsicElements'.
+src/components/dooh/DoohScreenZones.tsx(110,7): error TS2339: Property 'mesh' does not exist on type 'JSX.IntrinsicElements'.
+src/components/dooh/DoohScreenZones.tsx(113,7): error TS2339: Property 'lineSegments' does not exist on type 'JSX.IntrinsicElements'.
+src/components/dooh/DoohScreenZones.tsx(114,9): error TS2339: Property 'lineBasicMaterial' does not exist on type 'JSX.IntrinsicElements'.
+src/components/dooh/DoohScreenZones.tsx(115,7): error TS2339: Property 'lineSegments' does not exist on type 'JSX.IntrinsicElements'.
+src/components/dooh/DoohScreenZones.tsx(116,5): error TS2339: Property 'group' does not exist on type 'JSX.IntrinsicElements'.
+src/components/dooh/DoohScreenZones.tsx(150,5): error TS2339: Property 'group' does not exist on type 'JSX.IntrinsicElements'.
+src/components/dooh/DoohScreenZones.tsx(152,7): error TS2339: Property 'mesh' does not exist on type 'JSX.IntrinsicElements'.
+src/components/dooh/DoohScreenZones.tsx(153,9): error TS2339: Property 'boxGeometry' does not exist on type 'JSX.IntrinsicElements'.
+src/components/dooh/DoohScreenZones.tsx(154,9): error TS2339: Property 'meshStandardMaterial' does not exist on type 'JSX.IntrinsicElements'.
+src/components/dooh/DoohScreenZones.tsx(155,7): error TS2339: Property 'mesh' does not exist on type 'JSX.IntrinsicElements'.
+src/components/dooh/DoohScreenZones.tsx(158,13): error TS2322: Type '{ children: Element; geometry: BufferGeometry<NormalBufferAttributes>; }' is not assignable to type 'SVGLineElementAttributes<SVGLineElement>'.
+  Property 'geometry' does not exist on type 'SVGLineElementAttributes<SVGLineElement>'.
+src/components/dooh/DoohScreenZones.tsx(159,9): error TS2339: Property 'lineBasicMaterial' does not exist on type 'JSX.IntrinsicElements'.
+src/components/dooh/DoohScreenZones.tsx(163,7): error TS2339: Property 'mesh' does not exist on type 'JSX.IntrinsicElements'.
+src/components/dooh/DoohScreenZones.tsx(164,9): error TS2339: Property 'cylinderGeometry' does not exist on type 'JSX.IntrinsicElements'.
+src/components/dooh/DoohScreenZones.tsx(165,9): error TS2339: Property 'meshStandardMaterial' does not exist on type 'JSX.IntrinsicElements'.
+src/components/dooh/DoohScreenZones.tsx(166,7): error TS2339: Property 'mesh' does not exist on type 'JSX.IntrinsicElements'.
+src/components/dooh/DoohScreenZones.tsx(167,5): error TS2339: Property 'group' does not exist on type 'JSX.IntrinsicElements'.
+src/components/dooh/DoohScreenZones.tsx(174,3): error TS6133: 'showLabels' is declared but its value is never read.
+src/components/dooh/DoohScreenZones.tsx(184,5): error TS2339: Property 'group' does not exist on type 'JSX.IntrinsicElements'.
+src/components/dooh/DoohScreenZones.tsx(186,9): error TS2339: Property 'group' does not exist on type 'JSX.IntrinsicElements'.
+src/components/dooh/DoohScreenZones.tsx(211,9): error TS2339: Property 'group' does not exist on type 'JSX.IntrinsicElements'.
+src/components/dooh/DoohScreenZones.tsx(213,5): error TS2339: Property 'group' does not exist on type 'JSX.IntrinsicElements'.
+src/components/dooh/PlaylistManager.tsx(2,40): error TS6133: 'Play' is declared but its value is never read.
+src/components/dooh/PlaylistManager.tsx(2,46): error TS6133: 'Pause' is declared but its value is never read.
+src/components/dooh/PlaylistManager.tsx(39,9): error TS6133: 'videoPreviewRef' is declared but its value is never read.
+src/components/dooh/PlaylistManager.tsx(217,9): error TS6133: 'availableVideos' is declared but its value is never read.
+src/components/dwgImporter/GroupListPanel.tsx(172,9): error TS6133: 'getAiClassification' is declared but its value is never read.
+src/components/dwgImporter/ImportedLayoutLayer.tsx(89,10): error TS6133: 'isLoading' is declared but its value is never read.
+src/components/dwgImporter/ImportedLayoutLayer.tsx(223,19): error TS6133: 'mappingKey' is declared but its value is never read.
+src/components/dwgImporter/Layout3DPreview.tsx(1367,15): error TS6133: 'vfov' is declared but its value is never read.
+src/components/dwgImporter/LidarDebugPanel.tsx(2,13): error TS6133: 'Play' is declared but its value is never read.
+src/components/dwgImporter/LidarDebugPanel.tsx(2,19): error TS6133: 'RefreshCw' is declared but its value is never read.
+src/components/dwgImporter/LidarDebugPanel.tsx(87,10): error TS6133: 'isSimulating' is declared but its value is never read.
+src/components/dwgImporter/LidarDebugPanel.tsx(147,9): error TS6133: 'runSimulation' is declared but its value is never read.
+src/components/dwgImporter/PreviewPanel.tsx(94,3): error TS6133: 'selectedGroupId' is declared but its value is never read.
+src/components/edgeCommissioning/ConversionServiceForm.tsx(128,9): error TS6133: 'handleLicenseFileChange' is declared but its value is never read.
+src/components/edgeCommissioning/EdgeCommissioningPage.tsx(6,105): error TS6133: 'DwgFixture' is declared but its value is never read.
+src/components/edgeCommissioning/EdgeCommissioningPage.tsx(42,5): error TS6133: 'decommissionLidar' is declared but its value is never read.
+src/components/edgeCommissioning/PointCloudViewer.tsx(514,48): error TS6133: 'intensityOffset' is declared but its value is never read.
+src/components/kpi/CheckoutCalibrationPanel.tsx(19,3): error TS6133: 'extractCheckoutCalibration' is declared but its value is never read.
+src/components/kpi/ZoneKPIOverlayPanel.tsx(134,48): error TS2345: Argument of type 'VenueObject[]' is not assignable to parameter of type 'ObjectLike[]'.
+  Type 'VenueObject' is not assignable to type 'ObjectLike'.
+    Types of property 'metadata' are incompatible.
+      Type '{ [key: string]: any; source?: string | undefined; dwg_fixture_id?: string | undefined; dwg_layout_version_id?: string | undefined; dwg_footprint_points?: { x: number; z: number; }[] | null | undefined; dwg_center_x?: number | undefined; dwg_center_z?: number | undefined; } | null | undefined' is not assignable to type '{ business_category_label?: string | undefined; business_category?: string | undefined; } | undefined'.
+        Type 'null' is not assignable to type '{ business_category_label?: string | undefined; business_category?: string | undefined; } | undefined'.
+src/components/kpi/ZoneKPIOverlayPanel.tsx(151,89): error TS2345: Argument of type 'VenueObject[]' is not assignable to parameter of type 'ObjectLike[]'.
+  Type 'VenueObject' is not assignable to type 'ObjectLike'.
+    Types of property 'metadata' are incompatible.
+      Type '{ [key: string]: any; source?: string | undefined; dwg_fixture_id?: string | undefined; dwg_layout_version_id?: string | undefined; dwg_footprint_points?: { x: number; z: number; }[] | null | undefined; dwg_center_x?: number | undefined; dwg_center_z?: number | undefined; } | null | undefined' is not assignable to type '{ business_category_label?: string | undefined; business_category?: string | undefined; } | undefined'.
+        Type 'null' is not assignable to type '{ business_category_label?: string | undefined; business_category?: string | undefined; } | undefined'.
+src/components/kpi/ZoneKPIPopup.tsx(352,10): error TS6133: 'shelfInfoLoading' is declared but its value is never read.
+src/components/layout/AppShell.tsx(128,9): error TS6133: 'isDwgMode' is declared but its value is never read.
+src/components/layout/RightPanel.tsx(13,60): error TS2345: Argument of type 'string | undefined' is not assignable to parameter of type 'string'.
+  Type 'undefined' is not assignable to type 'string'.
+src/components/layout/Sidebar.tsx(2,50): error TS6133: 'Map' is declared but its value is never read.
+src/components/lidarPlanner/Lidar3DPreview.tsx(30,3): error TS6133: 'onSelectInstance' is declared but its value is never read.
+src/components/matching/LiveReidCalibrationPanel.tsx(1,34): error TS6133: 'useMemo' is declared but its value is never read.
+src/components/matching/LiveReidCalibrationPanel.tsx(1,58): error TS6133: 'ReactNode' is declared but its value is never read.
+src/components/matching/LiveReidCalibrationPanel.tsx(38,16): error TS2345: Argument of type '"Start a calibration session first"' is not assignable to parameter of type 'ToastType'.
+src/components/matching/LiveReidCalibrationPanel.tsx(49,34): error TS2339: Property 'primaryPerceptionId' does not exist on type 'Track'.
+src/components/matching/LiveReidCalibrationPanel.tsx(66,9): error TS2345: Argument of type '`Path #${number} started \u2014 follow shopper, click again when they reappear` | `Stitched step ${number} on path #${number}`' is not assignable to parameter of type 'ToastType'.
+  Type '`Path #${number} started \u2014 follow shopper, click again when they reappear`' is not assignable to type 'ToastType'.
+src/components/matching/LiveReidCalibrationPanel.tsx(72,16): error TS2345: Argument of type 'string' is not assignable to parameter of type 'ToastType'.
+src/components/matching/LiveReidCalibrationPanel.tsx(95,16): error TS2345: Argument of type '"Live calibration session started — click a shopper on the map"' is not assignable to parameter of type 'ToastType'.
+src/components/matching/LiveReidCalibrationPanel.tsx(97,16): error TS2345: Argument of type 'string' is not assignable to parameter of type 'ToastType'.
+src/components/matching/LiveReidCalibrationPanel.tsx(112,16): error TS2345: Argument of type '`Optimizer: ${string}% of your links satisfied`' is not assignable to parameter of type 'ToastType'.
+src/components/matching/LiveReidCalibrationPanel.tsx(114,16): error TS2345: Argument of type 'string' is not assignable to parameter of type 'ToastType'.
+src/components/matching/LiveReidCalibrationPanel.tsx(133,16): error TS2345: Argument of type '"Best re-ID parameters applied to live venue"' is not assignable to parameter of type 'ToastType'.
+src/components/matching/LiveReidCalibrationPanel.tsx(135,16): error TS2345: Argument of type 'string' is not assignable to parameter of type 'ToastType'.
+src/components/matching/TrajectoryQualityPanel.tsx(146,5): error TS2740: Type '{ enabled: true; ghost_max_speed_m_s: number; ghost_min_promotion_lifetime_ms: number; ghost_min_promotion_displacement_m: number; ghost_static_timeout_s: number; ghost_static_displacement_m: number; ... 9 more ...; trail_max_length: number; }' is missing the following properties from type 'ReconcilerConfig': reid_slow_speed_m_s, reid_static_max_distance_m, reid_static_max_implied_speed_m_s, reid_aligned_cosine_min, and 5 more.
+src/components/matching/TrajectoryQualityPanel.tsx(170,5): error TS2740: Type '{ enabled: true; ghost_max_speed_m_s: number; ghost_min_promotion_lifetime_ms: number; ghost_min_promotion_displacement_m: number; ghost_static_timeout_s: number; ghost_static_displacement_m: number; ... 9 more ...; trail_max_length: number; }' is missing the following properties from type 'ReconcilerConfig': reid_slow_speed_m_s, reid_static_max_distance_m, reid_static_max_implied_speed_m_s, reid_aligned_cosine_min, and 5 more.
+src/components/matching/TrajectoryQualityPanel.tsx(194,5): error TS2740: Type '{ enabled: true; ghost_max_speed_m_s: number; ghost_min_promotion_lifetime_ms: number; ghost_min_promotion_displacement_m: number; ghost_static_timeout_s: number; ghost_static_displacement_m: number; ... 9 more ...; trail_max_length: number; }' is missing the following properties from type 'ReconcilerConfig': reid_slow_speed_m_s, reid_static_max_distance_m, reid_static_max_implied_speed_m_s, reid_aligned_cosine_min, and 5 more.
+src/components/matching/TrajectoryQualityPanel.tsx(218,5): error TS2740: Type '{ enabled: true; ghost_max_speed_m_s: number; ghost_min_promotion_lifetime_ms: number; ghost_min_promotion_displacement_m: number; ghost_static_timeout_s: number; ghost_static_displacement_m: number; ... 9 more ...; trail_max_length: number; }' is missing the following properties from type 'ReconcilerConfig': reid_slow_speed_m_s, reid_static_max_distance_m, reid_static_max_implied_speed_m_s, reid_aligned_cosine_min, and 5 more.
+src/components/matching/TrajectoryQualityPanel.tsx(242,5): error TS2740: Type '{ enabled: true; ghost_max_speed_m_s: number; ghost_min_promotion_lifetime_ms: number; ghost_min_promotion_displacement_m: number; ghost_static_timeout_s: number; ghost_static_displacement_m: number; ... 9 more ...; trail_max_length: number; }' is missing the following properties from type 'ReconcilerConfig': reid_slow_speed_m_s, reid_static_max_distance_m, reid_static_max_implied_speed_m_s, reid_aligned_cosine_min, and 5 more.
+src/components/matching/TrajectoryQualityPanel.tsx(266,5): error TS2740: Type '{ enabled: true; ghost_max_speed_m_s: number; ghost_min_promotion_lifetime_ms: number; ghost_min_promotion_displacement_m: number; ghost_static_timeout_s: number; ghost_static_displacement_m: number; ... 9 more ...; trail_max_length: number; }' is missing the following properties from type 'ReconcilerConfig': reid_slow_speed_m_s, reid_static_max_distance_m, reid_static_max_implied_speed_m_s, reid_aligned_cosine_min, and 5 more.
+src/components/matching/TrajectoryQualityPanel.tsx(290,5): error TS2739: Type '{ enabled: true; ghost_max_speed_m_s: number; ghost_min_promotion_lifetime_ms: number; ghost_min_promotion_displacement_m: number; ghost_static_timeout_s: number; ghost_static_displacement_m: number; ... 16 more ...; trail_max_length: number; }' is missing the following properties from type 'ReconcilerConfig': reid_stale_active_ms, reid_churn_active_ms
+src/components/matching/TrajectoryQualityPanel.tsx(321,5): error TS2740: Type '{ enabled: true; ghost_max_speed_m_s: number; ghost_min_promotion_lifetime_ms: number; ghost_min_promotion_displacement_m: number; ghost_static_timeout_s: number; ghost_static_displacement_m: number; ... 9 more ...; trail_max_length: number; }' is missing the following properties from type 'ReconcilerConfig': reid_slow_speed_m_s, reid_static_max_distance_m, reid_static_max_implied_speed_m_s, reid_aligned_cosine_min, and 5 more.
+src/components/neuralDashboard/NeuralDashboard.tsx(60,85): error TS6133: 'isReplayMode' is declared but its value is never read.
+src/components/planogram/PlanogramPanel.tsx(119,64): error TS6133: 'i' is declared but its value is never read.
+src/components/planogram/PlanogramViewport.tsx(271,28): error TS2345: Argument of type '() => (shelfId: string, levelIndex: number, slotIndex: number) => { x: number; y: number; } | null' is not assignable to parameter of type '(shelfId: string, levelIndex: number, slotIndex: number) => { x: number; y: number; } | null'.
+  Type '(shelfId: string, levelIndex: number, slotIndex: number) => { x: number; y: number; } | null' is not assignable to type '{ x: number; y: number; }'.
+src/components/planogram/PlanogramViewport.tsx(1019,12): error TS2532: Object is possibly 'undefined'.
+src/components/planogram/ShelfInspectorPanel.tsx(1,31): error TS6133: 'useRef' is declared but its value is never read.
+src/components/planogram/ShelfInspectorPanel.tsx(3,33): error TS6133: 'SlotData' is declared but its value is never read.
+src/components/replay-insight/InsightModeOverlay.tsx(114,20): error TS6133: 'maxTime' is declared but its value is never read.
+src/components/storymode/StoryMode.tsx(744,9): error TS6133: 'color' is declared but its value is never read.
+src/components/venue/MainViewport.tsx(22,10): error TS2300: Duplicate identifier 'API_BASE'.
+src/components/venue/MainViewport.tsx(212,10): error TS2300: Duplicate identifier 'API_BASE'.
+src/components/venue/MainViewport.tsx(270,3): error TS6133: 'isReplayMode' is declared but its value is never read.
+src/components/venue/MainViewport.tsx(271,3): error TS6133: 'replayTimestamp' is declared but its value is never read.
+src/components/venue/MainViewport.tsx(295,9): error TS6133: 'trackInstancedMeshRef' is declared but its value is never read.
+src/components/venue/MainViewport.tsx(296,9): error TS6133: 'trackInstanceMapRef' is declared but its value is never read.
+src/components/venue/MainViewport.tsx(297,9): error TS6133: 'trackInstanceColorsRef' is declared but its value is never read.
+src/components/venue/MainViewport.tsx(298,9): error TS6133: 'MAX_TRACK_INSTANCES' is declared but its value is never read.
+src/components/venue/MainViewport.tsx(1986,51): error TS2345: Argument of type 'VenueObject[]' is not assignable to parameter of type 'ObjectLike[]'.
+  Type 'VenueObject' is not assignable to type 'ObjectLike'.
+    Types of property 'metadata' are incompatible.
+      Type '{ [key: string]: any; source?: string | undefined; dwg_fixture_id?: string | undefined; dwg_layout_version_id?: string | undefined; dwg_footprint_points?: { x: number; z: number; }[] | null | undefined; dwg_center_x?: number | undefined; dwg_center_z?: number | undefined; } | null | undefined' is not assignable to type '{ business_category_label?: string | undefined; business_category?: string | undefined; } | undefined'.
+        Type 'null' is not assignable to type '{ business_category_label?: string | undefined; business_category?: string | undefined; } | undefined'.
+src/components/venue/MainViewport.tsx(4316,36): error TS2345: Argument of type 'string | undefined' is not assignable to parameter of type 'string'.
+  Type 'undefined' is not assignable to type 'string'.
+src/components/venue/MainViewport.tsx(5219,29): error TS6133: 'v' is declared but its value is never read.
+src/components/venue/MainViewport.tsx(5252,74): error TS2345: Argument of type 'VenueObject[]' is not assignable to parameter of type 'ObjectLike[]'.
+  Type 'VenueObject' is not assignable to type 'ObjectLike'.
+    Types of property 'metadata' are incompatible.
+      Type '{ [key: string]: any; source?: string | undefined; dwg_fixture_id?: string | undefined; dwg_layout_version_id?: string | undefined; dwg_footprint_points?: { x: number; z: number; }[] | null | undefined; dwg_center_x?: number | undefined; dwg_center_z?: number | undefined; } | null | undefined' is not assignable to type '{ business_category_label?: string | undefined; business_category?: string | undefined; } | undefined'.
+        Type 'null' is not assignable to type '{ business_category_label?: string | undefined; business_category?: string | undefined; } | undefined'.
+src/components/venue/MainViewport.tsx(5546,42): error TS6133: 'roiId' is declared but its value is never read.
+src/components/venue/MainViewport.tsx(5663,45): error TS2345: Argument of type 'VenueObject[]' is not assignable to parameter of type 'ObjectLike[]'.
+  Type 'VenueObject' is not assignable to type 'ObjectLike'.
+    Types of property 'metadata' are incompatible.
+      Type '{ [key: string]: any; source?: string | undefined; dwg_fixture_id?: string | undefined; dwg_layout_version_id?: string | undefined; dwg_footprint_points?: { x: number; z: number; }[] | null | undefined; dwg_center_x?: number | undefined; dwg_center_z?: number | undefined; } | null | undefined' is not assignable to type '{ business_category_label?: string | undefined; business_category?: string | undefined; } | undefined'.
+        Type 'null' is not assignable to type '{ business_category_label?: string | undefined; business_category?: string | undefined; } | undefined'.
+src/components/venue/MainViewport.tsx(5748,47): error TS6133: 'objId' is declared but its value is never read.
+src/components/venue/MainViewport.tsx(5928,9): error TS6133: 'getSlotFromShelfPosition' is declared but its value is never read.
+src/components/venue/MainViewport.tsx(5930,5): error TS6133: 'localZ' is declared but its value is never read.
+src/components/venue/MainViewport.tsx(5936,11): error TS6133: 'shelfHeight' is declared but its value is never read.
+src/components/venue/MainViewport.tsx(5937,11): error TS6133: 'numLevels' is declared but its value is never read.
+src/components/venue/MainViewport.tsx(6120,48): error TS6133: 'event' is declared but its value is never read.
+src/components/venue/MainViewport.tsx(6245,29): error TS2339: Property 'objects' does not exist on type 'Venue'.
+src/components/venue/MainViewport.tsx(6372,43): error TS6133: 'id' is declared but its value is never read.
+src/components/venue/VenueSettingsPanel.tsx(2,13): error TS6133: 'Settings' is declared but its value is never read.
+src/context/EdgeCommissioningContext.tsx(579,53): error TS6133: 'venueId' is declared but its value is never read.
+src/context/EdgeCommissioningContext.tsx(645,69): error TS6133: 'edgeId' is declared but its value is never read.
+src/context/NarratorContext.tsx(57,9): error TS6133: 'dwgLayoutId' is declared but its value is never read.
+src/context/TrackingContext.tsx(7,1): error TS6133: 'countLiveFrameTracks' is declared but its value is never read.
+src/context/TrackingContext.tsx(36,10): error TS6133: 'capTrackMap' is declared but its value is never read.
+src/context/TrackingContext.tsx(367,43): error TS2554: Expected 1 arguments, but got 2.
+src/features/benchmark/BenchmarkPage.tsx(174,13): error TS2322: Type '(selectId?: string) => Promise<void>' is not assignable to type 'MouseEventHandler<HTMLButtonElement>'.
+  Types of parameters 'selectId' and 'event' are incompatible.
+    Type 'MouseEvent<HTMLButtonElement, MouseEvent>' is not assignable to type 'string'.
+src/features/benchmark/components/ReconciliationProofTab.tsx(46,9): error TS6133: 'footfall' is declared but its value is never read.
+src/features/businessReporting/BusinessReportingPage.tsx(33,51): error TS6133: 'TypicalVisitEmpty' is declared but its value is never read.
+src/features/businessReporting/BusinessReportingPage.tsx(202,28): error TS6133: 'setEsselungaVariant' is declared but its value is never read.
+src/features/businessReporting/BusinessReportingPage.tsx(362,41): error TS18048: 'result.error' is possibly 'undefined'.
+src/features/businessReporting/BusinessReportingPage.tsx(364,27): error TS2345: Argument of type '{ day: string; eta_s: any; missing: any; } | undefined' is not assignable to parameter of type 'SetStateAction<{ day: string; eta_s?: number | undefined; error?: string | undefined; } | null>'.
+  Type 'undefined' is not assignable to type 'SetStateAction<{ day: string; eta_s?: number | undefined; error?: string | undefined; } | null>'.
+src/features/businessReporting/BusinessReportingPage.tsx(403,19): error TS2345: Argument of type 'DailyKpiPayload | null | undefined' is not assignable to parameter of type 'SetStateAction<DailyKpiPayload | null>'.
+  Type 'undefined' is not assignable to type 'SetStateAction<DailyKpiPayload | null>'.
+src/features/businessReporting/BusinessReportingPage.tsx(552,15): error TS2367: This comparison appears to be unintentional because the types '"executive" | "esselunga-executive"' and '"esselunga-store"' have no overlap.
+src/features/businessReporting/clienteMedio/components/CheckoutSummary.test.ts(1,38): error TS2307: Cannot find module 'vitest' or its corresponding type declarations.
+src/features/businessReporting/clienteMedio/components/CounterRow.tsx(2,22): error TS6133: 'formatSlotTick' is declared but its value is never read.
+src/features/businessReporting/clienteMedio/components/PromoSpots.tsx(3,1): error TS6133: 'fmtDuration' is declared but its value is never read.
+src/features/businessReporting/clienteMedio/components/SlotColumns.tsx(3,10): error TS6133: 'formatSlot' is declared but its value is never read.
+src/features/businessReporting/clienteMedio/lib/format.test.ts(1,38): error TS2307: Cannot find module 'vitest' or its corresponding type declarations.
+src/features/businessReporting/clienteMedio/lib/modes.test.ts(1,38): error TS2307: Cannot find module 'vitest' or its corresponding type declarations.
+src/features/businessReporting/clienteMedio/lib/nextDepts.test.ts(1,38): error TS2307: Cannot find module 'vitest' or its corresponding type declarations.
+src/features/businessReporting/clienteMedio/lib/verdicts.test.ts(1,38): error TS2307: Cannot find module 'vitest' or its corresponding type declarations.
+src/features/businessReporting/clienteMedio/lib/verdicts.test.ts(21,7): error TS2739: Type '{ lane: string; laneNo: number; WAITING: number; TRANSIT: number; FIXED: number; waitingPm: number; }' is missing the following properties from type 'LaneShare': servicePm, sessions, waitMin, serviceMin, share
+src/features/businessReporting/clienteMedio/lib/verdicts.test.ts(22,7): error TS2739: Type '{ lane: string; laneNo: number; WAITING: number; TRANSIT: number; FIXED: number; waitingPm: number; }' is missing the following properties from type 'LaneShare': servicePm, sessions, waitMin, serviceMin, share
+src/features/businessReporting/clienteMedio/lib/verdicts.test.ts(23,7): error TS2739: Type '{ lane: string; laneNo: number; WAITING: number; TRANSIT: number; FIXED: number; waitingPm: number; }' is missing the following properties from type 'LaneShare': servicePm, sessions, waitMin, serviceMin, share
+src/features/businessReporting/clienteMedio/lib/verdicts.test.ts(24,7): error TS2739: Type '{ lane: string; laneNo: number; WAITING: number; TRANSIT: number; FIXED: number; waitingPm: number; }' is missing the following properties from type 'LaneShare': servicePm, sessions, waitMin, serviceMin, share
+src/features/businessReporting/clienteMedio/lib/visitComposition.test.ts(1,38): error TS2307: Cannot find module 'vitest' or its corresponding type declarations.
+src/features/businessReporting/clienteMedio/screens/Checkouts.tsx(64,28): error TS2339: Property 'sessions' does not exist on type '{ label: string; share: number; warn: boolean; sessions: number | null; waitMin: number | null; serviceMin: number | null; } | { label: string; share: number; muted: boolean; }'.
+  Property 'sessions' does not exist on type '{ label: string; share: number; muted: boolean; }'.
+src/features/businessReporting/clienteMedio/screens/Checkouts.tsx(64,56): error TS2339: Property 'sessions' does not exist on type '{ label: string; share: number; warn: boolean; sessions: number | null; waitMin: number | null; serviceMin: number | null; } | { label: string; share: number; muted: boolean; }'.
+  Property 'sessions' does not exist on type '{ label: string; share: number; muted: boolean; }'.
+src/features/businessReporting/clienteMedio/screens/Checkouts.tsx(65,28): error TS2339: Property 'waitMin' does not exist on type '{ label: string; share: number; warn: boolean; sessions: number | null; waitMin: number | null; serviceMin: number | null; } | { label: string; share: number; muted: boolean; }'.
+  Property 'waitMin' does not exist on type '{ label: string; share: number; muted: boolean; }'.
+src/features/businessReporting/clienteMedio/screens/Checkouts.tsx(65,60): error TS2339: Property 'waitMin' does not exist on type '{ label: string; share: number; warn: boolean; sessions: number | null; waitMin: number | null; serviceMin: number | null; } | { label: string; share: number; muted: boolean; }'.
+  Property 'waitMin' does not exist on type '{ label: string; share: number; muted: boolean; }'.
+src/features/businessReporting/clienteMedio/screens/Checkouts.tsx(66,28): error TS2339: Property 'serviceMin' does not exist on type '{ label: string; share: number; warn: boolean; sessions: number | null; waitMin: number | null; serviceMin: number | null; } | { label: string; share: number; muted: boolean; }'.
+  Property 'serviceMin' does not exist on type '{ label: string; share: number; muted: boolean; }'.
+src/features/businessReporting/clienteMedio/screens/Checkouts.tsx(66,63): error TS2339: Property 'serviceMin' does not exist on type '{ label: string; share: number; warn: boolean; sessions: number | null; waitMin: number | null; serviceMin: number | null; } | { label: string; share: number; muted: boolean; }'.
+  Property 'serviceMin' does not exist on type '{ label: string; share: number; muted: boolean; }'.
+src/features/businessReporting/components/CategoryVisitsPanel.tsx(36,3): error TS6133: 'highlightCategory' is declared but its value is never read.
+src/features/businessReporting/components/ReportingInsightsPanel.tsx(3,29): error TS6133: 'KpiThresholds' is declared but its value is never read.
+src/features/businessReporting/components/ReportingInsightsPanel.tsx(98,25): error TS6133: 'bad' is declared but its value is never read.
+src/features/businessReporting/components/ReportingKpiTile.tsx(40,23): error TS6133: 'bad' is declared but its value is never read.
+src/features/businessReporting/dailyKpi/DailyExecutiveSections.tsx(56,18): error TS18048: 'svc' is possibly 'undefined'.
+src/features/businessReporting/dailyKpi/DailyExecutiveSections.tsx(61,9): error TS6133: 'maxDept' is declared but its value is never read.
+src/features/businessReporting/dailyKpi/DailyExecutiveSections.tsx(276,33): error TS2339: Property 'lane' does not exist on type '{ waitMin: number | null; serviceMin: number | null; sessions: number | null; }'.
+src/features/businessReporting/dailyKpi/DailyExecutiveSections.tsx(277,56): error TS2339: Property 'lane' does not exist on type '{ waitMin: number | null; serviceMin: number | null; sessions: number | null; }'.
+src/features/businessReporting/dailyKpi/viewModel.test.ts(1,38): error TS2307: Cannot find module 'vitest' or its corresponding type declarations.
+src/features/businessReporting/dailyKpi/viewModel.ts(27,3): error TS2322: Type '{ id: string; label: string; value: number | null; display: string; hint: string; previous: null; higherIsBetter: boolean; deltaPct: number | null; noCompareReason: string | null; compareLabel: string | undefined; ... 5 more ...; statusReason: string | undefined; }[]' is not assignable to type 'HeadlineKpi[]'.
+  Type '{ id: string; label: string; value: number | null; display: string; hint: string; previous: null; higherIsBetter: boolean; deltaPct: number | null; noCompareReason: string | null; compareLabel: string | undefined; ... 5 more ...; statusReason: string | undefined; }' is not assignable to type 'HeadlineKpi'.
+    Types of property 'status' are incompatible.
+      Type 'KpiStatus' is not assignable to type '"ok" | "unreliable" | undefined'.
+        Type '"no_coverage"' is not assignable to type '"ok" | "unreliable" | undefined'.
+src/features/businessReporting/dashboardBuilder/__tests__/sources.test.ts(4,1): error TS2582: Cannot find name 'describe'. Do you need to install type definitions for a test runner? Try `npm i --save-dev @types/jest` or `npm i --save-dev @types/mocha`.
+src/features/businessReporting/dashboardBuilder/__tests__/sources.test.ts(5,3): error TS2582: Cannot find name 'it'. Do you need to install type definitions for a test runner? Try `npm i --save-dev @types/jest` or `npm i --save-dev @types/mocha`.
+src/features/businessReporting/dashboardBuilder/__tests__/sources.test.ts(7,5): error TS2304: Cannot find name 'expect'.
+src/features/businessReporting/dashboardBuilder/__tests__/sources.test.ts(8,5): error TS2304: Cannot find name 'expect'.
+src/features/businessReporting/dashboardBuilder/__tests__/sources.test.ts(11,3): error TS2582: Cannot find name 'it'. Do you need to install type definitions for a test runner? Try `npm i --save-dev @types/jest` or `npm i --save-dev @types/mocha`.
+src/features/businessReporting/dashboardBuilder/__tests__/sources.test.ts(14,5): error TS2304: Cannot find name 'expect'.
+src/features/businessReporting/dashboardBuilder/__tests__/sources.test.ts(17,3): error TS2582: Cannot find name 'it'. Do you need to install type definitions for a test runner? Try `npm i --save-dev @types/jest` or `npm i --save-dev @types/mocha`.
+src/features/businessReporting/dashboardBuilder/__tests__/sources.test.ts(18,5): error TS2304: Cannot find name 'expect'.
+src/features/businessReporting/esselunga/DwellGeometryLegend.tsx(124,9): error TS6133: 'gapS' is declared but its value is never read.
+src/features/businessReporting/esselunga/EsselungaCharts.tsx(121,3): error TS6133: 'p75DwellSec' is declared but its value is never read.
+src/features/businessReporting/esselunga/EsselungaCharts.tsx(131,3): error TS6133: 'p75EngagementSec' is declared but its value is never read.
+src/features/businessReporting/esselunga/EsselungaExecutiveViewport.tsx(224,3): error TS6133: 'onVariantChange' is declared but its value is never read.
+src/features/businessReporting/esselunga/EsselungaExecutiveViewport.tsx(611,26): error TS2367: This comparison appears to be unintentional because the types '"hq"' and '"live"' have no overlap.
+src/features/businessReporting/esselunga/ExecutiveVisuals.tsx(5,15): error TS6196: 'ActivityTimeline' is declared but never used.
+src/features/businessReporting/esselunga/ExecutiveVisuals.tsx(172,3): error TS6133: 'animate' is declared but its value is never read.
+src/features/businessReporting/executiveCanvas/canvasModel.test.ts(1,38): error TS2307: Cannot find module 'vitest' or its corresponding type declarations.
+src/features/businessReporting/executiveCanvas/canvasModel.ts(112,3): error TS2322: Type '{ id: string; label: string; minutes: number; }[]' is not assignable to type 'TimeBucket[]'.
+  Type '{ id: string; label: string; minutes: number; }' is not assignable to type 'TimeBucket'.
+    Types of property 'id' are incompatible.
+      Type 'string' is not assignable to type '"checkout" | "other" | "fresh" | "aisles"'.
+src/features/businessReporting/executiveCanvas/canvasModel.ts(208,7): error TS2322: Type 'string | null | undefined' is not assignable to type 'string | undefined'.
+  Type 'null' is not assignable to type 'string | undefined'.
+src/features/businessReporting/executiveCanvas/canvasModel.ts(219,7): error TS2322: Type 'string | null | undefined' is not assignable to type 'string | undefined'.
+  Type 'null' is not assignable to type 'string | undefined'.
+src/features/businessReporting/executiveCanvas/canvasModel.ts(229,7): error TS2322: Type 'string | null | undefined' is not assignable to type 'string | undefined'.
+  Type 'null' is not assignable to type 'string | undefined'.
+src/features/businessReporting/executiveCanvas/canvasModel.ts(240,7): error TS2322: Type 'string | null | undefined' is not assignable to type 'string | undefined'.
+  Type 'null' is not assignable to type 'string | undefined'.
+src/features/businessReporting/operationsConsole/OperationsFootfallPanel.tsx(72,31): error TS2367: This comparison appears to be unintentional because the types 'number | null' and 'string' have no overlap.
+src/features/businessReporting/operationsConsole/OperationsFootfallPanel.tsx(77,52): error TS2345: Argument of type 'string' is not assignable to parameter of type 'SetStateAction<number | null>'.
+src/features/profitRadar/components/LiveFingerprintPanel.tsx(48,11): error TS2352: Conversion of type 'readonly ["exploration", "goal_directedness", "urgency", "commitment", "hesitation", "confusion", "social_groupness", "avoidance", "waiting_queueing", "engagement_with_POI", "churn_exit_intent", "friction"]' to type '("exploration" | "goal_directedness" | "urgency" | "commitment" | "hesitation" | "confusion" | "social_groupness" | "avoidance" | "waiting_queueing" | "engagement_with_POI" | "churn_exit_intent" | "friction")[]' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.
+  The type 'readonly ["exploration", "goal_directedness", "urgency", "commitment", "hesitation", "confusion", "social_groupness", "avoidance", "waiting_queueing", "engagement_with_POI", "churn_exit_intent", "friction"]' is 'readonly' and cannot be assigned to the mutable type '("exploration" | "goal_directedness" | "urgency" | "commitment" | "hesitation" | "confusion" | "social_groupness" | "avoidance" | "waiting_queueing" | "engagement_with_POI" | "churn_exit_intent" | "friction")[]'.
+src/hooks/useDoohVideoPlayer.ts(141,66): error TS6133: 'screenId' is declared but its value is never read.
+src/launchpad/EdgeCommissioningModal.tsx(53,3): error TS6133: 'layoutVersionId' is declared but its value is never read.
