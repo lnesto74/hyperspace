@@ -70,6 +70,8 @@ import OpsDispatchService from './services/ops-dispatch/OpsDispatchService.js';
 import createOpsDispatchRoutes from './routes/opsDispatch.js';
 import { FlowFieldDailyService } from './services/FlowFieldDailyService.js';
 import createFlowfieldRoutes from './routes/flowfield.js';
+import { WindflowDayService } from './services/windflow/WindflowDayService.js';
+import createWindflowRoutes from './routes/windflow.js';
 import { LpmService } from './services/lpm/LpmService.js';
 import createLpmRoutes from './routes/lpm.js';
 import {
@@ -678,6 +680,7 @@ app.use('/api/ops-dispatch', createOpsDispatchRoutes(db, opsDispatchService, { u
 
 const flowFieldDaily = new FlowFieldDailyService(db);
 app.use('/api/flowfield', createFlowfieldRoutes(flowFieldDaily));
+app.use('/api/windflow', createWindflowRoutes(new WindflowDayService(db)));
 flowFieldDaily.startNightly();
 const lpmService = new LpmService({ db, flowFieldDaily });
 app.use('/api/lpm', createLpmRoutes(lpmService));

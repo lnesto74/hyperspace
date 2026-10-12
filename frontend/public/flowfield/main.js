@@ -1,5 +1,5 @@
 import { analyseAreas, rankAreas } from './business-analysis.js?v=report-4';
-import { mountAnalysisWorkspace } from './workspace.js?v=v3-13';
+import { mountAnalysisWorkspace } from './workspace.js?v=v3-14';
 // Lens modes that draw the cyan movement streams (Pulse, Flow Explorer).
 const MOVE_MODES = new Set(['moved', 'flow']);
 const STREAM_MODES = new Set(['moved', 'flow', 'stopped', 'value']);
@@ -127,19 +127,30 @@ const isEmbed = bootQs.has('embed');
 let useLivePack = !(isEmbed && !fieldApi.date);
 let dateCatalog = null;
 
+// Days whose movement field was built on the server from the raw 10 Hz archive (Windflow day packs).
+// They win over the 3 s track_positions packs for the same day.
+let rawDays = new Set();
 async function fetchDateCatalog() {
-  try {
-    const q = fieldApi.venue ? `?venue=${encodeURIComponent(fieldApi.venue)}` : '';
-    const res = await fetch(`/api/flowfield/dates${q}`, { cache: 'no-store' });
-    if (!res.ok) throw new Error(String(res.status));
-    return await res.json();
-  } catch {
-    return null;
-  }
+  const q = fieldApi.venue ? `?venue=${encodeURIComponent(fieldApi.venue)}` : '';
+  const get = async (url) => { try { const r = await fetch(url, { cache: 'no-store' }); return r.ok ? await r.json() : null; } catch { return null; } };
+  const [old, raw] = await Promise.all([get(`/api/flowfield/dates${q}`), get(`/api/windflow/dates${q}`)]);
+  if (!old && !raw) return null;
+  rawDays = new Set((raw?.dates || []).map((d) => d.date));
+  const byDay = new Map();
+  for (const d of old?.dates || []) byDay.set(d.date, d);
+  for (const d of raw?.dates || []) byDay.set(d.date, { ...byDay.get(d.date), ...d });
+  const dates = [...byDay.values()].sort((a, b) => (a.date < b.date ? 1 : -1));
+  return { ...(old || {}), latest: dates[0]?.date || null, dates };
 }
 
 function fieldUrl(slice, date) {
   if (!useLivePack) return `./slices/field_${slice}.json${bust}`;
+  if (date && rawDays.has(date)) {
+    const u = new URL('/api/windflow/field', location.origin);
+    u.searchParams.set('day', date); u.searchParams.set('slice', slice);
+    if (fieldApi.venue) u.searchParams.set('venueId', fieldApi.venue);
+    return u.pathname + u.search;
+  }
   const u = new URL('/api/flowfield/field', location.origin);
   u.searchParams.set('slice', slice);
   if (fieldApi.venue) u.searchParams.set('venue', fieldApi.venue);
@@ -3416,7 +3427,7 @@ function catalogHasDays() {
 }
 
 function liveCompareOk() {
-  return !!(useLivePack && field?.meta?.pack === 'live' && catalogHasDays());
+  return !!(useLivePack && ['live', 'raw10hz', 'range'].includes(field?.meta?.pack) && catalogHasDays());
 }
 
 function dropFakeCompare() {
@@ -6051,7 +6062,12 @@ mountAnalysisWorkspace({
     days: (dateCatalog?.days || dateCatalog?.dates || []).map((d) => (typeof d === 'string' ? d : d.date)).filter(Boolean),
     slice: sliceId, sliceLabel: SLICE_LABELS[sliceId], hours: field?.meta?.slice_hours || field?.meta?.window_local_hours || null,
     cell: field?.meta?.cell_m, localDate: field?.meta?.local_date || null, venue: fieldApi.venue || field?.meta?.venue_id || null, source: field?.meta?.source || null }),
-  setDate: async (d) => { if (d && (d !== fieldApi.date || fieldApi.range)) await switchDate(d); },
+  setDate: async (d, force = false) => {
+    if (!d) return;
+    // force: the same day was rebuilt on the server (raw 10 Hz pack) — load it again.
+    if (force && d === fieldApi.date && !fieldApi.range && useLivePack) fieldApi.date = '';
+    if (d !== fieldApi.date || fieldApi.range) await switchDate(d);
+  },
   setRange: async (range) => switchRange(range),
   flowDays: () => [...catalogDays()].sort(),
   hasSlice: (id) => !!SLICE_LABELS[id],
@@ -6062,6 +6078,8 @@ mountAnalysisWorkspace({
   // Colour streams by a per-place mix (e.g. measured movement states). null restores the lens colour.
   streams: (g = 1) => { streamGain = Math.max(0, Math.min(1.5, g)); if (lineMesh && streamGain > 0.001) lineMesh.visible = STREAM_MODES.has(params.businessMode); },
   focusStreams,
+  /** Re-read the day catalogue after the server built new day packs. */
+  refreshCatalog: async () => { const c = await fetchDateCatalog(); if (c) dateCatalog = c; return [...catalogDays()]; },
   tint: (fn, gain = 0.55) => { particleTint = typeof fn === 'function' ? fn : null; tintGain = gain; },
 });
 if (!document.documentElement.classList.contains('export')) {

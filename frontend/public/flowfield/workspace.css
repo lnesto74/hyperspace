@@ -647,3 +647,15 @@ html.hx .hx-spatial-tools { left:auto; right:14px; top:62px; justify-content:fle
 .hx-rp-k.a { background:var(--amber); } .hx-rp-k.c { background:var(--queue); margin-left:6px; }
 .hx-rp-warn { border-color:rgba(194,168,127,.45) !important; background:rgba(42,31,18,.55) !important; }
 .hx-rp-warn p { margin:0; font-size:11.5px; color:#e9d6b0; }
+
+/* ---- Windflow day packs: server calculation status */
+.hx-wf-chip { position:absolute; z-index:7; left:50%; top:56px; translate:-50% 0; max-width:min(420px,calc(100% - 32px)); display:flex; align-items:center; gap:10px; padding:8px 14px; border-radius:11px; background:rgba(8,16,23,.92); border:1px solid var(--line); box-shadow:0 10px 30px #0008; }
+.hx-wf-chip[hidden] { display:none; }
+.hx-wf-chip b { display:block; font-size:12px; color:var(--ink); }
+.hx-wf-chip small { display:block; font-size:11px; color:var(--ink-2); margin-top:2px; }
+.hx-wf-chip .spin { flex:none; width:16px; height:16px; border-radius:50%; border:2px solid rgba(101,222,240,.25); border-top-color:var(--cyan); animation:hx-wf-spin .9s linear infinite; }
+@keyframes hx-wf-spin { to { transform:rotate(360deg); } }
+.hx-wf-list { list-style:none; margin:6px 0 0; padding:0; display:flex; flex-direction:column; gap:3px; font-size:11.5px; }
+.hx-wf-list li { display:flex; justify-content:space-between; gap:10px; color:var(--ink-2); }
+.hx-wf-list li em { font-style:normal; color:var(--amber); }
+.hx-wf-list li.ok em { color:var(--green); }

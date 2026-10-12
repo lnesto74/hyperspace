@@ -166,3 +166,50 @@ export async function loadKinetic(url = './kinetic.json') {
   if (!r.ok) throw new Error(`kinetic.json ${r.status}`);
   return r.json();
 }
+
+/**
+ * Combine the movement states of several measured days (same grid). Seconds add up; U-turn rate and
+ * speed per department are weighted by that department's person-time. `day` labels the result
+ * (a day string, or the period object of the Visitor Journey view so the two stay matched).
+ */
+export function mergeKinetic(list, day) {
+  const Ks = (list || []).filter((K) => K && K.store);
+  if (!Ks.length) return null;
+  if (Ks.length === 1) return { ...Ks[0], day, days: [Ks[0].day] };
+  const add = (a, b) => { for (const k of IDS) a[k] = (a[k] || 0) + (Number(b?.[k]) || 0); return a; };
+  const out = { ...Ks[0], day, days: Ks.map((K) => K.day), store: {}, by_slot: {}, by_dept: {}, by_dept_slot: {}, by_lane: {},
+    uturns_per_min: {}, speed_m_s: {}, cells: {}, windows: 0, person_hours: 0, validation: null };
+  const ut = {}, sp = {}, wt = {};
+  const cellMaps = {};
+  for (const K of Ks) {
+    add(out.store, K.store);
+    for (const [s, m] of Object.entries(K.by_slot || {})) add(out.by_slot[s] ||= {}, m);
+    for (const [d, m] of Object.entries(K.by_dept || {})) {
+      add(out.by_dept[d] ||= {}, m);
+      const w = total(m);
+      if (K.uturns_per_min?.[d] != null) { ut[d] = (ut[d] || 0) + K.uturns_per_min[d] * w; }
+      if (K.speed_m_s?.[d] != null) { sp[d] = (sp[d] || 0) + K.speed_m_s[d] * w; }
+      wt[d] = (wt[d] || 0) + w;
+    }
+    for (const [d, slots] of Object.entries(K.by_dept_slot || {})) for (const [s, m] of Object.entries(slots)) add((out.by_dept_slot[d] ||= {})[s] ||= {}, m);
+    for (const [l, m] of Object.entries(K.by_lane || {})) add(out.by_lane[l] ||= {}, m);
+    for (const [sl, rows] of Object.entries(K.cells || {})) {
+      const M = cellMaps[sl] ||= new Map();
+      for (const r of rows) {
+        const key = `${r[0]},${r[1]}`;
+        const c = M.get(key) || [r[0], r[1], ...new Array(IDS.length).fill(0)];
+        for (let k = 0; k < IDS.length; k++) c[2 + k] += Number(r[2 + k]) || 0;
+        M.set(key, c);
+      }
+    }
+    out.windows += Number(K.windows) || 0; out.person_hours += Number(K.person_hours) || 0;
+  }
+  for (const d of Object.keys(wt)) {
+    if (!wt[d]) continue;
+    if (ut[d] != null) out.uturns_per_min[d] = ut[d] / wt[d];
+    if (sp[d] != null) out.speed_m_s[d] = sp[d] / wt[d];
+  }
+  for (const [sl, M] of Object.entries(cellMaps)) out.cells[sl] = [...M.values()];
+  out.person_hours = Math.round(out.person_hours * 10) / 10;
+  return out;
+}

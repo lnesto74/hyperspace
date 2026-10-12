@@ -9,7 +9,7 @@
 import { LENSES, LENS, SLOT_TO_SLICE, ICONS } from './lenses.js?v=v3-13';
 import * as VJ from './visitor-journey.js?v=v3-5';
 import * as VAS from './value-at-stake.js?v=v3-5';
-import * as KN from './kinetic.js?v=v3-5';
+import * as KN from './kinetic.js?v=v3-14';
 import * as G from './twin-graphics.js?v=v3-5';
 import * as PER from './period.js?v=v3-5';
 import { radarAreas } from './value-opportunities.js';
@@ -86,7 +86,8 @@ export function mountAnalysisWorkspace(api) {
     flowCell: null, // Flow Explorer · Direction: inspected cell "i,j"
     flowSpot: null, // Flow Explorer · Convergence: highlighted meeting / splitting place
     regFocus: null, // Flow Explorer · Path types: isolate one path type (regime id)
-    replay: { day: null, data: null, status: 'idle', k: null, playing: false, timer: 0 }, // Service · minute by minute
+    replay: { day: null, key: '', data: null, status: 'idle', k: null, playing: false, timer: 0 }, // Service · minute by minute
+    wf: { days: [], st: {}, ok: null, timer: 0, applied: '' }, // server day packs (movement, behaviour, checkouts)
     inspCollapsed: false,
     contours: false, // Astra: 3D scalar isolines on the twin floor (off by default; the v3 contours are drawn by twin-graphics)
   };
@@ -475,17 +476,53 @@ export function mountAnalysisWorkspace(api) {
     if (d && d.from && d.from === d.to) return d.from;
     return d?.from || kinDay() || null;
   }
+  /** Days the replay covers: the period's days, or the single day on screen. */
+  function rpDays() {
+    const p = state.period;
+    if (p && p.days.length > 1) return (state.vj.view?.period?.days || p.days).slice().sort();
+    const d = rpDay(); return d ? [d] : [];
+  }
   async function loadReplay() {
-    const day = rpDay(), R = state.replay;
-    if (!day || (R.day === day && R.status !== 'idle')) return;
-    R.day = day; R.status = 'loading'; R.data = null;
-    try {
-      const r = await fetch(`./checkouts/${day}.json`, { cache: 'no-store' });
-      if (!r.ok) throw new Error(r.status === 404 ? 'none' : `HTTP ${r.status}`);
-      R.data = await r.json(); R.status = 'ready';
-      if (R.k == null || R.k >= R.data.q[R.data.lanes[0].key].length) R.k = Math.round((R.data.peak.from_s + 25 * 60) / R.data.step_s);
-    } catch (e) { R.status = e.message === 'none' ? 'none' : 'error'; }
+    const W = state.wf;
+    // While the server is still calculating, use only the days that are ready (the rest join as they finish).
+    const all = rpDays(), days = W.ok && all.length > 1 ? all.filter((d) => W.st[d]?.complete) : all;
+    const R = state.replay, key = days.join(',');
+    if (!key || (R.key === key && R.status !== 'idle')) return;
+    R.key = key; R.day = days.length > 1 ? state.vj.view?.day : days[0]; R.status = 'loading'; R.data = null;
+    const one = async (d) => {
+      for (const url of [`/api/windflow/checkouts?venueId=${encodeURIComponent(venueOf() || '')}&day=${d}`, `./checkouts/${d}.json`]) {
+        try { const r = await fetch(url, { credentials: 'include', cache: 'no-store' }); if (r.ok) return await r.json(); } catch { /* next */ }
+      }
+      return null;
+    };
+    const list = (await Promise.all(days.map(one))).filter(Boolean);
+    if (R.key !== key) return;
+    if (!list.length) R.status = 'none';
+    else {
+      R.data = list.length === 1 ? list[0] : mergeReplay(list, state.vj.view?.day);
+      R.status = 'ready';
+      if (R.k == null || R.k >= rpN()) R.k = Math.round((R.data.peak.from_s + 25 * 60) / R.data.step_s);
+    }
     overlayKey = ''; paintKey = ''; render();
+  }
+  /** Several days -> the average day: mean people queuing / paying at each instant, every payment kept. */
+  function mergeReplay(list, day) {
+    const D0 = list[0], n = list.length, med = (a) => { const b = a.slice().sort((x, y) => x - y); return b.length ? b[Math.floor(b.length / 2)] : null; };
+    const keys = [...new Set(list.flatMap((D) => D.lanes.map((l) => l.key)))].sort((a, b) => parseInt(a, 10) - parseInt(b, 10));
+    const N = Math.min(...list.map((D) => D.q[D.lanes[0].key].length));
+    const avg = (f, k) => Array.from({ length: N }, (_, i) => list.reduce((s, D) => s + ((D[f][k] || [])[i] || 0), 0) / n);
+    const q = {}, sv = {};
+    for (const k of keys) { q[k] = avg('q', k); sv[k] = avg('s', k); }
+    const sessions = list.flatMap((D) => D.sessions).sort((a, b) => a[1] - b[1]);
+    const series15 = D0.series15.map(([t], i) => [t, list.reduce((s, D) => s + (D.series15[i]?.[1] || 0), 0) / n, list.reduce((s, D) => s + (D.series15[i]?.[2] || 0), 0) / n]);
+    let pk = 0, best = -1;
+    for (let i = 0; i + 3 < series15.length; i++) { const v = series15.slice(i, i + 4).reduce((s, x) => s + x[1] + x[2], 0); if (v > best) { best = v; pk = i; } }
+    const lanes = keys.map((k) => { const ss = sessions.filter((x) => x[0] === k); const ref = list.flatMap((D) => D.lanes).find((l) => l.key === k);
+      return { ...ref, sessions: ss.length, median_s: med(ss.map((x) => x[2])) }; });
+    const counts = D0.hist.counts.map((_, i) => list.reduce((s, D) => s + (D.hist.counts[i] || 0), 0));
+    return { ...D0, day, days: list.map((D) => D.day), n_days: n, lanes, q, s: sv, series15, sessions,
+      peak: { from_s: series15[pk][0], to_s: series15[pk][0] + 3600, mean_people: Math.round(best / 4 * 100) / 100 },
+      hist: { ...D0.hist, counts }, n_sessions: sessions.length, median_s: med(sessions.map((x) => x[2])) };
   }
   const rpN = () => state.replay.data ? state.replay.data.q[state.replay.data.lanes[0].key].length : 0;
   const rpSec = (k = state.replay.k) => (state.replay.data ? k * state.replay.data.step_s : 0);
@@ -527,8 +564,9 @@ export function mountAnalysisWorkspace(api) {
     replayPlay.setAttribute('aria-label', state.replay.playing ? 'Pause' : 'Play the day');
     if (!on) return;
     const n = rpNow();
-    replayClock.replaceChildren(h('small', null, `REPLAY · ${VJ.fmtDay(state.replay.day).toUpperCase()}`), h('b', null, rpClock(rpSec())),
-      h('span', null, h('i', { class: 'q' }), `${n.q} queuing`, h('i', { class: 's' }), `${n.s} paying`));
+    const D = state.replay.data, many = (D.n_days || 1) > 1, f = (x) => (many ? x.toFixed(1) : String(x));
+    replayClock.replaceChildren(h('small', null, many ? `AVERAGE DAY · ${D.n_days} DAYS` : `REPLAY · ${VJ.fmtDay(state.replay.day).toUpperCase()}`), h('b', null, rpClock(rpSec())),
+      h('span', null, h('i', { class: 'q' }), `${f(n.q)} queuing`, h('i', { class: 's' }), `${f(n.s)} paying`));
   }
   function drawReplayStrip() {
     const D = state.replay.data; if (!D || replayStrip.hidden) return;
@@ -564,7 +602,7 @@ export function mountAnalysisWorkspace(api) {
     for (const l of D.lanes) {
       const g = rpLaneOf(l); if (!g) continue;
       const qb = rpBox(g.queue), sb = rpBox(g.service);
-      const q = D.q[l.key][k] || 0, s = D.s[l.key][k] || 0;
+      const q = Math.round(D.q[l.key]?.[k] || 0), s = Math.round(D.s[l.key]?.[k] || 0);
       const till = sb ? sb.minX : qb?.maxX; if (till == null) continue;
       const zc = sb ? (sb.minZ + sb.maxZ) / 2 : (qb.minZ + qb.maxZ) / 2;
       const hw = Math.min(0.75, ((qb || sb).maxZ - (qb || sb).minZ) * 0.42);
@@ -643,6 +681,8 @@ export function mountAnalysisWorkspace(api) {
   const replayPlay = h('button', { type: 'button', class: 'hx-play', 'aria-label': 'Play the day' });
   replayStrip.append(replayPlay, h('div', { class: 'hx-rp-cw' }, h('small', null, 'PEOPLE AT THE CHECKOUTS · DRAG TO REPLAY'), replayCanvas));
   stage.append(replayClock, replayStrip);
+  const wfChip = h('div', { class: 'hx-wf-chip', role: 'status', 'aria-live': 'polite', hidden: true });
+  stage.append(wfChip);
   replayPlay.addEventListener('click', () => rpPlay());
   {
     let drag = false;
@@ -735,6 +775,109 @@ export function mountAnalysisWorkspace(api) {
   }
 
   /** Load (and if needed calculate) every day of the period, combine, then move numbers and floor together. */
+  // ------------------------------------------------------------------ Windflow day packs (server, raw 10 Hz)
+  // Movement field, behaviour states and the checkout replay of each day are computed on the server the first
+  // time a day is asked for (one day at a time, in a queue). The numbers (Visitor Journey) never wait for them:
+  // the floor, Behaviour and the replay fill in as days become ready.
+  const WF_POLL_MS = 5000;
+  const WF_PART = { prereq: 'journey data', flow: 'movement', checkouts: 'checkouts', kinetic: 'behaviour', queued: 'queued' };
+  async function wfPost(days) {
+    const r = await fetch('/api/windflow/ensure', { method: 'POST', credentials: 'include', cache: 'no-store', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ venueId: venueOf(), days }) });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    return (await r.json()).days || [];
+  }
+  async function startWindflow(days) {
+    clearTimeout(state.wf.timer);
+    const W = state.wf = { days: days.slice(), st: {}, ok: null, timer: 0, applied: '' };
+    try { for (const s of await wfPost(W.days)) W.st[s.day] = s; W.ok = true; }
+    catch { W.ok = false; renderWfChip(); render(); return; }
+    render();
+    await wfTick(W);
+  }
+  function wfCounts(W = state.wf) {
+    const st = W.days.map((d) => W.st[d]).filter(Boolean);
+    const ready = st.filter((s) => s.complete).map((s) => s.day);
+    const noRaw = st.filter((s) => !s.complete && !s.raw).map((s) => s.day);
+    const failed = st.filter((s) => !s.complete && s.job?.status === 'error');
+    const pending = st.filter((s) => !s.complete && s.raw && s.job?.status !== 'error');
+    return { ready, noRaw, failed, pending };
+  }
+  async function wfTick(W) {
+    if (W !== state.wf || !W.ok) return;
+    const c = wfCounts(W);
+    const key = c.ready.join(',');
+    if (c.ready.length && key !== W.applied) { W.applied = key; await wfApply(W, c.ready); }
+    renderWfChip();
+    if (c.pending.length && W === state.wf) {
+      W.timer = setTimeout(async () => {
+        try { for (const s of await wfPost(W.days)) W.st[s.day] = s; } catch { /* keep polling */ }
+        void wfTick(W);
+      }, WF_POLL_MS);
+    }
+  }
+  async function wfApply(W, ready) {
+    if (W !== state.wf) return;
+    const days = ready.slice().sort();
+    try { await api.refreshCatalog?.(); } catch { /* keep */ }
+    const p = state.period;
+    try {
+      if (!p || p.days.length === 1) await api.setDate(days[0], true);
+      else await api.setRange({ from: p.from, to: p.to, days });
+      state.floorNote = p && p.days.length > 1 ? `floor combines ${days.length} of ${p.days.length} days · raw 10 Hz` : '';
+    } catch (e) { console.warn('windflow floor', e); }
+    // Behaviour: merge the days' movement states, labelled with the view's day so they match the numbers.
+    const Ks = await Promise.all(days.map((d) => fetch(`/api/windflow/kinetic?venueId=${encodeURIComponent(venueOf() || '')}&day=${d}`, { credentials: 'include' })
+      .then((r) => (r.ok ? r.json() : null)).catch(() => null)));
+    const K = KN.mergeKinetic(Ks.filter(Boolean), state.vj.view?.day ?? days[0]);
+    if (K) { state.kin = { K, status: 'ok', note: '' }; applyTint(); }
+    // Checkouts: reload the replay for these days.
+    state.replay.status = 'idle'; state.replay.key = '';
+    overlayKey = ''; paintKey = ''; render();
+    if (state.lens === 'compare') void renderCompare();
+  }
+  function wfDayLine(s) {
+    if (!s) return '';
+    if (s.complete) return 'ready';
+    if (!s.raw) return 'no raw data';
+    if (s.job?.status === 'error') return 'failed';
+    if (s.job?.status === 'running') return `calculating ${WF_PART[s.job.stage] || s.job.stage}`;
+    if (s.job?.status === 'queued') return `in queue${s.job.ahead ? ` · ${s.job.ahead} before` : ''}`;
+    return 'waiting';
+  }
+  function renderWfChip() {
+    const W = state.wf;
+    if (!W.ok || !W.days.length) { wfChip.hidden = true; return; }
+    const c = wfCounts(W);
+    if (!c.pending.length && !c.failed.length && !c.noRaw.length) { wfChip.hidden = true; return; }
+    const run = c.pending.find((s) => s.job?.status === 'running');
+    const eta = Math.max(0, ...c.pending.map((s) => s.job?.eta_s || 0));
+    wfChip.hidden = false;
+    wfChip.classList.toggle('busy', !!c.pending.length);
+    wfChip.replaceChildren(...[
+      c.pending.length ? h('i', { class: 'spin' }) : null,
+      h('div', null,
+        h('b', null, c.pending.length ? 'Calculating movement, behaviour and checkouts' : 'Some days are missing'),
+        h('small', null, [
+          `${c.ready.length} of ${W.days.length} day${W.days.length > 1 ? 's' : ''} ready`,
+          run ? `${VJ.fmtDay(run.day)}: ${wfDayLine(run)}` : null,
+          c.pending.length - (run ? 1 : 0) > 0 ? `${c.pending.length - (run ? 1 : 0)} in queue` : null,
+          c.pending.length && eta ? `about ${Math.max(1, Math.round(eta / 60))} min` : null,
+          c.noRaw.length ? `${c.noRaw.length} without raw data` : null,
+          c.failed.length ? `${c.failed.length} failed` : null,
+        ].filter(Boolean).join(' · '))),
+      c.pending.length ? null : h('button', { type: 'button', class: 'hx-link', onclick: () => { wfChip.hidden = true; } }, 'Hide')].filter(Boolean));
+    // Inspectors waiting on these days re-render as the status moves.
+    if ((state.lens === 'behaviour' && !kinMatches()) || (state.lens === 'service' && rpOn() && state.replay.status !== 'ready')) renderInspector();
+  }
+  /** One line for an inspector waiting on server days ("calculating…"), or null when nothing is pending. */
+  function wfWaitCard(what) {
+    const W = state.wf; if (!W.ok) return null;
+    const c = wfCounts(W); if (!c.pending.length) return null;
+    return card('hx-empty', h('b', null, `Calculating ${what}…`),
+      h('p', null, `${c.ready.length} of ${W.days.length} days ready. Each day is computed once from the raw 10 Hz tracks, in a queue; it appears here by itself when ready.`),
+      h('ul', { class: 'hx-wf-list' }, ...W.days.map((d) => h('li', { class: W.st[d]?.complete ? 'ok' : '' }, h('span', null, VJ.fmtDay(d)), h('em', null, wfDayLine(W.st[d]))))));
+  }
+
   async function applyPeriod(p) {
     if (!p || state.periodJob) return;
     const abort = new AbortController();
@@ -768,7 +911,8 @@ export function mountAnalysisWorkspace(api) {
       const flowDays = used.filter((d) => flowHave.has(d));
       if (p.days.length === 1) { if (flowHave.has(used[0])) await api.setDate(used[0]); }
       else if (flowDays.length) await api.setRange({ from: p.from, to: p.to, days: flowDays });
-      state.floorNote = p.days.length > 1 ? (flowDays.length ? `floor combines ${flowDays.length} day${flowDays.length > 1 ? 's' : ''}` : 'no movement pack for these days') : '';
+      state.floorNote = p.days.length > 1 ? (flowDays.length ? `floor combines ${flowDays.length} day${flowDays.length > 1 ? 's' : ''}` : 'movement being calculated') : '';
+      void startWindflow(p.days);
     } catch (e) {
       if (e.name !== 'AbortError') console.error('Period load failed', e);
     } finally {
@@ -814,7 +958,7 @@ export function mountAnalysisWorkspace(api) {
               h('b', null, state.exec.report ? `${state.exec.report.window} · ${state.exec.status === 'archived' ? 'Archived PDF' : 'calculated'}` : state.exec.status === 'loading' ? 'loading…' : 'unavailable'))
             : h('span', { class: `hx-pill kpi ${vj.origin}`, title: vj.note }, h('i'), 'Visitor Journey ', h('b', null, kpiLabel)),
             state.lens === 'behaviour' ? h('span', { class: `hx-pill kin ${state.kin.status}`, title: 'Journey Lab 220 · kinetic states from the raw 10 Hz tracks' }, h('i'), 'Movement states ',
-              h('b', null, state.kin.K ? `${VJ.fmtSlot(state.slot)} · ${VJ.fmtDay(kinDay())} · 10 Hz` : state.kin.status === 'loading' ? 'loading…' : 'unavailable')) : null,
+              h('b', null, state.kin.K ? `${VJ.fmtSlot(state.slot)} · ${VJ.fmtDay(kinDay())}${state.kin.K.days?.length > 1 || (state.period?.days.length > 1 && state.kin.K.days) ? ` · ${state.kin.K.days.length} of ${state.period?.days.length || state.kin.K.days.length} days` : ''} · 10 Hz` : state.kin.status === 'loading' ? 'loading…' : 'unavailable')) : null,
             h('span', { class: 'hx-pill flow', title: i.source || '' }, h('i'), 'Flow context ', h('b', null, flowLabel))],
         persp),
     );
@@ -2006,7 +2150,8 @@ export function mountAnalysisWorkspace(api) {
     const K = state.kin.K;
     const head = [h('div', { class: 'hx-kicker' }, 'BEHAVIOURAL FINGERPRINT · MEASURED')];
     if (!K) return [...head, h('h2', null, 'How people move'), state.kin.status === 'loading' ? card('', h('p', null, 'Loading movement states…')) : card('hx-empty', h('b', null, 'Movement states unavailable'), h('p', null, state.kin.note), h('p', null, 'No state is guessed in its place.'))];
-    if (!kinMatches()) return [...head, h('h2', null, 'How people move'), card('hx-empty', h('b', null, `Measured for ${VJ.fmtDay(kinDay())} only`), h('p', null, `The movement states come from the raw 10 Hz tracks of ${VJ.fmtDay(kinDay())}. The day on screen is ${VJ.fmtDay(v?.day)}, so nothing is drawn for it.`), h('p', null, 'Pick that day, or run the nightly job for this one.'))];
+    if (!kinMatches() && wfWaitCard('the movement states')) return [...head, h('h2', null, 'How people move'), wfWaitCard('the movement states')];
+    if (!kinMatches()) return [...head, h('h2', null, 'How people move'), card('hx-empty', h('b', null, `Measured for ${VJ.fmtDay(kinDay())} only`), h('p', null, `The movement states come from the raw 10 Hz tracks of ${VJ.fmtDay(kinDay())}. The day on screen is ${VJ.fmtDay(v?.day)}, so nothing is drawn for it.`), h('p', null, state.wf.ok === false ? 'The server that computes other days is not reachable from here.' : 'No raw 10 Hz data for these days, so the movement states cannot be computed.'))];
     const slot = state.slot;
     const store = KN.shares(KN.mixOf(K, null, slot));
     const fps = KN.departments(K, slot);
@@ -2124,6 +2269,7 @@ export function mountAnalysisWorkspace(api) {
   const rpUi = { lead: null, rows: [], win: [0, 0] };
   function inspectReplay(v) {
     const R = state.replay, D = R.data;
+    if ((R.status !== 'ready' || !D) && wfWaitCard('the checkouts')) return [ihead('05 · CHECKOUT SERVICE', 'The checkouts, minute by minute', { badge: srcBadge('Raw 10 Hz · checkout replay', '', 'flow') }), wfWaitCard('the checkouts')];
     if (R.status !== 'ready' || !D) {
       return [ihead('05 · CHECKOUT SERVICE', 'The checkouts, minute by minute', { badge: srcBadge('Raw 10 Hz · checkout replay', '', 'flow') }),
         card('hx-empty', h('b', null, R.status === 'loading' ? 'Loading…' : 'No replay for this day'),
@@ -2133,8 +2279,9 @@ export function mountAnalysisWorkspace(api) {
     const sec = rpSec(), n = rpNow();
     const peakS = D.sessions.filter(([, t]) => t >= D.peak.from_s && t < D.peak.to_s);
     const med = (a) => { const b = a.slice().sort((x, y) => x - y); return b.length ? b[Math.floor(b.length / 2)] : null; };
-    rpUi.lead = h('div', { class: 'hx-rp-now' }, h('b', null, `${n.q}`), h('span', null, 'queuing'), h('b', { class: 's' }, `${n.s}`), h('span', null, 'paying'));
-    const out = [ihead('05 · CHECKOUT SERVICE', `The checkouts at ${rpClock(sec)}`, { badge: srcBadge(`Measured · raw 10 Hz · ${VJ.fmtDay(D.day)}`, 'Positions read 10 times a second; a person counts as queuing or paying when standing still (under 0.5 m/s) in that zone.', 'flow'),
+    const many = (D.n_days || 1) > 1, f = (x) => (many ? x.toFixed(1) : String(x));
+    rpUi.lead = h('div', { class: 'hx-rp-now' }, h('b', null, f(n.q)), h('span', null, many ? 'queuing on average' : 'queuing'), h('b', { class: 's' }, f(n.s)), h('span', null, many ? 'paying on average' : 'paying'));
+    const out = [ihead('05 · CHECKOUT SERVICE', `The checkouts at ${rpClock(sec)}`, { badge: srcBadge(`Measured · raw 10 Hz · ${(D.n_days || 1) > 1 ? `average of ${D.n_days} days · ` : ''}${VJ.fmtDay(D.day)}`, 'Positions read 10 times a second; a person counts as queuing or paying when standing still (under 0.5 m/s) in that zone.', 'flow'),
       lead: h('div', { class: 'hx-leadkpi coral' }, rpUi.now = h('small', null, `RIGHT NOW · ${rpClock(sec)}`), rpUi.lead) })];
     out.push(card('', h('div', { class: 'hx-card-h' }, h('b', null, `Peak hour ${rpClock(D.peak.from_s)}–${rpClock(D.peak.to_s)}`), h('small', null, 'most people at the checkouts')),
       h('div', { class: 'hx-grid3' },
@@ -2169,7 +2316,8 @@ export function mountAnalysisWorkspace(api) {
   function updateReplayPanel() {
     const D = state.replay.data; if (!D || !rpOn()) return;
     const n = rpNow();
-    if (rpUi.lead?.isConnected) { const b = rpUi.lead.querySelectorAll('b'); b[0].textContent = n.q; b[1].textContent = n.s; }
+    const many = (D.n_days || 1) > 1, f = (x) => (many ? x.toFixed(1) : String(x));
+    if (rpUi.lead?.isConnected) { const b = rpUi.lead.querySelectorAll('b'); b[0].textContent = f(n.q); b[1].textContent = f(n.s); }
     if (rpUi.now?.isConnected) rpUi.now.textContent = `RIGHT NOW · ${rpClock(rpSec())}`;
     const h2 = inspector?.querySelector?.('.hx-ihead h2'); if (h2) h2.textContent = `The checkouts at ${rpClock(rpSec())}`;
     const [w0, w1] = rpUi.win, sec = rpSec();

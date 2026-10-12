@@ -49,3 +49,17 @@ t('value at stake uses measured axes when the kinetic file is given', () => {
   assert.ok(b.every((x) => x.axesSource === 'approx'));
 });
 console.log(`${n} kinetic tests passed`);
+
+{ // mergeKinetic adds seconds and weights per-department rates by time
+  const { mergeKinetic } = KN;
+  const z = { transit: 0, browse: 0, choose: 0, pause: 0, hesitate: 0, wait: 0 };
+  const A = { day: 'a', store: { ...z, browse: 10 }, by_dept: { F: { ...z, browse: 10 } }, uturns_per_min: { F: 1 }, speed_m_s: { F: 1 }, cells: { trading: [[1, 2, 0, 10, 0, 0, 0, 0]] }, windows: 1, person_hours: 1 };
+  const B = { day: 'b', store: { ...z, wait: 30 }, by_dept: { F: { ...z, wait: 30 } }, uturns_per_min: { F: 3 }, speed_m_s: { F: 2 }, cells: { trading: [[1, 2, 0, 0, 0, 0, 0, 30], [3, 3, 5, 0, 0, 0, 0, 0]] }, windows: 2, person_hours: 2 };
+  const M = mergeKinetic([A, B], 'p');
+  assert.equal(M.day, 'p'); assert.deepEqual(M.days, ['a', 'b']);
+  assert.equal(M.store.browse, 10); assert.equal(M.store.wait, 30);
+  assert.equal(M.uturns_per_min.F, (1 * 10 + 3 * 30) / 40);
+  assert.equal(M.cells.trading.length, 2);
+  assert.deepEqual(M.cells.trading.find((r) => r[0] === 1), [1, 2, 0, 10, 0, 0, 0, 30]);
+}
+console.log('mergeKinetic ok');
