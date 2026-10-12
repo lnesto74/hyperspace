@@ -4,7 +4,7 @@ export function reportRow(report,area){
  if(!report||!area)return null;
  const lane=Number(area.name?.match(/(?:Checkout|Cassa)\s*(\d+)/i)?.[1]);
  const ids=(area.rois || []).map(r=>r.id);
- return (lane?report.lanes:report.departments).find(r=>r.roiIds?.some(id=>ids.includes(id))) || (lane?report.lanes.find(l=>l.lane===lane):report.departments.find(d=>d.name===area.name)) || null;
+ return (lane?report.lanes:report.departments).find(r=>r.roiIds?.some(id=>ids.includes(id))) || (lane?report.lanes.find(l=>l.lane===lane):report.departments.find(d=>d.name===area.name||(area.category&&d.name===area.category))) || null;
 }
 export function reportValue(row,key){return Number.isFinite(row?.[key])?`${fmt(row[key])}${REPORT_METRICS[key]?.unit || ''}`:'Not reported';}
 export function rankReportAreas(areas,report,mode,key='stoppingPct'){

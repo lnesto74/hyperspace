@@ -61,12 +61,14 @@ export class ZoneAggregator {
       const sums = {};
       AXIS_NAMES.forEach(a => sums[a] = 0);
       let count = 0;
+      let observedAt = Infinity;
       const trackKeys = [];
 
       for (const [trackKey, data] of trackAxes) {
         if (!data.position) continue;
         if (pointInPolygon(data.position, roi.vertices)) {
           count++;
+          observedAt = Math.min(observedAt, data.timestamp || 0);
           trackKeys.push(trackKey);
           for (const axis of AXIS_NAMES) {
             sums[axis] += (data.axes[axis] || 0);
@@ -92,6 +94,7 @@ export class ZoneAggregator {
       }
 
       this.zoneField.set(roi.id, {
+        observedAt,
         roiId: roi.id,
         roiName: roi.name,
         dominant,

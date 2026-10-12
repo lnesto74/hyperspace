@@ -19,10 +19,12 @@ export const FRESH = ['Frutta', 'Verdura', 'Surgelati', 'Bakery & Breakfast', 'L
 export const SERVED = ['Carne', 'Pesce', 'Bar', 'Gastronomia', 'Salumi', 'Pane'];
 export const THRESHOLDS = { queueSlotMin: 1, choiceWorked: 0.4, choicePassed: 0.25 };
 
+// Display names (English UI). Ids stay the daily_kpi department ids.
 const LABELS = {
-  Frutta: 'Frutta', Verdura: 'Verdura', Surgelati: 'Surgelati', 'Bakery & Breakfast': 'Pane e colazione',
-  Latticini: 'Latticini', Carne: 'Carne', Pesce: 'Pesce', Bar: 'Bar', Acqua: 'Acqua',
-  Gastronomia: 'Gastronomia', Salumi: 'Salumi', Pane: 'Pane (banco)', [PACKAGED]: 'Corsie del confezionato',
+  Frutta: 'Fruit', Verdura: 'Vegetables', Surgelati: 'Frozen', 'Bakery & Breakfast': 'Bakery & Breakfast',
+  Latticini: 'Dairy', Carne: 'Meat counter', Pesce: 'Fish counter', Bar: 'Bar', Acqua: 'Water',
+  Gastronomia: 'Deli counter', Salumi: 'Cured meats', Pane: 'Bread counter', [PACKAGED]: 'Packaged aisles',
+  Corsie: 'Aisles (no department)', 'Ingresso/casse': 'Entrance & checkouts',
 };
 export const deptLabel = (id) => LABELS[id] || id;
 
@@ -83,7 +85,7 @@ function lanes(payload) {
     const svc = service.get(Number(l.lane));
     return {
       lane: Number(l.lane),
-      name: `Cassa ${l.lane}`,
+      name: `Lane ${l.lane}`,
       waitingPm: W, transitPm: T, fixedPm: F,
       servicePm: Number(svc?.WAITING || 0),
       sessions: n,
@@ -137,11 +139,60 @@ export function buildVisitorView(payload, expected = {}) {
     service: slotSeries(payload, 'service_min_per_entrance'),
     area, banco, choice,
     next: reconOk && nextRow?.status === 'ok' ? (nextRow.payload || {}) : null,
+    // Adjacent department hops on reconstructed journeys (201), counts — the UI shows shares of these
+    // counts with their denominator, only when the reconstruction passes the same gate.
+    hops: (() => { const r = pickKpi(payload, 'dept_transitions', DAY); return reconOk && r?.status === 'ok' && r.payload?.counts ? r.payload.counts : null; })(),
+    reconRecall: cell(pickKpi(payload, 'recon_blind_recall')),
     reconOk,
     counterStay,
     lanes: lanes(payload),
     checks: checks(payload),
+    behaviour: behaviour(payload),
   };
+}
+
+// ----------------------------------------------------------------- behaviour modes ("modi di visita")
+// Journey Lab 120_behaviour_clusters: k-means on reconstructed journey segments >= 20 s, named by fixed
+// rules. Stored nightly in daily_kpi as behaviour_share (store mix, mix per department, per slot) and
+// behaviour_mix_by_slot. ESTIMATED. Colours are the workspace's, names are the job's.
+export const BEHAVIOUR_MODES = [
+  { id: 'Movimento con soste brevi', color: '#65DEF0', en: 'Walking, short stops' },
+  { id: 'Giro lungo in corsia', color: '#A99BFF', en: 'Long browse in the aisles' },
+  { id: 'Fermo a scaffale (sceglie)', color: '#F3C778', en: 'Stopped at the shelf, choosing' },
+  { id: 'Al banco servito', color: '#81E0A3', en: 'At a served counter' },
+  { id: 'Fermo in corsia (fuori zona)', color: '#7E93A6', en: 'Standing in the aisle, off the shelves' },
+  { id: 'In coda', color: '#FB8B80', en: 'Queuing' },
+  { id: 'In cassa (servizio)', color: '#F6A6C9', en: 'At the till, being served' },
+];
+
+function behaviour(payload) {
+  const row = pickKpi(payload, 'behaviour_share', DAY);
+  if (!row || row.status !== 'ok' || !row.payload) {
+    return { ok: false, reason: row ? (row.status_reason || 'Failed a daily check') : 'Not in this day’s report' };
+  }
+  const p = row.payload;
+  const share = { ...(p.share || {}) };
+  // {mode: {dept: share}} -> {dept: {mode: share}}
+  const deptMix = {};
+  for (const [mode, depts] of Object.entries(p.dept_mix_time_share || {})) {
+    for (const [dept, v] of Object.entries(depts || {})) (deptMix[dept] ||= {})[mode] = Number(v) || 0;
+  }
+  const slotRow = pickKpi(payload, 'behaviour_mix_by_slot', DAY);
+  let slotMix = {};
+  if (slotRow?.status === 'ok' && slotRow.payload) slotMix = slotRow.payload;
+  else for (const [mode, slots] of Object.entries(p.slot_mix_segment_share || {})) for (const [sl, v] of Object.entries(slots || {})) (slotMix[sl] ||= {})[mode] = Number(v) || 0;
+  return { ok: true, label: row.label, method: row.method, segments: Number(p.segments) || null, share, deptMix, slotMix,
+    profiles: Array.isArray(p.cluster_profiles) ? p.cluster_profiles : [] };
+}
+
+/** A department's mix as [{mode, share}] over the seven modes, normalised to 1. */
+export function modeMix(view, dept) {
+  const m = view?.behaviour?.deptMix?.[dept];
+  if (!m) return null;
+  const rows = BEHAVIOUR_MODES.map((b) => ({ ...b, share: Number(m[b.id]) || 0 }));
+  const tot = rows.reduce((s, r) => s + r.share, 0);
+  if (!(tot > 0)) return null;
+  return rows.map((r) => ({ ...r, share: r.share / tot })).sort((a, b) => b.share - a.share);
 }
 
 // ----------------------------------------------------------------- derived views
@@ -167,7 +218,7 @@ export function choiceKind(share) {
   if (share < THRESHOLDS.choicePassed) return 'passed';
   return 'mixed';
 }
-export const CHOICE_LABEL = { worked: 'lavorato', passed: 'attraversato', mixed: 'intermedio' };
+export const CHOICE_LABEL = { worked: 'worked', passed: 'crossed', mixed: 'in between' };
 
 /** "Com'è fatta la visita": same four segments as visitComposition.ts. */
 export function visitComposition(view, slot = DAY) {
@@ -178,10 +229,10 @@ export function visitComposition(view, slot = DAY) {
   const checkout = (view.queue[slot]?.value || 0) + (view.service[slot]?.value || 0);
   const other = Math.max(0, v - packaged - fresh - checkout);
   return { visit: v, segments: [
-    { id: 'packaged', label: 'Corsie del confezionato', minutes: packaged },
-    { id: 'fresh', label: 'Reparti freschi', minutes: fresh },
-    { id: 'checkout', label: 'Casse', minutes: checkout },
-    { id: 'other', label: 'Ingresso e altro', minutes: other },
+    { id: 'packaged', label: 'Packaged aisles', minutes: packaged },
+    { id: 'fresh', label: 'Fresh departments', minutes: fresh },
+    { id: 'checkout', label: 'Checkouts', minutes: checkout },
+    { id: 'other', label: 'Entrance and other', minutes: other },
   ] };
 }
 
@@ -195,6 +246,15 @@ export function queuePeak(view) {
     if (v > THRESHOLDS.queueSlotMin && (!over || v > over.value)) over = { slot: sl, value: v };
   }
   return { peak, over };
+}
+
+/** Next department after `dept`: shares of the reconstructed adjacent hops leaving it (whole day). */
+export function nextDepartments(view, dept, min = 0.05) {
+  const row = view?.hops?.[dept];
+  if (!row) return null;
+  const total = Object.entries(row).filter(([k]) => k !== dept).reduce((s, [, n]) => s + (Number(n) || 0), 0);
+  if (!(total > 0)) return null;
+  return { total, list: Object.entries(row).filter(([k, n]) => k !== dept && n / total >= min).map(([k, n]) => ({ id: k, n, share: n / total })).sort((a, b) => b.n - a.n) };
 }
 
 export function entrancePeak(view) {
@@ -215,17 +275,24 @@ export function fmtDuration(min) {
   const m = Math.floor(s / 60), r = s % 60;
   return r ? `${m} min ${r} s` : `${m} min`;
 }
-export function fmtInt(n) { return n == null || !Number.isFinite(n) ? '—' : Math.round(n).toLocaleString('it-IT'); }
-export function fmtSlot(sl) { return sl === DAY ? 'Giornata 08–20' : sl.replace('-', '–'); }
+export function fmtInt(n) { return n == null || !Number.isFinite(n) ? '—' : Math.round(n).toLocaleString('en-GB'); }
+export function fmtSlot(sl) { return sl === DAY ? 'Whole day 08–20' : sl.replace('-', '–'); }
 export function fmtDay(day) {
   if (!day) return '';
+  // A combined period is carried as "from/to" (see combineViews).
+  if (day.includes('/')) {
+    const [a, b] = day.split('/');
+    const o = { day: 'numeric', month: 'short', timeZone: 'UTC' };
+    return `${new Date(`${a}T12:00:00Z`).toLocaleDateString('en-GB', o)} – ${new Date(`${b}T12:00:00Z`).toLocaleDateString('en-GB', o)}`;
+  }
   const d = new Date(`${day}T12:00:00Z`);
-  return d.toLocaleDateString('it-IT', { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC' });
+  return d.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC' });
 }
 
 // ----------------------------------------------------------------- loading
 
-const isPreviewHost = () => ['localhost', '127.0.0.1', '[::1]'].includes(location.hostname) || location.hostname.endsWith('.localhost');
+// Snapshot only off the production app (local preview or a private review page), never on *.hyspace.app.
+export const isPreviewHost = () => !/(^|\.)hyspace\.app$/.test(location.hostname);
 
 /**
  * Load the day. Production: the API, or an honest unavailable state.
@@ -259,4 +326,98 @@ export function polygonCentre(rings) {
   let sx = 0, sz = 0, n = 0;
   for (const r of rings || []) for (const [x, z] of r.outer) { sx += x; sz += z; n++; }
   return n ? { x: sx / n, z: sz / n } : null;
+}
+
+
+// ----------------------------------------------------------------- several days → one view
+// Week / month: the same view shape, so every lens works unchanged. Only exact recombinations:
+//   counts (entrants, person-minutes, sessions) add up;
+//   per-entrant minutes = Σ(value × entrants) ÷ Σ entrants of the same slot (= Σ person-minutes ÷ Σ entrants);
+//   choice index = combined time at the shelf ÷ combined time in area;
+//   people in store = mean of the days.
+// A day whose cell failed its daily check is left out of that cell, and the cell says how many days it uses.
+
+function partial(cells, combine, n, why) {
+  const ok = cells.filter((c) => c && c.status === 'ok' && c.value != null);
+  if (!ok.length) return { value: null, status: 'missing', reason: why || `No reliable day in this period (${n} days)`, label: null, method: null, days: 0, of: n };
+  const label = ok.every((c) => c.label === 'MEASURED') ? 'MEASURED' : (ok.find((c) => c.label)?.label || null);
+  const value = combine(ok);
+  return { value, status: value == null ? 'missing' : 'ok', reason: ok.length < n ? `${ok.length} of ${n} days` : null, label,
+    method: `Combined over ${ok.length} of ${n} days. ${ok[0].method || ''}`.trim(), days: ok.length, of: n };
+}
+
+export function combineViews(views, { from, to } = {}) {
+  const vs = views.filter(Boolean);
+  if (!vs.length) return null;
+  if (vs.length === 1 && (!from || from === to)) return vs[0];
+  const n = vs.length;
+  const slots = [...SLOTS, DAY];
+  const series = (get) => Object.fromEntries(slots.map((sl) => [sl, get(sl)]));
+  const entr = (v, sl) => (v.entrances?.[sl]?.status === 'ok' ? v.entrances[sl].value : null);
+  const sum = (key) => series((sl) => partial(vs.map((v) => v[key]?.[sl]), (ok) => ok.reduce((a, c) => a + c.value, 0), n));
+  const mean = (key) => series((sl) => partial(vs.map((v) => v[key]?.[sl]), (ok) => ok.reduce((a, c) => a + c.value, 0) / ok.length, n));
+  // Entrant-weighted: keep only days where both the value and that slot's entrants are reliable.
+  const weighted = (getCell) => series((sl) => {
+    const pairs = vs.map((v) => ({ c: getCell(v, sl), w: entr(v, sl) })).filter((x) => x.c?.status === 'ok' && x.c.value != null && x.w > 0);
+    return partial(pairs.map((x) => ({ ...x.c, _w: x.w })), (ok) => { const W = ok.reduce((a, c) => a + c._w, 0); return W ? ok.reduce((a, c) => a + c.value * c._w, 0) / W : null; }, n);
+  });
+  const depts = [...new Set(vs.flatMap((v) => Object.keys(v.area || {})))];
+  const area = Object.fromEntries(depts.map((d) => [d, weighted((v, sl) => v.area?.[d]?.[sl])]));
+  const banco = Object.fromEntries(depts.map((d) => [d, weighted((v, sl) => v.banco?.[d]?.[sl])]));
+  const choice = Object.fromEntries(depts.map((d) => {
+    const a = area[d][DAY], b = banco[d][DAY];
+    return [d, a.value > 0 && b.value != null
+      ? { value: b.value / a.value, status: 'ok', reason: null, label: 'ESTIMATED', method: 'Combined time at the shelf ÷ combined time in area over the period', days: Math.min(a.days, b.days), of: n }
+      : { value: null, status: 'missing', reason: 'Not enough reliable days', label: null, method: null }];
+  }));
+  // Lanes: add the person-minutes and sessions, then recompute shares and per-session minutes.
+  const laneMap = new Map();
+  for (const v of vs) for (const l of v.lanes?.list || []) {
+    const m = laneMap.get(l.lane) || { lane: l.lane, name: l.name, waitingPm: 0, transitPm: 0, fixedPm: 0, servicePm: 0, sessions: 0, sessionsKnown: true, people: [], days: 0 };
+    m.waitingPm += l.waitingPm; m.transitPm += l.transitPm; m.fixedPm += l.fixedPm || 0; m.servicePm += l.servicePm || 0;
+    if (l.sessions > 0) m.sessions += l.sessions; else m.sessionsKnown = false;
+    if (l.meanPeopleWaiting != null) m.people.push(l.meanPeopleWaiting);
+    m.days++; laneMap.set(l.lane, m);
+  }
+  const laneList = [...laneMap.values()].map((m) => ({ lane: m.lane, name: m.name, waitingPm: m.waitingPm, transitPm: m.transitPm, fixedPm: m.fixedPm, servicePm: m.servicePm,
+    sessions: m.sessionsKnown && m.sessions > 0 ? m.sessions : null,
+    waitPerSessionMin: m.sessionsKnown && m.sessions > 0 ? m.waitingPm / m.sessions : null,
+    servicePerSessionMin: m.sessionsKnown && m.sessions > 0 ? m.servicePm / m.sessions : null,
+    meanPeopleWaiting: m.people.length ? m.people.reduce((a, b) => a + b, 0) / m.people.length : null, days: m.days }));
+  const totalW = laneList.reduce((a, l) => a + l.waitingPm, 0);
+  const laneDays = vs.filter((v) => v.lanes?.status === 'ok').length;
+  // Behaviour modes: segment-weighted.
+  const bv = vs.filter((v) => v.behaviour?.ok);
+  const wmix = (get) => { const out = {}; let W = 0; for (const v of bv) { const w = v.behaviour.segments || 1; W += w; for (const [k, x] of Object.entries(get(v) || {})) out[k] = (out[k] || 0) + x * w; } for (const k of Object.keys(out)) out[k] /= W || 1; return out; };
+  const nested = (get) => { const keys = new Set(bv.flatMap((v) => Object.keys(get(v) || {}))); return Object.fromEntries([...keys].map((k) => [k, wmix((v) => get(v)?.[k])])); };
+  const behaviour = bv.length ? { ok: true, label: 'ESTIMATED', method: `Segment-weighted over ${bv.length} of ${n} days`, segments: bv.reduce((a, v) => a + (v.behaviour.segments || 0), 0),
+    share: wmix((v) => v.behaviour.share), deptMix: nested((v) => v.behaviour.deptMix), slotMix: nested((v) => v.behaviour.slotMix), profiles: [] }
+    : { ok: false, reason: 'No day in this period has behaviour modes' };
+  // Reconstructed hops: counts add up, only when every day passed the reconstruction gate.
+  let hops = null;
+  if (vs.every((v) => v.hops)) {
+    hops = {};
+    for (const v of vs) for (const [a, row] of Object.entries(v.hops)) for (const [b, c] of Object.entries(row)) ((hops[a] ||= {})[b] = (hops[a][b] || 0) + (Number(c) || 0));
+  }
+  const ck = vs.map((v) => v.checks || { passed: 0, total: 0, failed: [] });
+  return {
+    schema: 'visitor-journey-v1', venueId: vs[0].venueId,
+    day: from && to ? `${from}/${to}` : vs[0].day,
+    period: { from, to, days: vs.map((v) => v.day), n },
+    hours: vs[0].hours, source: vs[0].source,
+    entrances: sum('entrances'),
+    visit: weighted((v, sl) => v.visit?.[sl]),
+    peopleMean: mean('peopleMean'),
+    queue: weighted((v, sl) => v.queue?.[sl]),
+    service: weighted((v, sl) => v.service?.[sl]),
+    area, banco, choice,
+    next: null, hops,
+    reconRecall: { value: null, status: 'missing', reason: 'Per-day measure', label: null, method: null },
+    reconOk: vs.every((v) => v.reconOk),
+    counterStay: Object.fromEntries(SERVED.map((d) => [d, { value: null, status: 'missing', reason: 'Per-day measure, not combined', label: null, method: null }])),
+    lanes: { status: laneDays ? 'ok' : 'missing', reason: laneDays ? (laneDays < n ? `${laneDays} of ${n} days` : null) : 'No day in this period has lane data',
+      totalWaitingPm: totalW, list: laneList.map((l) => ({ ...l, share: totalW ? l.waitingPm / totalW : 0 })).sort((a, b) => b.waitingPm - a.waitingPm) },
+    checks: { passed: ck.reduce((a, c) => a + c.passed, 0), total: ck.reduce((a, c) => a + c.total, 0), failed: [...new Set(ck.flatMap((c) => c.failed))] },
+    behaviour,
+  };
 }

@@ -236,6 +236,7 @@ export type CaptureScreenshotFn = (options: {
 }) => string | null;
 
 interface MainViewportProps {
+  focusPoint?: { x: number; z: number } | null
   cameraView?: CameraView
   lighting?: LightingSettings
   tracking?: TrackingSettings
@@ -262,6 +263,7 @@ const defaultTracking: TrackingSettings = {
 }
 
 export default function MainViewport({ 
+  focusPoint,
   cameraView = 'perspective', 
   lighting = defaultLighting, 
   tracking = defaultTracking,
@@ -3663,6 +3665,18 @@ export default function MainViewport({
     controls.update()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cameraView]) // Only trigger on explicit view changes, NOT dwgSceneBounds changes
+
+  // Flow analysis hands off a venue-metre location; Live tracks always shows now.
+  useEffect(() => {
+    const camera = cameraRef.current
+    const controls = controlsRef.current
+    if (!focusPoint || !camera || !controls) return
+    camera.up.set(0, 1, 0)
+    controls.target.set(focusPoint.x, 0, focusPoint.z)
+    camera.position.set(focusPoint.x + 12, 20, focusPoint.z + 12)
+    camera.lookAt(controls.target)
+    controls.update()
+  }, [focusPoint])
 
   // Update lighting when settings change
   useEffect(() => {

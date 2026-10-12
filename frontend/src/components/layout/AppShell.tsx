@@ -74,6 +74,7 @@ interface AppShellProps {
 
 export default function AppShell({ onOpenDwgImporter, onOpenEdgeCommissioning, showLanding = false, onDismissLanding }: AppShellProps) {
   const [activeTab, setActiveTab] = useState<SidebarTab>('floorplan')
+  const [flowFocus, setFlowFocus] = useState<{ x: number; z: number } | null>(null)
   const [cameraView, setCameraView] = useState<CameraView>('perspective')
   const [showLightingPopup, setShowLightingPopup] = useState(false)
   const [showTrackingPopup, setShowTrackingPopup] = useState(false)
@@ -88,7 +89,7 @@ export default function AppShell({ onOpenDwgImporter, onOpenEdgeCommissioning, s
   const { selectedPlacementId, placements } = useLidar()
   const { dwgLayoutId: selectedDwgLayoutId } = useDwg()
   const { intentFieldEnabled, setIntentFieldEnabled } = useProfitRadar()
-  const { launchPadOpen: lpOpen, setLaunchPadOpen: setLpOpen, neuralDashboardEnabled, setNeuralDashboardEnabled, floorViz } = useViewMode()
+  const { launchPadOpen: lpOpen, setLaunchPadOpen: setLpOpen, neuralDashboardEnabled, setNeuralDashboardEnabled, floorViz, setFloorViz } = useViewMode()
   const [flowFieldMounted, setFlowFieldMounted] = useState(false)
   const flowFieldRef = useRef<FlowFieldHandle>(null)
   const [flowStoryOn, setFlowStoryOn] = useState(false)
@@ -190,6 +191,9 @@ export default function AppShell({ onOpenDwgImporter, onOpenEdgeCommissioning, s
   
   // When timeline is shown, we're in replay mode
   const isReplayMode = showTimeline && replayTimestamp !== null
+  // Windflow is a full workspace of its own: nothing inherited from the Live view is drawn over it
+  // (sidebar, KPI rail, Intent Field, status bar and its tools, timeline, Pulse, right panel).
+  const flowOnly = !showLanding && floorViz === 'flow'
 
   const showRightPanel = selectedObjectId !== null || selectedPlacementId !== null
 
@@ -207,6 +211,7 @@ export default function AppShell({ onOpenDwgImporter, onOpenEdgeCommissioning, s
   return (
     <div className="h-screen w-screen flex bg-app-bg overflow-hidden">
       {/* Left Sidebar with collapse toggle */}
+      {!flowOnly && (
       <div className="relative flex">
         {!sidebarCollapsed && (
           <Sidebar activeTab={activeTab} onTabChange={setActiveTab} onOpenDwgImporter={onOpenDwgImporter} onOpenEdgeCommissioning={onOpenEdgeCommissioning} launchPadOpen={lpOpen} onToggleLaunchPad={() => setLpOpen(!lpOpen)} />
@@ -230,6 +235,7 @@ export default function AppShell({ onOpenDwgImporter, onOpenEdgeCommissioning, s
           )}
         </button>
       </div>
+      )}
       
       {/* Main Content Area with ModeBar + 3D Viewport */}
       <div className="flex-1 min-w-0 flex flex-col overflow-hidden">
@@ -238,7 +244,7 @@ export default function AppShell({ onOpenDwgImporter, onOpenEdgeCommissioning, s
         
         {/* 3D Viewport + optional KPI focus rail */}
         <div className="flex-1 relative overflow-hidden flex flex-row min-h-0">
-        {showKpiRail && <ZoneKPIOverlayPanel />}
+        {showKpiRail && !flowOnly && <ZoneKPIOverlayPanel />}
 
         <div className="flex-1 relative overflow-hidden min-w-0 min-h-0">
         <NeuralDashboard 
@@ -247,6 +253,7 @@ export default function AppShell({ onOpenDwgImporter, onOpenEdgeCommissioning, s
           isReplayMode={isReplayMode}
         >
           <MainViewport 
+            focusPoint={flowFocus}
             cameraView={cameraView} 
             lighting={lighting} 
             tracking={tracking}
@@ -267,13 +274,20 @@ export default function AppShell({ onOpenDwgImporter, onOpenEdgeCommissioning, s
               venueId={venue?.id}
               title="People-flow field"
               startCollapsed
+              showExpand={false}
               onStoryChange={setFlowStoryOn}
+              onOpenLive={(point) => {
+                setShowTimeline(false)
+                setReplayTimestamp(null)
+                setFlowFocus(point)
+                setFloorViz('tracks')
+              }}
             />
           </div>
         )}
 
         {/* Intent Field Overlay (Profit Radar) - only show in default mode */}
-        {!neuralDashboardEnabled && <IntentFieldOverlay />}
+        {!neuralDashboardEnabled && !flowOnly && <IntentFieldOverlay />}
 
         {/* Perception Matching live tuner — floating panel on top of 3D venue. */}
         {showMatchingTuner && venue?.id && (
@@ -523,7 +537,8 @@ export default function AppShell({ onOpenDwgImporter, onOpenEdgeCommissioning, s
           </div>
         )}
         
-        {/* Status Bar - always visible */}
+        {/* Status Bar - hidden in Windflow, which has its own controls */}
+        {!flowOnly && (
         <div className="absolute bottom-0 left-0 right-0 h-12 bg-panel-bg/90 border-t border-border-dark flex items-center px-4 text-xs text-gray-400 z-20">
           <span className="mr-4">
             <span className="text-gray-500">Venue:</span>{' '}
@@ -733,9 +748,10 @@ export default function AppShell({ onOpenDwgImporter, onOpenEdgeCommissioning, s
             Click objects to select • Drag to move • Right-click to rotate
           </span>
         </div>
+        )}
         
         {/* Timeline Replay */}
-        {venue?.id && (
+        {venue?.id && !flowOnly && (
           <TimelineReplay
             venueId={venue.id}
             isOpen={showTimeline}
@@ -745,7 +761,7 @@ export default function AppShell({ onOpenDwgImporter, onOpenEdgeCommissioning, s
         {venue?.id && (
           <TeamTelegramModal venueId={venue.id} isOpen={showTeamTelegram} onClose={() => setShowTeamTelegram(false)} />
         )}
-        {pulseEnabled && (
+        {pulseEnabled && !flowOnly && (
           <HyperspacePulseOverlay onOpenTelegram={() => setShowTeamTelegram(true)} />
         )}
         </div>
@@ -753,7 +769,7 @@ export default function AppShell({ onOpenDwgImporter, onOpenEdgeCommissioning, s
       </div>
       
       {/* Right Panel (conditional) */}
-      {showRightPanel && <RightPanel />}
+      {showRightPanel && !flowOnly && <RightPanel />}
     </div>
   )
 }

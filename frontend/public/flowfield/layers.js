@@ -375,6 +375,7 @@ export function createLayerEngine(api) {
     terrainHeightAt, terrainHeightAtVenue, supportNorm,
     getFixtureBoxes, layout, getStrokeWidth,
   } = api;
+  const isClosed = api.isClosed || (() => false); // floor fenced in by fixtures: never spawn there
 
   const root = new T.Group();
   root.name = 'insightLayers';
@@ -893,7 +894,7 @@ export function createLayerEngine(api) {
     for (let k = 0; k < N; k++) {
       const i = k % field.NX, j = (k / field.NX) | 0;
       const v = gridToVenue(i + 0.5, j + 0.5);
-      if (!cellInSel(v.x, v.z)) continue;
+      if (!cellInSel(v.x, v.z) || isClosed(v.x, v.z)) continue;
       if (!(euro[k] > 0) || !catOf[k]) continue;
       any.push({ k, i, j, w: euro[k] });
       if (euro[k] >= thresh) hot.push({ k, i, j, w: Math.pow(euro[k], 1.45) });
@@ -935,7 +936,7 @@ export function createLayerEngine(api) {
       const s = field.randomSpawn();
       const k = field.idx(Math.floor(s.x), Math.floor(s.y));
       const v = gridToVenue(s.x, s.y);
-      if (!cellInSel(v.x, v.z)) continue;
+      if (!cellInSel(v.x, v.z) || isClosed(v.x, v.z)) continue;
       const e = euro ? euro[k] / euroMax : 0;
       if (e < 0.08 && Math.random() > 0.08) continue;
       p.x = s.x; p.y = s.y; p.e = Math.max(0.15, e);
@@ -961,7 +962,7 @@ export function createLayerEngine(api) {
     for (let t = 0; t < 50; t++) {
       const s = field.randomSpawn();
       const v = gridToVenue(s.x, s.y);
-      if (!cellInSel(v.x, v.z)) continue;
+      if (!cellInSel(v.x, v.z) || isClosed(v.x, v.z)) continue;
       const a = venueToAc(v.x, v.z);
       const i = Math.floor(a.i), j = Math.floor(a.j);
       if (i < 0 || j < 0 || i >= ac.nx || j >= ac.ny) continue;
@@ -1447,6 +1448,8 @@ export function createLayerEngine(api) {
 
   return {
     rebuild, step, applyVisibility, tryLiveProfit,
+    // The retail twin supplies the exact glass cage; preserve legacy editing in Lab.
+    selectionVisual: (visible) => { gSel.visible = visible; },
     setSelection, setDraft, pickRoi, inspect,
     getSelection, getDraft, selectionCenter, clearSelection: () => setSelection(null),
     tintCell, selectionMask, euroAt, profitBasis: () => profitBasis,

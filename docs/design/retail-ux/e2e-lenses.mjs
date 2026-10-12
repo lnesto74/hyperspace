@@ -1,6 +1,6 @@
-// Browser check of the seven-lens workspace. Serve frontend/public on :8765 (python3 -m http.server 8765), then: node docs/design/retail-ux/e2e-lenses.mjs
+// Browser check of the eight-lens workspace. Serve frontend/public on :8765 (python3 -m http.server 8765), then: node docs/design/retail-ux/e2e-lenses.mjs
 import { chromium } from 'playwright';
-const browser = await chromium.launch({ args: ['--use-gl=swiftshader','--enable-webgl','--ignore-gpu-blocklist'] });
+const browser = await chromium.launch({ ...(process.env.PW_CHROMIUM ? { executablePath: process.env.PW_CHROMIUM } : {}), args: ['--use-gl=swiftshader','--enable-webgl','--ignore-gpu-blocklist'] });
 const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } });
 const errs=[]; page.on('pageerror', e => errs.push(e.message));
 await page.goto(process.env.FLOWFIELD_URL || 'http://localhost:8765/flowfield/index.html?embed=1', { waitUntil: 'load' });
@@ -36,12 +36,45 @@ ok((await page.locator('.hx-pill.kpi').innerText()).includes('00:00–23:30'), '
 await page.locator('.hx-source button', { hasText: 'Visitor Journey' }).click(); await page.waitForTimeout(1500);
 ok((await page.locator('.hx-pill.kpi').innerText()).includes('Visitor Journey'), 'back to Visitor Journey');
 await tab('Compare');
-ok(await page.locator('.hx-compare canvas').count()===2, 'compare: two matched maps');
+ok(await page.locator('.hx-compare canvas').count()===6, 'compare: the day in six matched maps');
+const h2a = await h2(); await page.locator('.hx-bar .hx-play').click(); await page.waitForTimeout(4200);
+ok((await h2()) !== h2a && (await page.locator('.hx-cmp-grid figure.active').count())===1, 'play walks the day: '+h2a+' → '+await h2());
+await page.locator('.hx-bar .hx-play').click();
+await page.locator('.hx-layer-seg button', { hasText: 'A vs B' }).click(); await page.waitForTimeout(2500);
+ok(await page.locator('.hx-compare canvas').count()===2, 'A vs B: two matched maps');
 await page.locator('.hx-layer-seg button', { hasText: 'Difference' }).click(); await page.waitForTimeout(2500);
 ok(await page.locator('.hx-compare canvas').count()===1, 'difference map');
+await tab('Opportunities');
+ok((await page.locator('.hx-inspector .hx-bars .hx-barrow').count())>=8, 'value at stake lists many areas: '+await page.locator('.hx-inspector .hx-bars .hx-barrow').count());
+ok((await page.locator('.hx-money').first().innerText()).includes('€'), 'modelled € range shown: '+await page.locator('.hx-money').first().innerText());
+await page.locator('.hx-inspector .hx-barrow', { hasText: 'Carne' }).click(); await page.waitForTimeout(1000);
+ok((await h2())==='Carne', 'select Carne');
+await tab('Pulse');
+await page.locator('.hx-slots button', { hasText: '08–10' }).click(); await page.waitForTimeout(4000);
+ok((await page.locator('.hx-pill.flow').innerText()).includes('08–10'), 'floor follows the slot: '+await page.locator('.hx-pill.flow').innerText());
 await tab('Flow Explorer');
 for (const l of ['Dwell','Direction','Regimes','Movement']) { await page.locator('.hx-layer-seg button', { hasText: l }).click(); await page.waitForTimeout(2000); }
 ok(true, 'flow layers switched');
+await tab('Behaviour');
+ok((await page.locator('.hx-pill.kin').innerText()).includes('10 Hz'), 'behaviour: measured movement chip');
+ok((await page.locator('.hx-inspector .hx-state').count())===6, 'behaviour: six states in the store mix');
+ok((await page.locator('.hx-legend .hx-lchip').count())===6, 'behaviour: clickable state legend');
+await page.locator('.hx-layer-seg button', { hasText: 'Department fingerprints' }).click(); await page.waitForTimeout(2000);
+ok((await page.locator('.hx-donut').count())>=8, 'behaviour: department rings on the floor: '+await page.locator('.hx-donut').count());
+await page.locator('.hx-donut', { hasText: 'SURGELATI' }).first().click(); await page.waitForTimeout(1500);
+ok((await h2())==='Surgelati' && (await page.locator('.hx-lead').first().innerText()).includes('choose'), 'behaviour: Surgelati fingerprint reads as choosing: '+await page.locator('.hx-lead').first().innerText());
+ok((await page.locator('.kin-val').innerText()).includes('0,996'), 'behaviour: validation r against al banco shown');
+await page.locator('.hx-layer-seg button', { hasText: 'Hesitation spots' }).click(); await page.waitForTimeout(2000);
+ok((await page.locator('.hx-hot').count())>=3, 'behaviour: hesitation spots: '+await page.locator('.hx-hot').count());
+await page.locator('.hx-slots button', { hasText: '18–20' }).click(); await page.waitForTimeout(3000);
+ok((await page.locator('.hx-pill.kin').innerText()).includes('18–20'), 'behaviour follows the slot');
+await tab('Opportunities');
+ok((await page.locator('.hx-oppfp').count())===1, 'opportunities: measured movement under the selected area');
+ok((await page.locator('.hx-inspector .hx-dl').innerText()).includes('Moving past (measured)'), 'opportunities: lever axes from measured movement');
+await tab('Compare');
+await page.locator('.hx-layer-seg button', { hasText: 'The day' }).click(); await page.waitForTimeout(1500);
+await page.locator('.hx-inspector .hx-seg button', { hasText: 'Behaviour' }).click(); await page.waitForTimeout(2500);
+ok((await page.locator('.hx-compare canvas').count())===6 && (await page.locator('.hx-cmp-note').innerText()).includes('movement state'), 'compare: the day by behaviour');
 await page.locator('.hx-top-r button', { hasText: 'Lab' }).click(); await page.waitForTimeout(500);
 ok(await page.locator('#controls').isVisible(), 'Lab drawer opens engineering controls');
 console.log('errors:', errs.slice(0,5));

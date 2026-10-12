@@ -39,3 +39,10 @@ tutorial/
 backend/uploads/dwg/
 backend/uploads/logos/
 backend/uploads/floorplans/
+
+# Raw captures and data exports stay on disk, never in git (2026-10-12)
+*.pcapng
+raw_tracks.jsonl
+exports/**/*.parquet
+exports/**/*.csv
+infra/cloud3d/out/**/*.zip

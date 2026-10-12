@@ -12,23 +12,48 @@
     {
       "id": "footfall",
       "file": "01_footfall_overview.png",
+      "camera": "overview",
       "title": "Where traffic concentrates",
-      "shortCaption": "Footfall over 9.4 trading days (07:00–22:00). Busiest tenth of cells carries ~39% of traffic — strongest south-west. Coverage ~80% of walkable floor.",
-      "caption": "Footfall over 9.4 trading days (07:00–22:00 local), overlaid on the store wireframe. Colour and relief mark distinct-track density; animated streamlines show direction. Coverage reaches ~80% of walkable floor. Traffic is not evenly spread: the busiest tenth of cells carries about 39% of all track evidence, funneling through a small set of corridors and nodes — strongest in the south-west of the plan."
+      "shortCaption": "Read the peaks against named fresco counters and aisles in this window — Verdura, Pane, Carne, Shelf 19, checkout — not against cell counts.",
+      "caption": "Footfall over 9.4 trading days (07:00–22:00 local), overlaid on the store wireframe. Colour and relief mark distinct-track density; animated streamlines show direction. Coverage reaches ~80% of walkable floor. Traffic is not evenly spread: the busiest tenth of cells carries about 39% of all track evidence, funneling through a small set of corridors and nodes — strongest in the south-west of the plan.",
+      "kpis": [
+        { "label": "Window", "value": "9.4 days · 07:00–22:00" },
+        { "label": "Measured cells", "value": "1,734" },
+        { "label": "Walkable coverage", "value": "~80%" },
+        { "label": "Busiest tenth", "value": "39% of traffic" },
+        { "label": "Strongest quadrant", "value": "South-west" }
+      ]
     },
     {
       "id": "dwell",
       "file": "02_dwell_overview.png",
+      "camera": "overview",
       "title": "Where shoppers slow and stop",
-      "shortCaption": "Dwell peaks mark engagement or queues; valleys are through-routes. Pair with aisle/fresco tables for where stopping power sits on the floor.",
-      "caption": "Same field coloured by dwell. Peaks are places people stay; valleys are through-routes with high movement and little stopping. Read the valleys as circulation and the peaks as engagement or queueing. Pair this with the aisle and fresco tables in the executive report: the map shows where the stopping power sits spatially, not only as a percentage."
+      "shortCaption": "Peaks are named counters and tills (Pesce, Verdura, checkout lanes). Valleys are through-routes. Stopping % and wait seconds are this report window.",
+      "caption": "Same field coloured by dwell. Peaks are places people stay; valleys are through-routes with high movement and little stopping. Read the valleys as circulation and the peaks as engagement or queueing. Pair this with the aisle and fresco tables in the executive report: the map shows where the stopping power sits spatially, not only as a percentage.",
+      "kpis": [
+        { "label": "Colour", "value": "Dwell (s)" },
+        { "label": "Height", "value": "Linger, not euros" },
+        { "label": "Peaks", "value": "Stop or queue" },
+        { "label": "Valleys", "value": "Through-route" },
+        { "label": "Window", "value": "9.4 days · 07:00–22:00" },
+        { "label": "Cells", "value": "1,734" }
+      ]
     },
     {
       "id": "streams",
       "file": "03_streamlines_low.png",
+      "camera": "low",
       "title": "How people move through the plan",
-      "shortCaption": "Streamlines follow the direction rose. Busy aisles are often two-way (purity ≈ 0.3) — opposing flows stay visible instead of cancelling to a mean arrow.",
-      "caption": "A lower camera angle emphasises the wind-map streamlines. Each trail follows the measured direction rose in its cell. Along the busiest through-route cells, flow is often two-way (average directional purity ≈ 0.3), so a single mean arrow would mislead — the rose keeps opposing aisle traffic visible. Use this view to see which aisle mouths feed the fresco / checkout spine."
+      "shortCaption": "Follow the spine toward Shelf 19 and the fresco counters. Two-way aisles stay visible (purity 0.30). The number that matters is how many entrants never reach that floor.",
+      "caption": "A lower camera angle emphasises the wind-map streamlines. Each trail follows the measured direction rose in its cell. Along the busiest through-route cells, flow is often two-way (average directional purity ≈ 0.3), so a single mean arrow would mislead — the rose keeps opposing aisle traffic visible. Use this view to see which aisle mouths feed the fresco / checkout spine.",
+      "kpis": [
+        { "label": "Avg directional purity", "value": "0.30" },
+        { "label": "1.0 means", "value": "One-way" },
+        { "label": "0 means", "value": "Two-way / milling" },
+        { "label": "Window", "value": "9.4 days · 07:00–22:00" },
+        { "label": "Walkable coverage", "value": "~80%" }
+      ]
     }
   ]
 }

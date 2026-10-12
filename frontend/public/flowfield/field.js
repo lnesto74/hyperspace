@@ -33,6 +33,14 @@ export async function loadField(urlOrPayload) {
     if (c.j < j0) j0 = c.j; if (c.j > j1) j1 = c.j;
   }
   const NX = i1 - i0 + 1, NY = j1 - j0 + 1;
+  // The grid below is indexed from the first occupied cell (i0, j0), and main.js places
+  // local cell 0 at meta.origin_m. Packs from FlowFieldDailyService keep the anchor-grid
+  // origin while their first occupied cell is not 0, so shift the origin to that cell.
+  // Without this every dated pack is drawn i0 × cell_m metres off the store plan.
+  if (meta.origin_m && (i0 !== 0 || j0 !== 0)) {
+    meta.origin_m_anchor = meta.origin_m;
+    meta.origin_m = { x: meta.origin_m.x + i0 * meta.cell_m, y: meta.origin_m.y + j0 * meta.cell_m };
+  }
   const idx = (i, j) => j * NX + i;
 
   const raw = {

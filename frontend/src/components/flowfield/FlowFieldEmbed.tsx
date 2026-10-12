@@ -1,5 +1,4 @@
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
 import { Maximize2, X } from 'lucide-react';
 
 export type FlowFieldHandle = {
@@ -10,7 +9,7 @@ export type FlowFieldHandle = {
 /**
  * Embeds the Windy-style people-flow prototype (Three.js + left control bar)
  * into dashboards. Kept as an iframe so the visualisation options stay identical
- * to the standalone prototype. Expand opens the full page (non-embed) overlay.
+ * to the standalone prototype. Expansion keeps the same iframe mounted, preserving the current investigation.
  */
 const FlowFieldEmbed = forwardRef<FlowFieldHandle, {
   className?: string;
@@ -21,6 +20,7 @@ const FlowFieldEmbed = forwardRef<FlowFieldHandle, {
   /** Start with the in-iframe control rail folded (workspace stage). */
   startCollapsed?: boolean;
   onStoryChange?: (on: boolean) => void;
+  onOpenLive?: (point: { x: number; z: number }) => void;
 }>(function FlowFieldEmbed({
   className = '',
   title = 'People-flow field',
@@ -28,6 +28,7 @@ const FlowFieldEmbed = forwardRef<FlowFieldHandle, {
   venueId,
   startCollapsed = false,
   onStoryChange,
+  onOpenLive,
 }, ref) {
   const [fullscreen, setFullscreen] = useState(false);
   const iframeRef = useRef<HTMLIFrameElement>(null);
@@ -44,16 +45,13 @@ const FlowFieldEmbed = forwardRef<FlowFieldHandle, {
   // Stable src — Date.now() on every mount restarted the iframe (and the
   // splash) whenever the dashboard re-rendered the tile.
   const embedSrc = useMemo(() => {
-    const q = new URLSearchParams({ embed: '1', v: 'holistic-67' });
+    const q = new URLSearchParams({ embed: '1', v: 'ux-v3-12' });
     if (venueId) q.set('venue', venueId);
+    if (onOpenLive) q.set('liveLink', '1');
     if (startCollapsed) q.set('collapsed', '1');
     return `/flowfield/index.html?${q}`;
-  }, [venueId, startCollapsed]);
-  const fullSrc = useMemo(() => {
-    const q = new URLSearchParams({ v: 'holistic-67' });
-    if (venueId) q.set('venue', venueId);
-    return `/flowfield/index.html?${q}`;
-  }, [venueId]);
+  }, [venueId, startCollapsed, !!onOpenLive]);
+
 
   useEffect(() => {
     if (!fullscreen) return;
@@ -72,15 +70,24 @@ const FlowFieldEmbed = forwardRef<FlowFieldHandle, {
   useEffect(() => {
     const onMsg = (e: MessageEvent) => {
       if (e.origin !== window.location.origin) return;
+      if (e.data?.type === 'ff-open-live' && e.source === iframeRef.current?.contentWindow
+          && Number.isFinite(e.data.x) && Number.isFinite(e.data.z)) {
+        onOpenLive?.({ x: e.data.x, z: e.data.z });
+      }
       if (e.data?.type === 'ff-story-chrome') onStoryChange?.(!!e.data.on);
     };
     window.addEventListener('message', onMsg);
     return () => window.removeEventListener('message', onMsg);
-  }, [onStoryChange]);
+  }, [onStoryChange, onOpenLive]);
 
   return (
     <>
-      <div className={`relative h-full w-full ${className}`}>
+      <div
+        className={fullscreen ? 'fixed inset-0 z-[200] bg-black' : `relative h-full w-full ${className}`}
+        role={fullscreen ? 'dialog' : undefined}
+        aria-modal={fullscreen ? true : undefined}
+        aria-label={fullscreen ? `${title} — full screen` : undefined}
+      >
         <iframe
           ref={iframeRef}
           title={title}
@@ -92,48 +99,17 @@ const FlowFieldEmbed = forwardRef<FlowFieldHandle, {
         {showExpand && (
           <button
             type="button"
-            onClick={() => setFullscreen(true)}
+            onClick={() => setFullscreen((value) => !value)}
             className="absolute top-3 right-3 z-10 flex items-center gap-1 px-2 py-1 text-xs rounded-md bg-gray-900/85 border border-gray-600 text-gray-300 hover:text-white hover:border-cyan-500/50 transition-colors shadow-lg shadow-black/40"
-            title="Open full people-flow field"
+            title={fullscreen ? "Close full screen" : "Open full people-flow field"}
           >
-            <Maximize2 className="w-3 h-3" />
-            Full screen
+            {fullscreen ? <X className="w-3 h-3" /> : <Maximize2 className="w-3 h-3" />}
+            {fullscreen ? 'Close' : 'Full screen'}
           </button>
         )}
       </div>
 
-      {fullscreen && createPortal(
-        <div
-          className="fixed inset-0 z-[200] bg-black flex flex-col"
-          role="dialog"
-          aria-modal="true"
-          aria-label="People-flow field full screen"
-        >
-          <div className="h-11 flex items-center justify-between gap-3 px-3 border-b border-gray-800 bg-gray-950 shrink-0">
-            <div className="min-w-0">
-              <div className="text-sm font-medium text-white truncate">{title}</div>
-              <div className="text-[10px] text-gray-500">
-                Full controls · Esc or Close to return
-              </div>
-            </div>
-            <button
-              type="button"
-              onClick={() => setFullscreen(false)}
-              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-md border border-gray-600 text-gray-300 hover:text-white hover:bg-gray-800"
-            >
-              <X className="w-3.5 h-3.5" />
-              Close
-            </button>
-          </div>
-          <iframe
-            title={`${title} — full screen`}
-            src={fullSrc}
-            className="flex-1 w-full min-h-0 border-0 bg-black"
-            allow="fullscreen"
-          />
-        </div>,
-        document.body,
-      )}
+
     </>
   );
 });

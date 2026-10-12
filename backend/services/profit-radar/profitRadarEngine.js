@@ -206,7 +206,7 @@ export class ProfitRadarEngine {
     // Rank by severity then confidence
     const sevOrder = { high: 0, medium: 1, low: 2 };
     newInsights.sort((a, b) => {
-      const sd = (sevOrder[a.severity] || 2) - (sevOrder[b.severity] || 2);
+      const sd = (sevOrder[a.severity] ?? 2) - (sevOrder[b.severity] ?? 2);
       if (sd !== 0) return sd;
       return b.confidence - a.confidence;
     });
@@ -254,6 +254,10 @@ export class ProfitRadarEngine {
       const roiId = db.roiId || null;
       const zone = roiId ? zoneByRoi.get(roiId) : null;
       const isQueue = ins.type === INSIGHT_TYPES.STAFF_MISALLOCATION;
+      // Evidence provenance is independent of whether shelf economics are configured.
+      ins.evidence = { source: !ins.id.startsWith('insight-pz-') && zone && zone.trackCount > 0 ? 'observed' : 'synthetic',
+        observedAt: zone?.observedAt || null };
+
 
       const axes = (zone && zone.means) || this._synthAxes(db);
       const engagement = db.engagement != null ? db.engagement : (axes.engagement_with_POI || 0);
@@ -345,8 +349,8 @@ export class ProfitRadarEngine {
       };
 
       // Recompute the headline band from the recovery range (per day).
-      const min = Math.max(1, summary.range.conservative);
-      const max = Math.max(min + 1, summary.range.aggressive);
+      const min = Math.max(0, summary.range.conservative);
+      const max = Math.max(min, summary.range.aggressive);
       ins.impact = {
         min,
         max,

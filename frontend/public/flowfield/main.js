@@ -1,15 +1,20 @@
 import { analyseAreas, rankAreas } from './business-analysis.js?v=report-4';
-import { mountAnalysisWorkspace } from './workspace.js?v=lens-1';
+import { mountAnalysisWorkspace } from './workspace.js?v=v3-13';
 // Lens modes that draw the cyan movement streams (Pulse, Flow Explorer).
 const MOVE_MODES = new Set(['moved', 'flow']);
 const STREAM_MODES = new Set(['moved', 'flow', 'stopped', 'value']);
 import * as THREE from 'three';
 import { OrbitControls } from './vendor/OrbitControls.js';
+import { createRetailTwin } from './retail-twin.js?v=v3-5';
+import { mergeFieldPacks } from './period.js?v=v3-5';
+import { contourSegments, observedCells, closedPockets } from './retail-geometry.js?v=v3-10';
+let retailTwin = null;
+let retailPickListener = null;
 // Dynamic, cache-busted: the field module is edited alongside the extractor and
 // the browser otherwise pins the first version it saw for the whole session.
 const bust = `?t=${Date.now()}`;
 const {
-  loadField,
+  loadField: loadFieldRaw,
   heatRamp,
   regimeRamp,
   REGIME_CATEGORIES,
@@ -150,6 +155,7 @@ function withTimeout(promise, ms, label) {
   return Promise.race([promise, timeout]).finally(() => window.clearTimeout(t));
 }
 
+let fieldBooted = false;
 async function loadFieldSmart(slice, date = fieldApi.date) {
   try {
     if (useLivePack) {
@@ -157,7 +163,8 @@ async function loadFieldSmart(slice, date = fieldApi.date) {
     }
     return await loadField(`./slices/field_${slice}.json${bust}`);
   } catch (err) {
-    if (useLivePack && !field) {
+    // `field` is still in its temporal dead zone on the first load; guard with a flag (fixes a boot crash when the live pack is unreachable outside embed mode).
+    if (useLivePack && !fieldBooted) {
       console.warn('Live flowfield pack unavailable, falling back to static snapshot', err);
       useLivePack = false;
       return loadField(`./slices/field_${slice}.json${bust}`);
@@ -166,12 +173,22 @@ async function loadFieldSmart(slice, date = fieldApi.date) {
   }
 }
 
+// Exact fixture footprints (25 cm raster) plus floor fenced in on every side by fixtures.
+// Particles test this, so a 1.4 m aisle between two shelves stays open even though a 1.5 m
+// cell box around either shelf would cover it.
+const layout = await (await fetch('./layout_prod.json' + bust)).json();
+let pockets = null;
+try { pockets = closedPockets(layout.polys); } catch (e) { console.warn('closed-pocket mask unavailable', e); }
+// Packs are never trimmed: a 1.5 m cell next to the ring wall carries real aisle traffic even when
+// its centre falls behind the wall. Only the particles respect the exact shelf footprints (below).
+const loadField = (src) => loadFieldRaw(src);
+
 dateCatalog = await fetchDateCatalog();
 if (dateCatalog?.latest && !fieldApi.date) fieldApi.date = dateCatalog.latest;
 if (dateCatalog && dateCatalog.dates?.length === 0) useLivePack = false;
 
 let field = await loadFieldSmart(sliceId);
-const layout = await (await fetch('./layout_prod.json' + bust)).json();
+fieldBooted = true;
 const layersPack = await (await fetch('./layers_pack.json' + bust)).json();
 let CELL = field.meta.cell_m;
 let FIELD_W = field.NX * CELL;
@@ -262,7 +279,7 @@ const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x07080b);
 scene.fog = new THREE.Fog(0x07080b, VENUE_SPAN * 1.8, VENUE_SPAN * 4.2);
 
-const camera = new THREE.PerspectiveCamera(48, 1, 0.5, 1200);
+const camera = new THREE.PerspectiveCamera(48, 1, 0.2, 1200);
 camera.position.set(
   planCenter.x + VENUE_SPAN * 0.42,
   VENUE_SPAN * 0.72,
@@ -282,6 +299,33 @@ controls.enableDamping = true;
 controls.dampingFactor = 0.08;
 controls.target.set(planCenter.x, 0, planCenter.z);
 controls.maxPolarAngle = Math.PI * 0.495;
+// Zoom goes where the pointer is, and never stalls: OrbitControls shrinks the distance to its
+// pivot by a fixed ratio per wheel step, so near the pivot each step moves almost nothing and
+// zoom seems to stop. Once the camera is within a few metres of the pivot, further wheel-in
+// steps push camera and pivot forward together (walk into the store) instead.
+controls.zoomToCursor = true;
+controls.minDistance = 2.5;
+controls.maxDistance = 420;
+{
+  const fwd = new THREE.Vector3();
+  renderer.domElement.addEventListener('wheel', (e) => {
+    if (!controls.enabled || !controls.enableZoom || e.deltaY >= 0) return;
+    const dist = camera.position.distanceTo(controls.target);
+    if (dist > controls.minDistance * 1.6) return;
+    camera.getWorldDirection(fwd);
+    // Looking down at the floor from 2.5 m is already as close as it gets; only walk forward
+    // when the view is oblique enough to have floor ahead of the camera.
+    if (fwd.y < -0.6) return;
+    const step = Math.min(1.2, 0.004 * Math.abs(e.deltaMode === 1 ? e.deltaY * 33 : e.deltaY) + 0.12);
+    // Move along the view direction, but never through the floor nor out of the store.
+    if (camera.position.y + fwd.y * step < 0.9) { fwd.y = 0; if (fwd.lengthSq() < 1e-6) return; fwd.normalize(); }
+    const nx = camera.position.x + fwd.x * step, nz = camera.position.z + fwd.z * step;
+    if (nx < layout.bbox.minX - 4 || nx > layout.bbox.maxX + 4 || nz < layout.bbox.minZ - 4 || nz > layout.bbox.maxZ + 4) return;
+    camera.position.addScaledVector(fwd, step);
+    controls.target.addScaledVector(fwd, step);
+    if (controls.target.y < 0) controls.target.y = 0;
+  }, { passive: true });
+}
 params.panMode = false;
 function applyNavMode() {
   if (params.panMode) {
@@ -701,30 +745,16 @@ function sampleTerrainColor(gx, gy, out) {
 
 function rebuildIsolines() {
   if (!params.showIsoline) { isolineMesh.visible = false; return; }
-  const NX = field.NX, NY = field.NY;
-  const stepG = 0.45 / CELL;
-  const pos = [];
-  const col = [];
-  const rgb = [0, 0, 0];
-  const pushSeg = (gx0, gy0, gx1, gy1) => {
-    if (supportNormFrac(gx0, gy0) < 0.04 && supportNormFrac(gx1, gy1) < 0.04) return;
-    const p0 = gridToVenue(gx0, gy0);
-    const p1 = gridToVenue(gx1, gy1);
-    pos.push(p0.x, terrainHeightAt(gx0, gy0) + 0.04, p0.z);
-    pos.push(p1.x, terrainHeightAt(gx1, gy1) + 0.04, p1.z);
-    sampleTerrainColor(gx0, gy0, rgb);
-    col.push(rgb[0], rgb[1], rgb[2]);
-    sampleTerrainColor(gx1, gy1, rgb);
-    col.push(rgb[0], rgb[1], rgb[2]);
-  };
-  for (let gy = 0; gy <= NY - 1; gy += stepG) {
-    for (let gx = 0; gx < NX - 1; gx += stepG) {
-      pushSeg(gx, gy, Math.min(gx + stepG, NX - 1), gy);
-    }
-  }
-  for (let gx = 0; gx <= NX - 1; gx += stepG) {
-    for (let gy = 0; gy < NY - 1; gy += stepG) {
-      pushSeg(gx, gy, gx, Math.min(gy + stepG, NY - 1));
+  const sc = field.scalars[params.scalar];
+  if (!sc || sc.categorical) { isolineMesh.visible = false; return; }
+  const max = sc.max || 1, min = sc.signed ? (sc.min ?? -max) : 0;
+  const levels = Array.from({ length: 7 }, (_, i) => min + (max - min) * (i + 1) / 8);
+  const pos = [], col = [];
+  for (const seg of contourSegments(sc.data, observedCells(field), field.NX, field.NY, levels)) {
+    for (const [x,z] of [seg.a,seg.b]) {
+      const p = gridToVenue(x,z);
+      pos.push(p.x, terrainHeightAt(x,z) + .065, p.z);
+      col.push(.36,.65,.72);
     }
   }
   if (pos.length < 6) { isolineMesh.visible = false; return; }
@@ -991,9 +1021,26 @@ function fixtureAabb(poly) {
 let layersEngine = null;
 let fixtureBoxes = [];
 let blocked = new Uint8Array(0);
+// Floor fenced in on every side by fixtures (the inside of the central shelf ring). Nobody can walk
+// there: the few tracks the sensors put inside are people seen over the shelves, so nothing is drawn there.
+function closedAtGrid(gx, gy) {
+  if (!pockets) return false;
+  const v = gridToVenue(gx, gy);
+  return pockets.blockedAt(v.x, v.z);
+}
 function rasterizeObstacles() {
   blocked = new Uint8Array(field.NX * field.NY);
   fixtureBoxes = [];
+  if (pockets) {
+    // A cell is blocked only when most of it is shelf or closed floor; thin aisles stay open.
+    for (const poly of layout.polys) { const box = fixtureAabb(poly); if (box) fixtureBoxes.push(box); }
+    for (let j = 0; j < field.NY; j++) for (let i = 0; i < field.NX; i++) {
+      let n = 0;
+      for (const a of [0.17, 0.5, 0.83]) for (const b of [0.17, 0.5, 0.83]) if (closedAtGrid(i + a, j + b)) n++;
+      if (n >= 6) blocked[field.idx(i, j)] = 1;
+    }
+    return;
+  }
   for (const poly of layout.polys) {
     const box = fixtureAabb(poly);
     if (!box) continue;
@@ -1093,7 +1140,7 @@ let heatFrame = 0;
 function cellBlocked(gx, gy) {
   const i = Math.floor(gx), j = Math.floor(gy);
   if (i < 0 || j < 0 || i >= field.NX || j >= field.NY) return true;
-  return !!blocked[field.idx(i, j)];
+  return pockets ? closedAtGrid(gx, gy) : !!blocked[field.idx(i, j)];
 }
 
 function pickHeatSpawn() {
@@ -2350,14 +2397,65 @@ function flyOblique() {
 }
 
 function flyBusinessOverview() {
+  const direction=new THREE.Vector3(.08,.66,.62).normalize();
+  const right=new THREE.Vector3().crossVectors(camera.up,direction).normalize(),up=new THREE.Vector3().crossVectors(direction,right).normalize();
+  const target=new THREE.Vector3(planCenter.x,.6,planCenter.z),tan=Math.tan(THREE.MathUtils.degToRad(camera.fov/2));
+  let distance=10;
+  for(const x of [layout.bbox.minX,layout.bbox.maxX])for(const z of [layout.bbox.minZ,layout.bbox.maxZ])for(const y of [0,2.8]){
+    const v=new THREE.Vector3(x,y,z).sub(target);
+    distance=Math.max(distance,Math.abs(v.dot(right))/(tan*Math.max(.3,camera.aspect))+v.dot(direction),Math.abs(v.dot(up))/tan+v.dot(direction));
+  }
   camAnim = { t:0, fromPos:camera.position.clone(), fromTgt:controls.target.clone(),
-    toTgt:new THREE.Vector3(planCenter.x,0,planCenter.z),
-    toPos:new THREE.Vector3(planCenter.x+VENUE_SPAN*.08,VENUE_SPAN*.66,planCenter.z+VENUE_SPAN*.62) };
+    toTgt:target,toPos:target.clone().addScaledVector(direction,distance*1.16) };
 }
 
 function flyReportPlan() {
   const height=Math.max(VENUE_D,VENUE_W/Math.max(.1,camera.aspect))/(2*Math.tan(THREE.MathUtils.degToRad(camera.fov/2)))*1.08;
   camAnim={t:0,fromPos:camera.position.clone(),fromTgt:controls.target.clone(),toTgt:new THREE.Vector3(planCenter.x,0,planCenter.z),toPos:new THREE.Vector3(planCenter.x,height,planCenter.z+.01)};
+}
+
+// Fit the registered store frame (layout bbox, venue metres) to the canvas from a view direction.
+// Binary search on distance so the footprint fills ~margin of the frame, then re-centre the
+// target so the store sits in the middle of the canvas. No stretching, no invented extent.
+const _fitCam = new THREE.PerspectiveCamera();
+const _fitV = new THREE.Vector3();
+function fitPose(dir, { margin = 0.9, minX = layout.bbox.minX, maxX = layout.bbox.maxX, minZ = layout.bbox.minZ, maxZ = layout.bbox.maxZ } = {}) {
+  const d = new THREE.Vector3(dir.x, dir.y, dir.z).normalize();
+  const corners = [];
+  for (const x of [minX, maxX]) for (const z of [minZ, maxZ]) for (const y of [0, 2.4]) corners.push(new THREE.Vector3(x, y, z));
+  _fitCam.fov = camera.fov; _fitCam.aspect = camera.aspect; _fitCam.near = camera.near; _fitCam.far = camera.far; _fitCam.updateProjectionMatrix();
+  const target = new THREE.Vector3((minX + maxX) / 2, 0, (minZ + maxZ) / 2);
+  const extent = (dist) => {
+    _fitCam.position.copy(target).addScaledVector(d, dist);
+    if (Math.abs(d.y) > 0.999) _fitCam.up.set(0, 0, -1); else _fitCam.up.set(0, 1, 0);
+    _fitCam.lookAt(target); _fitCam.updateMatrixWorld();
+    let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+    for (const c of corners) { _fitV.copy(c).project(_fitCam); x0 = Math.min(x0, _fitV.x); x1 = Math.max(x1, _fitV.x); y0 = Math.min(y0, _fitV.y); y1 = Math.max(y1, _fitV.y); }
+    return { x0, x1, y0, y1 };
+  };
+  let dist = VENUE_SPAN;
+  for (let pass = 0; pass < 3; pass++) {
+    let lo = 4, hi = VENUE_SPAN * 6;
+    for (let k = 0; k < 40; k++) {
+      const mid = (lo + hi) / 2, e = extent(mid);
+      if (Math.max(e.x1 - e.x0, e.y1 - e.y0) / 2 > margin || Math.max(Math.abs(e.x0), Math.abs(e.x1), Math.abs(e.y0), Math.abs(e.y1)) > 1) lo = mid; else hi = mid;
+    }
+    dist = hi;
+    const e = extent(dist);
+    // Shift the target by the projected centre offset (world units at the target depth).
+    const cx = (e.x0 + e.x1) / 2, cy = (e.y0 + e.y1) / 2;
+    const h = Math.tan(THREE.MathUtils.degToRad(_fitCam.fov / 2)) * dist;
+    const right = new THREE.Vector3().setFromMatrixColumn(_fitCam.matrixWorld, 0);
+    const up = new THREE.Vector3().setFromMatrixColumn(_fitCam.matrixWorld, 1);
+    target.addScaledVector(right, cx * h * _fitCam.aspect).addScaledVector(up, cy * h);
+    target.y = 0;
+  }
+  return { pos: target.clone().addScaledVector(d, dist).add(Math.abs(d.y) > 0.999 ? new THREE.Vector3(0, 0, 0.01) : new THREE.Vector3()), tgt: target };
+}
+const FIT_DIRS = { oblique: { x: 0.10, y: 0.78, z: 0.62 }, low: { x: 0.30, y: 0.52, z: 0.80 }, top: { x: 0, y: 1, z: 0 } };
+function flyFit(kind = 'oblique', opts = {}) {
+  const f = fitPose(FIT_DIRS[kind] || kind, opts);
+  camAnim = { t: 0, fromPos: camera.position.clone(), fromTgt: controls.target.clone(), toPos: f.pos, toTgt: f.tgt };
 }
 
 function flyToPoint(x, z, span = 18) {
@@ -3588,6 +3686,7 @@ function scheduleStoryAdvance() {
 }
 
 function storyClearZone() {
+  retailTwin?.select(null, { animate: false });
   clearPin();
   layersEngine?.clearSelection();
   params.pickMode = false;
@@ -3760,6 +3859,7 @@ async function exitStory() {
 function commitSelection(sel, opts = {}) {
   if (!layersEngine) return;
   layersEngine.setSelection(sel);
+  retailTwin?.select(sel, { animate: false });
   params.pickMode = false;
   params.drawMode = false;
   document.getElementById('pickZone')?.classList.remove('active');
@@ -3827,6 +3927,23 @@ headGradient.addColorStop(0,'rgba(255,255,255,1)');headGradient.addColorStop(.2,
 headContext.fillStyle=headGradient;headContext.fillRect(0,0,32,32);
 const flowHeadTexture=new THREE.CanvasTexture(headCanvas);
 
+// Behaviour focus: particles are born only where one movement state happens (weight 0..1 at a
+// venue point) and use a motion preset that reads as that state (long and fast for passing,
+// short and slow for waiting, curly for hesitating). null restores the normal streams.
+let spawnWeight = null, presetSaved = null;
+function focusStreams(opts) {
+  if (!opts && !spawnWeight && !presetSaved) return;
+  spawnWeight = opts?.weight || null;
+  const preset = opts?.preset || null;
+  if (preset) {
+    presetSaved ||= { trail: params.trail, timeScale: params.timeScale, kappa: params.kappa, inertia: params.inertia, particles: params.particles, dwellDrag: params.dwellDrag };
+    Object.assign(params, presetSaved, preset);
+  } else if (presetSaved) { Object.assign(params, presetSaved); presetSaved = null; }
+  buildParticles();
+  // A glowing head per stream makes slow behaviours (waiting, standing) read as coloured spots.
+  if (flowHeads) flowHeads.material.size = opts?.head ?? 0.42;
+}
+
 function buildParticles() {
   particles = new Array(params.particles);
   for (let p = 0; p < params.particles; p++) particles[p] = spawn({});
@@ -3875,15 +3992,19 @@ function buildParticles() {
 
 function spawn(p) {
   let s = field.randomSpawn();
-  {
-    for (let tries = 0; tries < 12; tries++) {
-      const ii = Math.floor(s.x), jj = Math.floor(s.y);
-      if (ii < 0 || jj < 0 || ii >= field.NX || jj >= field.NY) break;
-      if (!blocked[field.idx(ii, jj)]) break;
+  if (spawnWeight) {
+    for (let tries = 0; tries < 120; tries++) {
+      if (!cellBlocked(s.x, s.y)) { const v = gridToVenue(s.x, s.y); if (Math.random() < spawnWeight(v.x, v.z)) break; }
+      s = field.randomSpawn();
+    }
+  } else {
+    for (let tries = 0; tries < 40; tries++) {
+      if (!cellBlocked(s.x, s.y)) break;
       s = field.randomSpawn();
     }
   }
   p.x = s.x; p.y = s.y;
+  p.u = Math.random(); // stable per-life draw: picks this particle's state from the local mix (tint lens)
   p.age = 0;
   p.life = 60 + Math.random() * 110;
   const { sup } = field.sampleRose(p.x, p.y, roseBuf);
@@ -3920,6 +4041,10 @@ function pickHeading(rose, heading) {
 // Trails are sampled every few frames rather than every frame, so a trail spans
 // a readable stretch of floor instead of a couple of centimetres.
 const HIST_STRIDE = 3;
+// Optional per-particle colour from a lens (kinetic states): (venueX, venueZ, u) -> [r,g,b] | null.
+let particleTint = null, tintGain = 0.55;
+// Lens-controlled stream strength (0 hides streams; 1 = renderer default). Rendering only, no field math.
+let streamGain = 1;
 let frame = 0;
 
 function stepParticles(dt) {
@@ -3956,6 +4081,8 @@ function stepParticles(dt) {
       spawn(p);
       continue;
     }
+    // Focused on one behaviour: a stream that walks out of where it happens fades and is reborn.
+    if (spawnWeight && push) { const v = gridToVenue(p.x, p.y); if (spawnWeight(v.x, v.z) < 0.04) { spawn(p); continue; } }
 
     if (push) {
       p.hist.copyWithin(3, 0, (MAX_TRAIL - 1) * 3);
@@ -3975,9 +4102,13 @@ function stepParticles(dt) {
     let cr = 0.88, cg = 0.94, cb = 1;
     if (MOVE_MODES.has(params.businessMode)) { cr = .09; cg = .36; cb = .46; }
     if (params.businessMode === 'stopped') { cr = 1; cg = .71; cb = .35; }
+    if (particleTint) {
+      const t = particleTint(h[0], h[2], p.u);
+      if (t) { cr = t[0] * tintGain; cg = t[1] * tintGain; cb = t[2] * tintGain; } else { cr *= .35; cg *= .35; cb *= .35; }
+    }
     const selectedBrightness = layersEngine && params.businessMode
       ? layersEngine.selectionMask(Math.max(0,Math.min(field.NX*field.NY-1,field.idx(Math.floor(p.x),Math.floor(p.y))))) : 1;
-    cr *= selectedBrightness; cg *= selectedBrightness; cb *= selectedBrightness;
+    cr *= selectedBrightness * streamGain; cg *= selectedBrightness * streamGain; cb *= selectedBrightness * streamGain;
     if (bay) {
       const vx = h[0], vz = h[2];
       const inCone = layersEngine.inScreenCone?.(vx, vz);
@@ -4180,7 +4311,7 @@ renderer.domElement.addEventListener('pointerdown', (e) => {
       return;
     }
   }
-  if (sel?.vertices?.length && !params.drawMode) {
+  if (sel?.vertices?.length && !params.drawMode && !document.documentElement.classList.contains('hx')) {
     const i = nearestPolyVertex(x, z, sel.vertices);
     if (i >= 0) {
       vertexDrag = { kind: 'sel', index: i, moved: false };
@@ -4214,6 +4345,10 @@ renderer.domElement.addEventListener('pointerup', (e) => {
   if (!hit) return;
   const x = hit.point.x, z = hit.point.z;
   const now = performance.now();
+  if (retailPickListener && document.documentElement.classList.contains('hx') && !params.drawMode) {
+    retailPickListener(x, z, retailTwin?.pick(x, z));
+    return;
+  }
   const dbl = now - lastClickAt < 320;
   lastClickAt = now;
   if (params.drawMode) {
@@ -4875,7 +5010,7 @@ async function switchSlice(next) {
   setLoader(true, `Loading ${SLICE_LABELS[next]}…`);
   document.querySelectorAll('button.slice[data-slice]').forEach((b) => { b.disabled = true; });
   try {
-    const nextField = await loadFieldSmart(next);
+    const nextField = fieldApi.range ? await loadField(await fetchPeriodPack(next)) : await loadFieldSmart(next);
     field = nextField;
     sliceId = next;
     reachSource = null;
@@ -4917,8 +5052,58 @@ async function switchSlice(next) {
   }
 }
 
+// ---- Period (week / month): the floor is the dated packs of those days, merged cell by cell.
+function catalogDays() {
+  return new Set((dateCatalog?.days || dateCatalog?.dates || []).map((d) => (typeof d === 'string' ? d : d.date)).filter(Boolean));
+}
+async function fetchPeriodPack(slice) {
+  const r = fieldApi.range;
+  const have = catalogDays();
+  const want = r.days.filter((d) => have.has(d));
+  const packs = await Promise.all(want.map((d) => fetchFieldJson(slice, d).catch(() => null)));
+  const used = want.filter((d, k) => packs[k]);
+  const merged = mergeFieldPacks(packs, { from: r.from, to: r.to, days: used });
+  if (!merged) throw new Error('No flow pack for these days');
+  r.used = used;
+  return merged;
+}
+async function switchRange(range) {
+  if (!range?.days?.length) return { ok: false, note: 'No days' };
+  if (range.days.length === 1) { await switchDate(range.days[0]); return { ok: fieldApi.date === range.days[0], used: [range.days[0]] }; }
+  if (sliceSwitching) return { ok: false, note: 'Busy' };
+  if (!useLivePack) {
+    const ok = catalogHasDays() && await ensureLivePack();
+    if (!ok) return { ok: false, note: 'Flow packs for other days need the Hyperspace server' };
+  }
+  sliceSwitching = true;
+  setLoader(true, `Combining ${range.days.length} days of movement…`);
+  const prev = fieldApi.range;
+  try {
+    fieldApi.range = { ...range };
+    const nextField = await loadField(await fetchPeriodPack(sliceId));
+    field = nextField;
+    fieldApi.date = fieldApi.range.used[fieldApi.range.used.length - 1];
+    reachSource = null; reachFar = null; analysisPromise = null; companionMaps = null;
+    for (const k of ['shift_me', 'shift_ww', 'shift_day']) if (field.scalars[k]) delete field.scalars[k];
+    roseBuf = new Float32Array(field.B);
+    syncFieldGeometry();
+    CELL = field.meta.cell_m;
+    updateMeta(); rebuildTerrain(); buildArrows(); buildFloorplan(); rebuildPhysicsLayers(); buildParticles(); writeUrlState(); paintReadKey();
+    return { ok: true, used: fieldApi.range.used };
+  } catch (err) {
+    console.error('Failed to combine days', err);
+    fieldApi.range = prev;
+    return { ok: false, note: err.message };
+  } finally {
+    if (!field.scalars[params.scalar]) params.scalar = 'dwell';
+    try { rebuildTerrain(); } catch { /* keep fixtures visible */ }
+    setLoader(false);
+    sliceSwitching = false;
+  }
+}
+
 async function switchDate(nextDate) {
-  if (!nextDate || nextDate === fieldApi.date || sliceSwitching) return;
+  if (!nextDate || (nextDate === fieldApi.date && !fieldApi.range) || sliceSwitching) return;
   if (!useLivePack && catalogHasDays()) {
     const ok = await ensureLivePack();
     if (!ok) {
@@ -4932,6 +5117,7 @@ async function switchDate(nextDate) {
   sliceSwitching = true;
   setLoader(true, `Loading ${nextDate}…`);
   try {
+    fieldApi.range = null;
     fieldApi.date = nextDate;
     if (fieldApi.compare === nextDate) fieldApi.compare = '';
     const nextField = await loadFieldSmart(sliceId, nextDate);
@@ -5572,6 +5758,7 @@ layersEngine = createLayerEngine({
   gridToVenue, venueToGrid, terrainHeightAt, terrainHeightAtVenue, supportNorm,
   getFixtureBoxes: () => fixtureBoxes,
   getStrokeWidth,
+  isClosed: (x, z) => !!pockets?.at(x, z),
 });
 rebuildPhysicsLayers();
 buildParticles();
@@ -5650,6 +5837,44 @@ if (bootQs.has('export') || bootQs.get('scalar')) {
   }
 }
 
+if (!document.documentElement.classList.contains('export')) {
+  try {
+    retailTwin = await createRetailTwin({ scene, camera, renderer, layout,
+      home: flyBusinessOverview, top: flyReportPlan,
+      fly: (b, mode, profile = {}) => {
+        const aspect = Math.max(.4, camera.aspect);
+        const height = Math.max(b.maxZ-b.minZ, (b.maxX-b.minX)/aspect) / (2*Math.tan(THREE.MathUtils.degToRad(camera.fov/2))) * 1.38;
+        const longZ=b.maxZ-b.minZ>b.maxX-b.minX;
+        const direction=new THREE.Vector3(longZ?.9:.25,.68,longZ?.25:.9).normalize();
+        // Preserve the approved Frutta angle. Other fixture types expose their useful face.
+        if(profile.preset==='bakery')direction.y=.42;
+        if(profile.preset==='cold')direction.y=.85;
+        if(profile.preset==='checkout')direction.set(-.8,.85,.65);
+        if(profile.preset==='counter'){
+          const f=profile.fixtures?.find(f=>f.fronts?.length);
+          if(f){const [a,c]=f.fronts[0],nx=(a[0]+c[0])/2-f.x,nz=(a[1]+c[1])/2-f.z;direction.set(nx,.6*Math.max(.3,Math.hypot(nx,nz)),nz);}
+          else direction.y=.52;
+        }
+        direction.normalize();
+        const right=new THREE.Vector3().crossVectors(camera.up,direction).normalize();
+        const up=new THREE.Vector3().crossVectors(direction,right).normalize();
+        const tan=Math.tan(THREE.MathUtils.degToRad(camera.fov/2));
+        let distance=10;
+        for(const x of [b.minX,b.maxX])for(const z of [b.minZ,b.maxZ])for(const y of [0,2.8]) {
+          const v=new THREE.Vector3(x-b.x,y-1.4,z-b.z);
+          distance=Math.max(distance,Math.abs(v.dot(right))/(tan*aspect)+v.dot(direction),Math.abs(v.dot(up))/tan+v.dot(direction));
+        }
+        const target=new THREE.Vector3(b.x,1.4,b.z).addScaledVector(right,b.span*.08);
+        camAnim = { t:0, fromPos:camera.position.clone(), fromTgt:controls.target.clone(),
+          toTgt:mode==='top'?new THREE.Vector3(b.x,.5,b.z):target,
+          toPos:mode === 'top' ? new THREE.Vector3(b.x,height,b.z+.01) : target.clone().addScaledVector(direction,distance*1.42) };
+      },
+    });
+    planGroup.traverse(o => { if (o.material) { o.material.opacity=.25; o.material.depthTest=true; } });
+    controls.addEventListener('start', () => { camAnim = null; });
+  } catch (e) { console.warn('Retail twin unavailable; keeping calibrated CAD', e); }
+}
+
 // Exposed so the scene can be poked from the devtools console while tuning.
 window.flowProto = {
   THREE, scene, camera, controls, params,
@@ -5658,10 +5883,12 @@ window.flowProto = {
   switchSlice, rebuildTerrain, buildArrows, buildParticles, stepParticles, renderer, setExportView,
   rebuildPhysicsLayers, buildVolume,
   applyHeat, stepHeatPlumes, layersEngine,
+  retailTwin,
 };
 
 let last = performance.now();
 let renderSuspended = false;
+let retailPerf = { start: last, frames: 0, cpu: 0 };
 renderer.setAnimationLoop(() => {
   if (renderSuspended || document.hidden) { last = performance.now(); analysisFrameListener?.(); return; }
   const now = performance.now();
@@ -5680,10 +5907,33 @@ renderer.setAnimationLoop(() => {
     if (camAnim.t >= 1) camAnim = null;
   }
   controls.update();
-  if(flowHeads) flowHeads.visible=!!lineMesh?.visible && MOVE_MODES.has(params.businessMode);
+  if (lineMesh && streamGain <= 0.001) lineMesh.visible = false;
+  if (retailTwin && document.documentElement.classList.contains('hx') && !document.documentElement.classList.contains('hx-lab')) {
+    layersEngine?.selectionVisual?.(false);
+    obstacleGroup.visible = false;
+    retailTwin.update(dt);
+  } else layersEngine?.selectionVisual?.(true);
+  if(flowHeads) flowHeads.visible=!!lineMesh?.visible && (MOVE_MODES.has(params.businessMode) || !!spawnWeight);
   if(flowRibbon) flowRibbon.visible=!!lineMesh?.visible && MOVE_MODES.has(params.businessMode);
+  if (retailTwin) {
+    const focus = !!retailTwin.state.selection;
+    if(flowHeads) flowHeads.material.opacity=focus?.32:.7;
+    if(flowRibbon) flowRibbon.material.opacity=focus?.38:.8;
+    if(lineMesh && MOVE_MODES.has(params.businessMode))lineMesh.material.opacity=focus?.42:.75;
+  }
   renderer.render(scene, camera);
   analysisFrameListener?.();
+  if (retailTwin) {
+    retailPerf.frames++;retailPerf.cpu+=performance.now()-now;
+    if(now-retailPerf.start>1500) {
+      // Read-only diagnostics for local validation, not a business metric.
+      container.dataset.retailDiagnostics=JSON.stringify({ ...retailTwin.diagnostics(), cameraMoving:!!camAnim, calls:renderer.info.render.calls,
+        triangles:renderer.info.render.triangles, geometries:renderer.info.memory.geometries,
+        fps:+(retailPerf.frames*1000/(now-retailPerf.start)).toFixed(1),cpuMs:+(retailPerf.cpu/retailPerf.frames).toFixed(2) });
+      container.dataset.retailAssetStatus=retailTwin.assetStatus;
+      retailPerf={start:now,frames:0,cpu:0};
+    }
+  }
 });
 
 
@@ -5707,6 +5957,15 @@ function getBusinessAreas() {
 
 // The workspace owns navigation and evidence; the existing renderer owns geometry.
 mountAnalysisWorkspace({
+  twin: retailTwin,
+  onFloorPick: (fn) => { retailPickListener = fn; },
+  project3D: (x,y,z) => {
+    const p = new THREE.Vector3(x,y,z).project(camera);
+    if (p.z < -1 || p.z > 1) return null;
+    const r=renderer.domElement.getBoundingClientRect();
+    return {sx:(p.x*.5+.5)*r.width,sy:(-.5*p.y+.5)*r.height};
+  },
+  contours: (on) => { params.showIsoline=on; rebuildIsolines(); },
   snapshot: () => ({ field, rois:layersEngine?.pack?.rois || [], areas:getBusinessAreas().areas, selection: layersEngine?.getSelection(), question: everydayId || 'moved',
     date: fieldApi.date, compare: fieldApi.compare, slice: sliceId, venue: fieldApi.venue,
     camera: camera.position.toArray(), target: controls.target.toArray(),
@@ -5718,6 +5977,19 @@ mountAnalysisWorkspace({
   toVenue: gridToVenue,
   inspect: (area) => { commitSelection(area.selection,{fly:false}); },
   project: (area) => projectFloor(area.x,area.z),
+  // 3D projector for overlay line work: key changes whenever the camera or canvas changes.
+  projector: () => {
+    const r = renderer.domElement.getBoundingClientRect();
+    const e = camera.matrixWorld.elements;
+    const key = `${r.width}x${r.height}|${e[12].toFixed(3)},${e[13].toFixed(3)},${e[14].toFixed(3)},${e[8].toFixed(4)},${e[9].toFixed(4)},${e[10].toFixed(4)}`;
+    const pitch = Math.asin(Math.max(-1, Math.min(1, e[9]))); // camera back-vector y: 1 = looking straight down
+    return { key, w: r.width, h: r.height, pitch, at: (x, y, z) => {
+      _proj.set(x, y, z).project(camera);
+      if (_proj.z < -1 || _proj.z > 1) return null;
+      return [(_proj.x * 0.5 + 0.5) * r.width, (-_proj.y * 0.5 + 0.5) * r.height];
+    } };
+  },
+  fit: (kind, opts) => flyFit(kind, opts),
   onFrame: (callback) => { analysisFrameListener=callback; },
   display: (setting,value) => {
     if (setting === 'motion') { params.paused=!value; document.getElementById('pause').textContent=value?'Pause':'Resume'; }
@@ -5747,7 +6019,7 @@ mountAnalysisWorkspace({
     camera.position.fromArray(saved.camera); controls.target.fromArray(saved.target); controls.update();
   },
   compareField: async () => liveCompareOk() && fieldApi.compare ? fetchFieldJson(sliceId, fieldApi.compare) : null,
-  sliceField: async (slice) => fetchFieldJson(slice, fieldApi.date),
+  sliceField: async (slice) => (fieldApi.range ? fetchPeriodPack(slice) : fetchFieldJson(slice, fieldApi.date)),
   slice: async (slice) => switchSlice(slice),
   // ---- lens API (workspace.js). The renderer keeps every algorithm; the lens only picks
   // mode, layer and camera.
@@ -5765,20 +6037,32 @@ mountAnalysisWorkspace({
   },
   relief: (on) => { params.terrainHeight = on ? 5 : 0; rebuildTerrain(); buildParticles(); },
   scalarInfo: () => { const sc = field.scalars[params.scalar]; return sc ? { id: params.scalar, label: sc.label, unit: sc.unit, max: sc.max, min: sc.min, signed: !!sc.signed, categorical: !!sc.categorical, categories: sc.categories || null } : null; },
-  select: (sel, opts = {}) => { if (sel) commitSelection(sel, { fly: false }); else { storyClearZone(); updateInspector(); } if (opts.fly && sel) flyToPoint(sel.cx, sel.cz, opts.span || 22); },
+  select: (sel, opts = {}) => {
+    const changed = layersEngine?.getSelection()?.id !== sel?.id;
+    if (sel) commitSelection(sel, { fly: false }); else { storyClearZone(); updateInspector(); }
+    if (retailTwin && sel && (changed || opts.fly)) retailTwin.focus();
+    else if (!retailTwin && opts.fly && sel) flyToPoint(sel.cx, sel.cz, opts.span || 22);
+  },
   flyTo: (x, z, span = 22) => flyToPoint(x, z, span),
-  overview: () => flyBusinessOverview(),
-  top: () => flyReportPlan(),
+  // Astra's twin owns the store/top camera profiles when it is loaded; the fitted pose is the fallback.
+  overview: (kind = 'oblique') => (retailTwin ? retailTwin.mode('3d') : flyFit(kind)),
+  top: () => (retailTwin ? retailTwin.mode('top') : flyFit('top', { margin: 0.84 })),
   packInfo: () => ({ live: field?.meta?.pack === 'live', date: fieldApi.date || null, latest: dateCatalog?.latest || null,
     days: (dateCatalog?.days || dateCatalog?.dates || []).map((d) => (typeof d === 'string' ? d : d.date)).filter(Boolean),
     slice: sliceId, sliceLabel: SLICE_LABELS[sliceId], hours: field?.meta?.slice_hours || field?.meta?.window_local_hours || null,
-    cell: field?.meta?.cell_m, venue: fieldApi.venue || field?.meta?.venue_id || null, source: field?.meta?.source || null }),
-  setDate: async (d) => { if (d && d !== fieldApi.date) await switchDate(d); },
+    cell: field?.meta?.cell_m, localDate: field?.meta?.local_date || null, venue: fieldApi.venue || field?.meta?.venue_id || null, source: field?.meta?.source || null }),
+  setDate: async (d) => { if (d && (d !== fieldApi.date || fieldApi.range)) await switchDate(d); },
+  setRange: async (range) => switchRange(range),
+  flowDays: () => [...catalogDays()].sort(),
   hasSlice: (id) => !!SLICE_LABELS[id],
   pause: (on) => { params.paused = !!on; },
   ensureLive: async () => ensureLivePack(),
   // Compare draws its own matched 2D maps; the 3D twin stops drawing meanwhile (no reload).
   suspend: (on) => { renderSuspended = !!on; },
+  // Colour streams by a per-place mix (e.g. measured movement states). null restores the lens colour.
+  streams: (g = 1) => { streamGain = Math.max(0, Math.min(1.5, g)); if (lineMesh && streamGain > 0.001) lineMesh.visible = STREAM_MODES.has(params.businessMode); },
+  focusStreams,
+  tint: (fn, gain = 0.55) => { particleTint = typeof fn === 'function' ? fn : null; tintGain = gain; },
 });
 if (!document.documentElement.classList.contains('export')) {
   await applyEverydayView(new URL(location.href).searchParams.get('question') || 'moved');

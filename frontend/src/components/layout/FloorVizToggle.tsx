@@ -26,7 +26,7 @@ export default function FloorVizToggle({ className = '' }: { className?: string 
         }`}
       >
         <Wind className="w-3.5 h-3.5" />
-        Flow field
+        Flow analysis
       </button>
       <button
         type="button"

@@ -1,92 +1,182 @@
 {
-  "slices": [
-    {
-      "id": "all",
-      "file": "field_all.json",
-      "cells": 1745,
-      "rows": 2965074,
-      "hours": [
-        7,
-        22
-      ],
-      "dows": null
-    },
-    {
-      "id": "morning",
-      "file": "field_morning.json",
-      "cells": 1698,
-      "rows": 856061,
-      "hours": [
-        7,
-        11
-      ],
-      "dows": null
-    },
-    {
-      "id": "midday",
-      "file": "field_midday.json",
-      "cells": 1704,
-      "rows": 867392,
-      "hours": [
-        11,
-        15
-      ],
-      "dows": null
-    },
-    {
-      "id": "afternoon",
-      "file": "field_afternoon.json",
-      "cells": 1690,
-      "rows": 824220,
-      "hours": [
-        15,
-        19
-      ],
-      "dows": null
-    },
-    {
-      "id": "evening",
-      "file": "field_evening.json",
-      "cells": 1676,
-      "rows": 417401,
-      "hours": [
-        19,
-        22
-      ],
-      "dows": null
-    },
-    {
-      "id": "weekday",
-      "file": "field_weekday.json",
-      "cells": 1730,
-      "rows": 1741499,
-      "hours": [
-        7,
-        22
-      ],
-      "dows": [
-        0,
-        1,
-        2,
-        3,
-        4
-      ]
-    },
-    {
-      "id": "weekend",
-      "file": "field_weekend.json",
-      "cells": 1715,
-      "rows": 1223575,
-      "hours": [
-        7,
-        22
-      ],
-      "dows": [
-        5,
-        6
-      ]
-    }
-  ],
-  "cell_m": 1.5,
-  "venue_id": "55fdd53b-3298-4355-97c0-b4e789b11d06"
+ "slices": [
+  {
+   "id": "weekday",
+   "file": "field_weekday.json",
+   "cells": 1730,
+   "rows": 1741499,
+   "hours": [
+    7,
+    22
+   ],
+   "dows": [
+    0,
+    1,
+    2,
+    3,
+    4
+   ]
+  },
+  {
+   "id": "weekend",
+   "file": "field_weekend.json",
+   "cells": 1715,
+   "rows": 1223575,
+   "hours": [
+    7,
+    22
+   ],
+   "dows": [
+    5,
+    6
+   ]
+  },
+  {
+   "id": "all",
+   "file": "field_all.json",
+   "cells": 1380,
+   "rows": 352598,
+   "hours": [
+    7,
+    22
+   ],
+   "dows": null,
+   "date": "2026-09-14"
+  },
+  {
+   "id": "morning",
+   "file": "field_morning.json",
+   "cells": 1230,
+   "rows": 92540,
+   "hours": [
+    7,
+    11
+   ],
+   "dows": null,
+   "date": "2026-09-14"
+  },
+  {
+   "id": "midday",
+   "file": "field_midday.json",
+   "cells": 1248,
+   "rows": 99859,
+   "hours": [
+    11,
+    15
+   ],
+   "dows": null,
+   "date": "2026-09-14"
+  },
+  {
+   "id": "afternoon",
+   "file": "field_afternoon.json",
+   "cells": 1201,
+   "rows": 99006,
+   "hours": [
+    15,
+    19
+   ],
+   "dows": null,
+   "date": "2026-09-14"
+  },
+  {
+   "id": "evening",
+   "file": "field_evening.json",
+   "cells": 1136,
+   "rows": 61193,
+   "hours": [
+    19,
+    22
+   ],
+   "dows": null,
+   "date": "2026-09-14"
+  },
+  {
+   "id": "trading",
+   "file": "field_trading.json",
+   "cells": 1363,
+   "rows": 294986,
+   "hours": [
+    8,
+    20
+   ],
+   "dows": null,
+   "date": "2026-09-14"
+  },
+  {
+   "id": "h08_10",
+   "file": "field_h08_10.json",
+   "cells": 1132,
+   "rows": 50426,
+   "hours": [
+    8,
+    10
+   ],
+   "dows": null,
+   "date": "2026-09-14"
+  },
+  {
+   "id": "h10_12",
+   "file": "field_h10_12.json",
+   "cells": 1088,
+   "rows": 43239,
+   "hours": [
+    10,
+    12
+   ],
+   "dows": null,
+   "date": "2026-09-14"
+  },
+  {
+   "id": "h12_14",
+   "file": "field_h12_14.json",
+   "cells": 1139,
+   "rows": 49725,
+   "hours": [
+    12,
+    14
+   ],
+   "dows": null,
+   "date": "2026-09-14"
+  },
+  {
+   "id": "h14_16",
+   "file": "field_h14_16.json",
+   "cells": 1168,
+   "rows": 54600,
+   "hours": [
+    14,
+    16
+   ],
+   "dows": null,
+   "date": "2026-09-14"
+  },
+  {
+   "id": "h16_18",
+   "file": "field_h16_18.json",
+   "cells": 1093,
+   "rows": 47935,
+   "hours": [
+    16,
+    18
+   ],
+   "dows": null,
+   "date": "2026-09-14"
+  },
+  {
+   "id": "h18_20",
+   "file": "field_h18_20.json",
+   "cells": 1088,
+   "rows": 49061,
+   "hours": [
+    18,
+    20
+   ],
+   "dows": null,
+   "date": "2026-09-14"
+  }
+ ],
+ "cell_m": 1.5,
+ "venue_id": "55fdd53b-3298-4355-97c0-b4e789b11d06",
+ "note": "Bundled preview: 14 Sep 2026 track_positions for day slices (same aggregation as /api/flowfield/field); weekday/weekend remain the earlier August sample."
 }
