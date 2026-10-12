@@ -1,0 +1,149 @@
+{
+  "schema": "executive-pdf-v1",
+  "venueId": "55fdd53b-3298-4355-97c0-b4e789b11d06",
+  "day": "2026-09-14",
+  "window": "00:00\u201323:30 Europe/Rome",
+  "source": "esselunga-executive-2026-09-14 2.pdf",
+  "sourcePages": [
+    1,
+    2
+  ],
+  "basis": "Values transcribed from the user-supplied executive PDF; field animation is separate spatial context.",
+  "overview": {
+    "entrants": 5068,
+    "stoppingPct": 34.5,
+    "shoppingDwellMin": 1.1,
+    "avgWaitSec": 26,
+    "engagementPct": 13.2,
+    "passThroughPct": 65.5,
+    "penetrationPct": 15.5,
+    "bypassPct": 84.5,
+    "friction": 0.4
+  },
+  "departments": [
+    {
+      "name": "Verdura",
+      "section": "fresco",
+      "crossings": 11780,
+      "stops": 4478,
+      "stoppingPct": 70,
+      "dwellSec": 19,
+      "engagementSec": 16
+    },
+    {
+      "name": "Pane",
+      "section": "fresco",
+      "crossings": 6343,
+      "stops": 4675,
+      "stoppingPct": 58.4,
+      "dwellSec": 15,
+      "engagementSec": 15
+    },
+    {
+      "name": "Carne",
+      "section": "fresco",
+      "crossings": 4976,
+      "stops": 1948,
+      "stoppingPct": 56.5,
+      "dwellSec": 30,
+      "engagementSec": 26
+    },
+    {
+      "name": "Latticini",
+      "section": "fresco",
+      "crossings": 4294,
+      "stops": 2591,
+      "stoppingPct": 51.9,
+      "dwellSec": 20,
+      "engagementSec": 20
+    },
+    {
+      "name": "Pesce",
+      "section": "fresco",
+      "crossings": 1503,
+      "stops": 941,
+      "stoppingPct": 63.5,
+      "dwellSec": 30,
+      "engagementSec": 30
+    },
+    {
+      "name": "Salumi",
+      "section": "fresco",
+      "crossings": 1,
+      "stops": null,
+      "stoppingPct": null,
+      "dwellSec": null,
+      "engagementSec": 15
+    },
+    {
+      "name": "Surgelati",
+      "section": "category",
+      "zones": 10,
+      "crossings": 6,
+      "stoppingPct": 75,
+      "dwellSec": 61,
+      "engagementSec": null
+    },
+    {
+      "name": "Bar",
+      "section": "category",
+      "zones": 4,
+      "crossings": 1,
+      "stoppingPct": 100,
+      "dwellSec": 56,
+      "engagementSec": null
+    }
+  ],
+  "checkout": {
+    "label": "Traditional",
+    "completed": 1701,
+    "sessions": 1701,
+    "avgWaitSec": 26,
+    "abandonPct": 0
+  },
+  "lanes": [
+    {
+      "lane": 4,
+      "shoppers": 143,
+      "avgWaitSec": 54,
+      "abandonPct": 0
+    },
+    {
+      "lane": 6,
+      "shoppers": 362,
+      "avgWaitSec": 28,
+      "abandonPct": 0
+    },
+    {
+      "lane": 7,
+      "shoppers": 208,
+      "avgWaitSec": 26,
+      "abandonPct": 0
+    },
+    {
+      "lane": 13,
+      "shoppers": 352,
+      "avgWaitSec": 23,
+      "abandonPct": 0
+    },
+    {
+      "lane": 8,
+      "shoppers": 173,
+      "avgWaitSec": 23,
+      "abandonPct": 0
+    },
+    {
+      "lane": 12,
+      "shoppers": 105,
+      "avgWaitSec": 22,
+      "abandonPct": 0
+    }
+  ],
+  "notes": [
+    "The PDF only publishes six checkout lanes. Others are unavailable, not zero.",
+    "Fresco dwell is median time within 2 m among shelf-face stops. Category-table dwell is an average. Do not rank these together.",
+    "Salumi, Surgelati and Bar have only 1, 6 and 1 crossings respectively; not enough to lead a performance ranking.",
+    "Checkout waits consider queue visits lasting at least 10 seconds.",
+    "Department stopping uses category-presence episodes reaching the shelf face; crossings are zone entries. Stops divided by crossings is not its denominator."
+  ]
+}

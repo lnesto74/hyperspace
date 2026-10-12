@@ -836,7 +836,7 @@ export function createLayerEngine(api) {
     }
     const vs = sel.vertices;
     const width = getStrokeWidth ? getStrokeWidth() : 0.2;
-    addZoneStroke(gSel, T, vs, { closed: true, y: 0.28, width });
+    for (const poly of sel.polygons || [vs]) addZoneStroke(gSel, T, poly, { closed: true, y: 0.28, width });
     const vis = categoryVisual(sel.category);
     const shape = new T.Shape();
     shape.moveTo(vs[0][0], -vs[0][1]);
@@ -852,7 +852,7 @@ export function createLayerEngine(api) {
     fill.rotation.x = -Math.PI / 2;
     fill.position.y = 0.05;
     gSel.add(fill);
-    buildCategoryMarks(sel);
+    if (!params.businessMode) buildCategoryMarks(sel); else clearGroup(gCat);
   }
 
   function setDraft(verts, preview = null) {
@@ -1229,7 +1229,7 @@ export function createLayerEngine(api) {
     const field = getField();
     const i = k % field.NX, j = (k / field.NX) | 0;
     const p = gridToVenue(i + 0.5, j + 0.5);
-    return pointInPoly(p.x, p.z, selection.vertices) ? 1 : 0.22;
+    return (selection.polygons || [selection.vertices]).some(poly=>pointInPoly(p.x,p.z,poly)) ? 1 : 0.15;
   }
 
   function euroAt(k) {

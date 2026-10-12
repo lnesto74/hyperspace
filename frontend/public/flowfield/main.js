@@ -1,3 +1,8 @@
+import { analyseAreas, rankAreas } from './business-analysis.js?v=report-4';
+import { mountAnalysisWorkspace } from './workspace.js?v=lens-1';
+// Lens modes that draw the cyan movement streams (Pulse, Flow Explorer).
+const MOVE_MODES = new Set(['moved', 'flow']);
+const STREAM_MODES = new Set(['moved', 'flow', 'stopped', 'value']);
 import * as THREE from 'three';
 import { OrbitControls } from './vendor/OrbitControls.js';
 // Dynamic, cache-busted: the field module is edited alongside the extractor and
@@ -15,7 +20,10 @@ const {
 const { createLayerEngine, CATEGORY_HSL, pointInPoly, categoryVisual } = await import('./layers.js' + bust);
 const { initDrilldown } = await import('./drilldown.js' + bust);
 
+let businessCache = null;
+let analysisFrameListener = null;
 const params = {
+  businessMode: null,
   scalar: 'dwell',
   terrainHeight: 6.0,
   // Tuned as a density, not a count: the production field covers roughly three
@@ -26,7 +34,7 @@ const params = {
   timeScale: 12.0,   // time compression — real walking speed makes trails too short to read
   kappa: 2.8,        // how strongly a particle sticks to its current heading
   inertia: 0.82,     // heading smoothing
-  dwellDrag: true,   // slow particles down in high-dwell cells
+  dwellDrag: false,   // slow particles down in high-dwell cells
   showArrows: false,
   showTerrain: true,
   paused: false,
@@ -38,7 +46,7 @@ const params = {
   showCurtain: false,
   showScreenFov: false,
   showSpeakers: false,
-  showProfit: true,
+  showProfit: false,
   showMedia: false,
   showCategory: false,
   showTicker: false,
@@ -63,6 +71,9 @@ const SLICE_LABELS = {
   midday: 'Midday 11–15',
   afternoon: 'Afternoon 15–19',
   evening: 'Evening 19–22',
+  // Visitor Journey clock: the daily_kpi 2-hour slots and the 08–20 trading day.
+  trading: 'Trading day 08–20',
+  h08_10: '08–10', h10_12: '10–12', h12_14: '12–14', h14_16: '14–16', h16_18: '16–18', h18_20: '18–20',
   weekday: 'Weekday (Mon–Fri)',
   weekend: 'Weekend (Sat–Sun)',
 };
@@ -504,6 +515,7 @@ function rebuildTerrain() {
   const dwellMax = field.scalars.dwell.max || 1;
   const peakCut = params.showPeakGlow ? peakDwellCut(0.88) : Infinity;
   const col = new THREE.Color();
+  const business = params.businessMode ? getBusinessAreas() : null;
   for (let k = 0; k < vertCount; k++) {
     const sup = supportNorm(k);
     positions[k * 3 + 1] = params.showTerrain ? heightAtCell(k) : 0;
@@ -531,6 +543,24 @@ function rebuildTerrain() {
       r = r * (1 - w) + 1.00 * w;
       g = g * (1 - w) + (0.38 + 0.28 * t) * w;
       b = b * (1 - w) + 0.07 * w;
+    }
+    if (business) {
+      const mode = params.businessMode;
+      const mask = layersEngine ? layersEngine.selectionMask(k) : 1;
+      if (mode === 'flow') {
+        // Flow Explorer: the chosen layer colours the floor; height stays dwell.
+      } else if (mode === 'moved' || mode === 'value') {
+        const t = Math.min(1, supportNorm(k));
+        r = .014; g = .026 + t * .05; b = .043 + t * .07;
+        positions[k * 3 + 1] = 0;
+      } else if (mode === 'queues') {
+        r=.018; g=.029; b=.038; positions[k*3+1]=0;
+      } else if (mode === 'hot' || mode === 'stopped') {
+        r=.018; g=.03; b=.042; positions[k*3+1]=0;
+      } else if (mode === 'change' && params.scalar !== 'shift_day') {
+        r = .025; g = .04; b = .055;
+      }
+      r *= mask; g *= mask; b *= mask;
     }
     colors[k * 3] = r; colors[k * 3 + 1] = g; colors[k * 3 + 2] = b;
   }
@@ -1699,7 +1729,7 @@ function addPeekRing(k, color, scale) {
 
 function rebuildPeekMarks() {
   peekGroup.clear();
-  const on = params.scalar === 'outlier' || everydayId === 'hot';
+  const on = !params.businessMode && (params.scalar === 'outlier' || everydayId === 'hot');
   peekGroup.visible = on;
   if (!on) return;
   const { linger, pass } = peekCandidates();
@@ -1711,7 +1741,7 @@ function rebuildPeekMarks() {
 }
 
 function isHotView() {
-  return everydayId === 'hot' || params.scalar === 'outlier';
+  return !params.businessMode && (everydayId === 'hot' || params.scalar === 'outlier');
 }
 
 function isProductRoi(roi) {
@@ -1970,6 +2000,7 @@ function fmtEuro(n) {
 }
 
 function updateInspector() {
+  window.dispatchEvent(new Event("ff-analysis-update"));
   const el = document.getElementById('probes');
   const body = document.getElementById('probesBody') || el;
   if (!el || !layersEngine) return;
@@ -2316,6 +2347,17 @@ function flyOblique() {
       planCenter.z + VENUE_SPAN * 0.32,
     ),
   };
+}
+
+function flyBusinessOverview() {
+  camAnim = { t:0, fromPos:camera.position.clone(), fromTgt:controls.target.clone(),
+    toTgt:new THREE.Vector3(planCenter.x,0,planCenter.z),
+    toPos:new THREE.Vector3(planCenter.x+VENUE_SPAN*.08,VENUE_SPAN*.66,planCenter.z+VENUE_SPAN*.62) };
+}
+
+function flyReportPlan() {
+  const height=Math.max(VENUE_D,VENUE_W/Math.max(.1,camera.aspect))/(2*Math.tan(THREE.MathUtils.degToRad(camera.fov/2)))*1.08;
+  camAnim={t:0,fromPos:camera.position.clone(),fromTgt:controls.target.clone(),toTgt:new THREE.Vector3(planCenter.x,0,planCenter.z),toPos:new THREE.Vector3(planCenter.x,height,planCenter.z+.01)};
 }
 
 function flyToPoint(x, z, span = 18) {
@@ -2791,8 +2833,8 @@ async function applyViewPreset(id) {
     if (arrowGroup) arrowGroup.visible = params.showArrows;
     params.showPlan = true; syncCheck('showPlan', true);
     if (planGroup) planGroup.visible = true;
-    params.showFixtures = true; syncCheck('showFixtures', true);
-    if (obstacleGroup) obstacleGroup.visible = true;
+    params.showFixtures = false; syncCheck('showFixtures', false);
+    if (obstacleGroup) obstacleGroup.visible = false;
     params.showTerrain = preset.terrain !== false;
     syncCheck('showTerrain', params.showTerrain);
     params.showHeat = !!preset.heat;
@@ -2866,7 +2908,7 @@ const EXPLAIN = {
   'view-moved': {
     kicker: 'Ask',
     title: 'How the shop moved',
-    body: 'Each white line is someone walking through the shop — not a camera, not a name. Warm colour and hills = they stopped. Cool floor = they only walked through. Hover a white number on the left for what that figure is.',
+    body: 'Each white line samples the aggregated direction field — not a camera, not a name. Warm colour and hills = they stopped. Cool floor = they only walked through. Hover a white number on the left for what that figure is.',
   },
   'view-stopped': {
     kicker: 'Ask',
@@ -2885,7 +2927,7 @@ const EXPLAIN = {
   },
   'view-change': {
     kicker: 'Ask',
-    title: 'Did my change work?',
+    title: 'Changes',
     body: 'Two days, same store. Colour is traffic share, not euros. Pick the pair on the card. DEMO cannot prove a layout change — you need a LIVE pack with two dates.',
   },
   legend: {
@@ -2894,12 +2936,12 @@ const EXPLAIN = {
     body: 'Left of the bar is low for this metric, right is high. The label above the bar names the metric (dwell, outlier, share shift). It is not money unless Profit Radar says LIVE.',
   },
   'change-colour': {
-    kicker: 'Did my change work?',
+    kicker: 'Changes',
     title: 'Colour is share, not euros',
     body: 'Left colour = the earlier day had a larger share of traffic on this patch. Right colour = the later day did. Mix the two swatches if the default pair is too loud.',
   },
   'change-hills': {
-    kicker: 'Did my change work?',
+    kicker: 'Changes',
     title: 'Hills are linger',
     body: 'Height is people stopping, not how big the rewrite is. A tall hill with little colour change means they still linger — the traffic mix did not move.',
   },
@@ -3099,10 +3141,11 @@ function explainTarget(node) {
 }
 
 const EVERYDAY_VIEWS = [
+  {id:"value",label:"Value opportunities",scalar:"dwell",camera:"oblique"},
   {
     id: 'moved',
     label: 'How the shop moved',
-    tour: 'Each white line is someone walking through the shop \u2014 not a camera, not a name. Warm colour (and the hills) is where they stopped. Cool floor is where they only walked through. The menu on the left still works; this tour does not lock it.',
+    tour: 'Each white line samples the aggregated direction field \u2014 not a camera, not a name. Warm colour (and the hills) is where they stopped. Cool floor is where they only walked through. The menu on the left still works; this tour does not lock it.',
     slice: 'all',
     scalar: 'dwell',
     camera: 'oblique',
@@ -3139,7 +3182,7 @@ const EVERYDAY_VIEWS = [
   },
   {
     id: 'change',
-    label: 'Did my change work?',
+    label: 'Changes',
     tour: 'Pick two days on the card. Mix the two colours if the default pair is too loud. Hills are linger.',
     slice: 'all',
     scalar: 'shift_day',
@@ -3164,7 +3207,7 @@ function shiftStory() {
   const date = field.meta?.local_date || fieldApi.date || 'selected day';
   if (compareError) {
     return {
-      kicker: 'Did my change work?',
+      kicker: 'Changes',
       title: fieldApi.compare ? `${fieldApi.compare} vs ${date}` : 'Need two days',
       lo: fieldApi.compare || 'Earlier',
       hi: date,
@@ -3175,7 +3218,7 @@ function shiftStory() {
   }
   if (params.scalar === 'shift_day' && fieldApi.compare && liveCompareOk() && field.scalars?.shift_day) {
     return {
-      kicker: 'Did my change work?',
+      kicker: 'Changes',
       title: `${fieldApi.compare} vs ${date}`,
       lo: fieldApi.compare,
       hi: date,
@@ -3349,17 +3392,18 @@ function stopTour() {
 
 async function applyEverydayView(id) {
   const view = EVERYDAY_VIEWS.find((v) => v.id === id);
-  if (!view) return;
+  if (!view || applyingEveryday || sliceSwitching) return;
   applyingEveryday = true;
+  document.querySelectorAll('button.everyday').forEach(b=>{b.disabled=true;});
   try {
     stopStoryForPreset();
-    storyClearZone();
+    const selection=layersEngine?.getSelection();
+    const queueSelection=selection && (selection.businessKind==='queue' || /Checkout|Cassa/i.test(selection.name || ''));
+    if(selection && ((view.id==='queues' && !queueSelection) || (view.id!=='queues' && view.id!=='change' && queueSelection))) storyClearZone();
 
-    let scalar = view.scalar;
-    if (!view.needCompare && fieldApi.compare) {
-      fieldApi.compare = '';
-      if (field.scalars?.shift_day) delete field.scalars.shift_day;
-    }
+    params.businessMode = view.id;
+    let scalar = 'dwell';
+
     if (view.needCompare) {
       const live = await ensureLivePack();
       if (live) {
@@ -3367,37 +3411,39 @@ async function applyEverydayView(id) {
           const d = suggestCompareDate();
           if (d) fieldApi.compare = d;
         }
-        scalar = fieldApi.compare ? 'shift_day' : 'shift_me';
+        scalar = fieldApi.compare ? 'shift_day' : 'dwell';
       } else {
         dropFakeCompare();
         compareError = 'Need a LIVE pack with two dates. DEMO is the same snapshot twice.';
-        scalar = 'shift_me';
+        scalar = 'dwell';
       }
     }
 
-    if (view.slice) await switchSlice(view.slice);
+    // A question changes the measurement, never the selected time window.
 
     const flowOn = true;
     const flow = document.getElementById('showFlow');
     if (flow) flow.checked = flowOn;
     if (lineMesh) lineMesh.visible = flowOn;
-    params.dwellDrag = true; syncCheck('dwellDrag', true);
+    params.dwellDrag = false; syncCheck('dwellDrag', false);
     params.showArrows = false; syncCheck('showArrows', false);
     if (arrowGroup) arrowGroup.visible = false;
     params.showPlan = true; syncCheck('showPlan', true);
     if (planGroup) planGroup.visible = true;
-    params.showFixtures = true; syncCheck('showFixtures', true);
-    if (obstacleGroup) obstacleGroup.visible = true;
+    params.planOpacity = view.id === 'moved' ? .30 : .40;
+    buildFloorplan();
+    params.showFixtures = false; syncCheck('showFixtures', false);
+    if (obstacleGroup) obstacleGroup.visible = false;
     params.showTerrain = true; syncCheck('showTerrain', true);
     params.showHeat = false; syncCheck('showHeat', false);
-    params.terrainHeight = view.terrainHeight != null ? view.terrainHeight : 6;
+    params.terrainHeight = 0;
     const th = document.getElementById('terrainHeight');
     const thv = document.getElementById('terrainHeightVal');
     if (th) th.value = String(params.terrainHeight);
     if (thv) thv.textContent = params.terrainHeight.toFixed(1) + ' m';
-    applyReadingChecks({ isoline: !!view.isoline, peakGlow: !!view.peakGlow });
+    applyReadingChecks({ isoline: false, peakGlow: false });
     applyInsightChecks({
-      screen: false, speakers: false, profit: view.id !== 'change', media: false, category: false,
+      screen: false, speakers: false, profit: false, media: false, category: false,
     });
     if (view.needCompare && scalar === 'shift_day' && fieldApi.compare) {
       setLoader(true, `Comparing ${fieldApi.compare} \u2192 ${fieldApi.date}\u2026`);
@@ -3407,16 +3453,25 @@ async function applyEverydayView(id) {
     } finally {
       if (view.needCompare) setLoader(false);
     }
-    setParticleCount(view.id === 'change' ? 900 : 1600);
-    if (lineMesh) lineMesh.visible = true;
+    setParticleCount(view.id === 'moved' ? 2600 : 900);
+    if (lineMesh) {
+      lineMesh.visible = ['moved','stopped','value'].includes(view.id);
+      lineMesh.material.opacity = view.id === 'moved' ? 0.95 : 0.16;
+    }
+    syncCheck('showFlow', ['moved','stopped','value'].includes(view.id));
+    params.timeScale = view.id === 'moved' ? 7 : 3;
+    const rate = document.getElementById('timeScale'); if (rate) rate.value = String(params.timeScale);
+    document.documentElement.dataset.businessView = view.id;
+    updateLegend();
     hideProductGallery();
     refreshTicker();
     refreshWhyChip();
 
-    if (view.camera === 'checkout') flyToCheckout();
-    else if (view.camera === 'wind') flyWind();
-    else if (view.camera === 'home') flyHome();
-    else flyOblique();
+    // A selected investigation stays in place; the checkout overview frames the tills.
+    if (!layersEngine?.getSelection() && view.id === 'queues') {
+      const qs=getBusinessAreas().areas.filter(a=>a.kind==='queue');
+      if(qs.length) flyToPoint(qs.reduce((t,a)=>t+a.x,0)/qs.length,qs.reduce((t,a)=>t+a.z,0)/qs.length,42);
+    } else if (!layersEngine?.getSelection()) flyReportPlan();
 
     const sel = document.getElementById('viewPreset');
     if (sel) sel.value = '';
@@ -3427,7 +3482,7 @@ async function applyEverydayView(id) {
         : `${view.label}. Guided view stays Custom \u2014 mix the left rail whenever you want.`;
     }
     everydayId = view.id;
-    if (!isHotView()) clearPin();
+
     paintEverydayChips();
     rebuildPeekMarks();
     paintGlance();
@@ -3444,6 +3499,8 @@ async function applyEverydayView(id) {
     }
   } finally {
     applyingEveryday = false;
+    updateMeta();
+    updateInspector();
   }
 }
 
@@ -3760,6 +3817,15 @@ let roseBuf = new Float32Array(field.B);
 
 let particles = [];
 let lineGeom, lineMesh, linePos, lineCol;
+let flowHeads = null, flowHeadPositions = null, flowHeadColours = null;
+let flowRibbon=null,ribbonPositions=null,ribbonColours=null;
+const ribbonEnds=[0,0,1,1,0,1],ribbonSides=[1,-1,1,1,-1,-1];
+const headCanvas=document.createElement('canvas');headCanvas.width=headCanvas.height=32;
+const headContext=headCanvas.getContext('2d');
+const headGradient=headContext.createRadialGradient(16,16,0,16,16,16);
+headGradient.addColorStop(0,'rgba(255,255,255,1)');headGradient.addColorStop(.2,'rgba(255,255,255,.7)');headGradient.addColorStop(1,'rgba(255,255,255,0)');
+headContext.fillStyle=headGradient;headContext.fillRect(0,0,32,32);
+const flowHeadTexture=new THREE.CanvasTexture(headCanvas);
 
 function buildParticles() {
   particles = new Array(params.particles);
@@ -3778,7 +3844,17 @@ function buildParticles() {
       }
     }
   }
-  if (lineMesh) { scene.remove(lineMesh); lineGeom.dispose(); }
+  if (lineMesh) { scene.remove(lineMesh); lineGeom.dispose(); lineMesh.material.dispose(); }
+  if (flowHeads) { scene.remove(flowHeads);flowHeads.geometry.dispose();flowHeads.material.dispose(); }
+  if(flowRibbon) { scene.remove(flowRibbon);flowRibbon.geometry.dispose();flowRibbon.material.dispose(); }
+  ribbonPositions=new Float32Array(params.particles*segs*18);ribbonColours=new Float32Array(ribbonPositions.length);
+  const ribbons=new THREE.BufferGeometry();ribbons.setAttribute('position',new THREE.BufferAttribute(ribbonPositions,3));ribbons.setAttribute('color',new THREE.BufferAttribute(ribbonColours,3));
+  flowRibbon=new THREE.Mesh(ribbons,new THREE.MeshBasicMaterial({vertexColors:true,transparent:true,opacity:.8,blending:THREE.AdditiveBlending,side:THREE.DoubleSide,depthWrite:false}));
+  flowRibbon.frustumCulled=false;flowRibbon.renderOrder=6;flowRibbon.visible=false;scene.add(flowRibbon);
+  flowHeadPositions=new Float32Array(params.particles*3);flowHeadColours=new Float32Array(params.particles*3);
+  const headsGeometry=new THREE.BufferGeometry();headsGeometry.setAttribute('position',new THREE.BufferAttribute(flowHeadPositions,3));headsGeometry.setAttribute('color',new THREE.BufferAttribute(flowHeadColours,3));
+  flowHeads=new THREE.Points(headsGeometry,new THREE.PointsMaterial({size:.42,map:flowHeadTexture,vertexColors:true,transparent:true,opacity:.7,blending:THREE.AdditiveBlending,depthWrite:false}));
+  flowHeads.frustumCulled=false;flowHeads.renderOrder=7;flowHeads.visible=false;scene.add(flowHeads);
   lineGeom = new THREE.BufferGeometry();
   lineGeom.setAttribute('position', new THREE.BufferAttribute(linePos, 3));
   lineGeom.setAttribute('color', new THREE.BufferAttribute(lineCol, 3));
@@ -3789,12 +3865,17 @@ function buildParticles() {
   // be a zero-radius sphere at the origin and cull every trail once the camera
   // looks at the venue instead of the origin.
   lineMesh.frustumCulled = false;
+  lineMesh.renderOrder=6;
+  if(params.businessMode) {
+    lineMesh.visible=STREAM_MODES.has(params.businessMode);
+    lineMesh.material.opacity=MOVE_MODES.has(params.businessMode)?.9:.16;
+  }
   scene.add(lineMesh);
 }
 
 function spawn(p) {
   let s = field.randomSpawn();
-  if (params.showHeat) {
+  {
     for (let tries = 0; tries < 12; tries++) {
       const ii = Math.floor(s.x), jj = Math.floor(s.y);
       if (ii < 0 || jj < 0 || ii >= field.NX || jj >= field.NY) break;
@@ -3871,7 +3952,7 @@ function stepParticles(dt) {
     p.y += Math.sin(p.heading) * adv;
     p.age += dt * 60;
     const ii = Math.floor(p.x), jj = Math.floor(p.y);
-    if (params.showHeat && ii >= 0 && jj >= 0 && ii < field.NX && jj < field.NY && blocked[field.idx(ii, jj)]) {
+    if (cellBlocked(p.x, p.y)) {
       spawn(p);
       continue;
     }
@@ -3892,6 +3973,11 @@ function stepParticles(dt) {
     const h = particles[i].hist;
     const p = particles[i];
     let cr = 0.88, cg = 0.94, cb = 1;
+    if (MOVE_MODES.has(params.businessMode)) { cr = .09; cg = .36; cb = .46; }
+    if (params.businessMode === 'stopped') { cr = 1; cg = .71; cb = .35; }
+    const selectedBrightness = layersEngine && params.businessMode
+      ? layersEngine.selectionMask(Math.max(0,Math.min(field.NX*field.NY-1,field.idx(Math.floor(p.x),Math.floor(p.y))))) : 1;
+    cr *= selectedBrightness; cg *= selectedBrightness; cb *= selectedBrightness;
     if (bay) {
       const vx = h[0], vz = h[2];
       const inCone = layersEngine.inScreenCone?.(vx, vz);
@@ -3905,12 +3991,28 @@ function stepParticles(dt) {
         else { cr = 0.32; cg = 0.36; cb = 0.46; }
       }
     }
+    if(flowHeadPositions) {
+      flowHeadPositions[i*3]=h[0];flowHeadPositions[i*3+1]=h[1]+.02;flowHeadPositions[i*3+2]=h[2];
+      flowHeadColours[i*3]=cr;flowHeadColours[i*3+1]=cg;flowHeadColours[i*3+2]=cb;
+    }
     for (let s = 0; s < segs; s++) {
       const o = ((i * segs + s) * 2) * 3;
       linePos[o] = h[s * 3]; linePos[o + 1] = h[s * 3 + 1]; linePos[o + 2] = h[s * 3 + 2];
       linePos[o + 3] = h[(s + 1) * 3]; linePos[o + 4] = h[(s + 1) * 3 + 1]; linePos[o + 5] = h[(s + 1) * 3 + 2];
       const head = 1 - s / segs;
       const a = Math.pow(head, 1.6);
+      if(MOVE_MODES.has(params.businessMode)) {
+        const dx=linePos[o+3]-linePos[o],dz=linePos[o+5]-linePos[o+2];
+        const len=Math.hypot(dx,dz),width=.075*head;
+        const nx=len>1e-5 ? -dz/len*width : 0,nz=len>1e-5 ? dx/len*width : 0;
+        const start=(i*segs+s)*18;
+        // Two tapered triangles along the same sampled stream segment.
+        for(let v=0;v<6;v++) {
+          const base=o+ribbonEnds[v]*3,at=start+v*3;
+          ribbonPositions[at]=linePos[base]+nx*ribbonSides[v];ribbonPositions[at+1]=linePos[base+1]+.02;ribbonPositions[at+2]=linePos[base+2]+nz*ribbonSides[v];
+          ribbonColours[at]=a*cr;ribbonColours[at+1]=a*cg;ribbonColours[at+2]=a*cb;
+        }
+      }
       for (let e = 0; e < 2; e++) {
         const co = o + e * 3;
         lineCol[co] = a * cr; lineCol[co + 1] = a * cg; lineCol[co + 2] = a * cb;
@@ -3919,6 +4021,8 @@ function stepParticles(dt) {
   }
   lineGeom.attributes.position.needsUpdate = true;
   lineGeom.attributes.color.needsUpdate = true;
+  if(flowHeads) { flowHeads.geometry.attributes.position.needsUpdate=true;flowHeads.geometry.attributes.color.needsUpdate=true; }
+  if(flowRibbon) { flowRibbon.geometry.attributes.position.needsUpdate=true;flowRibbon.geometry.attributes.color.needsUpdate=true; }
 }
 
 // ------------------------------------------------------------------ hover HUD
@@ -4134,6 +4238,13 @@ renderer.domElement.addEventListener('pointerup', (e) => {
     return;
   }
   const roi = layersEngine.pickRoi(x, z);
+  if (document.documentElement.classList.contains('analysis-workspace')) {
+    const half = CELL;
+    commitSelection(roi || { name: 'Selected patch', vertices: [
+      [x-half,z-half], [x+half,z-half], [x+half,z+half], [x-half,z+half],
+    ] }, { fly: false });
+    return;
+  }
   const k0 = cellAtVenue(x, z);
   if (k0 == null || field.support[k0] <= 0) {
     if (isCheckoutRoi(roi) || everydayId === 'queues') {
@@ -4525,6 +4636,28 @@ function updateHud() {
 }
 
 function updateLegend() {
+  if (params.businessMode) {
+    const legends = {
+      value: ['Value review · numbered gold markers', 'Flow = movement context', 'No money heatmap', 'linear-gradient(90deg,#263138,#edc979)'],
+      moved: ['Observed movement', 'Less concentrated', 'More concentrated', 'linear-gradient(90deg,#122935,#66dcef)'],
+      stopped: ['Accumulated slow presence · relief', 'Lower', 'Higher', 'linear-gradient(90deg,#291b14,#b8662f,#ffe0a5)'],
+      queues: ['Lane outlines · accumulated slow time', 'Lower burden', 'Higher burden', 'linear-gradient(90deg,#381d20,#e77864,#ffc5a0)'],
+      hot: ['Slow-time share vs department median', 'Less time slow', 'More time slow', 'linear-gradient(90deg,#61c6e9,#273346,#eeb471)'],
+      change: params.scalar === 'shift_day'
+        ? ['Traffic-share change', fieldApi.compare || 'Earlier', fieldApi.date || 'Later','linear-gradient(90deg,#1d9a8a,#17242c,#e0b15a)']
+        : ['Choose two dates to compare', 'No comparison loaded', '', 'linear-gradient(90deg,#1b2a36,#1b2a36)'],
+    };
+    const l = legends[params.businessMode];
+    if (l) {
+      document.getElementById('legend-label').textContent=l[0];
+      document.getElementById('legend-lo').textContent=l[1];
+      document.getElementById('legend-hi').textContent=l[2];
+      const bar=document.getElementById('legend-bar'); bar.style.display='block'; bar.style.background=l[3];
+      document.getElementById('legend-cats').style.display='none';
+      document.querySelector('.legend-ends').style.display='flex';
+      return;
+    }
+  }
   const sc = field.scalars[params.scalar];
   if (!sc) return;
   const bar = document.getElementById('legend-bar');
@@ -4658,6 +4791,7 @@ function fmtDay(ts) {
 }
 
 function updateMeta() {
+  window.dispatchEvent(new Event('ff-analysis-update'));
   const live = useLivePack && field.meta.pack === 'live';
   const date = field.meta.local_date || fieldApi.date || 'snapshot';
   document.getElementById('meta').innerHTML =
@@ -4668,7 +4802,7 @@ function updateMeta() {
   const asOf = document.getElementById('asOf');
   if (asOf) {
     asOf.textContent = live
-      ? `${date} \u00b7 ${fmtDay(field.meta.first_ts)} \u2192 ${fmtDay(field.meta.last_ts)}`
+      ? `${date} · ${fmtDay(field.meta.first_ts)} → ${fmtDay(field.meta.last_ts)} · Built ${field.meta.built_at ? new Date(field.meta.built_at).toLocaleString('en-GB', {timeZone:'Europe/Rome'}) : 'unknown'} (Rome)`
       : 'Static demo snapshot (live pack unavailable)';
   }
   const cmpNote = document.getElementById('compareNote');
@@ -4676,13 +4810,13 @@ function updateMeta() {
     if (everydayId === 'change' || params.scalar?.startsWith('shift_')) {
       cmpNote.textContent = shiftStory().note;
     } else if (fieldApi.compare) {
-      cmpNote.textContent = `Compare ${fieldApi.compare} is only used on “Did my change work?”. This floor is one day (${date}) — dwell colour, like the landing snapshot. Set Compare to None or open that chip for cyan/red.`;
+      cmpNote.textContent = `Compare ${fieldApi.compare} is only used on “Changes”. This floor is one day (${date}) — dwell colour, like the landing snapshot. Set Compare to None or open that chip for cyan/red.`;
     } else {
       cmpNote.textContent = 'Leave Compare on None for a single-day snapshot (landing page). Pick a second day only when you want cyan/red share Δ.';
     }
   }
   const badge = document.getElementById('packBadge');
-  if (badge) badge.textContent = live ? 'LIVE' : 'DEMO';
+  if (badge) badge.textContent = live ? 'AGGREGATED' : 'DEMO';
   const shiftBtn = document.getElementById('shiftDayBtn');
   if (shiftBtn) shiftBtn.hidden = !fieldApi.compare;
   paintReadKey();
@@ -4727,7 +4861,9 @@ function writeUrlState() {
   else u.searchParams.delete('date');
   if (fieldApi.compare) u.searchParams.set('compare', fieldApi.compare);
   else u.searchParams.delete('compare');
+  if (everydayId) u.searchParams.set('question', everydayId);
   history.replaceState(null, '', u.toString());
+  window.dispatchEvent(new Event('ff-analysis-update'));
 }
 
 let sliceSwitching = false;
@@ -5525,12 +5661,14 @@ window.flowProto = {
 };
 
 let last = performance.now();
+let renderSuspended = false;
 renderer.setAnimationLoop(() => {
+  if (renderSuspended || document.hidden) { last = performance.now(); analysisFrameListener?.(); return; }
   const now = performance.now();
   const dt = Math.min(0.05, (now - last) / 1000);
   last = now;
   if (!params.paused) {
-    stepParticles(dt);
+    if(!params.businessMode || STREAM_MODES.has(params.businessMode)) stepParticles(dt);
     stepHeatPlumes(dt);
     layersEngine?.step(dt);
   }
@@ -5542,5 +5680,107 @@ renderer.setAnimationLoop(() => {
     if (camAnim.t >= 1) camAnim = null;
   }
   controls.update();
+  if(flowHeads) flowHeads.visible=!!lineMesh?.visible && MOVE_MODES.has(params.businessMode);
+  if(flowRibbon) flowRibbon.visible=!!lineMesh?.visible && MOVE_MODES.has(params.businessMode);
   renderer.render(scene, camera);
+  analysisFrameListener?.();
 });
+
+
+function getBusinessAreas() {
+  const pose = [params.planMirror,params.planDx,params.planDz,params.planRotDeg].join(':');
+  if (businessCache?.field === field && businessCache.pose === pose) return businessCache;
+  const areas = analyseAreas(field, layersEngine?.pack?.rois || [], gridToVenue, pointInPoly);
+  const { baseline } = rankAreas(areas,'hot');
+  const queueCells = [], departmentCells = [];
+  for (let k=0;k<field.NX*field.NY;k++) {
+    const p=gridToVenue(k%field.NX+.5,Math.floor(k/field.NX)+.5);
+    for (const area of areas) {
+      if (!area.polygons.some(poly=>pointInPoly(p.x,p.z,poly))) continue;
+      if (area.kind === 'queue') queueCells[k]=area;
+      else if (!departmentCells[k]) departmentCells[k]=area;
+    }
+  }
+  businessCache={field,pose,areas,baseline:baseline || 0,queueCells,departmentCells};
+  return businessCache;
+}
+
+// The workspace owns navigation and evidence; the existing renderer owns geometry.
+mountAnalysisWorkspace({
+  snapshot: () => ({ field, rois:layersEngine?.pack?.rois || [], areas:getBusinessAreas().areas, selection: layersEngine?.getSelection(), question: everydayId || 'moved',
+    date: fieldApi.date, compare: fieldApi.compare, slice: sliceId, venue: fieldApi.venue,
+    camera: camera.position.toArray(), target: controls.target.toArray(),
+    paused: params.paused, plan: params.showPlan, relief:params.terrainHeight, scalar: params.scalar, busy: applyingEveryday || sliceSwitching,
+    shift: everydayId === 'change' ? shiftStory() : null,
+  }),
+  legacy: (roi) => layersEngine?.roiStatFor(roi),
+  contains: (x, z, vertices) => pointInPoly(x, z, vertices),
+  toVenue: gridToVenue,
+  inspect: (area) => { commitSelection(area.selection,{fly:false}); },
+  project: (area) => projectFloor(area.x,area.z),
+  onFrame: (callback) => { analysisFrameListener=callback; },
+  display: (setting,value) => {
+    if (setting === 'motion') { params.paused=!value; document.getElementById('pause').textContent=value?'Pause':'Resume'; }
+    if (setting === 'plan') { params.showPlan=value; syncCheck('showPlan',value); if(planGroup) planGroup.visible=value; }
+    if (setting === 'relief') { params.terrainHeight=value?4:0; rebuildTerrain(); buildParticles(); }
+    window.dispatchEvent(new Event('ff-analysis-update'));
+  },
+  question: async (id) => { if (!applyingEveryday && !sliceSwitching) await applyEverydayView(id); },
+  clear: () => { storyClearZone(); updateInspector(); },
+  view: (kind) => {
+    camAnim = null;
+    if (kind === 'top') {
+      camera.position.set(controls.target.x, VENUE_SPAN * 1.15, controls.target.z + 0.01);
+      controls.update();
+    } else flyBusinessOverview();
+  },
+  restore: async (saved) => {
+    if (saved.venue !== fieldApi.venue) throw new Error('This view belongs to another venue.');
+    if (saved.date) await switchDate(saved.date);
+    await switchSlice(saved.slice);
+    await onCompareChange(saved.compare || '');
+    await applyEverydayView(saved.question);
+    if (saved.date && fieldApi.date !== saved.date || sliceId !== saved.slice) throw new Error('Saved period could not be loaded.');
+    if (saved.selection) commitSelection(saved.selection, { fly: false });
+    else storyClearZone();
+    camAnim = null;
+    camera.position.fromArray(saved.camera); controls.target.fromArray(saved.target); controls.update();
+  },
+  compareField: async () => liveCompareOk() && fieldApi.compare ? fetchFieldJson(sliceId, fieldApi.compare) : null,
+  sliceField: async (slice) => fetchFieldJson(slice, fieldApi.date),
+  slice: async (slice) => switchSlice(slice),
+  // ---- lens API (workspace.js). The renderer keeps every algorithm; the lens only picks
+  // mode, layer and camera.
+  lens: async ({ base = 'moved', mode = null, scalar = null, particles = null } = {}) => {
+    if (everydayId !== base || params.businessMode !== (mode || base)) {
+      if (everydayId !== base) await applyEverydayView(base);
+    }
+    params.businessMode = mode || base;
+    if (scalar && params.scalar !== scalar && (field.scalars[scalar] || scalar === 'shift_me')) await setScalar(scalar);
+    if (particles) setParticleCount(particles);
+    if (lineMesh) { lineMesh.visible = STREAM_MODES.has(params.businessMode); lineMesh.material.opacity = MOVE_MODES.has(params.businessMode) ? .75 : .16; }
+    document.documentElement.dataset.businessView = params.businessMode;
+    rebuildTerrain();
+    window.dispatchEvent(new Event('ff-analysis-update'));
+  },
+  relief: (on) => { params.terrainHeight = on ? 5 : 0; rebuildTerrain(); buildParticles(); },
+  scalarInfo: () => { const sc = field.scalars[params.scalar]; return sc ? { id: params.scalar, label: sc.label, unit: sc.unit, max: sc.max, min: sc.min, signed: !!sc.signed, categorical: !!sc.categorical, categories: sc.categories || null } : null; },
+  select: (sel, opts = {}) => { if (sel) commitSelection(sel, { fly: false }); else { storyClearZone(); updateInspector(); } if (opts.fly && sel) flyToPoint(sel.cx, sel.cz, opts.span || 22); },
+  flyTo: (x, z, span = 22) => flyToPoint(x, z, span),
+  overview: () => flyBusinessOverview(),
+  top: () => flyReportPlan(),
+  packInfo: () => ({ live: field?.meta?.pack === 'live', date: fieldApi.date || null, latest: dateCatalog?.latest || null,
+    days: (dateCatalog?.days || dateCatalog?.dates || []).map((d) => (typeof d === 'string' ? d : d.date)).filter(Boolean),
+    slice: sliceId, sliceLabel: SLICE_LABELS[sliceId], hours: field?.meta?.slice_hours || field?.meta?.window_local_hours || null,
+    cell: field?.meta?.cell_m, venue: fieldApi.venue || field?.meta?.venue_id || null, source: field?.meta?.source || null }),
+  setDate: async (d) => { if (d && d !== fieldApi.date) await switchDate(d); },
+  hasSlice: (id) => !!SLICE_LABELS[id],
+  pause: (on) => { params.paused = !!on; },
+  ensureLive: async () => ensureLivePack(),
+  // Compare draws its own matched 2D maps; the 3D twin stops drawing meanwhile (no reload).
+  suspend: (on) => { renderSuspended = !!on; },
+});
+if (!document.documentElement.classList.contains('export')) {
+  await applyEverydayView(new URL(location.href).searchParams.get('question') || 'moved');
+  if (matchMedia('(prefers-reduced-motion: reduce)').matches) document.getElementById('pause')?.click();
+}

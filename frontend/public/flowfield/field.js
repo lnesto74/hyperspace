@@ -171,7 +171,7 @@ export async function loadField(urlOrPayload) {
 
   const scalars = {
     dwell: { data: dwell, max: maxOf(dwell), label: 'Dwell', unit: 's', signed: false },
-    footfall: { data: traffic, max: maxOf(traffic), label: 'Footfall', unit: 'distinct tracks', signed: false },
+    footfall: { data: traffic, max: maxOf(traffic), label: 'Track activity', unit: 'smoothed keys / cell', signed: false },
     speed: { data: speed, max: maxOf(speed), label: 'Walking speed', unit: 'm/s', signed: false },
     purity: { data: purity, max: 1, label: 'Directional purity', unit: '0\u20131', signed: false },
     convergence: { data: divergence, max: 0, label: 'Convergence', unit: 'divergence', signed: true },
@@ -238,7 +238,7 @@ export async function loadField(urlOrPayload) {
   };
 
   return {
-    meta, B, NX, NY, idx, i0, j0,
+    meta, cells, B, NX, NY, idx, i0, j0,
     traffic, dwell, steps, speed, rose, support, maxSupport, supportRef,
     meanX, meanY, purity, divergence, regime, outlier, scalars,
     spawnCdf, spawnTotal,

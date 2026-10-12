@@ -1527,6 +1527,8 @@
 <script type="importmap">
 { "imports": { "three": "./vendor/three.module.js" } }
 </script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="./workspace.css?v=lens-1" />
 </head>
 <body>
   <div id="view"></div>
@@ -1545,6 +1547,7 @@
     <button type="button" class="everyday" data-everyday="stopped" data-explain="view-stopped">Where they stopped</button>
     <button type="button" class="everyday" data-everyday="queues" data-explain="view-queues">Queues &amp; checkout</button>
     <button type="button" class="everyday" data-everyday="hot" data-explain="view-hot">Hot / cold bays</button>
+    <button type="button" class="everyday" data-everyday="value">Value opportunities</button>
     <button type="button" class="everyday" data-everyday="change" data-explain="view-change">Did my change work?</button>
     <button type="button" id="tourToggle" title="Walk the five questions. Not Guided view, not Story Mode." aria-pressed="false">Tour</button>
     <button type="button" id="explainToggle" title="Hover a number or chip — a side panel explains it. Off by default." aria-pressed="false">Explain</button>
@@ -1900,7 +1903,7 @@
       <label for="scalar">Surface colour</label>
       <select id="scalar">
         <option value="dwell" selected>Dwell</option>
-        <option value="footfall">Footfall</option>
+        <option value="footfall">Track activity (not shoppers)</option>
         <option value="speed">Walking speed</option>
         <option value="purity">Directional purity</option>
         <option value="convergence">Convergence</option>
@@ -2179,6 +2182,6 @@
     </div>
   </div>
 
-  <script type="module" src="./main.js?v=holistic-67"></script>
+  <script type="module" src="./main.js?v=lens-1"></script>
 </body>
 </html>
