@@ -86,7 +86,7 @@ export function mountAnalysisWorkspace(api) {
     flowCell: null, // Flow Explorer · Direction: inspected cell "i,j"
     flowSpot: null, // Flow Explorer · Convergence: highlighted meeting / splitting place
     regFocus: null, // Flow Explorer · Path types: isolate one path type (regime id)
-    replay: { day: null, key: '', data: null, status: 'idle', k: null, playing: false, timer: 0 }, // Service · minute by minute
+    replay: { day: null, key: '', data: null, status: 'idle', k: null, playing: false, timer: 0, pay: null }, // Service · minute by minute
     wf: { days: [], st: {}, ok: null, timer: 0, applied: '' }, // server day packs (movement, behaviour, checkouts)
     inspCollapsed: false,
     contours: false, // Astra: 3D scalar isolines on the twin floor (off by default; the v3 contours are drawn by twin-graphics)
@@ -520,7 +520,8 @@ export function mountAnalysisWorkspace(api) {
     const lanes = keys.map((k) => { const ss = sessions.filter((x) => x[0] === k); const ref = list.flatMap((D) => D.lanes).find((l) => l.key === k);
       return { ...ref, sessions: ss.length, median_s: med(ss.map((x) => x[2])) }; });
     const counts = D0.hist.counts.map((_, i) => list.reduce((s, D) => s + (D.hist.counts[i] || 0), 0));
-    return { ...D0, day, days: list.map((D) => D.day), n_days: n, lanes, q, s: sv, series15, sessions,
+    const payments = list.flatMap((D) => (D.payments || []).map((P) => { const c = P.slice(); c[10] = D.day; return c; })).sort((a, b) => a[1] - b[1]);
+    return { ...D0, day, days: list.map((D) => D.day), n_days: n, lanes, q, s: sv, series15, sessions, payments,
       peak: { from_s: series15[pk][0], to_s: series15[pk][0] + 3600, mean_people: Math.round(best / 4 * 100) / 100 },
       hist: { ...D0.hist, counts }, n_sessions: sessions.length, median_s: med(sessions.map((x) => x[2])) };
   }
@@ -547,11 +548,13 @@ export function mountAnalysisWorkspace(api) {
       }, RP_TICK_MS);
     }
     rpTick();
+    if (!on) renderInspector(); // paused: the receipt list catches up with the playhead
   }
   function rpSeek(k) { state.replay.k = Math.max(0, Math.min(rpN() - 1, Math.round(k))); rpTick(); }
   let rpHour = -1;
   function rpTick() {
     paintKey = '';
+    renderReceiptCards();
     drawReplayStrip(); updateReplayClock();
     // The panel's lane rows follow the playhead in one-hour windows; rebuild only when the window moves.
     const hr = Math.floor(rpSec() / 1800);
@@ -560,6 +563,7 @@ export function mountAnalysisWorkspace(api) {
   function updateReplayClock() {
     const on = rpOn() && state.replay.status === 'ready';
     replayClock.hidden = !on; replayStrip.hidden = !on; root.classList.toggle('hx-rp-on', on);
+    renderReceiptCards();
     replayPlay.innerHTML = state.replay.playing ? ICONS.pause : ICONS.play;
     replayPlay.setAttribute('aria-label', state.replay.playing ? 'Pause' : 'Play the day');
     if (!on) return;
@@ -592,6 +596,73 @@ export function mountAnalysisWorkspace(api) {
     c.strokeStyle = '#fff'; c.lineWidth = 2; c.beginPath(); c.moveTo(px, top - 4); c.lineTo(px, bot); c.stroke();
     c.fillStyle = '#fff'; c.beginPath(); c.arc(px, top - 2, 4, 0, Math.PI * 2); c.fill();
   }
+  // ---- Receipts at the till (DEMO): one card per payment, matched to the LiDAR id at the simulated Fidaty instant.
+  const MATCH = [
+    { k: 'certain', label: 'Matched', note: 'Alone at the till, or clearly nearest the terminal', color: '#7CCBA7', dot: '●' },
+    { k: 'uncertain', label: 'Not sure who paid', note: 'Two or more people at the till; nobody clearly nearer', color: '#F3C778', dot: '◐' },
+    { k: 'risky', label: 'Not linked', note: 'Someone else was nearer the terminal at that moment', color: '#93AEBF', dot: '○' },
+  ];
+  const RP_CARD_S = 45; // a receipt stays on the floor 45 s of store time after the payment ends
+  function hash32(str) { let h = 2166136261; for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 16777619); } return h >>> 0; }
+  const fidatyOf = (id) => `•••• ${String(hash32(String(id)) % 10000).padStart(4, '0')}`;
+  function receiptNo(D, i) { const P = D.payments[i]; const day = P[10] || D.day || ''; const md = typeof day === 'string' ? day.slice(5).replace('-', '') : '';
+    let n = 0; for (let j = 0; j <= i; j++) if ((D.payments[j][10] || D.day) === (P[10] || D.day)) n++; return `TRV-${md}-${String(n).padStart(4, '0')}`; }
+  const payClock = (D, sec) => new Date(D.t0 + sec * 1000).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit', timeZone: D.tz || 'Europe/Rome' });
+  function rpReceipts() {
+    const D = state.replay.data, out = [];
+    if (!D?.payments || !rpOn()) return out;
+    const sec = rpSec();
+    D.payments.forEach((P, i) => { const end = P[1] + P[2]; if (end <= sec && sec - end < RP_CARD_S) out.push(i); });
+    return out.slice(-10);
+  }
+  let rpCardKey = '';
+  function renderReceiptCards() {
+    const D = state.replay.data;
+    const list = rpOn() && state.replay.status === 'ready' ? rpReceipts() : [];
+    const sel = state.replay.pay;
+    const key = list.join(',') + '|' + sel;
+    if (key === rpCardKey) return;
+    rpCardKey = key; rpLayer.replaceChildren(); rpPins = [];
+    const perLane = {};
+    for (const i of list) {
+      const P = D.payments[i], l = D.lanes.find((x) => x.key === P[0]); if (!l) continue;
+      const g = rpLaneOf(l); if (!g) continue;
+      const b = rpBox(g.service) || rpBox(g.queue);
+      const n = perLane[P[0]] = (perLane[P[0]] || 0) + 1;
+      const m = MATCH[P[4]] || MATCH[1];
+      const el = h('button', { type: 'button', class: `hx-receipt ${m.k}${sel === i ? ' on' : ''}`, style: `--m:${m.color}`, title: m.note, onclick: () => selectPayment(i) },
+        h('small', null, 'RECEIPT · DEMO'), h('b', null, `#${receiptNo(D, i)}`),
+        h('span', null, `${payClock(D, P[3])} · Fidaty ${P[4] === 0 ? fidatyOf(P[8]) : '—'}`), h('em', null, `${m.dot} ${m.label}`));
+      rpLayer.append(el); rpPins.push({ el, x: b.maxX + 2.6 + (n - 1) * 0.2, z: (b.minZ + b.maxZ) / 2 - (n - 1) * 1.6 });
+    }
+    paintKey = '';
+  }
+  function selectPayment(i) {
+    const R = state.replay; R.pay = R.pay === i ? null : i;
+    if (R.pay != null) {
+      rpPlay(false);
+      const P = R.data.payments[i], l = R.data.lanes.find((x) => x.key === P[0]);
+      if (l) select({ kind: 'lane', id: l.lanes[0] });
+    }
+    rpCardKey = ''; renderReceiptCards(); paintKey = ''; renderInspector();
+  }
+  /** The selected payment's route on the floor: queue (coral) then till (amber), only what the sensor saw. */
+  function payRouteItems() {
+    const D = state.replay.data, i = state.replay.pay;
+    if (!D?.payments || i == null) return [];
+    const P = D.payments[i], pts = P[9] || []; if (pts.length < 4) return [];
+    const p0 = P[5] != null ? P[5] : P[1] - 60;
+    const xy = []; for (let k = 0; k + 1 < pts.length; k += 2) xy.push([pts[k], pts[k + 1]]);
+    const cut = Math.max(0, Math.min(xy.length - 1, Math.round((P[1] - p0) / 2)));
+    const out = [];
+    if (cut > 0) out.push({ t: 'line', pts: xy.slice(0, cut + 1), color: '#E58E92', width: 2.6, alpha: 0.95, y: 0.14 });
+    out.push({ t: 'line', pts: xy.slice(cut), color: '#F3C778', width: 3, alpha: 1, y: 0.15 });
+    out.push({ t: 'ring', pts: rpCircle(xy[0][0], xy[0][1], 0.3), color: '#fff', width: 1.4, y: 0.16 });
+    const last = xy[xy.length - 1];
+    out.push({ t: 'ring', pts: rpCircle(last[0], last[1], 0.42), color: '#fff', width: 2, fill: (MATCH[P[4]] || MATCH[1]).color, y: 0.16 });
+    return out;
+  }
+
   const rpBox = (rings) => { let a = Infinity, b = -Infinity, c = Infinity, d = -Infinity; for (const r of rings || []) for (const [x, z] of (r.outer || r)) { a = Math.min(a, x); b = Math.max(b, x); c = Math.min(c, z); d = Math.max(d, z); } return Number.isFinite(a) ? { minX: a, maxX: b, minZ: c, maxZ: d } : null; };
   const rpLaneOf = (l) => { for (const n of l.lanes) { const g = laneGeom(n); if (g?.queue?.length || g?.service?.length) return g; } return null; };
   const rpCircle = (x, z, r) => Array.from({ length: 14 }, (_, i) => [x + Math.cos(i / 14 * Math.PI * 2) * r, z + Math.sin(i / 14 * Math.PI * 2) * r]);
@@ -682,6 +753,9 @@ export function mountAnalysisWorkspace(api) {
   replayStrip.append(replayPlay, h('div', { class: 'hx-rp-cw' }, h('small', null, 'PEOPLE AT THE CHECKOUTS · DRAG TO REPLAY'), replayCanvas));
   stage.append(replayClock, replayStrip);
   const wfChip = h('div', { class: 'hx-wf-chip', role: 'status', 'aria-live': 'polite', hidden: true });
+  const rpLayer = h('div', { class: 'hx-tags hx-rp-layer' });
+  stage.append(rpLayer);
+  let rpPins = [];
   stage.append(wfChip);
   replayPlay.addEventListener('click', () => rpPlay());
   {
@@ -1715,7 +1789,7 @@ export function mountAnalysisWorkspace(api) {
     }
     const P = api.projector();
     const rp = rpOn() && state.replay.data;
-    const PK = rp ? `${P.key}|rp${state.replay.k}` : P.key;
+    const PK = rp ? `${P.key}|rp${state.replay.k}|${state.replay.pay}` : P.key;
     if (PK === paintKey) {
       // Camera at rest: resolve callout overlaps once (DOM measuring every moving frame made orbiting stutter).
       if (collidePending) { collidePending = false; resolveCollisions(); }
@@ -1729,12 +1803,17 @@ export function mountAnalysisWorkspace(api) {
     const ctx = paintCanvas.getContext('2d');
     ctx.clearRect(0, 0, W, H);
     if (items.length) G.paint(ctx, P, items, dpr);
-    if (rp) G.paint(ctx, P, replayDyn(), dpr);
+    if (rp) G.paint(ctx, P, replayDyn().concat(payRouteItems()), dpr);
     overlay.setAttribute('viewBox', `0 0 ${P.w} ${P.h}`);
     for (const s of shapes) {
       let ok = true;
       const pts = s.pts.map(([x, z]) => { const p = P.at(x, 0.3, z); if (!p) ok = false; return p ? `${p[0].toFixed(1)},${p[1].toFixed(1)}` : ''; });
       s.poly.setAttribute('points', ok ? pts.join(' ') : '');
+    }
+    for (const p of rpPins) {
+      const s = P.at(p.x, 0.3, p.z);
+      p.el.hidden = !s || s[0] < -40 || s[1] < -40 || s[0] > P.w + 40 || s[1] > P.h + 40;
+      if (s) p.el.style.transform = `translate(${s[0].toFixed(1)}px, ${s[1].toFixed(1)}px)`;
     }
     for (const p of pins) {
       const s = P.at(p.x, 0.3, p.z);
@@ -2303,6 +2382,7 @@ export function mountAnalysisWorkspace(api) {
     out.push(card('', h('div', { class: 'hx-card-h' }, h('b', null, 'Lane by lane'), h('small', null, `${rpClock(w0)}–${rpClock(w1)} · one tick per payment`)),
       h('div', { class: 'hx-rp-rows' }, ...rows),
       h('p', { class: 'hx-note' }, h('span', { class: 'hx-rp-k a' }), 'up to 1 minute ', h('span', { class: 'hx-rp-k c' }, ''), 'longer than 1 minute · count · median time paying')));
+    if (D.payments?.length) out.push(...inspectPayments(D, w0, w1));
     // How long people pay (whole day).
     const hc = h('canvas', { class: 'hx-rp-hist', width: 680, height: 230 });
     out.push(card('', h('div', { class: 'hx-card-h' }, h('b', null, 'How long people pay'), h('small', null, `${D.n_sessions} payments · whole day`)), hc));
@@ -2311,6 +2391,41 @@ export function mountAnalysisWorkspace(api) {
       v ? h('p', { class: 'hx-note' }, `Audited reference (Visitor Journey): ${VJ.fmtDuration(v.queue[VJ.DAY]?.value)} queue time per entrant over the whole day. The replay shows where and when it happened.`) : null,
       evidence(h('p', null, D.definition), h('p', null, `Steps of ${D.step_s} s from ${rpClock(0)} to ${rpClock((D.t1 - D.t0) / 1000)}. Counts are people standing in each zone at that instant, not unique customers.`),
         h('p', null, `Coverage ends at x ≈ ${D.coverage_east_m} m: tracks are not followed past the tills towards the exit.`), h('p', null, `Source: ${D.source}.`)));
+    return out;
+  }
+  function inspectPayments(D, w0, w1) {
+    const out = [], sec = rpSec(), R = state.replay;
+    const cnt = (arr) => MATCH.map((_, k) => arr.filter((P) => P[4] === k).length);
+    const all = cnt(D.payments), hour = D.payments.filter((P) => P[3] >= w0 && P[3] < w1), ch = cnt(hour);
+    const recent = D.payments.map((P, i) => [P, i]).filter(([P]) => P[1] + P[2] <= sec).slice(-4).reverse();
+    out.push(card('', h('div', { class: 'hx-card-h' }, h('b', null, 'Payments at the tills'), h('small', null, 'who paid, at the Fidaty moment')),
+      bars(MATCH.map((m, k) => ({ label: `${m.label}`, value: D.payments.length ? all[k] / D.payments.length : 0, color: m.color })), (x) => pct(x)),
+      h('p', { class: 'hx-note' }, `${D.payments.length} payments${(D.n_days || 1) > 1 ? ` over ${D.n_days} days` : ' this day'}; ${rpClock(w0)}–${rpClock(w1)}: ${hour.length} payments, ${ch[0]} matched, ${ch[1]} not sure, ${ch[2]} not linked.`),
+      recent.length ? h('div', { class: 'hx-rcpt-list' }, ...recent.map(([P, i]) => { const m = MATCH[P[4]] || MATCH[1];
+        return h('button', { type: 'button', class: `hx-rcpt-row${R.pay === i ? ' on' : ''}`, style: `--m:${m.color}`, onclick: () => selectPayment(i) },
+          h('b', null, `#${receiptNo(D, i)}`), h('span', null, `${payClock(D, P[3]).slice(0, 5)} · ${P[0].replace('-', '–')}`), h('em', null, `${m.dot} ${m.label}`)); })) : null));
+    if (R.pay != null && D.payments[R.pay]) {
+      const P = D.payments[R.pay], m = MATCH[P[4]] || MATCH[1];
+      const qs = P[5] != null ? P[1] - P[5] : 0, seen = P[6];
+      const tot = Math.max(1, seen + qs + P[2]);
+      const seg = (v, cls, label) => (v > 0 ? h('i', { class: cls, style: `flex:${v / tot}`, title: label }) : null);
+      out.push(card('hx-rcpt-detail', h('div', { class: 'hx-card-h' }, h('b', null, `Receipt #${receiptNo(D, R.pay)}`), h('small', null, 'DEMO')),
+        h('div', { class: 'hx-rcpt' },
+          h('div', null, h('small', null, 'Paid'), h('b', null, `${payClock(D, P[3])}${P[10] ? ` · ${VJ.fmtDay(P[10])}` : ''}`)),
+          h('div', null, h('small', null, P[0].includes('-') ? 'Lanes' : 'Lane'), h('b', null, P[0].replace('-', '–'))),
+          h('div', null, h('small', null, 'At the till'), h('b', null, `${Math.round(P[2])} s`)),
+          h('div', null, h('small', null, 'Fidaty'), h('b', null, P[4] === 0 ? fidatyOf(P[8]) : 'not linked'))),
+        h('p', { class: 'hx-rcpt-match', style: `--m:${m.color}` }, `${m.dot} ${m.label}`, h('span', null, ` · ${m.note}${P[7] ? ` (${P[7]} other ${P[7] > 1 ? 'people' : 'person'} at the till)` : ''}`)),
+        h('div', { class: 'hx-card-h' }, h('b', null, 'Journey behind the receipt'), h('small', null, 'what the sensor saw for this id')),
+        h('div', { class: 'hx-jbar' }, h('i', { class: 'unk', style: 'flex:.6', title: 'Earlier in the visit: not reconstructable' }), seg(Math.max(0, seen - qs), 'seen', 'Seen before the queue'), seg(qs, 'q', 'Queue'), seg(P[2], 't', 'Till')),
+        h('div', { class: 'hx-jkey' }, h('span', { class: 'unk' }, 'earlier: not known'), seen > qs ? h('span', { class: 'seen' }, `seen ${VJ.fmtDuration((seen - qs) / 60)}`) : null,
+          qs ? h('span', { class: 'q' }, `queue ${VJ.fmtDuration(qs / 60)}`) : null, h('span', { class: 't' }, `till ${Math.round(P[2])} s`)),
+        h('p', { class: 'hx-note' }, P[6] < 10
+          ? 'The sensor picked this person up only at the checkouts: the trajectory before it is broken into other ids, so the rest of the visit cannot be tied to this receipt.'
+          : `This id was followed for ${VJ.fmtDuration(P[6] / 60)} before the till; earlier fragments belong to other ids and are not linked here.`),
+        h('button', { type: 'button', class: 'hx-ghost wide', onclick: () => { R.pay = null; rpCardKey = ''; renderReceiptCards(); paintKey = ''; renderInspector(); } }, 'Close receipt')));
+    }
+    out.push(h('p', { class: 'hx-note' }, 'DEMO: receipt and Fidaty numbers are invented from the LiDAR id. Real ones need one day of till data (lane, time of payment, anonymous Fidaty code). Lanes 2–3, 5–6 and 7–8 are pairs.'));
     return out;
   }
   function updateReplayPanel() {

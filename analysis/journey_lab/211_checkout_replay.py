@@ -105,8 +105,42 @@ ppl = pd.Series([a + b for _, a, b in series]); roll = ppl.rolling(4).sum().shif
 # ---------------------------------------------------------------- payment sessions (210 E: WAITING service, runs < 15 s apart merged, >= 10 s)
 s2 = sv.sort_values(["id", "roi_id", "t0"]).copy()
 s2["new"] = ((s2.id != s2.id.shift()) | (s2.roi_id != s2.roi_id.shift()) | (s2.t0 - s2.t1.shift() > 15000)).astype(int); s2["sid"] = s2.new.cumsum()
-SES = s2.groupby("sid").agg(key=("key", "first"), t0=("t0", "min"), t1=("t1", "max")).reset_index()
-SES["dur"] = (SES.t1 - SES.t0) / 1000.0 + 0.1; SES = SES[SES.dur >= 10]
+SES = s2.groupby("sid").agg(key=("key", "first"), id=("id", "first"), roi_id=("roi_id", "first"), t0=("t0", "min"), t1=("t1", "max")).reset_index()
+SES["dur"] = (SES.t1 - SES.t0) / 1000.0 + 0.1; SES = SES[SES.dur >= 10].copy()
+
+# ---------------------------------------------------------------- who paid? (same rule as 210 E, on the whole day)
+# Simulated Fidaty instant = when the person is furthest along the lane (max x in the service zone: lanes run west->east).
+con.register("ses_df", SES[["sid", "id", "roi_id", "t0", "t1"]])
+tp = con.execute("""SELECT s.sid, arg_max(f.ts, f.wx) t_pay, max(f.wx) x_pay FROM ses_df s
+  JOIN w.ckf f ON f.id = s.id AND f.roi_id = s.roi_id AND f.ts BETWEEN s.t0 AND s.t1 GROUP BY 1""").fetchdf().set_index("sid")
+SES = SES.join(tp, on="sid"); SES["t_pay"] = SES.t_pay.fillna((SES.t0 + SES.t1) // 2).astype("int64")
+# Anyone else standing in the same lane (or overlapping pair) at that instant, and how far along they are.
+pool = sv[sv.dur_s >= 2][["id", "key", "t0", "t1"]].copy()
+con.register("pool_df", pool); con.register("ses_pay", SES[["sid", "id", "key", "t_pay"]])
+oth = con.execute("""SELECT s.sid, p.id oid, avg(f.wx) ox FROM ses_pay s
+   JOIN pool_df p ON p.key = s.key AND p.id <> s.id AND p.t0 <= s.t_pay AND p.t1 >= s.t_pay
+   JOIN w.ckf f ON f.id = p.id AND f.ts BETWEEN s.t_pay - 700 AND s.t_pay + 700 GROUP BY 1, 2""").fetchdf()
+SES["others"] = SES.sid.map(oth.groupby("sid").oid.nunique()).fillna(0).astype(int)
+SES["margin"] = SES.x_pay - SES.sid.map(oth.groupby("sid").ox.max())
+MARGIN = 0.8
+# 0 = certain (alone, or clearly nearest the terminal), 2 = risky (someone else clearly nearer), 1 = uncertain
+SES["match"] = np.where(SES.margin.isna() | (SES.margin >= MARGIN), 0, np.where(SES.margin <= -MARGIN, 2, 1))
+# Queue just before, same id and same lane (or pair), ending within 3 minutes of reaching the till.
+qq = qv[["id", "key", "t0", "t1"]].rename(columns={"t0": "t0_q", "t1": "t1_q"})
+qm = SES[["sid", "id", "key", "t0"]].merge(qq, on=["id", "key"])
+qm = qm[(qm.t1_q <= qm.t0 + 2000) & (qm.t1_q >= qm.t0 - 180000)]
+SES["q_from"] = SES.sid.map(qm.groupby("sid").t0_q.min())
+# How long this LiDAR id had been seen before the till (trajectories break up: usually seconds).
+con.register("ids_need", pd.DataFrame({"id": SES.id.unique()}))
+born = con.execute(f"SELECT r.id, min(r.ts) b FROM read_parquet('{P}') r SEMI JOIN ids_need USING (id) GROUP BY 1").fetchdf().set_index("id").b
+SES["before_s"] = ((SES.t0 - SES.id.map(born)) / 1000).clip(lower=0).fillna(0)
+# Route on the floor for that id: from the start of its queue (or 60 s before the till) to leaving the till, every 2 s.
+SES["p0"] = SES.q_from.fillna(SES.t0 - 60000).astype("int64")
+con.register("ses_path", SES[["sid", "id", "p0", "t1"]])
+pts = con.execute("""SELECT s.sid, (f.ts // 2000) b, round(avg(f.wx), 1) x, round(avg(f.wz), 1) z FROM ses_path s
+  JOIN w.ckf f ON f.id = s.id AND f.ts BETWEEN s.p0 AND s.t1 GROUP BY 1, 2 ORDER BY 1, 2""").fetchdf()
+paths = {sid: [v for xz in zip(g.x, g.z) for v in xz] for sid, g in pts.groupby("sid")}
+log("payments", len(SES), "match certain/uncertain/risky", SES.match.value_counts().sort_index().to_dict())
 edges = [10, 20, 30, 45, 60, 90, 120, 180, 240, 1e9]
 hist = np.histogram(SES.dur.clip(upper=1e8), bins=edges)[0].tolist()
 lanes_meta = []
@@ -119,7 +153,13 @@ res = {"day": day, "source": "raw 10 Hz LiDAR (vendor parquet), 211_checkout_rep
        "tz": db.CFG["timezone"], "lanes": lanes_meta, "q": Q, "s": S, "series15": series,
        "peak": {"from_s": int((bins[pk] - o) / 1000), "to_s": int((bins[pk] - o) / 1000) + 3600, "mean_people": round(float(roll.iloc[pk] / 4), 2)},
        "sessions": [[r.key, int((r.t0 - o) / 1000), round(float(r.dur), 1)] for r in SES.sort_values("t0").itertuples()],
-       "hist": {"edges_s": edges[:-1], "counts": hist}, "median_s": round(float(SES.dur.median()), 1), "n_sessions": int(len(SES)),
+       "hist": {"edges_s": edges[:-1], "counts": hist},
+       # One row per payment: [laneKey, t0_s, dur_s, t_pay_s, match(0 certain|1 uncertain|2 risky), queue_from_s|null,
+       #   seen_before_till_s, others_at_till, lidar_id, path [x,z,x,z… every 2 s from queue start to leaving the till]]
+       "payments": [[r.key, int((r.t0 - o) / 1000), round(float(r.dur), 1), int((r.t_pay - o) / 1000), int(r.match),
+                     (int((r.q_from - o) / 1000) if pd.notna(r.q_from) else None), int(r.before_s), int(r.others), str(r.id), paths.get(r.sid, [])]
+                    for r in SES.sort_values("t0").itertuples()],
+       "match_rule": "Simulated Fidaty instant = when the person is furthest along the lane. Certain: nobody else in that lane (or overlapping pair), or this person is at least 0.8 m nearer the terminal. Risky: someone else is at least 0.8 m nearer. Uncertain: in between.", "median_s": round(float(SES.dur.median()), 1), "n_sessions": int(len(SES)),
        "pairs_note": "Lanes 2-3, 5-6 and 7-8 have overlapping zones in the twin and are reported as pairs.",
        "coverage_east_m": 67.0,
        "definition": "Queuing / paying = a WAITING visit (mean speed < 0.5 m/s, not a fixed object) in a checkout queue / service zone. Payment session = WAITING service visit >= 10 s."}

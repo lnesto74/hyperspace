@@ -1,5 +1,5 @@
 import { analyseAreas, rankAreas } from './business-analysis.js?v=report-4';
-import { mountAnalysisWorkspace } from './workspace.js?v=v3-14';
+import { mountAnalysisWorkspace } from './workspace.js?v=v3-15';
 // Lens modes that draw the cyan movement streams (Pulse, Flow Explorer).
 const MOVE_MODES = new Set(['moved', 'flow']);
 const STREAM_MODES = new Set(['moved', 'flow', 'stopped', 'value']);
