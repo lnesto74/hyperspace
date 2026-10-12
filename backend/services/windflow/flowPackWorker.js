@@ -5,7 +5,9 @@ import fs from 'fs';
 import zlib from 'zlib';
 import readline from 'readline';
 import path from 'path';
-import { aggregatePositions, SLICES } from '../FlowFieldDailyService.js';
+// Own copy of the aggregation (same code as FlowFieldDailyService.js on main): the server's copy may be an
+// older version without the Visitor Journey slices (trading, h08_10 …).
+import { aggregatePositions, SLICES } from './flowAggregate.js';
 
 const [day, venueId, rowsFile, outDir, anchorPath] = process.argv.slice(2);
 const anchor = JSON.parse(fs.readFileSync(anchorPath, 'utf8'));
@@ -21,6 +23,7 @@ const packs = aggregatePositions(rows, {
   cell: anchor.cell_m ?? 1.5, tzOffsetH: Number(anchor.tz_offset_h ?? 2),
   openHour: anchor.open_hour ?? 7, closeHour: anchor.close_hour ?? 22, dateStr: day, bbox: anchor.bbox, venueId,
 });
+if (!packs.trading) { console.error(`no trading slice built (slices: ${Object.keys(packs).join(',')})`); process.exit(2); }
 fs.mkdirSync(outDir, { recursive: true });
 for (const spec of SLICES) {
   const p = packs[spec.id]; if (!p) continue;
