@@ -3407,7 +3407,7 @@ export function mountAnalysisWorkspace(api) {
       ctx.font = '600 12px Inter, system-ui, sans-serif'; ctx.textAlign = ex > cx ? 'right' : 'left'; ctx.fillText(`${hv.label || hv.id} · off screen, click to go`, ex + (ex > cx ? -18 : 18), ey + 4); ctx.restore();
     }
     // leader line from the hovered panel row to the place
-    if (Q.hoverEl?.isConnected && best) {
+    if (false && Q.hoverEl?.isConnected && best) {   // leader line retired: the lit shelf face and the marked row are enough
       const vr = view.getBoundingClientRect(), er = Q.hoverEl.getBoundingClientRect();
       const x2 = vr.left + best.p[0], y2 = vr.top + best.p[1], x1 = er.left - 4, y1 = er.top + er.height / 2;
       for (const [k, v] of Object.entries({ x1, y1, x2, y2 })) catLinkLine.setAttribute(k, v.toFixed(1));
