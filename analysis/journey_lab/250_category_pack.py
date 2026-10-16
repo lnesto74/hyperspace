@@ -98,7 +98,7 @@ def build_sections():
                     "cat": ci(cat), "macro": macro, "inf": inferred, "q": quality(g.AFFIDABILITA_POSIZIONE.iloc[0]),
                     "a": [round(a[0], 2), round(a[1], 2)], "b": [round(b[0], 2), round(b[1], 2)],
                     "n": [round(float(nrm[0]), 3), round(float(nrm[1]), 3)], "lv": lv,
-                    "items": int(g.COD_ARTICOLO.nunique()), "h": round(float(min(2.6, max(0.6, ((g.Y_ART.fillna(0) + g.ALT_ART.fillna(0)).max()) / 100))), 2), "mix": [[ci(c), round(float(v / w.sum()), 2)] for c, v in w.head(3).items()]})
+                    "items": int(g.COD_ARTICOLO.nunique()), "fm": round(float(g.W.sum()) / 100, 2), "prod": [[str(n)[:34], round(float(v) / 100, 2)] for n, v in g.groupby("DESC_ARTICOLO").W.sum().sort_values(ascending=False).head(6).items()], "h": round(float(min(2.6, max(0.6, ((g.Y_ART.fillna(0) + g.ALT_ART.fillna(0)).max()) / 100))), 2), "mix": [[ci(c), round(float(v / w.sum()), 2)] for c, v in w.head(3).items()]})
     # aisles 1–12: corridor between the two fronts
     aisles = []
     for c in range(1, 13):
@@ -116,6 +116,7 @@ def build_sections():
     res = {"schema": "planogram-sections-v1", "planogram": "Esselunga TEV 2026-10-13", "venue_id": VENUE,
            "precision_m": 1.3, "cats": cats, "macros": [{"name": m, "color": MACRO_COLORS.get(m)} for m in macros],
            "sections": out, "aisles": aisles,
+           "catSpace": {c: round(float(v) / 100, 1) for c, v in d.groupby("DESC_CATEGORIA_ESPOSITIVA").W.sum().items()},
            "quality": {q: sum(1 for s in out if s["q"] == q) for q in ("ok", "verify", "out")}}
     json.dump(res, open(SITE / "sections.json", "w"), separators=(",", ":"), ensure_ascii=False)
     print(f"250 sections: {len(out)} sections, {len(cats)} categories, {len(aisles)} aisles -> {SITE / 'sections.json'}")

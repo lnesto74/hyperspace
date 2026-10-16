@@ -92,7 +92,7 @@ export function mountAnalysisWorkspace(api) {
     wf: { days: [], st: {}, ok: null, timer: 0, applied: '' }, // server day packs (movement, behaviour, checkouts)
     media: { data: null, status: 'idle', sel: 0, note: '',
       simq: { data: null, status: 'idle', note: '', spot: 'T1', sku: 'ESS-100031', msg: 'promo', lift: null, days: [0, 1, 2, 3, 4, 5, 6], hours: [7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21], spotSec: 15, weeks: 2, pinned: null, target: undefined, targetAuto: true, err: '' } }, // Media lens · digital totems (240_media_pack)
-    cat: { sec: null, day: null, status: 'idle', note: '', metric: 'rate', macro: null, cat: null, aisle: null }, // Categories lens (250_category_pack)
+    cat: { sec: null, day: null, status: 'idle', note: '', metric: 'rate', macro: null, cat: null, aisle: null, qLevel: 'macro', qParent: null, qGrand: null, qMod: null, qPins: [] }, // Categories lens (250_category_pack)
     inspCollapsed: false,
     contours: false, // Astra: 3D scalar isolines on the twin floor (off by default; the v3 contours are drawn by twin-graphics)
   };
@@ -3368,6 +3368,7 @@ export function mountAnalysisWorkspace(api) {
     if (!hv || hv.from !== 'twin') catTip.hidden = true;
     if (!el) catLink.style.display = 'none';
     Q.frontRedraw?.();
+    if (state.lens === 'categories') QC.draw?.();
   }
   /** Highlight items, drawn over a dark veil: matched ribbons glow, one beacon per aisle, the aisle corridor if any. */
   function catHoverItems(t) {
@@ -3462,6 +3463,356 @@ export function mountAnalysisWorkspace(api) {
     api.fit?.('oblique', { minX: Math.min(...xs) - 6, maxX: Math.max(...xs) + 6, minZ: Math.min(...zs) - 5, maxZ: Math.max(...zs) + 5, margin: 0.85 });
   }
 
+  // ---- Categories · quadrant carousel
+  // Six questions on one grammar: colour = macro-category, size = minutes in the area, hollow = not measured.
+  // Hover lights the shelves, click selects, double-click drills (macro → categories → modules), shift-click pins (max 4).
+  const Q_SLOTS = ['08-10', '10-12', '12-14', '14-16', '16-18', '18-20'];
+  const TEST_MACRO = { 'Bakery & Breakfast': 'Colazione e dolci', 'Dairy & Eggs': 'Latticini e freschi' };
+  const qx = { reach: null, media: null, status: 'idle' };
+  async function loadQuadExtras() {
+    if (qx.status !== 'idle') return; qx.status = 'loading';
+    const j = (u) => fetch(u, { credentials: 'include', cache: 'no-store' }).then((r) => (r.ok ? r.json() : null)).catch(() => null);
+    const q = `?venueId=${encodeURIComponent(venueOf() || '')}`;
+    qx.reach = (await j(`/api/windflow/categories/reach.json${q}`)) || (await j('./categories/reach.json'));
+    const idx = await j('./media/index.json'), md = idx?.days?.[idx.days.length - 1];
+    qx.media = md ? await j(`./media/${md}.json`) : null;
+    if (qx.reach) qx.reach._i = Object.fromEntries(qx.reach.cats.map((c, i) => [c, i]));
+    qx.status = 'ready'; QC.draw();
+  }
+  const rowAt = (lvl, name, sl) => C_().day?.slots?.[sl]?.[lvl === 'macro' ? 'macro' : 'cat']?.[name] || null;
+  const okAt = (r) => !!r && r.st === 'ok';
+  function catMacroOf(n) {
+    const S = C_().sec; if (!S) return null;
+    if (!S._cm) { S._cm = {}; for (const s of S.sections) { const c = S.cats[s.cat]; if (!S._cm[c]) S._cm[c] = s.macro; } }
+    return catRow(n)?.macro || S._cm[n] || null;
+  }
+  function spaceOf(lvl, name) {
+    const S = C_().sec, cs = S?.catSpace || {};
+    return lvl === 'cat' ? cs[name] || 0 : S.cats.filter((c) => catMacroOf(c) === name).reduce((a, c) => a + (cs[c] || 0), 0);
+  }
+  /** In-target viewers from the best screen spot for this macro / category (reach.json × passes). */
+  function viewersOf(lvl, name, sl) {
+    const R = qx.reach; if (!R) return null;
+    const S = C_().sec, cats = lvl === 'cat' ? [name] : S.cats.filter((c) => catMacroOf(c) === name);
+    let best = null;
+    for (const sp of R.spots) {
+      let v = 0;
+      for (const c of cats) { const i = R._i[c], r = rowAt('cat', c, sl); if (i != null && r) v += (r.vis || 0) * (sp.reach[i] || 0); }
+      if (!best || v > best.v) best = { v, spot: sp.label };
+    }
+    return best;
+  }
+  /** ON/OFF tests of the Media pack, mapped onto planogram macros. DEMO: the flight has not run in store. */
+  function adTests() {
+    const M = qx.media, out = {}; if (!M) return out;
+    for (const t of M.totems || []) {
+      const p = M.products?.[t.product], mac = TEST_MACRO[p?.category];
+      if (mac && t.shelfStops) out[mac] = { ...t.shelfStops, sku: `${p.brand} ${p.name}`, totem: t.name };
+    }
+    return out;
+  }
+  const sgn = (v, d = 0) => (v == null || !Number.isFinite(v) ? '—' : `${v >= 0 ? '+' : '−'}${Math.abs(v * 100).toFixed(d)}%`);
+  const fInt = (v) => (v == null || !Number.isFinite(v) ? '—' : VJ.fmtInt(Math.round(v)));
+  const QUADS = [
+    { id: 'pass', q: 'Where do shoppers pass, and where do they stop?', sub: 'passes × stop rate', xl: 'passes', yl: 'stop rate', xf: fInt, yf: (v) => pct(v), ref: 'median', play: true,
+      corners: ['Hidden pull', 'Destinations', 'Quiet', 'Busy but skipped'],
+      note: 'Destinations draw both traffic and stops. Hidden pull: few pass, many stop. Busy but skipped: many pass, few stop, the first place to look for a layout or media test.',
+      xy: (lvl, n, r) => [r?.vis ?? null, okAt(r) ? r.rate : null] },
+    { id: 'choose', q: 'Once they stop, do they choose or grab?', sub: 'stop rate × choice index', xl: 'stop rate', yl: 'choice index', xf: (v) => pct(v), yf: (v) => num(v, 2), ref: 'median', play: true,
+      corners: ['Few stop, they compare', 'Considered destinations', 'Pass-through', 'Grab and go'],
+      note: 'Choice index = time at the shelf ÷ time in the area. High: people compare and read. Low: they know what they want, take it and go. Grab-and-go shelves need stock and visibility, considered ones need information.',
+      xy: (lvl, n, r) => (okAt(r) ? [r.rate, r.ch] : [null, null]) },
+    { id: 'space', q: 'Does each category earn its shelf space?', sub: 'share of facing metres × share of stops', xl: 'share of shelf space', yl: 'share of stops', xf: (v) => pct(v, 1), yf: (v) => pct(v, 1), ref: 'diag', play: true,
+      corners: ['Earns more than its space', '', '', 'Space that does not stop people'],
+      note: 'Shelf space = facing metres in the Esselunga planogram (width × facings). On the diagonal a category gets the stops its space would predict. Shares are among the measured ones at this level.',
+      pts: (lvl, names, sl) => {
+        const rs = names.map((n) => ({ n, r: rowAt(lvl, n, sl), sp: spaceOf(lvl, n) }));
+        const ok = rs.filter((x) => okAt(x.r)), ts = ok.reduce((a, x) => a + (x.r.stops || 0), 0) || 1, tsp = ok.reduce((a, x) => a + x.sp, 0) || 1;
+        return rs.map((x) => [x.n, x.sp / tsp, okAt(x.r) ? (x.r.stops || 0) / ts : null]);
+      } },
+    { id: 'time', q: 'Morning or evening: when does each shelf work?', sub: 'stop rate 08–12 × stop rate 16–20', xl: 'stop rate 08–12', yl: 'stop rate 16–20', xf: (v) => pct(v), yf: (v) => pct(v), ref: 'diag', play: false,
+      corners: ['Evening shelf', '', '', 'Morning shelf'],
+      note: 'Each slot pair pooled (stops ÷ passes). Above the diagonal the shelf works better in the evening rush, below it in the morning: a hint for restocking, staff and when to schedule a screen spot.',
+      pts: (lvl, names) => names.map((n) => {
+        const pool = (ss) => { const rr = ss.map((s) => rowAt(lvl, n, s)); if (!rr.every(okAt)) return null; const v = rr.reduce((a, r) => a + (r.vis || 0), 0); return v ? rr.reduce((a, r) => a + (r.stops || 0), 0) / v : null; };
+        return [n, pool(['08-10', '10-12']), pool(['16-18', '18-20'])];
+      }) },
+    { id: 'media', q: 'Where would a screen reach shoppers who don’t stop yet?', sub: 'in-target viewers from the best spot × headroom (passes − stops)', xl: 'viewers from the best spot', yl: 'headroom', xf: fInt, yf: fInt, ref: 'median', play: true, est: 'ESTIMATED · screen reach model',
+      corners: ['Open but hard to reach', 'Prime screen target', 'Low priority', 'Seen, little headroom'],
+      note: 'Viewers = passes in the category’s aisle cells × the share who face the best of the 12 screen spots (Media → Simulate model, calibrated on the 14 Sept LiDAR). Headroom = passes that did not become a stop. Hover a dot to see which spot.',
+      xy: (lvl, n, r, sl) => { const v = viewersOf(lvl, n, sl); return [v ? v.v : null, okAt(r) ? Math.max(0, (r.vis || 0) - (r.stops || 0)) : null]; } },
+    { id: 'adv', q: 'Did the screen make the shelf more attractive?', sub: 'baseline stop rate × stop uplift with the spot ON vs OFF', xl: 'baseline stop rate', yl: 'uplift ON vs OFF', xf: (v) => pct(v), yf: (v) => sgn(v), ref: 'zero', play: false, demo: 'DEMO · flight not run in store yet',
+      corners: ['Lifted a weak shelf', 'Lifted a strong shelf', 'No lift, weak shelf', 'No lift, strong shelf'],
+      note: 'Tested dots carry the 90% range. The ON/OFF schedule of the Media pack (14 Sept) is DEMO: the spot never actually played, so the honest expectation is ~0. Hollow dots on the zero line are not tested yet. The real test fills this chart without any change.',
+      pts: (lvl, names) => { const T = lvl === 'macro' ? adTests() : {};
+        return names.map((n) => { const g = rowAt(lvl, n, 'giorno'), t = T[n]; return [n, okAt(g) ? g.rate : null, t ? t.lift : null, t ? [t.lo90, t.hi90] : null, t ? `${t.sku} · ${t.totem}` : null]; }); } },
+  ];
+  const QMOD = { id: 'mods', sub: 'facing metres × stops on the floor in front', xl: 'facing metres', yl: 'stops in front (±1.3 m)', xf: (v) => `${num(v, 1)} m`, yf: fInt, ref: 'median', play: true, est: 'ESTIMATED · modules share floor numbers',
+    corners: ['Small module, many stops', 'Big and busy', 'Small and quiet', 'Big space, few stops'],
+    note: 'Module level is an estimate: stops are counted on the floor in 1.3 m steps along the aisle, so neighbouring modules share them, and a product sits within ±1.3 m of its planogram position. Hollow = perimeter or an aisle the sensor does not see.' };
+  const QC = { el: null, cv: null, head: null, crumbs: null, foot: null, slide: 0, hot: null, timer: 0, play: 0, trail: {}, dom: null, draw: () => {} };
+  const qLevel = () => C_().qLevel || 'macro';
+  function qMembers() {
+    const Q = C_(), S = Q.sec, lv = qLevel();
+    if (lv === 'cat') return S.cats.filter((n) => catMacroOf(n) === Q.qParent && rowAt('cat', n, 'giorno'));
+    return S.macros.map((x) => x.name).filter((n) => macroRow(n)?.kind === 'categoria' || rowAt('macro', n, 'giorno')?.kind === 'categoria');
+  }
+  /** Module points for the drilled category: x = facing metres, y = stops in its 1.3 m floor step. */
+  function modPoints(sl) {
+    const Q = C_(), S = Q.sec, k = S.cats.indexOf(Q.qParent), blind = blindAisles();
+    return S.sections.map((s, i) => [s, i]).filter(([s]) => s.cat === k).map(([s, i]) => {
+      const M = Q.day.modules?.[String(s.corsia)], st = M?.stops?.[sl], zm = (s.a[1] + s.b[1]) / 2;
+      const b = M ? Math.floor((zm - M.z0) / M.step) : -1, y = !s.corsia || blind.includes(s.corsia) || !st || b < 0 || b >= st.length ? null : st[b];
+      return { id: i, name: s.prod?.[0]?.[0] || `${Q.qParent} · module`, sub: `corsia ${s.corsia || '—'} · ${s.items} items`, x: s.fm ?? null, y, size: 0.25, color: macroColor(s.macro), hollow: y == null };
+    });
+  }
+  function qPoints(cfg, sl) {
+    const lv = qLevel();
+    if (lv === 'mod') return modPoints(sl);
+    const names = qMembers(), mins = names.map((n) => rowAt(lv, n, 'giorno')?.min || 0), mx = Math.max(1e-6, ...mins);
+    const raw = cfg.pts ? cfg.pts(lv, names, sl) : names.map((n) => { const r = rowAt(lv, n, sl); return [n, ...cfg.xy(lv, n, r, sl)]; });
+    return raw.map(([n, x, y, err, tag]) => {
+      const g = rowAt(lv, n, 'giorno'), col = macroColor(lv === 'macro' ? n : catMacroOf(n));
+      const untested = cfg.id === 'adv' && x != null && y == null;
+      return { id: n, name: n, x, y: untested ? 0 : y, err, tag: tag || (cfg.id === 'media' ? viewersOf(lv, n, sl)?.spot : null), size: Math.sqrt((g?.min || 0) / mx), color: col, hollow: y == null || untested, untested };
+    });
+  }
+  function qDomain(cfg, pts) {
+    const xs = pts.filter((p) => p.x != null).map((p) => p.x), ys = pts.filter((p) => p.y != null && !p.hollow).flatMap((p) => (p.err ? [p.y, ...p.err] : [p.y]));
+    let x1 = Math.max(1e-6, ...xs) * 1.1, y1 = Math.max(1e-6, ...ys) * 1.15, y0 = 0;
+    if (cfg.ref === 'diag') { x1 = y1 = Math.max(x1, y1); }
+    if (cfg.ref === 'zero') { y0 = Math.min(-0.08, ...ys) * 1.2; y1 = Math.max(0.08, ...ys) * 1.2; }
+    return { x1, y0, y1 };
+  }
+  const hvMatches = (p) => {
+    const hv = C_().hover, lv = qLevel(), S = C_().sec; if (!hv || !S) return false;
+    if (lv === 'mod') return (hv.kind === 'sec' && hv.id === p.id);
+    if (hv.kind === (lv === 'macro' ? 'macro' : 'cat')) return hv.id === p.id;
+    if (hv.kind === 'sec') { const s = S.sections[hv.id]; return lv === 'macro' ? s?.macro === p.id : S.cats[s?.cat] === p.id; }
+    return false;
+  };
+  function drawQuad(cv, cfg, pts, dom) {
+    const c = cv.getContext('2d'), W = cv.width, H = cv.height, k = cv._k || W / 680, Q = C_(), lv = qLevel();
+    const P = { x0: 78 * k, y0: 30 * k, w: W - 106 * k, h: H - 92 * k };
+    const X = (v) => P.x0 + P.w * v / dom.x1, Y = (v) => P.y0 + P.h * (1 - (v - dom.y0) / (dom.y1 - dom.y0));
+    const font = (px, w = '') => `${w} ${Math.round(px * k)}px Inter, system-ui, sans-serif`;
+    c.clearRect(0, 0, W, H);
+    // axes and ticks
+    c.strokeStyle = '#2a4152'; c.lineWidth = 1.5 * k; c.beginPath(); c.moveTo(P.x0, P.y0); c.lineTo(P.x0, P.y0 + P.h); c.lineTo(P.x0 + P.w, P.y0 + P.h); c.stroke();
+    c.font = font(12); c.fillStyle = '#5f7a8c';
+    for (let i = 0; i <= 4; i++) {
+      const vx = dom.x1 / 1.1 * i / 4, vy = dom.y0 + (dom.y1 - dom.y0) * i / 4;
+      c.textAlign = 'center'; c.fillText(cfg.xf(vx), X(vx), P.y0 + P.h + 17 * k);
+      c.textAlign = 'right'; c.fillText(cfg.yf(vy), P.x0 - 7 * k, Y(vy) + 4 * k);
+      c.strokeStyle = 'rgba(42,65,82,.35)'; c.lineWidth = 1; c.beginPath(); c.moveTo(P.x0, Y(vy)); c.lineTo(P.x0 + P.w, Y(vy)); c.stroke();
+    }
+    c.font = font(13); c.fillStyle = '#93AEBF'; c.textAlign = 'right'; c.fillText(`${cfg.xl} →`, P.x0 + P.w, P.y0 + P.h + 36 * k);
+    c.save(); c.translate(18 * k, P.y0); c.rotate(-Math.PI / 2); c.textAlign = 'right'; c.fillText(`${cfg.yl} →`, 0, 0); c.restore();
+    // reference: medians, fair-share diagonal or zero line
+    const ok = pts.filter((p) => !p.hollow && p.x != null && p.y != null);
+    const med = (a) => { const v = a.slice().sort((x, y) => x - y); return v.length ? v[v.length >> 1] : 0; };
+    c.strokeStyle = '#3d5a6e'; c.lineWidth = 1.5 * k; c.setLineDash([5 * k, 6 * k]); c.beginPath();
+    let cx, cy;
+    if (cfg.ref === 'diag') { const m = Math.min(dom.x1, dom.y1); c.moveTo(X(0), Y(0)); c.lineTo(X(m), Y(m)); }
+    else { cx = ok.length ? med(ok.map((p) => p.x)) : dom.x1 / 2; cy = cfg.ref === 'zero' ? 0 : ok.length ? med(ok.map((p) => p.y)) : (dom.y0 + dom.y1) / 2;
+      c.moveTo(X(cx), P.y0); c.lineTo(X(cx), P.y0 + P.h); c.moveTo(P.x0, Y(cy)); c.lineTo(P.x0 + P.w, Y(cy)); }
+    c.stroke(); c.setLineDash([]);
+    if (cfg.ref === 'diag') { c.font = font(11); c.fillStyle = '#5f7a8c'; c.textAlign = 'left'; const m = Math.min(dom.x1, dom.y1) * 0.82; c.save(); c.translate(X(m), Y(m)); c.rotate(-Math.atan2(P.h / (dom.y1 - dom.y0), P.w / dom.x1)); c.fillText(cfg.id === 'space' ? 'fair share' : 'same rate', 6 * k, -6 * k); c.restore(); }
+    c.font = font(14, '600'); c.fillStyle = '#4f6a7c';
+    const [tl, tr, bl, br] = cfg.corners;
+    c.textAlign = 'left'; if (tl) c.fillText(tl, P.x0 + 8 * k, P.y0 + 16 * k); if (bl) c.fillText(bl, P.x0 + 8 * k, P.y0 + P.h - 10 * k);
+    c.textAlign = 'right'; if (tr) c.fillText(tr, P.x0 + P.w - 6 * k, P.y0 + 16 * k); if (br) c.fillText(br, P.x0 + P.w - 6 * k, P.y0 + P.h - 22 * k);
+    const badge = cfg.demo || cfg.est;
+    if (badge) { c.font = font(11, '700'); const tw = c.measureText(badge).width + 14 * k; c.fillStyle = cfg.demo ? 'rgba(243,199,120,.16)' : 'rgba(143,211,255,.12)';
+      c.fillRect(P.x0 + P.w - tw, 4 * k, tw, 18 * k); c.fillStyle = cfg.demo ? '#F3C778' : '#8FD3FF'; c.textAlign = 'right'; c.fillText(badge, P.x0 + P.w - 7 * k, 17 * k); }
+    // trails (play)
+    for (const p of (catSlot() === 'giorno' ? [] : pts)) {
+      const tr = QC.trail[p.id]; if (!tr || tr.length < 2) continue;
+      c.strokeStyle = p.color; c.globalAlpha = 0.45; c.lineWidth = 1.6 * k; c.beginPath();
+      tr.forEach(([x, y], i) => (i ? c.lineTo(X(x), Y(y)) : c.moveTo(X(x), Y(y)))); c.stroke();
+      for (const [x, y] of tr) { c.beginPath(); c.arc(X(x), Y(y), 2.2 * k, 0, 7); c.fillStyle = p.color; c.fill(); }
+      c.globalAlpha = 1;
+    }
+    // points: strip for the ones with no x, bottom band for the ones with no y
+    const strip = pts.filter((p) => p.x == null);
+    if (strip.length) { c.font = font(11); c.fillStyle = '#5f7a8c'; c.textAlign = 'left'; c.fillText('not measured:', P.x0 + 4 * k, H - 8 * k); }
+    const pins = (Q.qPins || []).filter((x) => x.lvl === lv), pinIdx = (id) => pins.findIndex((x) => x.id === id);
+    const selId = lv === 'macro' ? Q.macro : lv === 'cat' ? Q.cat : Q.qMod;
+    const place = pts.map((p, i) => {
+      const rad = (lv === 'mod' ? 6 : 6 + 13 * p.size) * k;
+      const x = p.x == null ? P.x0 + 110 * k + (i % 24) * 22 * k : X(p.x);
+      const y = p.x == null ? H - 12 * k : p.y == null ? P.y0 + P.h - 10 * k : Y(p.y);
+      return { p, x, y, rad };
+    }).sort((a, b) => b.rad - a.rad);
+    cv._hits = [];
+    const anyFocus = selId != null || pins.length;
+    for (const { p, x, y, rad } of place) {
+      const sel = p.id === selId, pin = pinIdx(p.id) >= 0, hot = QC.hot === p.id || hvMatches(p);
+      if (p.err && !p.hollow) { c.strokeStyle = p.color; c.lineWidth = 2 * k; c.beginPath(); c.moveTo(x, Y(p.err[0])); c.lineTo(x, Y(p.err[1])); c.moveTo(x - 5 * k, Y(p.err[0])); c.lineTo(x + 5 * k, Y(p.err[0])); c.moveTo(x - 5 * k, Y(p.err[1])); c.lineTo(x + 5 * k, Y(p.err[1])); c.stroke(); }
+      c.beginPath(); c.arc(x, y, p.x == null ? 6 * k : rad, 0, Math.PI * 2);
+      if (!p.hollow) { c.globalAlpha = anyFocus && !sel && !pin && !hot ? 0.35 : 0.9; c.fillStyle = p.color; c.fill(); c.globalAlpha = 1; }
+      else { c.setLineDash([3 * k, 3 * k]); c.strokeStyle = p.color; c.lineWidth = 1.5 * k; c.globalAlpha = anyFocus && !sel && !pin && !hot ? 0.45 : 1; c.stroke(); c.setLineDash([]); c.globalAlpha = 1; }
+      if (sel || hot) { c.strokeStyle = '#fff'; c.lineWidth = 2.5 * k; c.stroke(); }
+      if (pin) { c.setLineDash([2 * k, 2 * k]); c.strokeStyle = '#F3C778'; c.lineWidth = 2 * k; c.beginPath(); c.arc(x, y, (p.x == null ? 6 * k : rad) + 4 * k, 0, 7); c.stroke(); c.setLineDash([]);
+        c.font = font(11, '700'); c.fillStyle = '#F3C778'; c.textAlign = 'center'; c.fillText(String(pinIdx(p.id) + 1), x + rad + 4 * k, y - rad - 2 * k); }
+      cv._hits.push({ x, y, rad: Math.max(rad, 7 * k) + 4 * k, p });
+    }
+    // labels: selected, pinned, hovered first, then the rest where they fit
+    const boxes = [], fits = (b) => b.x > P.x0 && b.x + b.w < W - 2 && b.y > 2 && b.y + b.h < H - 2 && !boxes.some((o) => b.x < o.x + o.w && o.x < b.x + b.w && b.y < o.y + o.h && o.y < b.y + b.h);
+    const prio = (e) => (e.p.id === selId ? 0 : pinIdx(e.p.id) >= 0 ? 1 : (QC.hot === e.p.id || hvMatches(e.p)) ? 2 : 3 + (1 - e.p.size));
+    for (const e of place.filter((e) => e.p.x != null || prio(e) < 3).sort((a, b) => prio(a) - prio(b))) {
+      const strong = prio(e) < 3; c.font = font(strong ? 13 : 11.5, strong ? '600' : '');
+      const t = e.p.name.length > 26 ? `${e.p.name.slice(0, 25)}…` : e.p.name, w = c.measureText(t).width;
+      const cand = [[e.x + e.rad + 5 * k, e.y + 4 * k], [e.x - e.rad - 5 * k - w, e.y + 4 * k], [e.x - w / 2, e.y - e.rad - 6 * k], [e.x - w / 2, e.y + e.rad + 14 * k]];
+      for (const [lx, ly] of cand) { const b = { x: lx - 2, y: ly - 13 * k, w: w + 4, h: 16 * k }; if (!fits(b) && !(strong && lx === cand[cand.length - 1][0] && ly === cand[cand.length - 1][1])) continue;
+        boxes.push(b); c.fillStyle = strong ? '#EEF8FF' : '#9FB6C6'; c.textAlign = 'left'; c.fillText(t, lx, ly); break; }
+    }
+    // hover readout
+    const hp = place.find((e) => e.p.id === QC.hot);
+    if (hp) {
+      const p = hp.p, l1 = p.name, l2 = p.hollow ? (p.untested ? 'not tested yet' : 'not measured') : `${cfg.xl} ${cfg.xf(p.x)} · ${cfg.yl} ${cfg.yf(p.y)}${p.err ? ` (90% ${sgn(p.err[0])} to ${sgn(p.err[1])})` : ''}`;
+      const l3 = p.sub || p.tag || (lv === 'macro' ? 'double-click: its categories · shift-click: pin' : lv === 'cat' ? 'double-click: its modules · shift-click: pin' : '');
+      c.font = font(12); const w = Math.max(c.measureText(l1).width + 20, c.measureText(l2).width, c.measureText(l3 || '').width) + 18 * k, hh = (l3 ? 58 : 42) * k;
+      let bx = hp.x + hp.rad + 12 * k, by = hp.y - hh - 6 * k; if (bx + w > W - 4) bx = hp.x - hp.rad - 12 * k - w; if (by < 4) by = hp.y + hp.rad + 8 * k;
+      c.fillStyle = 'rgba(9,18,26,.95)'; c.strokeStyle = 'rgba(243,199,120,.5)'; c.lineWidth = 1; c.fillRect(bx, by, w, hh); c.strokeRect(bx, by, w, hh);
+      c.textAlign = 'left'; c.font = font(12.5, '600'); c.fillStyle = '#EEF8FF'; c.fillText(l1, bx + 9 * k, by + 17 * k);
+      c.font = font(12); c.fillStyle = '#f3d9a4'; c.fillText(l2, bx + 9 * k, by + 34 * k); if (l3) { c.fillStyle = '#7f98aa'; c.fillText(l3, bx + 9 * k, by + 50 * k); }
+    }
+    return { cx, cy };
+  }
+  const qCfg = () => (qLevel() === 'mod' ? { ...QMOD, q: `Which modules of ${C_().qParent} get the stops?` } : QUADS[QC.slide]);
+  function qCorner(cfg, p, ref) {
+    if (p.hollow || p.x == null || p.y == null) return p.untested ? 'not tested' : 'not measured';
+    const [tl, tr, bl, br] = cfg.corners;
+    if (cfg.ref === 'diag') return p.y >= p.x ? tl : br;
+    const up = p.y >= ref.cy, right = p.x >= ref.cx;
+    return up ? (right ? tr : tl) : (right ? br : bl);
+  }
+  function qHvOf(p) { const lv = qLevel(); return lv === 'mod' ? { kind: 'sec', id: p.id, label: p.name } : { kind: lv === 'macro' ? 'macro' : 'cat', id: p.id, label: p.name }; }
+  function qSelect(p) {
+    const Q = C_(), lv = qLevel();
+    catHover(null);
+    if (lv === 'macro') catSet({ macro: Q.macro === p.id ? null : p.id, cat: null });
+    else if (lv === 'cat') { catSet({ cat: Q.cat === p.id ? null : p.id }); if (C_().cat) flyToHover({ kind: 'cat', id: p.id }); }
+    else { catSet({ qMod: Q.qMod === p.id ? null : p.id }); if (C_().qMod != null) flyToHover({ kind: 'sec', id: p.id }); }
+  }
+  function qDrill(p) {
+    const lv = qLevel(); clearTimeout(QC.timer); qStop();
+    if (lv === 'macro') { QC.trail = {}; catSet({ qLevel: 'cat', qParent: p.id, macro: p.id, cat: null, qMod: null }); flyToHover({ kind: 'macro', id: p.id }); }
+    else if (lv === 'cat') { QC.trail = {}; catSet({ qLevel: 'mod', qParent: p.id, qGrand: C_().qParent, cat: p.id, qMod: null }); flyToHover({ kind: 'cat', id: p.id }); }
+  }
+  function qPin(p) {
+    const Q = C_(), lv = qLevel(), pins = (Q.qPins || []).slice(), i = pins.findIndex((x) => x.lvl === lv && x.id === p.id);
+    if (i >= 0) pins.splice(i, 1); else { pins.push({ lvl: lv, id: p.id, name: p.name }); while (pins.filter((x) => x.lvl === lv).length > 4) pins.splice(pins.findIndex((x) => x.lvl === lv), 1); }
+    catSet({ qPins: pins });
+  }
+  function qGo(d) { if (qLevel() === 'mod') return; qStop(); QC.trail = {}; QC.slide = (QC.slide + d + QUADS.length) % QUADS.length; QC.hot = null; render(); }
+  function qStop() { if (QC.play || QC.played) { clearInterval(QC.play); QC.play = 0; QC.played = false; QC.dom = null; C_().preview = null; overlayKey = ''; } }
+  function qPlay() {
+    if (QC.play) { qStop(); render(); return; }
+    qStop();
+    const cfg = qCfg(); if (!cfg.play) return;
+    QC.trail = {};
+    QC.dom = qDomain(cfg, Q_SLOTS.flatMap((sl) => qPoints(cfg, sl)));
+    let i = 0;
+    const step = () => {
+      if (i >= Q_SLOTS.length || !QC.el?.isConnected) { clearInterval(QC.play); QC.play = 0; QC.played = true; render(); return; }
+      const sl = Q_SLOTS[i++]; C_().preview = sl;
+      for (const p of qPoints(cfg, sl)) if (p.x != null && p.y != null && !p.hollow) (QC.trail[p.id] ||= []).push([p.x, p.y]);
+      overlayKey = ''; render();
+    };
+    step(); QC.play = setInterval(step, 1300);
+  }
+  function qFull(on) {
+    QC.full = on == null ? !QC.full : on;
+    if (QC.full) { document.body.append(QC.el); QC.el.classList.add('hx-q-full'); }
+    else QC.el.classList.remove('hx-q-full');
+    render(); QC.draw();
+  }
+  function qBuild() {
+    if (QC.el) return;
+    const cv = h('canvas', { class: 'hx-md-cv hx-q-cv', width: 680, height: 360 });
+    QC.cv = cv; QC.head = h('div', { class: 'hx-q-head' }); QC.crumbs = h('div', { class: 'hx-q-crumbs' }); QC.foot = h('div', { class: 'hx-q-foot' });
+    QC.el = h('section', { class: 'hx-card hx-q' }, QC.head, QC.crumbs, cv, QC.foot);
+    const hit = (e) => { const b = cv.getBoundingClientRect(), sx = cv.width / b.width, x = (e.clientX - b.left) * sx, y = (e.clientY - b.top) * sx;
+      let best = null; for (const t of cv._hits || []) { const d = Math.hypot(t.x - x, t.y - y); if (d <= t.rad && (!best || d < best.d)) best = { d, p: t.p }; } return best?.p || null; };
+    cv.addEventListener('mousemove', (e) => {
+      const p = hit(e), id = p?.id ?? null;
+      if (id === QC.hot) return;
+      QC.hot = id;
+      if (p) catHover({ ...qHvOf(p), from: 'panel' }, cv); else if (C_().hover?.from === 'panel') catHover(null);
+      QC.draw();
+    });
+    cv.addEventListener('mouseleave', () => { QC.hot = null; catHover(null); QC.draw(); });
+    cv.addEventListener('click', (e) => {
+      const p = hit(e); if (!p) return;
+      if (e.shiftKey) { qPin(p); return; }
+      clearTimeout(QC.timer); QC.timer = setTimeout(() => qSelect(p), 240);
+    });
+    cv.addEventListener('dblclick', (e) => { const p = hit(e); if (p) { e.preventDefault(); qDrill(p); } });
+    document.addEventListener('keydown', (e) => {
+      if (!QC.el?.isConnected || state.lens !== 'categories' || /input|textarea|select/i.test(e.target?.tagName || '')) return;
+      if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { e.preventDefault(); qGo(e.key === 'ArrowLeft' ? -1 : 1); }
+      else if (e.key === 'Escape' && QC.full) qFull(false);
+    });
+    QC.draw = () => {
+      if (!QC.cv?.isConnected || !C_().sec || !C_().day) return;
+      const cfg = qCfg(), pts = qPoints(cfg, catSlot()), cv = QC.cv, dpr = Math.min(2, window.devicePixelRatio || 1);
+      const cw = Math.max(260, cv.clientWidth || 340), ch = QC.full ? Math.min(cw * 0.56, window.innerHeight * 0.66) : Math.max(250, cw * 0.78);
+      if (cv.width !== Math.round(cw * dpr) || cv.height !== Math.round(ch * dpr)) { cv.width = Math.round(cw * dpr); cv.height = Math.round(ch * dpr); }
+      cv._k = dpr * (QC.full ? 1.3 : cw < 480 ? 0.78 : 1);
+      QC.ref = drawQuad(cv, cfg, pts, (catSlot() !== 'giorno' && QC.dom) || qDomain(cfg, pts));
+      QC.pts = pts;
+    };
+  }
+  /** The carousel card (persistent DOM, so double-click survives re-renders). */
+  function quadCard() {
+    void loadQuadExtras(); qBuild();
+    const Q = C_(), lv = qLevel(), cfg = qCfg(), n = QUADS.length, sl = catSlot();
+    const btn = (label, title, on, extra = {}) => h('button', { type: 'button', class: 'hx-q-btn', title, onclick: on, ...extra }, label);
+    QC.head.replaceChildren(
+      h('div', { class: 'hx-q-title' }, h('b', null, cfg.q), h('small', null, `${cfg.sub} · ${sl === 'giorno' ? 'whole day' : sl.replace('-', '–')}${QC.played ? ' · trails 08–20' : QC.play ? ' · playing' : ''}`)),
+      h('div', { class: 'hx-q-nav' },
+        lv === 'mod' ? null : btn('‹', 'Previous question (←)', () => qGo(-1)),
+        lv === 'mod' ? null : h('span', { class: 'hx-q-dots' }, ...QUADS.map((x, i) => h('button', { type: 'button', class: i === QC.slide ? 'on' : '', title: x.q, onclick: () => { qStop(); QC.trail = {}; QC.slide = i; render(); } }))),
+        lv === 'mod' ? null : btn('›', 'Next question (→)', () => qGo(1)),
+        btn(QC.play ? '❚❚' : '▶', cfg.play ? 'Play the day 08–20 with trails' : 'This question is not per slot', qPlay, { disabled: !cfg.play, class: `hx-q-btn${QC.play ? ' on' : ''}` }),
+        btn(QC.full ? '✕' : '⤢', QC.full ? 'Close full screen (Esc)' : 'Full screen', () => qFull())));
+    const crumb = (label, on) => h('button', { type: 'button', onclick: on }, label);
+    const up = (patch) => { qStop(); QC.trail = {}; catHover(null); catSet(patch); };
+    QC.crumbs.replaceChildren(...[
+      crumb('All macro-categories', () => up({ qLevel: 'macro', qParent: null, qMod: null, cat: null })),
+      lv !== 'macro' ? h('i', null, '›') : null,
+      lv === 'cat' ? h('b', null, Q.qParent) : lv === 'mod' ? crumb(Q.qGrand, () => up({ qLevel: 'cat', qParent: Q.qGrand, qMod: null })) : null,
+      lv === 'mod' ? h('i', null, '›') : null, lv === 'mod' ? h('b', null, Q.qParent) : null,
+      h('small', null, lv === 'macro' ? 'double-click a dot to open its categories' : lv === 'cat' ? 'double-click a category to open its modules' : 'modules · estimated')].filter(Boolean));
+    // foot: note, pinned comparison, module products
+    const foot = [h('p', { class: 'hx-note' }, cfg.note)];
+    if (cfg.id === 'media' && !qx.reach) foot.unshift(h('p', { class: 'hx-note' }, qx.status === 'ready' ? 'Screen reach (categories/reach.json) is not available.' : 'Loading the screen reach model…'));
+    requestAnimationFrame(() => {
+      QC.draw();
+      const pins = (Q.qPins || []).filter((x) => x.lvl === lv);
+      const rows = pins.map((pn, i) => { const p = (QC.pts || []).find((x) => x.id === pn.id); return { pn, i, p }; });
+      const tbl = rows.length ? h('div', { class: 'hx-q-cmp' },
+        h('div', { class: 'hx-q-cmp-h' }, h('span', null, `Compare · ${rows.length} pinned`), h('span', null, cfg.xl), h('span', null, cfg.yl), h('span', null, 'quadrant'),
+          h('button', { type: 'button', class: 'hx-q-x', title: 'Clear the pins', onclick: () => catSet({ qPins: (Q.qPins || []).filter((x) => x.lvl !== lv) }) }, 'clear')),
+        ...rows.map(({ pn, i, p }) => h('div', { class: 'hx-q-cmp-r', ...hovAttrs(p ? qHvOf(p) : { kind: 'macro', id: pn.id }) },
+          h('span', null, h('em', null, String(i + 1)), h('i', { style: `--c:${p?.color || '#7A92A3'}` }), pn.name),
+          h('b', { 'data-l': cfg.xl }, p && p.x != null ? cfg.xf(p.x) : '—'), h('b', { 'data-l': cfg.yl }, p && !p.hollow && p.y != null ? cfg.yf(p.y) : '—'), h('small', null, p ? qCorner(cfg, p, QC.ref || {}) : 'not in view'),
+          h('button', { type: 'button', class: 'hx-q-x', title: 'Unpin', onclick: () => p && qPin(p) }, '×')))) : h('p', { class: 'hx-note hx-q-hint' }, 'Shift-click up to 4 dots to compare them across the six questions.');
+      const extra = [];
+      if (lv === 'mod' && Q.qMod != null) {
+        const s = Q.sec.sections[Q.qMod];
+        if (s) extra.push(h('div', { class: 'hx-q-prod' }, h('div', { class: 'hx-card-h' }, h('b', null, `Module · corsia ${s.corsia || 'perimeter'} · ${num(s.fm, 1)} facing m`), h('small', null, 'planogram · estimated position ±1.3 m')),
+          h('div', { class: 'hx-cat-list' }, ...(s.prod || []).map(([d, mt]) => h('div', { class: 'hx-cat-row' }, h('span', null, d), h('i', { style: `--w:${(mt / Math.max(0.01, s.prod[0][1]) * 100).toFixed(0)}%;--c:${macroColor(s.macro)}` }), h('b', null, `${num(mt, 2)} m`), h('em', null, ''))))));
+      }
+      if (QC.foot.isConnected || QC.full) QC.foot.replaceChildren(tbl, ...extra, ...foot);
+    });
+    QC.foot.replaceChildren(...foot);
+    if (QC.full) return card('hx-q-ph', h('p', null, 'The quadrants are open in full screen. ', h('button', { type: 'button', class: 'hx-ghost', onclick: () => qFull(false) }, 'Close')));
+    return QC.el;
+  }
+
   function inspectCat() {
     const Q = C_(), S = Q.sec, D = Q.day, layer = state.layer.categories, m = Q.metric;
     const kick = `${LENS.categories.n} · PLANOGRAM CATEGORIES`;
@@ -3490,16 +3841,7 @@ export function mountAnalysisWorkspace(api) {
         lead: Q.macro ? (catOk(r) ? leadKpi(`${CAT_METRICS.find((x) => x[0] === m)[1].toUpperCase()} · ${Q.macro.toUpperCase()}`, catFmt(m, r[m]), `${VJ.fmtInt(r.stops)} stops out of ${VJ.fmtInt(r.vis)} passes · ${Math.round((r.shelf || 0) * 60)} s at the shelf per visitor · choice ${num(r.ch, 2)}`, 'cyan')
           : leadKpi(`${Q.macro.toUpperCase()}`, 'Not measured', `The sensor sees ${pct(r?.cov)} of this category’s floor. No number is shown in its place.`, ''))
           : leadKpi('MACRO-CATEGORIES MEASURED', `${okN} of ${rowsM.length}`, `${S.sections.length} planogram sections on the floor · ${S.cats.length} display categories · ${S.quality.ok} sections on a twin shelf`, 'cyan') }), metricSeg);
-      const qc = mdCanvas('hx-md-cv', 340);
-      qc.addEventListener('mousemove', (e) => { const b = qc.getBoundingClientRect(), sx = qc.width / b.width, x = (e.clientX - b.left) * sx, y = (e.clientY - b.top) * sx;
-        const hit = (qc._hits || []).find((p) => Math.hypot(p.x - x, p.y - y) <= p.rad);
-        if (hit) catHover({ kind: 'macro', id: hit.name, label: hit.name, from: 'panel' }, qc); else if (Q.hover?.from === 'panel') catHover(null); });
-      qc.addEventListener('mouseleave', () => catHover(null));
-      qc.addEventListener('click', (e) => { const b = qc.getBoundingClientRect(), sx = qc.width / b.width, x = (e.clientX - b.left) * sx, y = (e.clientY - b.top) * sx;
-        const hit = (qc._hits || []).find((p) => Math.hypot(p.x - x, p.y - y) <= p.rad); if (hit) catSet({ macro: Q.macro === hit.name ? null : hit.name, cat: null }); });
-      out.push(card('', h('div', { class: 'hx-card-h' }, h('b', null, 'Where shoppers pass, where they stop'), h('small', null, 'one dot per macro-category · size = minutes in the area')), qc,
-        h('p', { class: 'hx-note' }, 'Destinations draw both traffic and stops. Hidden pull: few pass, many stop. Busy but skipped: many pass, few stop — the first place to look for a layout or media test.')));
-      requestAnimationFrame(() => drawCatQuad(qc, rowsM));
+      out.push(quadCard());
       if (Q.macro) {
         const names = S.cats.filter((n) => catRow(n)?.macro === Q.macro);
         out.push(card('', h('div', { class: 'hx-card-h' }, h('b', null, `Categories in ${Q.macro}`), h('small', null, CAT_METRICS.find((x) => x[0] === m)[1].toLowerCase())), catList(names),

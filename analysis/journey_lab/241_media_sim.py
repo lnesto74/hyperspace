@@ -349,6 +349,46 @@ def build():
     for s in spots: print("  ", s["id"], {DEPTS[d]: (s["reach"][d], s["index"][d]) for d in range(nd) if s["reach"][d] > 0.05})
     print("  base", dict(zip(DEPTS, res["base"])))
 
+
+def build_cat():
+    """categories/reach.json: for each candidate spot, the chance that its viewers reach each planogram display
+    category (cells within 1.2 m in front of that category's fronts) within 3 minutes. Same movement model,
+    calibration and start positions as build(); does not touch sim.json."""
+    sec = json.load(open(FF / "categories" / "sections.json"))
+    files = sorted(glob.glob(str(WORK / "sim_*.npz")))
+    D = [dict(np.load(f, allow_pickle=True)) for f in files]
+    tk = np.concatenate([d["trans_k"] for d in D]); tc = np.concatenate([d["trans_c"] for d in D])
+    k, inv = np.unique(tk, return_inverse=True); cnt = np.bincount(inv, tc)
+    a, b = (k // NCELL).astype(int), (k % NCELL).astype(int)
+    out_n = np.bincount(a, cnt, NCELL)
+    live = np.where(out_n >= 20)[0]; li = -np.ones(NCELL, int); li[live] = np.arange(len(live))
+    m = (li[a] >= 0) & (li[b] >= 0)
+    P = np.zeros((len(live), len(live))); np.add.at(P, (li[a[m]], li[b[m]]), cnt[m]); P /= np.maximum(P.sum(1, keepdims=True), 1)
+    cats = sec["cats"]; nc = len(cats)
+    A = np.zeros((len(live), nc))
+    for s in sec["sections"]:
+        ax_, az_ = s["a"]; bx_, bz_ = s["b"]; nx_, nz_ = s["n"]
+        for f in np.linspace(0, 1, 6):
+            for d in (0.4, 0.9):
+                c = li[mcell(ax_ + (bx_ - ax_) * f + nx_ * d, az_ + (bz_ - az_) * f + nz_ * d)]
+                if c >= 0: A[c, s["cat"]] = 1
+    r = A.copy()
+    for _ in range(HORIZON // STEP): r = A + (1 - A) * (P @ r)
+    sim = json.load(open(SITE / "sim.json")) if (SITE / "sim.json").exists() else {}
+    cal = (sim.get("params") or {}).get("calibration", 0.556)
+    occ = sum(d["occ"] for d in D)[live]; occ = occ / occ.sum(); base = occ @ r
+    spots = []
+    for si, s in enumerate(SPOTS):
+        e = sum(d["endc"][si] for d in D)[live]; e = e / max(1, e.sum())
+        spots.append({"id": s["id"], "label": s["label"], "reach": [round(float(v * cal), 4) for v in e @ r]})
+    res = {"schema": "category-reach-v1", "cats": cats, "calibration": cal, "horizon_s": HORIZON, "days_model": [str(d["day"]) for d in D],
+           "base": [round(float(v * cal), 4) for v in base], "spots": spots}
+    dest = FF / "categories" / "reach.json"
+    json.dump(res, open(dest, "w"), separators=(",", ":"), ensure_ascii=False)
+    top = sorted(zip(cats, spots[0]["reach"]), key=lambda x: -x[1])[:5]
+    print(f"241 build-cat: {len(spots)} spots x {nc} categories -> {dest}; T1 top: {top}")
+
 if __name__ == "__main__":
     if sys.argv[1] == "day": run_day(sys.argv[2], sys.argv[3] if len(sys.argv) > 3 else os.path.expanduser(f"~/jl_work/flow_rows_{sys.argv[2]}.csv.gz"))
+    elif sys.argv[1] == "build-cat": build_cat()
     else: build()

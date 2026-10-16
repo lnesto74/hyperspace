@@ -10,7 +10,7 @@ import { fileURLToPath } from 'url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = () => process.env.HYPERSPACE_ROOT || path.resolve(__dirname, '../../..');
 const SCRIPT = 'analysis/journey_lab/250_category_pack.py';
-export const CATEGORY_FILE = /^(index|sections|\d{4}-\d{2}-\d{2})\.json$/;
+export const CATEGORY_FILE = /^(index|sections|reach|\d{4}-\d{2}-\d{2})\.json$/;
 
 export function categoryPackDir(venueId) {
   if (process.env.CATEGORY_PACK_DIR) return path.join(process.env.CATEGORY_PACK_DIR, venueId);
