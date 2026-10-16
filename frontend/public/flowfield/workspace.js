@@ -1301,7 +1301,7 @@ export function mountAnalysisWorkspace(api) {
     const f = api.snapshot().field;
     const key = [fid(f), !!geo.fix, state.eng.iso, state.eng.flow, state.flowCell, state.kfocus, state.regFocus, state.flowSpot, state.kin.status, state.lens, state.econ.effort, JSON.stringify(state.econ.margins), state.econ.basketMargin, state.source, state.execLayer[state.lens], !!state.exec.report, state.layer[state.lens], state.slot, state.sel?.kind, state.sel?.id, !!view, !!A, state.radar.list.length, state.radar.stamp, state.media.status, state.media.sel, state.media.simq.status, state.media.simq.spot, state.media.simq.sku, state.media.simq.target, state.cat.status, state.cat.metric, state.cat.macro, state.cat.cat, state.cat.aisle, state.cat.preview].join('|');
     if (key === overlayKey) return;
-    overlayKey = key; paintKey = '';
+    overlayKey = key; paintKey = ''; lastBaseKey = '';
     overlay.replaceChildren(); tags.replaceChildren(); shapes = []; pins = []; items = [];
     kpiStrip.hidden = true;
     if (!A || state.lens === 'compare') return;
@@ -1852,15 +1852,16 @@ export function mountAnalysisWorkspace(api) {
     }
     const P = api.projector();
     const rp = rpOn() && state.replay.data;
-    const hvk = state.lens === 'categories' && state.cat.hover ? `|hv${hoverKey(state.cat.hover)}|${Math.floor(performance.now() / 50)}` : '';
-    const PK = (rp ? `${P.key}|rp${state.replay.k}|${state.replay.pay}` : P.key) + hvk;
+    const hvk = state.lens === 'categories' && state.cat.hover ? `|hv${hoverKey(state.cat.hover)}` : '';
+    const baseKey = rp ? `${P.key}|rp${state.replay.k}|${state.replay.pay}` : P.key;
+    const PK = baseKey + hvk;
     if (PK === paintKey) {
       // Camera at rest: resolve callout overlaps once (DOM measuring every moving frame made orbiting stutter).
       if (collidePending) { collidePending = false; resolveCollisions(); }
       return;
     }
     paintKey = PK;
-    collidePending = true;
+    if (baseKey !== lastBaseKey) { lastBaseKey = baseKey; collidePending = true; }   // hover repaints never re-run label collisions (no flicker)
     const dpr = Math.min(2, window.devicePixelRatio || 1);
     const W = Math.round(P.w * dpr), H = Math.round(P.h * dpr);
     if (paintCanvas.width !== W || paintCanvas.height !== H) { paintCanvas.width = W; paintCanvas.height = H; }
@@ -1886,7 +1887,7 @@ export function mountAnalysisWorkspace(api) {
       if (s) p.el.style.transform = `translate(${s[0].toFixed(1)}px, ${s[1].toFixed(1)}px)`;
     }
   });
-  let collidePending = false;
+  let collidePending = false, lastBaseKey = '';
   function resolveCollisions() {
     // Callouts never sit under the floating controls or on top of each other: the first pin
     // (highest priority) wins, a later one that collides is hidden until the camera moves.
@@ -3373,19 +3374,16 @@ export function mountAnalysisWorkspace(api) {
     const Q = C_(), S = Q.sec, hv = Q.hover; if (!S || !hv || state.lens !== 'categories') return [];
     const idx = catMatch(hv); if (!idx.length && hv.kind !== 'aisle') return [];
     const m = Q.metric, vals = S.cats.map((n) => catRow(n)).filter(catOk).map((r) => r[m]), mx = Math.max(1e-9, ...vals);
-    const pulse = 0.65 + 0.35 * Math.sin(t / 220), out = [], beacons = new Map();
+    const pulse = 1, out = [];
     for (const i of idx) {
       const s = S.sections[i], r = catRow(S.cats[s.cat]), col = macroColor(s.macro);
       const w = catOk(r) ? 0.12 + 0.78 * Math.sqrt(r[m] / mx) : 0.3;
-      out.push({ t: 'ring', pts: catRibbon(s, w), color: '#FFFFFF', width: 2.2, glow: 12 * pulse, alpha: 0.95, fill: catOk(r) ? col : 'rgba(122,146,163,0.35)', y: 0.06 });
-      const k = s.corsia > 0 ? `c${s.corsia}` : `p${Math.round(s.a[0] / 6)}_${Math.round(s.a[1] / 6)}`;
-      if (!beacons.has(k)) beacons.set(k, []); beacons.get(k).push(i);
-    }
-    const C = catCenters();
-    for (const list of beacons.values()) {
-      const i = list[list.length >> 1], [x, z] = C[i], col = macroColor(S.sections[i].macro);
-      out.push({ t: 'line', pts: [[x, z, 0.05], [x, z, 2.7]], color: col, width: 2, alpha: 0.9, glow: 8 });
-      out.push({ t: 'ring', pts: Array.from({ length: 12 }, (_, k) => [x + Math.cos(k / 12 * Math.PI * 2) * 0.28, z + Math.sin(k / 12 * Math.PI * 2) * 0.28, 2.7]), color: '#FFFFFF', width: 1.5, fill: col, alpha: 0.95 * pulse });
+      // floor ribbon (the KPI) …
+      out.push({ t: 'ring', pts: catRibbon(s, w), color: '#FFFFFF', width: 1.6, alpha: 0.95, fill: catOk(r) ? col : 'rgba(122,146,163,0.35)', y: 0.06 });
+      // … and the shelf face itself, from the floor to the top of the products (planogram height)
+      const H = s.h || 1.9, o = 0.04, [ax, az] = s.a, [bx, bz] = s.b, [nx, nz] = s.n;
+      out.push({ t: 'ring', pts: [[ax + nx * o, az + nz * o, 0.05], [bx + nx * o, bz + nz * o, 0.05], [bx + nx * o, bz + nz * o, H], [ax + nx * o, az + nz * o, H]],
+        color: '#FFFFFF', width: 1.4, glow: 10 * pulse, alpha: 0.9, fill: `${catOk(r) ? col : '#7A92A3'}${Math.round(255 * 0.42 * pulse).toString(16).padStart(2, '0')}` });
     }
     if (hv.kind === 'aisle') { const a = S.aisles.find((x) => x.corsia === hv.id); if (a) out.push({ t: 'ring', pts: [[a.x0, a.z0], [a.x1, a.z0], [a.x1, a.z1], [a.x0, a.z1]], color: '#FFFFFF', width: 2, glow: 10 * pulse, fill: 'rgba(243,199,120,0.12)', y: 0.05 }); }
     return out;
@@ -3417,6 +3415,12 @@ export function mountAnalysisWorkspace(api) {
       catLink.style.display = 'block';
     } else catLink.style.display = 'none';
   }
+  /** Small tip above the cursor, on the side away from the panel, never under the pointer. */
+  function placeTip(mx, my, vr) {
+    const w = catTip.offsetWidth || 200, hgt = catTip.offsetHeight || 54;
+    const x = mx > vr.width * 0.55 ? mx - w - 18 : mx + 18, y = my - hgt - 14 < 6 ? my + 18 : my - hgt - 14;
+    catTip.style.transform = `translate(${Math.max(6, Math.min(x, vr.width - w - 6))}px, ${y}px)`;
+  }
   /** Twin → panel: the module nearest the cursor (screen space, 22 px) lights itself and its rows. */
   let catMoveRaf = 0;
   view.addEventListener('pointermove', (e) => {
@@ -3425,15 +3429,16 @@ export function mountAnalysisWorkspace(api) {
       catMoveRaf = 0;
       const Q = C_(), S = Q.sec, P = api.projector(), vr = view.getBoundingClientRect(), mx = e.clientX - vr.left, my = e.clientY - vr.top;
       if (Q.hover && Q.hover.from !== 'twin') return;
-      let best = -1, bd = 22;
-      catCenters().forEach(([x, z], i) => { const p = P.at(x, 0.3, z); if (!p) return; const d = Math.hypot(p[0] - mx, p[1] - my); if (d < bd) { bd = d; best = i; } });
+      let best = -1, bd = 20;
+      const cur = Q.hover?.from === 'twin' ? Q.hover.id : -1;
+      catCenters().forEach(([x, z], i) => { const p = P.at(x, 0.3, z); if (!p) return; const d = Math.hypot(p[0] - mx, p[1] - my) - (i === cur ? 8 : 0); if (d < bd) { bd = d; best = i; } });
       if (best < 0) { if (Q.hover?.from === 'twin') catHover(null); return; }
       const s = S.sections[best], name = S.cats[s.cat], r = catRow(name), m = Q.metric;
+      if (best === cur) { placeTip(mx, my, vr); return; }
       catHover({ kind: 'sec', id: best, from: 'twin', label: name });
-      catTip.replaceChildren(h('b', null, name), h('span', null, `${s.macro} · corsia ${s.corsia || 'perimeter'}${s.inf ? ' · category inferred from product names' : ''}`),
-        h('strong', null, r ? (catOk(r) ? `${catFmt(m, r[m])} ${catNote[m]}` : `not measured · sensor sees ${pct(r.cov)}`) : 'checkout fixture · no category KPI'),
-        h('small', null, 'click to open'));
-      catTip.style.transform = `translate(${Math.min(mx + 16, vr.width - 260)}px, ${Math.max(8, my - 70)}px)`; catTip.hidden = false;
+      catTip.replaceChildren(h('b', null, name), h('span', null, r ? (catOk(r) ? `${catFmt(m, r[m])} ${catNote[m]}` : `not measured (${pct(r.cov)} seen)`) : 'checkout fixture · no KPI'),
+        h('small', null, `${s.macro} · ${s.corsia ? `corsia ${s.corsia}` : 'perimeter'}`));
+      catTip.hidden = false; placeTip(mx, my, vr);
     });
   });
   view.addEventListener('pointerleave', () => { if (C_().hover?.from === 'twin') catHover(null); });
@@ -3590,7 +3595,7 @@ export function mountAnalysisWorkspace(api) {
       const names = S.macros.map((x) => x.name).filter((n) => Q.day?.slots?.giorno?.macro?.[n]?.kind === 'categoria');
       legend.replaceChildren(...names.map((n) => h('button', { type: 'button', class: `hx-lchip${Q.macro === n ? ' on' : ''}${Q.macro && Q.macro !== n ? ' off' : ''}`, style: `--c:${S.macros.find((x) => x.name === n).color}`, onclick: () => catSet({ macro: Q.macro === n ? null : n, cat: null }),
         onmouseenter: () => catHover({ kind: 'macro', id: n, label: n, from: 'legend' }), onmouseleave: () => catHover(null) }, h('i'), n)),
-        h('span', { class: 'hx-lhot' }, Q.preview ? h('b', { class: 'hx-cat-prev' }, `Previewing ${Q.preview === 'giorno' ? 'the whole day' : Q.preview.replace('-', '–')} · `) : null, 'ribbon width = ', CAT_METRICS.find((x) => x[0] === Q.metric)[1].toLowerCase(), ' · dashed grey = not measured · dashed colour = checkout fixtures · hover anything to find it'));
+        h('span', { class: 'hx-lhot' }, Q.preview ? h('b', { class: 'hx-cat-prev' }, `Previewing ${Q.preview === 'giorno' ? 'the whole day' : Q.preview.replace('-', '–')} · `) : null, 'ribbon width = ', CAT_METRICS.find((x) => x[0] === Q.metric)[1].toLowerCase(), ' · dashed grey = not measured · dashed colour = checkout fixtures · hover a row or a shelf: its shelf face lights up'));
       return;
     }
     if (L === 'flow' && layer === 'regime') {
