@@ -15,6 +15,7 @@ import fs from 'fs';
 import path from 'path';
 import { spawn } from 'child_process';
 import { fileURLToPath } from 'url';
+import { buildCategoryDay } from './categoryPack.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const TREVIGLIO = '55fdd53b-3298-4355-97c0-b4e789b11d06';
@@ -147,6 +148,7 @@ export class WindflowDayService {
         await this._py('230_flow_rows.py', [day, rowsFile], pyEnv);
         const anchorPath = env('FLOWFIELD_LAYOUT_PATH', path.join(__dirname, '../../assets/flowfield/layout_anchor.json'));
         await this._node(path.join(__dirname, 'flowPackWorker.js'), [day, venueId, rowsFile, path.join(dir, 'flow'), anchorPath]);
+        await buildCategoryDay({ db: this.db, venueId, day, rows: rowsFile });
         fs.rmSync(rowsFile, { force: true });
       });
     }

@@ -13,6 +13,9 @@ MEASURED once over all days: a 5-second movement model on 1.5 m cells (where peo
   it is the probability, from the viewers' positions, of reaching the department within 3 minutes, chained
   through the movement model. A short-horizon check against ids that do survive is written to the output.
 DEMO (flagged): baseline sales per department, message-type effect assumptions, base CPM.
+Optional MEDIA_TARGETS (scripts/planogram/media_category_targets.py): planogram display categories as targets,
+measured the same way on the floor band along their real fronts. Set it for both steps; days must have the
+planogram layout. A target the LiDAR does not see is written as measured=false, never as 0 viewers.
 """
 import sys, os, json, math, glob
 from pathlib import Path
@@ -46,6 +49,23 @@ DEPTS = [d["id"] for d in areas["departments"]]
 DEPTR = np.full((nx, nz), -1, np.int16)
 for k, d in enumerate(areas["departments"]):
     DEPTR[contains_xy(mpoly(d["area"]), gx, gz)] = k
+
+# planogram category targets (optional, MEDIA_TARGETS = scripts/planogram/media_category_targets.py output):
+# the free floor within band_m of the target's real fronts.
+TARGETS = json.load(open(os.environ["MEDIA_TARGETS"])) if os.environ.get("MEDIA_TARGETS") else None
+def band_raster(fronts, band):
+    out = np.zeros((nx, nz), bool)
+    for x0, z0, x1, z1 in fronts:
+        i0, i1 = int((min(x0, x1) - band - ox) / R), int((max(x0, x1) + band - ox) / R) + 1
+        j0, j1 = int((min(z0, z1) - band - oz) / R), int((max(z0, z1) + band - oz) / R) + 1
+        i0, j0, i1, j1 = max(i0, 0), max(j0, 0), min(i1, nx), min(j1, nz)
+        px, pz = gx[i0:i1, j0:j1], gz[i0:i1, j0:j1]
+        dx, dz = x1 - x0, z1 - z0; L2 = max(dx * dx + dz * dz, 1e-9)
+        u = np.clip(((px - x0) * dx + (pz - z0) * dz) / L2, 0, 1)
+        out[i0:i1, j0:j1] |= np.hypot(px - (x0 + u * dx), pz - (z0 + u * dz)) <= band
+    return out & ~BLOCK
+TMASK = [band_raster(t["fronts"], TARGETS["band_m"]) for t in TARGETS["targets"]] if TARGETS else []
+TIDS = [t["id"] for t in TARGETS["targets"]] if TARGETS else []
 
 C = 0.5                                     # audience grid
 cx_n, cz_n = int(nx * R / C) + 1, int(nz * R / C) + 1
@@ -140,6 +160,15 @@ def run_day(day, rows_path):
     np.add.at(stops, (dep[first][sel], hr[first][sel]), 1)
     store = np.bincount(np.unique(codes.astype(np.int64) * NH + hr) % NH, minlength=NH)
     out["traffic"], out["stops"], out["store"] = traffic, stops, store
+    if TARGETS:   # ids passing each target band per hour
+        anyt = np.zeros((nx, nz), bool)
+        for mk in TMASK: anyt |= mk
+        sub = np.where(anyt[fi, fj])[0]
+        tt = np.zeros((len(TMASK), NH), int)
+        for q, mk in enumerate(TMASK):
+            w = sub[mk[fi[sub], fj[sub]]]
+            if len(w): tt[q] = np.bincount(np.unique(codes[w].astype(np.int64) * NH + hr[w]) % NH, minlength=NH)
+        out["ttraffic"], out["tids"] = tt, np.array(TIDS)
 
     # movement model: cell now -> cell 5 s later (same id)
     j = np.arange(len(t) - STEP)
@@ -267,6 +296,32 @@ def build():
         spots.append({**s, "reach": [round(float(v), 4) for v in r], "index": [round(float(v / max(1e-6, bv)), 2) for v, bv in zip(r, base)]})
     prof = {"aud": [d["aud"].round(1).tolist() for d in D], "traffic": [d["traffic"].tolist() for d in D],
             "stops": [d["stops"].tolist() for d in D], "store": [d["store"].tolist() for d in D]}
+    targets = None
+    if TARGETS and all("tids" in d and list(d["tids"]) == TIDS for d in D):
+        # a 1.5 m cell belongs to a target when >= 1/6 of its fine cells are in the target band (bands are ~1 m wide)
+        AT = np.zeros((len(live), len(TIDS)))
+        for q, c in enumerate(live):
+            i0, j0 = int((c // mz_n) * M / R), int((c % mz_n) * M / R)
+            for t, mk in enumerate(TMASK): AT[q, t] = float(mk[i0:i0 + 6, j0:j0 + 6].sum() >= 6)
+        RT = AT.copy()
+        for _ in range(HORIZON // STEP): RT = AT + (1 - AT) * (P @ RT)
+        tbase = occ @ RT
+        for si, s in enumerate(spots):
+            e = sum(d["endc"][si] for d in D)[live]; e = e / max(1, e.sum())
+            r = e @ RT
+            s["treach"] = [round(float(v), 4) for v in r]
+            s["tindex"] = [round(float(v / bv), 2) if bv > 1e-6 else None for v, bv in zip(r, tbase)]
+        prof["ttraffic"] = [d["ttraffic"].tolist() for d in D]
+        targets = []
+        for t, T in enumerate(TARGETS["targets"]):
+            per = [T["days"].get(dd) for dd in days]
+            blind = [dd for dd, v in zip(days, per) if not v or not v["measured"]]
+            reason = next((v["reason"] for v in per if v and v.get("reason")), None) or ("no category-layer row" if blind else None)
+            if not blind and AT[:, t].sum() == 0: reason, blind = "no movement-model cell on these fronts", days
+            targets.append({k: T[k] for k in ("id", "label", "kind", "categorie", "macro", "corsie", "fonti", "default_for_spot", "fronts")}
+                           | {"measured": not blind, "reason": reason, "cells": int(AT[:, t].sum()), "base": round(float(tbase[t]), 4)})
+    elif TARGETS:
+        print("241 build: MEDIA_TARGETS set but some day files were made without it (or with other targets) -> no targets")
     field = {DEPTS[d]: [[round(float(cxs[i]), 2), round(float(czs[i]), 2), round(float(R180[i, d]), 3)] for i in range(len(live)) if R180[i, d] >= 0.03 and A[i, d] == 0] for d in range(nd)}
     faces = {}
     for s in SPOTS:
@@ -284,6 +339,9 @@ def build():
            "profiles": prof, "field": field, "check": check, "catalog": CATALOG, "messages": MESSAGES,
            "params": {"calibration": round(cal, 3), "horizon_s": HORIZON, "step_s": STEP, "cell_m": M, "baseCpm": 6.0, "loop_s": 60},
            "demo": ["baseline sales", "message effects", "base CPM"]}
+    if targets is not None:
+        res["targets"] = targets
+        res["targets_meta"] = {"planogram": TARGETS["planogram"], "band_m": TARGETS["band_m"], "days": TARGETS["days"]}
     dest = SITE / "sim.json"
     json.dump(res, open(dest, "w"), separators=(",", ":"))
     print(f"241 build: {len(days)} days -> {dest} ({dest.stat().st_size // 1024} KB)")

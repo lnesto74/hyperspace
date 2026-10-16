@@ -28,6 +28,9 @@ def source_polygon(r):
     return [[round(x,2),round(z,2)]for x,z in p]
 assert len(rows)==len(layout['polys'])
 for i,r in enumerate(rows):assert source_polygon(r)==layout['polys'][i],f'Stale source inventory at CAD {i}; reconcile before placing assets'
+# 2026-10-16: 180TEV_Schematico.dwg revision renumbered CAD indices (204 removed, 302 added).
+# The frozen frutta-v1 baseline still uses the old numbering; remap preserves its bindings.
+_remap={int(k):v for k,v in json.loads((ROOT/'scripts/retail/cad_index_remap_2026-10-16.json').read_text())['remap'].items()}
 def fit(p):
     """Oriented rectangle for rectangular CAD; conservative interior rectangle otherwise."""
     a,b=max(edges(p),key=lambda e:math.dist(*e));length=math.dist(a,b)
@@ -47,7 +50,7 @@ roi_by_shelf=collections.defaultdict(list)
 for r in pack['rois']:
     if r.get('shelf_id'):roi_by_shelf[r['shelf_id']].append(r)
 fixtures=[];inventory=[];excluded=[]
-old={f['cadIndex']:f for f in baseline['fixtures']}
+old={_remap[f['cadIndex']]:f for f in baseline['fixtures'] if _remap.get(f['cadIndex']) is not None}
 for i,r in enumerate(rows):
     typ=r['type'];p=layout['polys'][i];rs=roi_by_shelf[r['object_id']]
     cats={q['category']for q in rs if q.get('category')}
@@ -58,14 +61,14 @@ for i,r in enumerate(rows):
     if typ=='checkout':
         if i not in old:excluded.append({**record,'reason':'Checkout has no matched lane ROI'});continue
         f=dict(old[i]);f.update(record);f['camera']='checkout';fixtures.append(f);continue
-    if typ=='self_checkout':cat='Checkout 12'if i==950 else 'Checkout 13';asset='self-checkout';camera='checkout'
+    if typ=='self_checkout':cat='Checkout 12'if i==854 else 'Checkout 13';asset='self-checkout';camera='checkout'  # 854 was 950 pre-2026-10 remap
     else:
         cat=cat or {'shelf':'Scaffali senza categoria','fridge':'Scaffali senza categoria','isola':'Espositori senza categoria','tavolo':'Tavoli','entrance':'Ingresso','digital_display':'Display digitali'}.get(typ,'Espositori senza categoria')
         c=config['categories'].get(cat);assert c,cat
         asset,camera=c['asset'],c['camera']
-        if typ=='fridge' and cat=='Surgelati' and i in [905,906,907]:asset='freezer-wall'
+        if typ=='fridge' and cat=='Surgelati' and i in [823,824,825]:asset='freezer-wall'  # were 905,906,907 pre-2026-10 remap
         if typ=='fridge' and cat=='Scaffali senza categoria':asset='chilled'
-    if i in [186,187,188,794]:
+    if i in [166,167,168,740]:  # were 186,187,188,794 pre-2026-10 remap
         excluded.append({**record,'category':cat,'reason':'CAD wall/lining geometry, not a merchandise fixture; retained exactly as architecture'});continue
     pos=fit(p)
     if not pos:excluded.append({**record,'category':cat,'reason':'No safe interior rectangle; exact CAD retained'});continue
@@ -85,7 +88,7 @@ for cat in sorted({f['category']for f in fixtures}|{a['id']for a in areas['depar
     analytic=next((a for a in areas['departments']if a['id']==cat),None)
     inventory.append({'category':cat,'status':'modelled'if fs else 'CAD only','fixtures':len(fs),'assets':sorted({f['asset']for f in fs}),'camera':fs[0]['camera']if fs else 'gondola','analyticGeometry':'visitor-areas.json'if analytic or cat.startswith('Checkout ')else None,'selection':'existing analytical ROI'if analytic or cat.startswith('Checkout ')else 'CAD fixture footprints only; no department KPI binding','excludedObjects':ex})
 assets={k:{'url':f'./retail/{k}.glb','overviewUrl':f'./retail/{k}-l0.glb','width':1.7,'length':2.6}for k in sorted({f['asset']for f in fixtures})}
-out={'schema':'retail-fixtures-v2','venueId':layout['venue']['id'],'layoutSha256':hashlib.sha256((PUBLIC/'layout_prod.json').read_bytes()).hexdigest(),'frame':baseline['frame'],'note':baseline['note'],'source':'exports/treviglio_2026-08-11: all 1119 source footprints exactly match current CAD','assumptions':config['assumptions'],'fixtures':fixtures,'assets':assets,'departments':inventory,'excluded':excluded,'unmatched':[]}
+out={'schema':'retail-fixtures-v2','venueId':layout['venue']['id'],'layoutSha256':hashlib.sha256((PUBLIC/'layout_prod.json').read_bytes()).hexdigest(),'frame':baseline['frame'],'note':baseline['note'],'source':f'exports/treviglio_2026-08-11 (updated 2026-10-16 from 180TEV_Schematico.dwg): all {len(rows)} source footprints exactly match current CAD','assumptions':config['assumptions'],'fixtures':fixtures,'assets':assets,'departments':inventory,'excluded':excluded,'unmatched':[]}
 (PUBLIC/'retail/manifest.json').write_text(json.dumps(out,indent=2,ensure_ascii=False)+'\n')
 (ROOT/'docs/design/supermarket/inventory.json').write_text(json.dumps({'source':out['source'],'departments':inventory,'excluded':excluded},indent=2,ensure_ascii=False)+'\n')
-print('Matched 1119 CAD objects;',len(fixtures),'placed fixtures;',len(inventory),'selectable areas;',len(assets),'asset variants;',len(excluded),'explicit exclusions')
+print(f'Matched {len(rows)} CAD objects;',len(fixtures),'placed fixtures;',len(inventory),'selectable areas;',len(assets),'asset variants;',len(excluded),'explicit exclusions')

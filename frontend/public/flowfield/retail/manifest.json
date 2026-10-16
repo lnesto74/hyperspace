@@ -1,10 +1,10 @@
 {
   "schema": "retail-fixtures-v2",
   "venueId": "55fdd53b-3298-4355-97c0-b4e789b11d06",
-  "layoutSha256": "116e0b73d3cb72d3980cda3b9f18cb3b5617b94193cd3821dc50664517b856c4",
+  "layoutSha256": "76c1f62f2ca8ae483efda8626c0795446f0b77c9d99b1e8954350555a3b9e16a",
   "frame": "venue metres: glTF (X,Y,Z) = Blender (X,Z,-Y); origin at fixture floor centre",
   "note": "CAD footprints and shelf-front edges are calibrated. Product assortments, heights and fixture styling are illustrative.",
-  "source": "exports/treviglio_2026-08-11: all 1119 source footprints exactly match current CAD",
+  "source": "exports/treviglio_2026-08-11 (updated 2026-10-16 from 180TEV_Schematico.dwg): all 1216 source footprints exactly match current CAD",
   "assumptions": {
     "units": "metres",
     "merchandise": "Representative category props; no brand or SKU planogram is available.",
@@ -18,151 +18,7 @@
   },
   "fixtures": [
     {
-      "cadIndex": 801,
-      "objectId": "88ed08bd-bd11-4e6b-a3d9-6ef4a74f9233",
-      "sourceName": "461_SCHEMATICO_0",
-      "type": "fridge",
-      "configuredCategory": "Carne",
-      "sourceHeight": 1.26,
-      "category": "Carne",
-      "asset": "meat",
-      "camera": "counter",
-      "shelfId": "88ed08bd-bd11-4e6b-a3d9-6ef4a74f9233",
-      "polygon": [
-        [
-          40.37,
-          5.57
-        ],
-        [
-          49.47,
-          5.57
-        ],
-        [
-          49.47,
-          4.95
-        ],
-        [
-          40.37,
-          4.95
-        ]
-      ],
-      "x": 44.92,
-      "z": 5.26,
-      "width": 0.6200000000000001,
-      "length": 9.100000000000001,
-      "yaw": 1.5707963267948966,
-      "fronts": [
-        [
-          [
-            40.37,
-            5.57
-          ],
-          [
-            49.47,
-            5.57
-          ]
-        ]
-      ],
-      "tile": true
-    },
-    {
-      "cadIndex": 802,
-      "objectId": "95120616-68fd-46bd-8a9c-fa0ef819ad7c",
-      "sourceName": "461_SCHEMATICO_0",
-      "type": "shelf",
-      "configuredCategory": "Acqua",
-      "sourceHeight": 0.6607998329174735,
-      "category": "Acqua",
-      "asset": "beverages",
-      "camera": "gondola",
-      "shelfId": "95120616-68fd-46bd-8a9c-fa0ef819ad7c",
-      "polygon": [
-        [
-          49.47,
-          5.57
-        ],
-        [
-          56.62,
-          5.57
-        ],
-        [
-          56.62,
-          4.25
-        ],
-        [
-          49.47,
-          4.25
-        ]
-      ],
-      "x": 53.045,
-      "z": 4.91,
-      "width": 1.3200000000000003,
-      "length": 7.149999999999999,
-      "yaw": 1.5707963267948966,
-      "fronts": [
-        [
-          [
-            49.47,
-            5.57
-          ],
-          [
-            56.62,
-            5.57
-          ]
-        ]
-      ],
-      "tile": true
-    },
-    {
-      "cadIndex": 803,
-      "objectId": "614164fe-2b80-4864-bb0d-2a33cf347a80",
-      "sourceName": "461_SCHEMATICO_0",
-      "type": "shelf",
-      "configuredCategory": null,
-      "sourceHeight": 2.18,
-      "category": "Scaffali senza categoria",
-      "asset": "grocery",
-      "camera": "gondola",
-      "shelfId": "614164fe-2b80-4864-bb0d-2a33cf347a80",
-      "polygon": [
-        [
-          32.85,
-          12.84
-        ],
-        [
-          41.07,
-          12.84
-        ],
-        [
-          41.07,
-          13.46
-        ],
-        [
-          32.85,
-          13.46
-        ]
-      ],
-      "x": 36.96,
-      "z": 13.15,
-      "width": 0.620000000000001,
-      "length": 8.219999999999999,
-      "yaw": 1.5707963267948966,
-      "fronts": [
-        [
-          [
-            32.85,
-            12.84
-          ],
-          [
-            41.07,
-            12.84
-          ]
-        ]
-      ],
-      "tile": true
-    },
-    {
-      "cadIndex": 804,
+      "cadIndex": 746,
       "objectId": "bf4b0974-ed65-4ff0-820f-bd64b91c4605",
       "sourceName": "461_SCHEMATICO_0",
       "type": "isola",
@@ -199,7 +55,7 @@
       "tile": true
     },
     {
-      "cadIndex": 805,
+      "cadIndex": 747,
       "objectId": "c849e1cc-d587-4187-b921-016fbd9568ea",
       "sourceName": "461_SCHEMATICO_0",
       "type": "isola",
@@ -236,7 +92,7 @@
       "tile": true
     },
     {
-      "cadIndex": 807,
+      "cadIndex": 749,
       "objectId": "6e19dcaf-f590-4865-be55-e39a9760983e",
       "sourceName": "461_SCHEMATICO_0",
       "type": "banco",
@@ -294,7 +150,7 @@
       "tile": true
     },
     {
-      "cadIndex": 811,
+      "cadIndex": 753,
       "objectId": "9346ec24-ad00-46d3-9212-52606b7060d0",
       "sourceName": "461_SCHEMATICO_0",
       "type": "banco",
@@ -352,7 +208,7 @@
       "tile": true
     },
     {
-      "cadIndex": 813,
+      "cadIndex": 755,
       "objectId": "dff3471f-ced1-421c-9674-6d505f4287bf",
       "sourceName": "461_SCHEMATICO_0",
       "type": "shelf",
@@ -400,7 +256,7 @@
       "tile": true
     },
     {
-      "cadIndex": 815,
+      "cadIndex": 757,
       "objectId": "24265f10-4219-4625-af81-6e8e60aa2cdc",
       "sourceName": "461_SCHEMATICO_0",
       "type": "tavolo",
@@ -437,7 +293,7 @@
       "tile": false
     },
     {
-      "cadIndex": 816,
+      "cadIndex": 758,
       "objectId": "80df981a-3bc1-4e7d-b6f2-159eee503852",
       "sourceName": "461_SCHEMATICO_0",
       "type": "promo",
@@ -474,7 +330,7 @@
       "tile": true
     },
     {
-      "cadIndex": 818,
+      "cadIndex": 759,
       "objectId": "90b17a1f-98be-466b-9954-f60314745c2f",
       "sourceName": "461_SCHEMATICO_0",
       "type": "shelf",
@@ -511,7 +367,7 @@
       "tile": true
     },
     {
-      "cadIndex": 819,
+      "cadIndex": 760,
       "objectId": "682e335f-e0c2-4b92-a282-61696f5dc39e",
       "sourceName": "461_SCHEMATICO_0",
       "type": "isola",
@@ -548,7 +404,7 @@
       "tile": true
     },
     {
-      "cadIndex": 820,
+      "cadIndex": 761,
       "objectId": "65b34b6f-ed94-4db1-a8c8-2d3f6f0af24c",
       "sourceName": "461_SCHEMATICO_0",
       "type": "shelf",
@@ -596,7 +452,7 @@
       "tile": true
     },
     {
-      "cadIndex": 822,
+      "cadIndex": 763,
       "objectId": "36049671-f933-4e91-a834-c47150ba6d80",
       "sourceName": "461_SCHEMATICO_0",
       "type": "shelf",
@@ -654,7 +510,7 @@
       "tile": true
     },
     {
-      "cadIndex": 823,
+      "cadIndex": 764,
       "objectId": "d0a8ebd2-de4c-4f15-bb48-6dd326ae3af8",
       "sourceName": "461_SCHEMATICO_0",
       "type": "shelf",
@@ -712,7 +568,7 @@
       "tile": true
     },
     {
-      "cadIndex": 824,
+      "cadIndex": 765,
       "objectId": "8179a62f-451a-4a4f-976c-7deba1c20397",
       "sourceName": "461_SCHEMATICO_0",
       "type": "shelf",
@@ -770,7 +626,7 @@
       "tile": true
     },
     {
-      "cadIndex": 825,
+      "cadIndex": 766,
       "objectId": "a8df0d70-273a-4771-abaf-ac9df98af7b8",
       "sourceName": "461_SCHEMATICO_0",
       "type": "shelf",
@@ -828,7 +684,7 @@
       "tile": true
     },
     {
-      "cadIndex": 826,
+      "cadIndex": 767,
       "objectId": "3a31e5e9-0e11-4775-ab79-12db3d8e4a18",
       "sourceName": "461_SCHEMATICO_0",
       "type": "shelf",
@@ -886,7 +742,7 @@
       "tile": true
     },
     {
-      "cadIndex": 828,
+      "cadIndex": 769,
       "objectId": "290b650f-b634-4ff4-b54e-c06c707aa192",
       "sourceName": "461_SCHEMATICO_0",
       "type": "isola",
@@ -923,7 +779,7 @@
       "tile": true
     },
     {
-      "cadIndex": 849,
+      "cadIndex": 776,
       "objectId": "a27b315c-0ec5-4e0d-b5f5-356549cc621c",
       "sourceName": "461_SCHEMATICO_0",
       "type": "shelf",
@@ -971,55 +827,7 @@
       "tile": true
     },
     {
-      "cadIndex": 850,
-      "objectId": "e2c32e87-7669-4770-8745-1e3e0688f556",
-      "sourceName": "461_SCHEMATICO_0",
-      "type": "shelf",
-      "configuredCategory": null,
-      "sourceHeight": 2.18,
-      "category": "Scaffali senza categoria",
-      "asset": "grocery",
-      "camera": "gondola",
-      "shelfId": "e2c32e87-7669-4770-8745-1e3e0688f556",
-      "polygon": [
-        [
-          40.45,
-          38.16
-        ],
-        [
-          32.85,
-          38.16
-        ],
-        [
-          32.85,
-          38.78
-        ],
-        [
-          40.45,
-          38.78
-        ]
-      ],
-      "x": 36.650000000000006,
-      "z": 38.47,
-      "width": 0.6200000000000045,
-      "length": 7.600000000000001,
-      "yaw": -1.5707963267948966,
-      "fronts": [
-        [
-          [
-            32.85,
-            38.78
-          ],
-          [
-            40.45,
-            38.78
-          ]
-        ]
-      ],
-      "tile": true
-    },
-    {
-      "cadIndex": 851,
+      "cadIndex": 777,
       "objectId": "10c265ca-55f9-4830-8ae2-a0d0404231fd",
       "sourceName": "461_SCHEMATICO_0",
       "type": "shelf",
@@ -1067,7 +875,7 @@
       "tile": true
     },
     {
-      "cadIndex": 852,
+      "cadIndex": 778,
       "objectId": "2570b0dd-70be-45c1-8c0c-6acbdbc5b5bf",
       "sourceName": "461_SCHEMATICO_0",
       "type": "isola",
@@ -1104,7 +912,7 @@
       "tile": true
     },
     {
-      "cadIndex": 853,
+      "cadIndex": 779,
       "objectId": "e91eb454-1f5c-4496-ab94-a816ae4af6bb",
       "sourceName": "461_SCHEMATICO_0",
       "type": "isola",
@@ -1141,7 +949,7 @@
       "tile": true
     },
     {
-      "cadIndex": 861,
+      "cadIndex": 787,
       "objectId": "f187606c-a047-4b14-8ffe-7b3f5e2f4135",
       "sourceName": "461_SCHEMATICO_0",
       "type": "shelf",
@@ -1194,7 +1002,7 @@
       "tile": true
     },
     {
-      "cadIndex": 862,
+      "cadIndex": 788,
       "objectId": "28814a0e-7e25-465c-84c2-8850dc6e1dfb",
       "sourceName": "461_SCHEMATICO_0",
       "type": "shelf",
@@ -1247,7 +1055,7 @@
       "tile": true
     },
     {
-      "cadIndex": 863,
+      "cadIndex": 789,
       "objectId": "2a3702f9-c428-449a-821c-c2713d27c42b",
       "sourceName": "461_SCHEMATICO_0",
       "type": "shelf",
@@ -1300,7 +1108,7 @@
       "tile": true
     },
     {
-      "cadIndex": 864,
+      "cadIndex": 790,
       "objectId": "580511d8-4267-4afa-a3e0-23118a9bc57e",
       "sourceName": "461_SCHEMATICO_0",
       "type": "shelf",
@@ -1353,7 +1161,7 @@
       "tile": true
     },
     {
-      "cadIndex": 865,
+      "cadIndex": 791,
       "objectId": "cb7ed029-2a7a-449f-8733-25d556b0410d",
       "sourceName": "461_SCHEMATICO_0",
       "type": "shelf",
@@ -1406,7 +1214,7 @@
       "tile": true
     },
     {
-      "cadIndex": 866,
+      "cadIndex": 792,
       "objectId": "52204490-5207-43d1-b646-33e8977bdd8a",
       "sourceName": "461_SCHEMATICO_0",
       "type": "shelf",
@@ -1459,145 +1267,7 @@
       "tile": true
     },
     {
-      "cadIndex": 867,
-      "objectId": "964b639d-5bec-4bf5-98a0-45c28623ff0a",
-      "sourceName": "461_SCHEMATICO_0",
-      "type": "shelf",
-      "configuredCategory": "Giornali",
-      "sourceHeight": 0.5,
-      "category": "Giornali",
-      "asset": "news",
-      "camera": "gondola",
-      "shelfId": "964b639d-5bec-4bf5-98a0-45c28623ff0a",
-      "polygon": [
-        [
-          57.53,
-          18.68
-        ],
-        [
-          57.53,
-          19.03
-        ],
-        [
-          57.56,
-          19.03
-        ],
-        [
-          57.56,
-          19.06
-        ],
-        [
-          58.26,
-          19.06
-        ],
-        [
-          58.26,
-          19.03
-        ],
-        [
-          58.29,
-          19.02
-        ],
-        [
-          58.29,
-          18.68
-        ],
-        [
-          58.26,
-          18.68
-        ],
-        [
-          58.26,
-          18.69
-        ],
-        [
-          57.56,
-          18.69
-        ],
-        [
-          57.56,
-          18.68
-        ]
-      ],
-      "x": 57.91,
-      "z": 18.869999999999997,
-      "width": 0.3495999999999991,
-      "length": 0.6991999999999982,
-      "yaw": 1.5707963267948966,
-      "fronts": [],
-      "tile": true
-    },
-    {
-      "cadIndex": 868,
-      "objectId": "f269b74e-2aee-4ebe-bf16-d0e71cc2164c",
-      "sourceName": "461_SCHEMATICO_0",
-      "type": "shelf",
-      "configuredCategory": "Giornali",
-      "sourceHeight": 0.5,
-      "category": "Giornali",
-      "asset": "news",
-      "camera": "gondola",
-      "shelfId": "f269b74e-2aee-4ebe-bf16-d0e71cc2164c",
-      "polygon": [
-        [
-          57.53,
-          15.87
-        ],
-        [
-          57.53,
-          15.51
-        ],
-        [
-          57.56,
-          15.51
-        ],
-        [
-          57.56,
-          15.48
-        ],
-        [
-          58.26,
-          15.48
-        ],
-        [
-          58.26,
-          15.51
-        ],
-        [
-          58.29,
-          15.52
-        ],
-        [
-          58.29,
-          15.87
-        ],
-        [
-          58.26,
-          15.87
-        ],
-        [
-          58.26,
-          15.86
-        ],
-        [
-          57.56,
-          15.86
-        ],
-        [
-          57.56,
-          15.87
-        ]
-      ],
-      "x": 57.91,
-      "z": 15.675,
-      "width": 0.3587999999999989,
-      "length": 0.6991999999999982,
-      "yaw": 1.5707963267948966,
-      "fronts": [],
-      "tile": true
-    },
-    {
-      "cadIndex": 870,
+      "cadIndex": 794,
       "objectId": "0f1c49a6-10a0-4657-b97d-641683c0742f",
       "sourceName": "461_SCHEMATICO_0",
       "type": "fridge",
@@ -1645,7 +1315,7 @@
       "tile": true
     },
     {
-      "cadIndex": 871,
+      "cadIndex": 795,
       "objectId": "bf79c5fa-8483-4950-84df-5e581b6c985b",
       "sourceName": "461_SCHEMATICO_0",
       "type": "fridge",
@@ -1693,7 +1363,7 @@
       "tile": true
     },
     {
-      "cadIndex": 872,
+      "cadIndex": 796,
       "category": "Checkout 1",
       "asset": "checkout",
       "shelfId": null,
@@ -1800,7 +1470,7 @@
       "camera": "checkout"
     },
     {
-      "cadIndex": 873,
+      "cadIndex": 797,
       "category": "Checkout 2",
       "asset": "checkout",
       "shelfId": null,
@@ -1907,7 +1577,7 @@
       "camera": "checkout"
     },
     {
-      "cadIndex": 874,
+      "cadIndex": 798,
       "category": "Checkout 3",
       "asset": "checkout",
       "shelfId": null,
@@ -2014,7 +1684,7 @@
       "camera": "checkout"
     },
     {
-      "cadIndex": 875,
+      "cadIndex": 799,
       "category": "Checkout 4",
       "asset": "checkout",
       "shelfId": null,
@@ -2121,7 +1791,7 @@
       "camera": "checkout"
     },
     {
-      "cadIndex": 876,
+      "cadIndex": 800,
       "category": "Checkout 5",
       "asset": "checkout",
       "shelfId": null,
@@ -2228,7 +1898,7 @@
       "camera": "checkout"
     },
     {
-      "cadIndex": 877,
+      "cadIndex": 801,
       "category": "Checkout 6",
       "asset": "checkout",
       "shelfId": null,
@@ -2335,7 +2005,7 @@
       "camera": "checkout"
     },
     {
-      "cadIndex": 879,
+      "cadIndex": 802,
       "objectId": "9f6ee2b5-07b8-47c4-911a-33f8db3d4dbf",
       "sourceName": "461_SCHEMATICO_0",
       "type": "isola",
@@ -2372,7 +2042,7 @@
       "tile": true
     },
     {
-      "cadIndex": 880,
+      "cadIndex": 803,
       "category": "Checkout 10",
       "asset": "checkout",
       "shelfId": null,
@@ -2479,7 +2149,7 @@
       "camera": "checkout"
     },
     {
-      "cadIndex": 881,
+      "cadIndex": 804,
       "category": "Checkout 11",
       "asset": "checkout",
       "shelfId": null,
@@ -2586,7 +2256,7 @@
       "camera": "checkout"
     },
     {
-      "cadIndex": 882,
+      "cadIndex": 805,
       "category": "Checkout 7",
       "asset": "checkout",
       "shelfId": null,
@@ -2693,7 +2363,7 @@
       "camera": "checkout"
     },
     {
-      "cadIndex": 883,
+      "cadIndex": 806,
       "category": "Checkout 8",
       "asset": "checkout",
       "shelfId": null,
@@ -2800,7 +2470,7 @@
       "camera": "checkout"
     },
     {
-      "cadIndex": 884,
+      "cadIndex": 807,
       "category": "Checkout 9",
       "asset": "checkout",
       "shelfId": null,
@@ -2907,7 +2577,7 @@
       "camera": "checkout"
     },
     {
-      "cadIndex": 890,
+      "cadIndex": 809,
       "objectId": "1772bbec-44d2-4044-808c-da85b37c7539",
       "sourceName": "461_SCHEMATICO_0",
       "type": "isola",
@@ -2944,7 +2614,7 @@
       "tile": true
     },
     {
-      "cadIndex": 891,
+      "cadIndex": 810,
       "category": "Frutta",
       "asset": "produce",
       "shelfId": "717006df-5ab3-4ce5-92f1-767d55c75203",
@@ -3001,7 +2671,7 @@
       "camera": "produce"
     },
     {
-      "cadIndex": 892,
+      "cadIndex": 811,
       "category": "Frutta",
       "asset": "produce",
       "shelfId": "5f86799d-9ec7-4037-9614-4e230ca49041",
@@ -3058,7 +2728,7 @@
       "camera": "produce"
     },
     {
-      "cadIndex": 893,
+      "cadIndex": 812,
       "category": "Frutta",
       "asset": "produce",
       "shelfId": "52a9d0ce-12e2-40f0-aa72-dbeb898d8baa",
@@ -3115,7 +2785,7 @@
       "camera": "produce"
     },
     {
-      "cadIndex": 895,
+      "cadIndex": 814,
       "objectId": "9a2d2f71-eeef-4e38-8f9f-e3db9a1be82f",
       "sourceName": "461_SCHEMATICO_0",
       "type": "shelf",
@@ -3152,7 +2822,7 @@
       "tile": true
     },
     {
-      "cadIndex": 897,
+      "cadIndex": 816,
       "objectId": "f583a83e-dc55-44f2-a993-2d6d5805d356",
       "sourceName": "461_SCHEMATICO_0",
       "type": "shelf",
@@ -3189,7 +2859,7 @@
       "tile": true
     },
     {
-      "cadIndex": 899,
+      "cadIndex": 818,
       "objectId": "f0700c23-9ebd-44cc-a749-73660963fe47",
       "sourceName": "461_SCHEMATICO_0",
       "type": "fridge",
@@ -3237,7 +2907,7 @@
       "tile": true
     },
     {
-      "cadIndex": 901,
+      "cadIndex": 819,
       "objectId": "022162ca-c6d0-4128-a84f-6c7bbf6a9740",
       "sourceName": "461_SCHEMATICO_0",
       "type": "fridge",
@@ -3285,7 +2955,7 @@
       "tile": true
     },
     {
-      "cadIndex": 902,
+      "cadIndex": 820,
       "objectId": "6228f339-c0dc-4ed2-b562-19c37251bb28",
       "sourceName": "461_SCHEMATICO_0",
       "type": "fridge",
@@ -3333,7 +3003,7 @@
       "tile": true
     },
     {
-      "cadIndex": 903,
+      "cadIndex": 821,
       "objectId": "0015d90a-20d6-423e-8614-337871c17717",
       "sourceName": "461_SCHEMATICO_0",
       "type": "fridge",
@@ -3381,7 +3051,7 @@
       "tile": true
     },
     {
-      "cadIndex": 904,
+      "cadIndex": 822,
       "objectId": "101970a9-25cf-4d11-86eb-0d172b151cb1",
       "sourceName": "461_SCHEMATICO_0",
       "type": "banco",
@@ -3429,7 +3099,7 @@
       "tile": true
     },
     {
-      "cadIndex": 905,
+      "cadIndex": 823,
       "objectId": "7ee328c5-8634-470f-b634-ec3cea88a66c",
       "sourceName": "461_SCHEMATICO_0",
       "type": "fridge",
@@ -3477,7 +3147,7 @@
       "tile": true
     },
     {
-      "cadIndex": 906,
+      "cadIndex": 824,
       "objectId": "b9966762-7faf-4eb1-9a8f-abda40b1f97d",
       "sourceName": "461_SCHEMATICO_0",
       "type": "fridge",
@@ -3514,7 +3184,7 @@
       "tile": true
     },
     {
-      "cadIndex": 907,
+      "cadIndex": 825,
       "objectId": "90e08629-24c9-4021-9cf2-38a7402c9d02",
       "sourceName": "461_SCHEMATICO_0",
       "type": "fridge",
@@ -3551,7 +3221,7 @@
       "tile": true
     },
     {
-      "cadIndex": 909,
+      "cadIndex": 827,
       "objectId": "8c1c00c4-b364-4fae-9e29-05de6cf9ad78",
       "sourceName": "461_SCHEMATICO_0",
       "type": "banco",
@@ -3609,7 +3279,7 @@
       "tile": true
     },
     {
-      "cadIndex": 911,
+      "cadIndex": 829,
       "objectId": "37fca38a-a9e9-4a75-8d51-fe57bc5a4223",
       "sourceName": "461_SCHEMATICO_0",
       "type": "promo",
@@ -3646,7 +3316,7 @@
       "tile": true
     },
     {
-      "cadIndex": 912,
+      "cadIndex": 830,
       "objectId": "f10c8371-f135-4335-b5f2-c1b2e40994f2",
       "sourceName": "461_SCHEMATICO_0",
       "type": "fridge",
@@ -3683,7 +3353,7 @@
       "tile": true
     },
     {
-      "cadIndex": 913,
+      "cadIndex": 831,
       "objectId": "a318e523-ba00-4a86-97cf-ce92b96fc31f",
       "sourceName": "461_SCHEMATICO_0",
       "type": "fridge",
@@ -3731,7 +3401,7 @@
       "tile": true
     },
     {
-      "cadIndex": 914,
+      "cadIndex": 832,
       "objectId": "18e8d686-b5ad-42a0-b7a6-7a2ef5f57440",
       "sourceName": "461_SCHEMATICO_0",
       "type": "fridge",
@@ -3779,81 +3449,7 @@
       "tile": true
     },
     {
-      "cadIndex": 915,
-      "objectId": "3f603c6e-8d7c-428a-ba05-e87c784e4c11",
-      "sourceName": "461_SCHEMATICO_0",
-      "type": "isola",
-      "configuredCategory": null,
-      "sourceHeight": 1.5,
-      "category": "Espositori senza categoria",
-      "asset": "grocery",
-      "camera": "gondola",
-      "shelfId": "3f603c6e-8d7c-428a-ba05-e87c784e4c11",
-      "polygon": [
-        [
-          50.55,
-          36.78
-        ],
-        [
-          51.68,
-          36.78
-        ],
-        [
-          51.68,
-          38.76
-        ],
-        [
-          50.55,
-          38.76
-        ]
-      ],
-      "x": 51.114999999999995,
-      "z": 37.769999999999996,
-      "width": 1.1300000000000026,
-      "length": 1.9799999999999969,
-      "yaw": 0.0,
-      "fronts": [],
-      "tile": true
-    },
-    {
-      "cadIndex": 916,
-      "objectId": "68a9b69d-4897-48c5-b75a-b9e687cb515e",
-      "sourceName": "461_SCHEMATICO_0",
-      "type": "isola",
-      "configuredCategory": null,
-      "sourceHeight": 0.91,
-      "category": "Espositori senza categoria",
-      "asset": "grocery",
-      "camera": "gondola",
-      "shelfId": "68a9b69d-4897-48c5-b75a-b9e687cb515e",
-      "polygon": [
-        [
-          53.76,
-          36.66
-        ],
-        [
-          55.59,
-          36.66
-        ],
-        [
-          55.59,
-          37.91
-        ],
-        [
-          53.76,
-          37.91
-        ]
-      ],
-      "x": 54.675,
-      "z": 37.285,
-      "width": 1.25,
-      "length": 1.8300000000000054,
-      "yaw": 1.5707963267948966,
-      "fronts": [],
-      "tile": true
-    },
-    {
-      "cadIndex": 918,
+      "cadIndex": 834,
       "objectId": "82ab36dd-1c28-440c-ad02-223fc49f809f",
       "sourceName": "461_SCHEMATICO_0",
       "type": "isola",
@@ -3890,7 +3486,7 @@
       "tile": true
     },
     {
-      "cadIndex": 919,
+      "cadIndex": 835,
       "objectId": "896d074f-8781-48f5-85f6-fa3360f7bb4a",
       "sourceName": "461_SCHEMATICO_0",
       "type": "fridge",
@@ -3938,7 +3534,7 @@
       "tile": true
     },
     {
-      "cadIndex": 920,
+      "cadIndex": 836,
       "objectId": "3a120cc3-6b8c-4bdc-8d47-c6fd4518be67",
       "sourceName": "461_SCHEMATICO_0",
       "type": "shelf",
@@ -3996,7 +3592,7 @@
       "tile": true
     },
     {
-      "cadIndex": 921,
+      "cadIndex": 837,
       "objectId": "beb37430-85e2-436c-b86f-81b817ea6c31",
       "sourceName": "461_SCHEMATICO_0",
       "type": "shelf",
@@ -4054,7 +3650,7 @@
       "tile": true
     },
     {
-      "cadIndex": 950,
+      "cadIndex": 854,
       "objectId": "a0d531b4-a6c2-4c49-a203-92b4b014c7a2",
       "sourceName": "461_SCHEMATICO_0",
       "type": "self_checkout",
@@ -4092,7 +3688,7 @@
       "lane": 12
     },
     {
-      "cadIndex": 952,
+      "cadIndex": 856,
       "objectId": "01f62f5e-6c8a-4d94-85f9-2a14dee8d3a8",
       "sourceName": "461_SCHEMATICO_0",
       "type": "self_checkout",
@@ -4130,44 +3726,7 @@
       "lane": 13
     },
     {
-      "cadIndex": 957,
-      "objectId": "3083ade4-3346-4838-bf63-5890a9c28158",
-      "sourceName": "461_SCHEMATICO_0",
-      "type": "shelf",
-      "configuredCategory": "Giornali",
-      "sourceHeight": 0.5,
-      "category": "Giornali",
-      "asset": "news",
-      "camera": "gondola",
-      "shelfId": "3083ade4-3346-4838-bf63-5890a9c28158",
-      "polygon": [
-        [
-          18.16,
-          13.46
-        ],
-        [
-          18.78,
-          13.46
-        ],
-        [
-          18.78,
-          14.41
-        ],
-        [
-          18.16,
-          14.41
-        ]
-      ],
-      "x": 18.47,
-      "z": 13.935,
-      "width": 0.620000000000001,
-      "length": 0.9499999999999993,
-      "yaw": 0.0,
-      "fronts": [],
-      "tile": true
-    },
-    {
-      "cadIndex": 965,
+      "cadIndex": 865,
       "objectId": "8abc51f6-3534-466c-a656-f46997243887",
       "sourceName": "461_SCHEMATICO_0",
       "type": "shelf",
@@ -4204,7 +3763,7 @@
       "tile": true
     },
     {
-      "cadIndex": 966,
+      "cadIndex": 866,
       "objectId": "99053af3-9283-4c51-992d-dc6e3046c739",
       "sourceName": "461_SCHEMATICO_0",
       "type": "tavolo",
@@ -4241,7 +3800,7 @@
       "tile": false
     },
     {
-      "cadIndex": 967,
+      "cadIndex": 867,
       "objectId": "7a02ed5b-8528-45af-a202-907abcaba4f1",
       "sourceName": "461_SCHEMATICO_0",
       "type": "tavolo",
@@ -4278,7 +3837,7 @@
       "tile": false
     },
     {
-      "cadIndex": 968,
+      "cadIndex": 868,
       "objectId": "9f5d76c8-2389-4321-9b47-397b816f4738",
       "sourceName": "461_SCHEMATICO_0",
       "type": "tavolo",
@@ -4559,7 +4118,7 @@
       "tile": false
     },
     {
-      "cadIndex": 969,
+      "cadIndex": 869,
       "objectId": "14d060d0-e5dc-495c-b8a1-d2c5191c993e",
       "sourceName": "461_SCHEMATICO_0",
       "type": "tavolo",
@@ -4840,7 +4399,7 @@
       "tile": false
     },
     {
-      "cadIndex": 970,
+      "cadIndex": 870,
       "objectId": "9f9aaadb-63e6-4c5a-bb3a-ad3239226d8a",
       "sourceName": "461_SCHEMATICO_0",
       "type": "tavolo",
@@ -5121,7 +4680,7 @@
       "tile": false
     },
     {
-      "cadIndex": 971,
+      "cadIndex": 871,
       "objectId": "d2f47bd2-d3c2-402a-a61c-c2e34d96089b",
       "sourceName": "461_SCHEMATICO_0",
       "type": "tavolo",
@@ -5402,7 +4961,7 @@
       "tile": false
     },
     {
-      "cadIndex": 972,
+      "cadIndex": 872,
       "objectId": "04523cd1-dd09-4304-acb0-b95bd08507bc",
       "sourceName": "461_SCHEMATICO_0",
       "type": "tavolo",
@@ -5683,7 +5242,7 @@
       "tile": false
     },
     {
-      "cadIndex": 973,
+      "cadIndex": 873,
       "objectId": "b9a3835e-36e9-4bfa-b1a5-9e1f61c891c9",
       "sourceName": "461_SCHEMATICO_0",
       "type": "tavolo",
@@ -5964,7 +5523,7 @@
       "tile": false
     },
     {
-      "cadIndex": 974,
+      "cadIndex": 874,
       "objectId": "ad5f216d-3b01-4823-879e-15ca6578ce02",
       "sourceName": "461_SCHEMATICO_0",
       "type": "tavolo",
@@ -6245,7 +5804,7 @@
       "tile": false
     },
     {
-      "cadIndex": 975,
+      "cadIndex": 875,
       "objectId": "c9ed22af-7354-4a23-ab12-faf32fb4b778",
       "sourceName": "461_SCHEMATICO_0",
       "type": "tavolo",
@@ -6526,1131 +6085,7 @@
       "tile": false
     },
     {
-      "cadIndex": 976,
-      "objectId": "6f5c1b52-c55d-437a-874d-f883df2bfb7f",
-      "sourceName": "461_SCHEMATICO_0",
-      "type": "tavolo",
-      "configuredCategory": null,
-      "sourceHeight": 0.5,
-      "category": "Tavoli",
-      "asset": "table",
-      "camera": "counter",
-      "shelfId": "6f5c1b52-c55d-437a-874d-f883df2bfb7f",
-      "polygon": [
-        [
-          39.43,
-          65.77
-        ],
-        [
-          39.43,
-          65.71
-        ],
-        [
-          39.43,
-          65.75
-        ],
-        [
-          39.42,
-          65.76
-        ],
-        [
-          39.4,
-          65.76
-        ],
-        [
-          39.4,
-          65.73
-        ],
-        [
-          39.4,
-          65.71
-        ],
-        [
-          39.4,
-          65.48
-        ],
-        [
-          39.4,
-          65.45
-        ],
-        [
-          39.4,
-          65.43
-        ],
-        [
-          39.42,
-          65.43
-        ],
-        [
-          39.43,
-          65.45
-        ],
-        [
-          39.43,
-          65.48
-        ],
-        [
-          39.43,
-          65.43
-        ],
-        [
-          39.51,
-          65.36
-        ],
-        [
-          39.9,
-          65.36
-        ],
-        [
-          39.98,
-          65.43
-        ],
-        [
-          39.98,
-          65.47
-        ],
-        [
-          39.98,
-          65.45
-        ],
-        [
-          39.98,
-          65.43
-        ],
-        [
-          40.01,
-          65.43
-        ],
-        [
-          40.01,
-          65.45
-        ],
-        [
-          40.01,
-          65.47
-        ],
-        [
-          40.01,
-          65.71
-        ],
-        [
-          40.01,
-          65.74
-        ],
-        [
-          40.01,
-          65.76
-        ],
-        [
-          39.98,
-          65.76
-        ],
-        [
-          39.98,
-          65.75
-        ],
-        [
-          39.98,
-          65.71
-        ],
-        [
-          39.98,
-          65.77
-        ],
-        [
-          40.03,
-          65.77
-        ],
-        [
-          40.03,
-          66.42
-        ],
-        [
-          39.98,
-          66.42
-        ],
-        [
-          39.98,
-          66.48
-        ],
-        [
-          39.98,
-          66.45
-        ],
-        [
-          39.98,
-          66.44
-        ],
-        [
-          40.01,
-          66.44
-        ],
-        [
-          40.01,
-          66.46
-        ],
-        [
-          40.01,
-          66.48
-        ],
-        [
-          40.01,
-          66.72
-        ],
-        [
-          40.01,
-          66.75
-        ],
-        [
-          40.01,
-          66.76
-        ],
-        [
-          39.98,
-          66.76
-        ],
-        [
-          39.98,
-          66.75
-        ],
-        [
-          39.98,
-          66.72
-        ],
-        [
-          39.98,
-          66.76
-        ],
-        [
-          39.9,
-          66.84
-        ],
-        [
-          39.51,
-          66.84
-        ],
-        [
-          39.43,
-          66.76
-        ],
-        [
-          39.43,
-          66.71
-        ],
-        [
-          39.43,
-          66.75
-        ],
-        [
-          39.42,
-          66.76
-        ],
-        [
-          39.4,
-          66.76
-        ],
-        [
-          39.4,
-          66.74
-        ],
-        [
-          39.4,
-          66.72
-        ],
-        [
-          39.4,
-          66.48
-        ],
-        [
-          39.4,
-          66.46
-        ],
-        [
-          39.4,
-          66.44
-        ],
-        [
-          39.42,
-          66.44
-        ],
-        [
-          39.43,
-          66.45
-        ],
-        [
-          39.43,
-          66.48
-        ],
-        [
-          39.43,
-          66.42
-        ],
-        [
-          39.38,
-          66.42
-        ],
-        [
-          39.38,
-          65.77
-        ],
-        [
-          39.43,
-          65.77
-        ]
-      ],
-      "x": 39.705,
-      "z": 66.1,
-      "width": 0.5459999999999988,
-      "length": 1.2432000000000032,
-      "yaw": 0,
-      "fronts": [],
-      "tile": false
-    },
-    {
-      "cadIndex": 977,
-      "objectId": "68f461ff-2fe4-4bb3-8e31-e28518ec7b92",
-      "sourceName": "461_SCHEMATICO_0",
-      "type": "tavolo",
-      "configuredCategory": null,
-      "sourceHeight": 0.5,
-      "category": "Tavoli",
-      "asset": "table",
-      "camera": "counter",
-      "shelfId": "68f461ff-2fe4-4bb3-8e31-e28518ec7b92",
-      "polygon": [
-        [
-          23.4,
-          65.13
-        ],
-        [
-          23.4,
-          65.07
-        ],
-        [
-          23.4,
-          65.11
-        ],
-        [
-          23.39,
-          65.12
-        ],
-        [
-          23.37,
-          65.12
-        ],
-        [
-          23.37,
-          65.09
-        ],
-        [
-          23.37,
-          65.07
-        ],
-        [
-          23.37,
-          64.84
-        ],
-        [
-          23.37,
-          64.81
-        ],
-        [
-          23.37,
-          64.79
-        ],
-        [
-          23.39,
-          64.79
-        ],
-        [
-          23.4,
-          64.81
-        ],
-        [
-          23.4,
-          64.84
-        ],
-        [
-          23.4,
-          64.79
-        ],
-        [
-          23.48,
-          64.72
-        ],
-        [
-          23.87,
-          64.72
-        ],
-        [
-          23.95,
-          64.79
-        ],
-        [
-          23.95,
-          64.83
-        ],
-        [
-          23.95,
-          64.81
-        ],
-        [
-          23.95,
-          64.79
-        ],
-        [
-          23.98,
-          64.79
-        ],
-        [
-          23.98,
-          64.81
-        ],
-        [
-          23.98,
-          64.84
-        ],
-        [
-          23.98,
-          65.07
-        ],
-        [
-          23.98,
-          65.1
-        ],
-        [
-          23.97,
-          65.12
-        ],
-        [
-          23.95,
-          65.12
-        ],
-        [
-          23.95,
-          65.11
-        ],
-        [
-          23.95,
-          65.08
-        ],
-        [
-          23.95,
-          65.13
-        ],
-        [
-          24.0,
-          65.13
-        ],
-        [
-          24.0,
-          65.78
-        ],
-        [
-          23.95,
-          65.78
-        ],
-        [
-          23.95,
-          65.84
-        ],
-        [
-          23.95,
-          65.81
-        ],
-        [
-          23.95,
-          65.8
-        ],
-        [
-          23.97,
-          65.8
-        ],
-        [
-          23.98,
-          65.82
-        ],
-        [
-          23.98,
-          65.84
-        ],
-        [
-          23.98,
-          66.08
-        ],
-        [
-          23.98,
-          66.11
-        ],
-        [
-          23.98,
-          66.12
-        ],
-        [
-          23.95,
-          66.12
-        ],
-        [
-          23.95,
-          66.11
-        ],
-        [
-          23.95,
-          66.08
-        ],
-        [
-          23.95,
-          66.13
-        ],
-        [
-          23.87,
-          66.2
-        ],
-        [
-          23.48,
-          66.2
-        ],
-        [
-          23.4,
-          66.12
-        ],
-        [
-          23.4,
-          66.07
-        ],
-        [
-          23.4,
-          66.11
-        ],
-        [
-          23.39,
-          66.12
-        ],
-        [
-          23.37,
-          66.12
-        ],
-        [
-          23.37,
-          66.1
-        ],
-        [
-          23.37,
-          66.08
-        ],
-        [
-          23.37,
-          65.84
-        ],
-        [
-          23.37,
-          65.83
-        ],
-        [
-          23.37,
-          65.8
-        ],
-        [
-          23.39,
-          65.8
-        ],
-        [
-          23.4,
-          65.81
-        ],
-        [
-          23.4,
-          65.84
-        ],
-        [
-          23.4,
-          65.78
-        ],
-        [
-          23.35,
-          65.78
-        ],
-        [
-          23.35,
-          65.13
-        ],
-        [
-          23.4,
-          65.13
-        ]
-      ],
-      "x": 23.675,
-      "z": 65.46000000000001,
-      "width": 0.5459999999999988,
-      "length": 1.2432000000000032,
-      "yaw": 0,
-      "fronts": [],
-      "tile": false
-    },
-    {
-      "cadIndex": 978,
-      "objectId": "baf09783-ae7c-4e71-aa78-ae2f4bbee477",
-      "sourceName": "461_SCHEMATICO_0",
-      "type": "tavolo",
-      "configuredCategory": null,
-      "sourceHeight": 0.5,
-      "category": "Tavoli",
-      "asset": "table",
-      "camera": "counter",
-      "shelfId": "baf09783-ae7c-4e71-aa78-ae2f4bbee477",
-      "polygon": [
-        [
-          24.05,
-          65.13
-        ],
-        [
-          24.05,
-          65.07
-        ],
-        [
-          24.05,
-          65.11
-        ],
-        [
-          24.04,
-          65.12
-        ],
-        [
-          24.02,
-          65.12
-        ],
-        [
-          24.02,
-          65.09
-        ],
-        [
-          24.02,
-          65.07
-        ],
-        [
-          24.02,
-          64.84
-        ],
-        [
-          24.02,
-          64.81
-        ],
-        [
-          24.02,
-          64.79
-        ],
-        [
-          24.04,
-          64.79
-        ],
-        [
-          24.05,
-          64.81
-        ],
-        [
-          24.05,
-          64.84
-        ],
-        [
-          24.05,
-          64.79
-        ],
-        [
-          24.13,
-          64.72
-        ],
-        [
-          24.52,
-          64.72
-        ],
-        [
-          24.6,
-          64.79
-        ],
-        [
-          24.6,
-          64.83
-        ],
-        [
-          24.6,
-          64.81
-        ],
-        [
-          24.6,
-          64.79
-        ],
-        [
-          24.63,
-          64.79
-        ],
-        [
-          24.63,
-          64.81
-        ],
-        [
-          24.63,
-          64.84
-        ],
-        [
-          24.63,
-          65.07
-        ],
-        [
-          24.63,
-          65.1
-        ],
-        [
-          24.62,
-          65.12
-        ],
-        [
-          24.6,
-          65.12
-        ],
-        [
-          24.6,
-          65.11
-        ],
-        [
-          24.6,
-          65.08
-        ],
-        [
-          24.6,
-          65.13
-        ],
-        [
-          24.65,
-          65.13
-        ],
-        [
-          24.65,
-          65.78
-        ],
-        [
-          24.6,
-          65.78
-        ],
-        [
-          24.6,
-          65.84
-        ],
-        [
-          24.6,
-          65.81
-        ],
-        [
-          24.6,
-          65.8
-        ],
-        [
-          24.62,
-          65.8
-        ],
-        [
-          24.63,
-          65.82
-        ],
-        [
-          24.63,
-          65.84
-        ],
-        [
-          24.63,
-          66.08
-        ],
-        [
-          24.63,
-          66.11
-        ],
-        [
-          24.63,
-          66.12
-        ],
-        [
-          24.6,
-          66.12
-        ],
-        [
-          24.6,
-          66.11
-        ],
-        [
-          24.6,
-          66.08
-        ],
-        [
-          24.6,
-          66.13
-        ],
-        [
-          24.52,
-          66.2
-        ],
-        [
-          24.13,
-          66.2
-        ],
-        [
-          24.05,
-          66.12
-        ],
-        [
-          24.05,
-          66.07
-        ],
-        [
-          24.05,
-          66.11
-        ],
-        [
-          24.04,
-          66.12
-        ],
-        [
-          24.02,
-          66.12
-        ],
-        [
-          24.02,
-          66.1
-        ],
-        [
-          24.02,
-          66.08
-        ],
-        [
-          24.02,
-          65.84
-        ],
-        [
-          24.02,
-          65.83
-        ],
-        [
-          24.02,
-          65.8
-        ],
-        [
-          24.04,
-          65.8
-        ],
-        [
-          24.05,
-          65.81
-        ],
-        [
-          24.05,
-          65.84
-        ],
-        [
-          24.05,
-          65.78
-        ],
-        [
-          24.0,
-          65.78
-        ],
-        [
-          24.0,
-          65.13
-        ],
-        [
-          24.05,
-          65.13
-        ]
-      ],
-      "x": 24.325,
-      "z": 65.46000000000001,
-      "width": 0.5459999999999988,
-      "length": 1.2432000000000032,
-      "yaw": 0,
-      "fronts": [],
-      "tile": false
-    },
-    {
-      "cadIndex": 979,
-      "objectId": "a4af3ea7-e5d1-4a52-88a8-5790ff0cf41d",
-      "sourceName": "461_SCHEMATICO_0",
-      "type": "tavolo",
-      "configuredCategory": null,
-      "sourceHeight": 0.5,
-      "category": "Tavoli",
-      "asset": "table",
-      "camera": "counter",
-      "shelfId": "a4af3ea7-e5d1-4a52-88a8-5790ff0cf41d",
-      "polygon": [
-        [
-          24.7,
-          65.13
-        ],
-        [
-          24.7,
-          65.07
-        ],
-        [
-          24.7,
-          65.11
-        ],
-        [
-          24.69,
-          65.12
-        ],
-        [
-          24.67,
-          65.12
-        ],
-        [
-          24.67,
-          65.09
-        ],
-        [
-          24.67,
-          65.07
-        ],
-        [
-          24.67,
-          64.84
-        ],
-        [
-          24.67,
-          64.81
-        ],
-        [
-          24.67,
-          64.79
-        ],
-        [
-          24.69,
-          64.79
-        ],
-        [
-          24.7,
-          64.81
-        ],
-        [
-          24.7,
-          64.84
-        ],
-        [
-          24.7,
-          64.79
-        ],
-        [
-          24.78,
-          64.72
-        ],
-        [
-          25.17,
-          64.72
-        ],
-        [
-          25.25,
-          64.79
-        ],
-        [
-          25.25,
-          64.83
-        ],
-        [
-          25.25,
-          64.81
-        ],
-        [
-          25.25,
-          64.79
-        ],
-        [
-          25.28,
-          64.79
-        ],
-        [
-          25.28,
-          64.81
-        ],
-        [
-          25.28,
-          64.84
-        ],
-        [
-          25.28,
-          65.07
-        ],
-        [
-          25.28,
-          65.1
-        ],
-        [
-          25.27,
-          65.12
-        ],
-        [
-          25.25,
-          65.12
-        ],
-        [
-          25.25,
-          65.11
-        ],
-        [
-          25.25,
-          65.08
-        ],
-        [
-          25.25,
-          65.13
-        ],
-        [
-          25.3,
-          65.13
-        ],
-        [
-          25.3,
-          65.78
-        ],
-        [
-          25.25,
-          65.78
-        ],
-        [
-          25.25,
-          65.84
-        ],
-        [
-          25.25,
-          65.81
-        ],
-        [
-          25.25,
-          65.8
-        ],
-        [
-          25.27,
-          65.8
-        ],
-        [
-          25.28,
-          65.82
-        ],
-        [
-          25.28,
-          65.84
-        ],
-        [
-          25.28,
-          66.08
-        ],
-        [
-          25.28,
-          66.11
-        ],
-        [
-          25.28,
-          66.12
-        ],
-        [
-          25.25,
-          66.12
-        ],
-        [
-          25.25,
-          66.11
-        ],
-        [
-          25.25,
-          66.08
-        ],
-        [
-          25.25,
-          66.13
-        ],
-        [
-          25.17,
-          66.2
-        ],
-        [
-          24.78,
-          66.2
-        ],
-        [
-          24.7,
-          66.12
-        ],
-        [
-          24.7,
-          66.07
-        ],
-        [
-          24.7,
-          66.11
-        ],
-        [
-          24.69,
-          66.12
-        ],
-        [
-          24.67,
-          66.12
-        ],
-        [
-          24.67,
-          66.1
-        ],
-        [
-          24.67,
-          66.08
-        ],
-        [
-          24.67,
-          65.84
-        ],
-        [
-          24.67,
-          65.83
-        ],
-        [
-          24.67,
-          65.8
-        ],
-        [
-          24.69,
-          65.8
-        ],
-        [
-          24.7,
-          65.81
-        ],
-        [
-          24.7,
-          65.84
-        ],
-        [
-          24.7,
-          65.78
-        ],
-        [
-          24.65,
-          65.78
-        ],
-        [
-          24.65,
-          65.13
-        ],
-        [
-          24.7,
-          65.13
-        ]
-      ],
-      "x": 24.975,
-      "z": 65.46000000000001,
-      "width": 0.5460000000000018,
-      "length": 1.2432000000000032,
-      "yaw": 0,
-      "fronts": [],
-      "tile": false
-    },
-    {
-      "cadIndex": 985,
+      "cadIndex": 880,
       "objectId": "311941e1-2db2-4666-b463-d5bc68cd76ec",
       "sourceName": "461_SCHEMATICO_0",
       "type": "tavolo",
@@ -7931,7 +6366,7 @@
       "tile": false
     },
     {
-      "cadIndex": 986,
+      "cadIndex": 881,
       "objectId": "06b17721-dab3-4017-8704-ab393a3eeca5",
       "sourceName": "461_SCHEMATICO_0",
       "type": "tavolo",
@@ -8212,7 +6647,7 @@
       "tile": false
     },
     {
-      "cadIndex": 987,
+      "cadIndex": 882,
       "objectId": "1e656ea1-a196-4caa-8317-99503397ea84",
       "sourceName": "461_SCHEMATICO_0",
       "type": "tavolo",
@@ -8493,7 +6928,7 @@
       "tile": false
     },
     {
-      "cadIndex": 988,
+      "cadIndex": 883,
       "objectId": "5609d315-9033-41ed-936f-1e4b43cdbafb",
       "sourceName": "461_SCHEMATICO_0",
       "type": "tavolo",
@@ -8774,7 +7209,7 @@
       "tile": false
     },
     {
-      "cadIndex": 989,
+      "cadIndex": 884,
       "objectId": "bc723b83-a82a-4ee1-9e26-cbc90ba54491",
       "sourceName": "461_SCHEMATICO_0",
       "type": "tavolo",
@@ -9055,7 +7490,7 @@
       "tile": false
     },
     {
-      "cadIndex": 990,
+      "cadIndex": 885,
       "objectId": "03cffa41-0d84-4fae-ab2a-47ac4731ce71",
       "sourceName": "461_SCHEMATICO_0",
       "type": "tavolo",
@@ -9336,7 +7771,7 @@
       "tile": false
     },
     {
-      "cadIndex": 991,
+      "cadIndex": 886,
       "objectId": "579dfa0c-7d8f-4000-b0b5-ee9ef1e93e5b",
       "sourceName": "461_SCHEMATICO_0",
       "type": "tavolo",
@@ -9617,7 +8052,7 @@
       "tile": false
     },
     {
-      "cadIndex": 992,
+      "cadIndex": 887,
       "objectId": "5565076f-e530-420b-b6cc-9d047ec73d5c",
       "sourceName": "461_SCHEMATICO_0",
       "type": "tavolo",
@@ -9898,7 +8333,7 @@
       "tile": false
     },
     {
-      "cadIndex": 993,
+      "cadIndex": 888,
       "objectId": "d5d34c7d-76ec-4b37-8c22-ca8cd731612a",
       "sourceName": "461_SCHEMATICO_0",
       "type": "tavolo",
@@ -10179,7 +8614,7 @@
       "tile": false
     },
     {
-      "cadIndex": 994,
+      "cadIndex": 889,
       "objectId": "4a6f118a-b1f9-47cc-8185-35918907fa53",
       "sourceName": "461_SCHEMATICO_0",
       "type": "tavolo",
@@ -10460,7 +8895,7 @@
       "tile": false
     },
     {
-      "cadIndex": 995,
+      "cadIndex": 890,
       "objectId": "8980eabd-350d-4c8a-91f7-8f1342397ff4",
       "sourceName": "461_SCHEMATICO_0",
       "type": "tavolo",
@@ -10741,7 +9176,7 @@
       "tile": false
     },
     {
-      "cadIndex": 996,
+      "cadIndex": 891,
       "objectId": "db34a601-750a-41d1-9313-1b73e56e1815",
       "sourceName": "461_SCHEMATICO_0",
       "type": "tavolo",
@@ -11022,7 +9457,7 @@
       "tile": false
     },
     {
-      "cadIndex": 997,
+      "cadIndex": 892,
       "objectId": "427f67ca-52fa-49e1-865f-3e2085f0993c",
       "sourceName": "461_SCHEMATICO_0",
       "type": "tavolo",
@@ -11303,7 +9738,7 @@
       "tile": false
     },
     {
-      "cadIndex": 998,
+      "cadIndex": 893,
       "objectId": "74566ad0-8ff0-42fd-a89e-bd5cd9830545",
       "sourceName": "461_SCHEMATICO_0",
       "type": "tavolo",
@@ -11584,7 +10019,7 @@
       "tile": false
     },
     {
-      "cadIndex": 999,
+      "cadIndex": 894,
       "objectId": "b842654f-b145-4b5a-884a-5482b99d573f",
       "sourceName": "461_SCHEMATICO_0",
       "type": "tavolo",
@@ -11865,7 +10300,7 @@
       "tile": false
     },
     {
-      "cadIndex": 1000,
+      "cadIndex": 895,
       "objectId": "f701cbc7-67dc-40fa-bf55-929f176b3813",
       "sourceName": "461_SCHEMATICO_0",
       "type": "tavolo",
@@ -12146,7 +10581,7 @@
       "tile": false
     },
     {
-      "cadIndex": 1001,
+      "cadIndex": 896,
       "objectId": "8f9a0b2f-c5f4-4b27-a836-22bf47a8eb2b",
       "sourceName": "461_SCHEMATICO_0",
       "type": "tavolo",
@@ -12427,7 +10862,7 @@
       "tile": false
     },
     {
-      "cadIndex": 1002,
+      "cadIndex": 897,
       "objectId": "9b11eb96-a35d-4098-b94e-0f6d1730e86b",
       "sourceName": "461_SCHEMATICO_0",
       "type": "tavolo",
@@ -12708,7 +11143,7 @@
       "tile": false
     },
     {
-      "cadIndex": 1015,
+      "cadIndex": 909,
       "objectId": "8051ab61-f068-440d-9d0f-cd8f45f681d1",
       "sourceName": "461_SCHEMATICO_0",
       "type": "banco",
@@ -12766,7 +11201,7 @@
       "tile": true
     },
     {
-      "cadIndex": 1016,
+      "cadIndex": 910,
       "objectId": "5d40c654-fb2d-4d92-8a02-a2e8b602b72a",
       "sourceName": "461_SCHEMATICO_0",
       "type": "banco",
@@ -12824,7 +11259,7 @@
       "tile": true
     },
     {
-      "cadIndex": 1115,
+      "cadIndex": 911,
       "objectId": "64de3207-aa46-4a3d-a704-216cbe38cac4",
       "sourceName": "Entrance 1121",
       "type": "entrance",
@@ -12861,7 +11296,7 @@
       "tile": false
     },
     {
-      "cadIndex": 1116,
+      "cadIndex": 912,
       "objectId": "140dffad-6860-443b-8848-a2d18db6938f",
       "sourceName": "Shelf 1122",
       "type": "shelf",
@@ -12919,7 +11354,7 @@
       "tile": true
     },
     {
-      "cadIndex": 1117,
+      "cadIndex": 913,
       "objectId": "89020b8c-d9d0-428b-9a7b-e62e1e25f123",
       "sourceName": "Digital Display 1118",
       "type": "digital_display",
@@ -12956,7 +11391,7 @@
       "tile": false
     },
     {
-      "cadIndex": 1118,
+      "cadIndex": 914,
       "objectId": "a51574e5-33c4-4616-b093-73a3faea27cd",
       "sourceName": "Digital Display 1118 (copy)",
       "type": "digital_display",
@@ -12991,6 +11426,952 @@
       "yaw": 1.5707963267948966,
       "fronts": [],
       "tile": false
+    },
+    {
+      "cadIndex": 1051,
+      "objectId": "08fc8aa7-28aa-4b65-be46-37f9b55d33f5",
+      "sourceName": "461_SCHEMATICO_0",
+      "type": "tavolo",
+      "configuredCategory": null,
+      "sourceHeight": 0.5,
+      "category": "Tavoli",
+      "asset": "table",
+      "camera": "counter",
+      "shelfId": "08fc8aa7-28aa-4b65-be46-37f9b55d33f5",
+      "polygon": [
+        [
+          23.91,
+          67.51
+        ],
+        [
+          23.36,
+          67.51
+        ],
+        [
+          23.36,
+          64.93
+        ],
+        [
+          23.91,
+          64.93
+        ],
+        [
+          23.93,
+          64.94
+        ],
+        [
+          23.93,
+          67.5
+        ]
+      ],
+      "x": 23.645,
+      "z": 66.22,
+      "width": 0.5244000000000003,
+      "length": 2.3735999999999984,
+      "yaw": 0,
+      "fronts": [],
+      "tile": false
+    },
+    {
+      "cadIndex": 1058,
+      "objectId": "1c9f5885-a585-4e3c-a013-f3fa9123757c",
+      "sourceName": "461_SCHEMATICO_0",
+      "type": "shelf",
+      "configuredCategory": "Giornali",
+      "sourceHeight": 0.865,
+      "category": "Giornali",
+      "asset": "news",
+      "camera": "gondola",
+      "shelfId": "1c9f5885-a585-4e3c-a013-f3fa9123757c",
+      "polygon": [
+        [
+          57.83,
+          19.55
+        ],
+        [
+          57.48,
+          19.55
+        ],
+        [
+          57.48,
+          19.52
+        ],
+        [
+          57.44,
+          19.52
+        ],
+        [
+          57.44,
+          18.64
+        ],
+        [
+          57.48,
+          18.64
+        ],
+        [
+          57.48,
+          18.61
+        ],
+        [
+          57.83,
+          18.61
+        ]
+      ],
+      "x": 57.635,
+      "z": 19.08,
+      "width": 0.35880000000000056,
+      "length": 0.8648000000000012,
+      "yaw": 0,
+      "fronts": [],
+      "tile": true
+    },
+    {
+      "cadIndex": 1060,
+      "objectId": "9e531449-7481-481a-bfff-733f897e38f0",
+      "sourceName": "461_SCHEMATICO_0",
+      "type": "shelf",
+      "configuredCategory": "Giornali",
+      "sourceHeight": 0.865,
+      "category": "Giornali",
+      "asset": "news",
+      "camera": "gondola",
+      "shelfId": "9e531449-7481-481a-bfff-733f897e38f0",
+      "polygon": [
+        [
+          18.2,
+          13.67
+        ],
+        [
+          18.92,
+          13.67
+        ],
+        [
+          18.92,
+          14.35
+        ],
+        [
+          18.2,
+          14.35
+        ]
+      ],
+      "x": 18.560000000000002,
+      "z": 14.01,
+      "width": 0.6799999999999997,
+      "length": 0.7200000000000024,
+      "yaw": 1.5707963267948966,
+      "fronts": [],
+      "tile": true
+    },
+    {
+      "cadIndex": 1061,
+      "objectId": "bc2190f8-6a69-4e7f-84d6-768ac3ce292e",
+      "sourceName": "461_SCHEMATICO_0",
+      "type": "isola",
+      "configuredCategory": null,
+      "sourceHeight": 1.0,
+      "category": "Espositori senza categoria",
+      "asset": "grocery",
+      "camera": "gondola",
+      "shelfId": "bc2190f8-6a69-4e7f-84d6-768ac3ce292e",
+      "polygon": [
+        [
+          54.1,
+          36.59
+        ],
+        [
+          55.22,
+          36.59
+        ],
+        [
+          55.22,
+          38.56
+        ],
+        [
+          54.1,
+          38.56
+        ]
+      ],
+      "x": 54.66,
+      "z": 37.575,
+      "width": 1.1199999999999974,
+      "length": 1.9699999999999989,
+      "yaw": 0.0,
+      "fronts": [],
+      "tile": true
+    },
+    {
+      "cadIndex": 1062,
+      "objectId": "3b5c8f2a-0364-4f7f-b377-b06d41b080fc",
+      "sourceName": "461_SCHEMATICO_0",
+      "type": "isola",
+      "configuredCategory": null,
+      "sourceHeight": 1.0,
+      "category": "Espositori senza categoria",
+      "asset": "grocery",
+      "camera": "gondola",
+      "shelfId": "3b5c8f2a-0364-4f7f-b377-b06d41b080fc",
+      "polygon": [
+        [
+          50.2,
+          36.62
+        ],
+        [
+          52.03,
+          36.62
+        ],
+        [
+          52.03,
+          37.87
+        ],
+        [
+          50.2,
+          37.87
+        ]
+      ],
+      "x": 51.115,
+      "z": 37.245,
+      "width": 1.25,
+      "length": 1.8299999999999983,
+      "yaw": 1.5707963267948966,
+      "fronts": [],
+      "tile": true
+    },
+    {
+      "cadIndex": 1158,
+      "objectId": "e239cef2-cb5d-4a44-a2d8-a54942a9af27",
+      "sourceName": "461_SCHEMATICO_0",
+      "type": "shelf",
+      "configuredCategory": null,
+      "sourceHeight": 0.865,
+      "category": "Scaffali senza categoria",
+      "asset": "grocery",
+      "camera": "gondola",
+      "shelfId": "e239cef2-cb5d-4a44-a2d8-a54942a9af27",
+      "polygon": [
+        [
+          60.48,
+          4.17
+        ],
+        [
+          60.48,
+          2.85
+        ],
+        [
+          64.98,
+          2.85
+        ],
+        [
+          64.98,
+          4.17
+        ]
+      ],
+      "x": 62.730000000000004,
+      "z": 3.51,
+      "width": 1.3199999999999998,
+      "length": 4.500000000000007,
+      "yaw": 1.5707963267948966,
+      "fronts": [],
+      "tile": true
+    },
+    {
+      "cadIndex": 1159,
+      "objectId": "a2cea161-7bd6-4bb7-bb3d-d256b3a93a69",
+      "sourceName": "461_SCHEMATICO_0",
+      "type": "shelf",
+      "configuredCategory": null,
+      "sourceHeight": 0.865,
+      "category": "Scaffali senza categoria",
+      "asset": "grocery",
+      "camera": "gondola",
+      "shelfId": "a2cea161-7bd6-4bb7-bb3d-d256b3a93a69",
+      "polygon": [
+        [
+          18.68,
+          30.64
+        ],
+        [
+          19.21,
+          30.64
+        ],
+        [
+          19.21,
+          25.69
+        ],
+        [
+          18.68,
+          25.69
+        ]
+      ],
+      "x": 18.945,
+      "z": 28.165,
+      "width": 0.5300000000000011,
+      "length": 4.949999999999999,
+      "yaw": 3.141592653589793,
+      "fronts": [],
+      "tile": true
+    },
+    {
+      "cadIndex": 1173,
+      "objectId": "3a376690-6a48-4e46-95c9-00cd84e1e46a",
+      "sourceName": "461_SCHEMATICO_0",
+      "type": "shelf",
+      "configuredCategory": null,
+      "sourceHeight": 0.865,
+      "category": "Scaffali senza categoria",
+      "asset": "grocery",
+      "camera": "gondola",
+      "shelfId": "3a376690-6a48-4e46-95c9-00cd84e1e46a",
+      "polygon": [
+        [
+          71.82,
+          21.56
+        ],
+        [
+          71.02,
+          21.56
+        ],
+        [
+          71.02,
+          12.91
+        ],
+        [
+          71.82,
+          12.91
+        ]
+      ],
+      "x": 71.41999999999999,
+      "z": 17.235,
+      "width": 0.7999999999999972,
+      "length": 8.649999999999999,
+      "yaw": 3.141592653589793,
+      "fronts": [],
+      "tile": true
+    },
+    {
+      "cadIndex": 1183,
+      "objectId": "46f47a3d-f1a0-4d76-aa01-e067769ac2f6",
+      "sourceName": "461_SCHEMATICO_0",
+      "type": "shelf",
+      "configuredCategory": null,
+      "sourceHeight": 0.865,
+      "category": "Scaffali senza categoria",
+      "asset": "grocery",
+      "camera": "gondola",
+      "shelfId": "46f47a3d-f1a0-4d76-aa01-e067769ac2f6",
+      "polygon": [
+        [
+          68.98,
+          58.12
+        ],
+        [
+          68.98,
+          62.76
+        ],
+        [
+          68.45,
+          62.76
+        ],
+        [
+          68.45,
+          58.12
+        ]
+      ],
+      "x": 68.715,
+      "z": 60.44,
+      "width": 0.5300000000000011,
+      "length": 4.640000000000001,
+      "yaw": 0.0,
+      "fronts": [],
+      "tile": true
+    },
+    {
+      "cadIndex": 1184,
+      "objectId": "5c314103-69b4-4fa0-ad5d-76157b31ed3e",
+      "sourceName": "461_SCHEMATICO_0",
+      "type": "shelf",
+      "configuredCategory": null,
+      "sourceHeight": 0.865,
+      "category": "Scaffali senza categoria",
+      "asset": "grocery",
+      "camera": "gondola",
+      "shelfId": "5c314103-69b4-4fa0-ad5d-76157b31ed3e",
+      "polygon": [
+        [
+          63.69,
+          65.24
+        ],
+        [
+          57.22,
+          65.24
+        ],
+        [
+          57.22,
+          64.69
+        ],
+        [
+          63.69,
+          64.69
+        ]
+      ],
+      "x": 60.455,
+      "z": 64.965,
+      "width": 0.5499999999999972,
+      "length": 6.469999999999999,
+      "yaw": -1.5707963267948966,
+      "fronts": [],
+      "tile": true
+    },
+    {
+      "cadIndex": 1186,
+      "objectId": "fb2e6c03-38c5-4deb-83be-5c33b431508d",
+      "sourceName": "461_SCHEMATICO_0",
+      "type": "shelf",
+      "configuredCategory": null,
+      "sourceHeight": 0.865,
+      "category": "Scaffali senza categoria",
+      "asset": "grocery",
+      "camera": "gondola",
+      "shelfId": "fb2e6c03-38c5-4deb-83be-5c33b431508d",
+      "polygon": [
+        [
+          63.69,
+          63.68
+        ],
+        [
+          57.22,
+          63.68
+        ],
+        [
+          57.22,
+          62.78
+        ],
+        [
+          63.69,
+          62.78
+        ]
+      ],
+      "x": 60.455,
+      "z": 63.230000000000004,
+      "width": 0.8999999999999986,
+      "length": 6.469999999999999,
+      "yaw": -1.5707963267948966,
+      "fronts": [],
+      "tile": true
+    },
+    {
+      "cadIndex": 1193,
+      "objectId": "e3502af3-7910-45a7-ab77-2594c1847dd9",
+      "sourceName": "461_SCHEMATICO_0",
+      "type": "shelf",
+      "configuredCategory": "Giornali",
+      "sourceHeight": 0.865,
+      "category": "Giornali",
+      "asset": "news",
+      "camera": "gondola",
+      "shelfId": "e3502af3-7910-45a7-ab77-2594c1847dd9",
+      "polygon": [
+        [
+          57.48,
+          15.77
+        ],
+        [
+          57.48,
+          15.42
+        ],
+        [
+          57.51,
+          15.42
+        ],
+        [
+          57.51,
+          15.25
+        ],
+        [
+          58.39,
+          15.25
+        ],
+        [
+          58.39,
+          15.42
+        ],
+        [
+          58.42,
+          15.42
+        ],
+        [
+          58.42,
+          15.77
+        ]
+      ],
+      "x": 57.95,
+      "z": 15.51,
+      "width": 0.4783999999999996,
+      "length": 0.8648000000000045,
+      "yaw": 1.5707963267948966,
+      "fronts": [],
+      "tile": true
+    },
+    {
+      "cadIndex": 1200,
+      "objectId": "f18f499a-9be3-4b33-af34-8db5952d8465",
+      "sourceName": "461_SCHEMATICO_0",
+      "type": "tavolo",
+      "configuredCategory": null,
+      "sourceHeight": 0.5,
+      "category": "Tavoli",
+      "asset": "table",
+      "camera": "counter",
+      "shelfId": "f18f499a-9be3-4b33-af34-8db5952d8465",
+      "polygon": [
+        [
+          40.09,
+          65.66
+        ],
+        [
+          40.09,
+          65.6
+        ],
+        [
+          40.09,
+          65.64
+        ],
+        [
+          40.09,
+          65.65
+        ],
+        [
+          40.06,
+          65.65
+        ],
+        [
+          40.06,
+          65.62
+        ],
+        [
+          40.06,
+          65.6
+        ],
+        [
+          40.06,
+          65.37
+        ],
+        [
+          40.06,
+          65.34
+        ],
+        [
+          40.06,
+          65.32
+        ],
+        [
+          40.09,
+          65.32
+        ],
+        [
+          40.09,
+          65.34
+        ],
+        [
+          40.09,
+          65.37
+        ],
+        [
+          40.09,
+          65.32
+        ],
+        [
+          40.17,
+          65.25
+        ],
+        [
+          40.56,
+          65.25
+        ],
+        [
+          40.64,
+          65.32
+        ],
+        [
+          40.64,
+          65.36
+        ],
+        [
+          40.64,
+          65.34
+        ],
+        [
+          40.65,
+          65.32
+        ],
+        [
+          40.67,
+          65.32
+        ],
+        [
+          40.67,
+          65.34
+        ],
+        [
+          40.67,
+          65.37
+        ],
+        [
+          40.67,
+          65.6
+        ],
+        [
+          40.67,
+          65.63
+        ],
+        [
+          40.67,
+          65.65
+        ],
+        [
+          40.65,
+          65.65
+        ],
+        [
+          40.64,
+          65.64
+        ],
+        [
+          40.64,
+          65.6
+        ],
+        [
+          40.64,
+          65.66
+        ],
+        [
+          40.69,
+          65.66
+        ],
+        [
+          40.69,
+          66.31
+        ],
+        [
+          40.64,
+          66.31
+        ],
+        [
+          40.64,
+          66.37
+        ],
+        [
+          40.64,
+          66.34
+        ],
+        [
+          40.65,
+          66.33
+        ],
+        [
+          40.67,
+          66.33
+        ],
+        [
+          40.67,
+          66.35
+        ],
+        [
+          40.67,
+          66.37
+        ],
+        [
+          40.67,
+          66.61
+        ],
+        [
+          40.67,
+          66.64
+        ],
+        [
+          40.67,
+          66.65
+        ],
+        [
+          40.65,
+          66.65
+        ],
+        [
+          40.64,
+          66.64
+        ],
+        [
+          40.64,
+          66.61
+        ],
+        [
+          40.64,
+          66.66
+        ],
+        [
+          40.56,
+          66.73
+        ],
+        [
+          40.17,
+          66.73
+        ],
+        [
+          40.09,
+          66.65
+        ],
+        [
+          40.09,
+          66.6
+        ],
+        [
+          40.09,
+          66.64
+        ],
+        [
+          40.09,
+          66.65
+        ],
+        [
+          40.06,
+          66.65
+        ],
+        [
+          40.06,
+          66.63
+        ],
+        [
+          40.06,
+          66.61
+        ],
+        [
+          40.06,
+          66.37
+        ],
+        [
+          40.06,
+          66.35
+        ],
+        [
+          40.06,
+          66.33
+        ],
+        [
+          40.09,
+          66.33
+        ],
+        [
+          40.09,
+          66.34
+        ],
+        [
+          40.09,
+          66.37
+        ],
+        [
+          40.09,
+          66.31
+        ],
+        [
+          40.04,
+          66.31
+        ],
+        [
+          40.04,
+          65.66
+        ]
+      ],
+      "x": 40.364999999999995,
+      "z": 65.99000000000001,
+      "width": 0.5459999999999988,
+      "length": 1.2432000000000032,
+      "yaw": 0,
+      "fronts": [],
+      "tile": false
+    },
+    {
+      "cadIndex": 1203,
+      "objectId": "33c8e989-9eaf-4dea-bc64-471af332cbd4",
+      "sourceName": "461_SCHEMATICO_0",
+      "type": "shelf",
+      "configuredCategory": null,
+      "sourceHeight": 0.865,
+      "category": "Scaffali senza categoria",
+      "asset": "grocery",
+      "camera": "gondola",
+      "shelfId": "33c8e989-9eaf-4dea-bc64-471af332cbd4",
+      "polygon": [
+        [
+          59.07,
+          57.46
+        ],
+        [
+          63.26,
+          57.46
+        ],
+        [
+          63.26,
+          57.02
+        ],
+        [
+          59.07,
+          57.02
+        ]
+      ],
+      "x": 61.165,
+      "z": 57.24,
+      "width": 0.4399999999999977,
+      "length": 4.189999999999998,
+      "yaw": 1.5707963267948966,
+      "fronts": [],
+      "tile": true
+    },
+    {
+      "cadIndex": 1207,
+      "objectId": "d0e03e21-2799-4091-8a1c-605fe2955131",
+      "sourceName": "461_SCHEMATICO_0",
+      "type": "shelf",
+      "configuredCategory": null,
+      "sourceHeight": 0.865,
+      "category": "Scaffali senza categoria",
+      "asset": "grocery",
+      "camera": "gondola",
+      "shelfId": "d0e03e21-2799-4091-8a1c-605fe2955131",
+      "polygon": [
+        [
+          63.05,
+          53.4
+        ],
+        [
+          67.87,
+          53.4
+        ],
+        [
+          67.87,
+          52.96
+        ],
+        [
+          63.05,
+          52.96
+        ]
+      ],
+      "x": 65.46000000000001,
+      "z": 53.18,
+      "width": 0.4399999999999977,
+      "length": 4.820000000000007,
+      "yaw": 1.5707963267948966,
+      "fronts": [],
+      "tile": true
+    },
+    {
+      "cadIndex": 1212,
+      "objectId": "af1b97e6-7f32-486c-923b-c5617b07d397",
+      "sourceName": "461_SCHEMATICO_0",
+      "type": "shelf",
+      "configuredCategory": null,
+      "sourceHeight": 0.865,
+      "category": "Scaffali senza categoria",
+      "asset": "grocery",
+      "camera": "gondola",
+      "shelfId": "af1b97e6-7f32-486c-923b-c5617b07d397",
+      "polygon": [
+        [
+          32.85,
+          38.78
+        ],
+        [
+          33.99,
+          38.78
+        ],
+        [
+          33.99,
+          12.84
+        ],
+        [
+          32.85,
+          12.84
+        ]
+      ],
+      "x": 33.42,
+      "z": 25.810000000000002,
+      "width": 1.1400000000000006,
+      "length": 25.94,
+      "yaw": 3.141592653589793,
+      "fronts": [],
+      "tile": true
+    },
+    {
+      "cadIndex": 1213,
+      "objectId": "59d92617-7ba0-47da-91ba-99f57c7a2558",
+      "sourceName": "461_SCHEMATICO_0",
+      "type": "shelf",
+      "configuredCategory": null,
+      "sourceHeight": 0.865,
+      "category": "Scaffali senza categoria",
+      "asset": "grocery",
+      "camera": "gondola",
+      "shelfId": "59d92617-7ba0-47da-91ba-99f57c7a2558",
+      "polygon": [
+        [
+          36.39,
+          38.78
+        ],
+        [
+          37.53,
+          38.78
+        ],
+        [
+          37.53,
+          12.84
+        ],
+        [
+          36.39,
+          12.84
+        ]
+      ],
+      "x": 36.96,
+      "z": 25.810000000000002,
+      "width": 1.1400000000000006,
+      "length": 25.94,
+      "yaw": 3.141592653589793,
+      "fronts": [],
+      "tile": true
+    },
+    {
+      "cadIndex": 1214,
+      "objectId": "5298cb86-20d4-4891-9eef-bb44e57f5afe",
+      "sourceName": "461_SCHEMATICO_0",
+      "type": "shelf",
+      "configuredCategory": null,
+      "sourceHeight": 0.865,
+      "category": "Scaffali senza categoria",
+      "asset": "grocery",
+      "camera": "gondola",
+      "shelfId": "5298cb86-20d4-4891-9eef-bb44e57f5afe",
+      "polygon": [
+        [
+          39.93,
+          38.78
+        ],
+        [
+          41.07,
+          38.78
+        ],
+        [
+          41.07,
+          12.84
+        ],
+        [
+          39.93,
+          12.84
+        ]
+      ],
+      "x": 40.5,
+      "z": 25.810000000000002,
+      "width": 1.1400000000000006,
+      "length": 25.94,
+      "yaw": 3.141592653589793,
+      "fronts": [],
+      "tile": true
     }
   ],
   "assets": {
@@ -13003,12 +12384,6 @@
     "bar": {
       "url": "./retail/bar.glb",
       "overviewUrl": "./retail/bar-l0.glb",
-      "width": 1.7,
-      "length": 2.6
-    },
-    "beverages": {
-      "url": "./retail/beverages.glb",
-      "overviewUrl": "./retail/beverages-l0.glb",
       "width": 1.7,
       "length": 2.6
     },
@@ -13124,11 +12499,9 @@
   "departments": [
     {
       "category": "Acqua",
-      "status": "modelled",
-      "fixtures": 1,
-      "assets": [
-        "beverages"
-      ],
+      "status": "CAD only",
+      "fixtures": 0,
+      "assets": [],
       "camera": "gondola",
       "analyticGeometry": "visitor-areas.json",
       "selection": "existing analytical ROI",
@@ -13161,7 +12534,7 @@
     {
       "category": "Carne",
       "status": "modelled",
-      "fixtures": 4,
+      "fixtures": 3,
       "assets": [
         "meat"
       ],
@@ -13446,7 +12819,7 @@
       "selection": "existing analytical ROI",
       "excludedObjects": [
         {
-          "cadIndex": 794,
+          "cadIndex": 740,
           "objectId": "5311c680-e715-4d9b-992c-0cb5f5943980",
           "sourceName": "MURETTO PES",
           "type": "banco",
@@ -13472,7 +12845,7 @@
     {
       "category": "Scaffali senza categoria",
       "status": "modelled",
-      "fixtures": 13,
+      "fixtures": 22,
       "assets": [
         "chilled",
         "grocery"
@@ -13495,7 +12868,7 @@
       "selection": "existing analytical ROI",
       "excludedObjects": [
         {
-          "cadIndex": 186,
+          "cadIndex": 166,
           "objectId": "1dcaa3b4-d060-443d-8311-0aa004b89f4f",
           "sourceName": "A-muri_cartongessi",
           "type": "fridge",
@@ -13505,7 +12878,7 @@
           "reason": "CAD wall/lining geometry, not a merchandise fixture; retained exactly as architecture"
         },
         {
-          "cadIndex": 187,
+          "cadIndex": 167,
           "objectId": "94345306-efe4-4449-8202-1d32b22a0d6d",
           "sourceName": "A-muri_cartongessi",
           "type": "fridge",
@@ -13515,7 +12888,7 @@
           "reason": "CAD wall/lining geometry, not a merchandise fixture; retained exactly as architecture"
         },
         {
-          "cadIndex": 188,
+          "cadIndex": 168,
           "objectId": "64ce2585-5b03-43a3-927d-5a1be852df98",
           "sourceName": "A-muri_cartongessi",
           "type": "fridge",
@@ -13529,7 +12902,7 @@
     {
       "category": "Tavoli",
       "status": "modelled",
-      "fixtures": 33,
+      "fixtures": 31,
       "assets": [
         "table"
       ],
@@ -13538,7 +12911,7 @@
       "selection": "CAD fixture footprints only; no department KPI binding",
       "excludedObjects": [
         {
-          "cadIndex": 917,
+          "cadIndex": 833,
           "objectId": "ba06f034-b2e8-4411-89cf-3ccf65674ea4",
           "sourceName": "461_SCHEMATICO_0",
           "type": "tavolo",
@@ -13564,7 +12937,7 @@
   ],
   "excluded": [
     {
-      "cadIndex": 186,
+      "cadIndex": 166,
       "objectId": "1dcaa3b4-d060-443d-8311-0aa004b89f4f",
       "sourceName": "A-muri_cartongessi",
       "type": "fridge",
@@ -13574,7 +12947,7 @@
       "reason": "CAD wall/lining geometry, not a merchandise fixture; retained exactly as architecture"
     },
     {
-      "cadIndex": 187,
+      "cadIndex": 167,
       "objectId": "94345306-efe4-4449-8202-1d32b22a0d6d",
       "sourceName": "A-muri_cartongessi",
       "type": "fridge",
@@ -13584,7 +12957,7 @@
       "reason": "CAD wall/lining geometry, not a merchandise fixture; retained exactly as architecture"
     },
     {
-      "cadIndex": 188,
+      "cadIndex": 168,
       "objectId": "64ce2585-5b03-43a3-927d-5a1be852df98",
       "sourceName": "A-muri_cartongessi",
       "type": "fridge",
@@ -13594,7 +12967,7 @@
       "reason": "CAD wall/lining geometry, not a merchandise fixture; retained exactly as architecture"
     },
     {
-      "cadIndex": 794,
+      "cadIndex": 740,
       "objectId": "5311c680-e715-4d9b-992c-0cb5f5943980",
       "sourceName": "MURETTO PES",
       "type": "banco",
@@ -13604,7 +12977,7 @@
       "reason": "CAD wall/lining geometry, not a merchandise fixture; retained exactly as architecture"
     },
     {
-      "cadIndex": 917,
+      "cadIndex": 833,
       "objectId": "ba06f034-b2e8-4411-89cf-3ccf65674ea4",
       "sourceName": "461_SCHEMATICO_0",
       "type": "tavolo",

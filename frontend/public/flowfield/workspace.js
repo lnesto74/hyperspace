@@ -6,13 +6,13 @@
 // measured on (scripts/daily_kpi/export_area_geometry.py), plus checkout lane ROIs.
 // Renderer: main.js keeps every flow algorithm; this file picks lens, layer, camera.
 
-import { LENSES, LENS, SLOT_TO_SLICE, ICONS } from './lenses.js?v=v3-17';
+import { LENSES, LENS, SLOT_TO_SLICE, ICONS } from './lenses.js?v=v3-22';
 import * as VJ from './visitor-journey.js?v=v3-5';
 import * as VAS from './value-at-stake.js?v=v3-5';
 import * as KN from './kinetic.js?v=v3-14';
 import * as G from './twin-graphics.js?v=v3-5';
 import * as PER from './period.js?v=v3-5';
-import * as MS from './media-sim.js?v=v3-17';
+import * as MS from './media-sim.js?v=v3-18';
 import { radarAreas } from './value-opportunities.js';
 import { loadExecutiveReport } from './executive-report.js?v=lens-1';
 import { reportRow } from './journey-scorecard.js?v=v3-5';
@@ -84,13 +84,15 @@ export function mountAnalysisWorkspace(api) {
     period: null, // { mode:'day'|'week'|'month', from, to, days:[…] } shown on screen
     periodJob: null, // a period being loaded / calculated
     eng: { iso: true, flow: false }, // Engagement overlays: measured isolines, movement context
+    flows: true, // movement streams on the floor; off hides them on every lens
     flowCell: null, // Flow Explorer · Direction: inspected cell "i,j"
     flowSpot: null, // Flow Explorer · Convergence: highlighted meeting / splitting place
     regFocus: null, // Flow Explorer · Path types: isolate one path type (regime id)
     replay: { day: null, key: '', data: null, status: 'idle', k: null, playing: false, timer: 0, pay: null }, // Service · minute by minute
     wf: { days: [], st: {}, ok: null, timer: 0, applied: '' }, // server day packs (movement, behaviour, checkouts)
     media: { data: null, status: 'idle', sel: 0, note: '',
-      simq: { data: null, status: 'idle', note: '', spot: 'T1', sku: 'ESS-100031', msg: 'promo', lift: null, days: [0, 1, 2, 3, 4, 5, 6], hours: [7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21], spotSec: 15, weeks: 2, pinned: null } }, // Media lens · digital totems (240_media_pack)
+      simq: { data: null, status: 'idle', note: '', spot: 'T1', sku: 'ESS-100031', msg: 'promo', lift: null, days: [0, 1, 2, 3, 4, 5, 6], hours: [7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21], spotSec: 15, weeks: 2, pinned: null, target: undefined, targetAuto: true, err: '' } }, // Media lens · digital totems (240_media_pack)
+    cat: { sec: null, day: null, status: 'idle', note: '', metric: 'rate', macro: null, cat: null, aisle: null }, // Categories lens (250_category_pack)
     inspCollapsed: false,
     contours: false, // Astra: 3D scalar isolines on the twin floor (off by default; the v3 contours are drawn by twin-graphics)
   };
@@ -102,7 +104,7 @@ export function mountAnalysisWorkspace(api) {
   const venue = h('div', { class: 'hx-venue' }, 'Esselunga / Treviglio');
   const tabs = h('nav', { class: 'hx-tabs', 'aria-label': 'Lenses' });
   const dayBox = h('div', { class: 'hx-day' });
-  const labBtn = h('button', { class: 'hx-ghost', type: 'button', title: 'Engineering controls (Lab)', onclick: () => toggleLab() }, h('i', { html: ICONS.lab }), 'Lab');
+  const labBtn = h('button', { class: 'hx-ghost hx-lab-btn', type: 'button', title: 'Engineering controls (Lab)', 'aria-pressed': 'false', onclick: () => toggleLab() }, h('i', { html: ICONS.lab }), 'Lab');
   top.append(brand, venue, tabs, h('div', { class: 'hx-top-r' }, dayBox, labBtn));
 
   const rail = h('nav', { class: 'hx-rail', 'aria-label': 'Lenses' });
@@ -150,7 +152,43 @@ export function mountAnalysisWorkspace(api) {
       } },h('option',{value:''},'Choose department'),...(api.twin.manifest.departments || []).slice().sort((a,b)=>a.category.localeCompare(b.category,'it',{numeric:true})).map(d=>h('option',{value:d.category,selected:state.sel?.id===d.category || (state.sel?.kind==='lane' && d.category===`Checkout ${state.sel.id}`)},VJ.deptLabel(d.category))))),
       h('button',{type:'button','aria-pressed':String(t.frontage),onclick:()=>{api.twin.frontage(!t.frontage);renderSpatialTools();},title:'Calibrated shelf edges of the selected category'},'Shelf fronts'),
       false && h('button',{type:'button','aria-pressed':String(state.contours),disabled:!!api.scalarInfo()?.categorical,onclick:()=>{state.contours=!state.contours;api.contours(state.contours);renderSpatialTools();},title:'Scalar contours; raw observed support only'},'Isolines'),
+      h('button',{type:'button','aria-pressed':String(plano.fronts),onclick:()=>togglePlano('fronts'),title:'Planogram product fronts, coloured by macro-category'},'Category colours'),
+      h('button',{type:'button','aria-pressed':String(plano.sections),onclick:()=>togglePlano('sections'),title:'Planogram sections, coloured by how well they sit on a twin shelf'},'Planogram sections'),
       h('button',{type:'button','aria-pressed':String(t.reduced),onclick:()=>{api.twin.reduced(!t.reduced);renderSpatialTools();}},'Reduced detail')].filter(Boolean));
+    renderPlanoLegend();
+  }
+
+  const plano = { fronts:false, sections:false, status:'idle', data:null, overlay:null, mod:null };
+  const planoLegend = h('div', { class:'hx-plano-legend', hidden:true, 'aria-label':'Planogram legend' });
+  stage.append(planoLegend);
+  async function togglePlano(kind) {
+    plano[kind]=!plano[kind];
+    if(plano.status==='idle'){
+      plano.status='loading';renderSpatialTools();
+      try{
+        const [THREE,mod]=await Promise.all([import('three'),import('./planogram-overlay.js?v=plano-1')]);
+        plano.mod=mod;
+        plano.data=await mod.loadPlanogramSections(info().venue || api.snapshot().field?.meta?.venue_id);
+        if(api.twin && plano.data.sections.length)plano.overlay=mod.createPlanogramOverlay(THREE,api.twin.root,plano.data.sections);
+        plano.status='ready';
+      }catch(e){plano.status='ready';plano.data={sections:[],note:`Planogram unavailable (${e.message})`};}
+    }
+    plano.overlay?.fronts(plano.fronts);plano.overlay?.sections(plano.sections);
+    renderSpatialTools();
+  }
+  function renderPlanoLegend() {
+    planoLegend.hidden=!(plano.fronts||plano.sections) || state.lens==='compare';
+    if(planoLegend.hidden)return;
+    if(plano.status==='loading'){planoLegend.replaceChildren(h('p',null,'Loading planogram…'));return;}
+    const d=plano.data,m=plano.mod;
+    if(!d?.sections.length){planoLegend.replaceChildren(h('p',null,d?.note||'No planogram'));return;}
+    const key=(color,label,n)=>h('li',null,h('i',{style:`background:${color}`}),h('span',null,label),h('b',null,String(n)));
+    planoLegend.replaceChildren(...[
+      h('p',{class:'hx-plano-title'},d.note),
+      plano.fronts?h('ul',null,...m.macroLegend(d.sections).map(r=>key(r.color,r.macro,r.fronts))):null,
+      plano.fronts?h('p',{class:'hx-plano-note'},'Macro-category per front (count = fronts). Esselunga category names; some are inferred from product names.'):null,
+      plano.sections?h('ul',null,...m.qualityLegend(d.sections).map(r=>key(r.color,r.label,r.count))):null,
+      plano.sections?h('p',{class:'hx-plano-note'},'Planogram sections (count = sections). Geometry only, no KPI.'):null].filter(Boolean));
   }
 
   function renderAnchorCard() {
@@ -214,11 +252,14 @@ export function mountAnalysisWorkspace(api) {
   // Legacy chrome stays mounted for the renderer's bindings, but out of sight.
   const controls = document.getElementById('controls');
   controls?.setAttribute('aria-hidden', 'true');
-  const labHead = h('div', { class: 'hx-lab-head' }, h('b', null, 'LAB'), ' · engineering controls. Tuning, not analysis.', h('button', { type: 'button', class: 'hx-ghost', onclick: () => toggleLab(false) }, 'Close'));
+  const labHead = h('div', { class: 'hx-lab-head' }, h('b', null, 'LAB'), h('button', { type: 'button', class: 'hx-ghost', onclick: () => toggleLab(false) }, 'Collapse'), h('span', null, 'Engineering controls. Tuning, not analysis.'));
   controls?.prepend(labHead);
   function toggleLab(on) {
     const v = root.classList.toggle('hx-lab', on);
     controls?.setAttribute('aria-hidden', String(!v));
+    const pressed = String(v);
+    labBtn.setAttribute('aria-pressed', pressed);
+    rail.querySelector('[aria-label="Lab"]')?.setAttribute('aria-pressed', pressed);
   }
 
   for (const l of LENSES) {
@@ -380,6 +421,7 @@ export function mountAnalysisWorkspace(api) {
       if (lensChanged && !api.media?.state.selected) {
         if (state.lens === 'service') flyCheckout();
         else if (state.lens === 'media' && mdData()) flyMedia();
+        else if (state.lens === 'categories' && state.cat.sec) flyCategories();
         else if (state.lens === 'flow') api.top();
         else if (state.sel && ['live', 'behaviour'].includes(state.lens)) focusSelection();
         else if (state.lens !== 'compare') api.overview();
@@ -390,6 +432,7 @@ export function mountAnalysisWorkspace(api) {
 
   /** How strong the movement streams are in each picture (rendering only). */
   function streamGainFor() {
+    if (!state.flows) return 0;
     const L = state.lens, layer = state.layer[L];
     if (L === 'pulse') return layer === 'movement' ? 1 : layer === 'evidence' ? 0.45 : 0;
     if (L === 'flow') return { movement: 1, dwell: 0.3, footfall: 0.2, purity: 0.2, convergence: 0.15, regime: 0 }[layer] ?? 1;
@@ -397,6 +440,7 @@ export function mountAnalysisWorkspace(api) {
     if (L === 'service') return 0.2;
     if (L === 'opportunities') return 0.22;
     if (L === 'media') return 0.15;
+    if (L === 'categories') return layer === 'store' ? 0.12 : 0.3;
     return 1; // behaviour, live, compare: unchanged
   }
 
@@ -733,6 +777,7 @@ export function mountAnalysisWorkspace(api) {
     await applyRenderer(false);
     render();
     if (state.lens === 'media') flyMedia();
+    if (state.lens === 'categories') flyCategories();
   }
 
   async function setSlot(sl) {
@@ -1101,7 +1146,9 @@ export function mountAnalysisWorkspace(api) {
       bar.append(slots, h('span', { class: 'hx-bar-note', title: 'Visitor Journey always uses the slot you pick. The floor follows when a dated pack has that slot.' },
         moved ? `Floor and numbers: ${VJ.fmtSlot(state.slot)}` : `Numbers ${VJ.fmtSlot(state.slot)} · floor ${i.sliceLabel}`));
     }
+    const flowBtn = h('button', { type: 'button', 'aria-pressed': String(state.flows), title: state.flows ? 'Hide movement streams' : 'Show movement streams', onclick: () => { state.flows = !state.flows; api.streams?.(streamGainFor()); renderStageControls(); } }, 'Flows');
     const cam = h('div', { class: 'hx-seg hx-cam', role: 'group', 'aria-label': 'Camera' },
+      flowBtn, h('span', { class: 'hx-seg-gap' }),
       h('button', { type: 'button', onclick: () => api.top() }, 'Top'),
       h('button', { type: 'button', onclick: () => api.overview() }, '3D'),
       h('button', { type: 'button', onclick: () => focusSelection(), disabled: !state.sel && state.lens !== 'service' }, 'Focus'));
@@ -1109,7 +1156,7 @@ export function mountAnalysisWorkspace(api) {
     if (state.lens === 'service' && !state.sel) cam.lastChild.onclick = () => flyCheckout();
     cam.append(h('button', { type: 'button', class: 'hx-panelbtn', 'aria-pressed': String(!state.inspCollapsed), title: state.inspCollapsed ? 'Show the panel' : 'Hide the panel, larger canvas', onclick: () => toggleInspector() }, state.inspCollapsed ? 'Panel ‹' : 'Panel ›'));
     if (state.lens !== 'compare') bar.append(cam);
-    else bar.append(h('div', { class: 'hx-seg hx-cam' }, cam.lastChild));
+    else bar.append(h('div', { class: 'hx-seg hx-cam' }, flowBtn, h('span', { class: 'hx-seg-gap' }), cam.querySelector('.hx-panelbtn')));
   }
   function toggleInspector(on = !state.inspCollapsed) {
     state.inspCollapsed = on;
@@ -1249,7 +1296,7 @@ export function mountAnalysisWorkspace(api) {
   function buildOverlay() {
     const view = state.vj.view, A = state.areas;
     const f = api.snapshot().field;
-    const key = [fid(f), !!geo.fix, state.eng.iso, state.eng.flow, state.flowCell, state.kfocus, state.regFocus, state.flowSpot, state.kin.status, state.lens, state.econ.effort, JSON.stringify(state.econ.margins), state.econ.basketMargin, state.source, state.execLayer[state.lens], !!state.exec.report, state.layer[state.lens], state.slot, state.sel?.kind, state.sel?.id, !!view, !!A, state.radar.list.length, state.radar.stamp, state.media.status, state.media.sel, state.media.simq.status, state.media.simq.spot, state.media.simq.sku].join('|');
+    const key = [fid(f), !!geo.fix, state.eng.iso, state.eng.flow, state.flowCell, state.kfocus, state.regFocus, state.flowSpot, state.kin.status, state.lens, state.econ.effort, JSON.stringify(state.econ.margins), state.econ.basketMargin, state.source, state.execLayer[state.lens], !!state.exec.report, state.layer[state.lens], state.slot, state.sel?.kind, state.sel?.id, !!view, !!A, state.radar.list.length, state.radar.stamp, state.media.status, state.media.sel, state.media.simq.status, state.media.simq.spot, state.media.simq.sku, state.media.simq.target, state.cat.status, state.cat.metric, state.cat.macro, state.cat.cat, state.cat.aisle].join('|');
     if (key === overlayKey) return;
     overlayKey = key; paintKey = '';
     overlay.replaceChildren(); tags.replaceChildren(); shapes = []; pins = []; items = [];
@@ -1258,6 +1305,7 @@ export function mountAnalysisWorkspace(api) {
     const L = state.lens, layer = state.layer[L];
     if (L === 'behaviour') { buildBehaviourOverlay(layer); return; }
     if (L === 'flow') { buildFlowOverlay(layer, f); return; }
+    if (L === 'categories') { buildCatOverlay(layer); return; }
     if (L === 'media') { if (layer === 'simulate') buildSimOverlay(); else buildMediaOverlay(layer); return; }
     if (isExec()) { buildExecOverlay(L); return; }
     const ranked = VJ.rankDepartments(view, state.slot);
@@ -2360,9 +2408,9 @@ export function mountAnalysisWorkspace(api) {
   const rpUi = { lead: null, rows: [], win: [0, 0] };
   function inspectReplay(v) {
     const R = state.replay, D = R.data;
-    if ((R.status !== 'ready' || !D) && wfWaitCard('the checkouts')) return [ihead('05 · CHECKOUT SERVICE', 'The checkouts, minute by minute', { badge: srcBadge('Raw 10 Hz · checkout replay', '', 'flow') }), wfWaitCard('the checkouts')];
+    if ((R.status !== 'ready' || !D) && wfWaitCard('the checkouts')) return [ihead('06 · CHECKOUT SERVICE', 'The checkouts, minute by minute', { badge: srcBadge('Raw 10 Hz · checkout replay', '', 'flow') }), wfWaitCard('the checkouts')];
     if (R.status !== 'ready' || !D) {
-      return [ihead('05 · CHECKOUT SERVICE', 'The checkouts, minute by minute', { badge: srcBadge('Raw 10 Hz · checkout replay', '', 'flow') }),
+      return [ihead('06 · CHECKOUT SERVICE', 'The checkouts, minute by minute', { badge: srcBadge('Raw 10 Hz · checkout replay', '', 'flow') }),
         card('hx-empty', h('b', null, R.status === 'loading' ? 'Loading…' : 'No replay for this day'),
           h('p', null, R.status === 'loading' ? 'Reading the minute-by-minute checkout file.' : `The replay is calculated from the raw 10 Hz tracks of one day (analysis/journey_lab/211_checkout_replay.py). It is not available for ${R.day ? VJ.fmtDay(R.day) : 'this period'} yet. The audited queue numbers are in “Waiting time”.`)),
         h('button', { type: 'button', class: 'hx-ghost wide', onclick: () => setLayer('waiting') }, 'Open Waiting time')];
@@ -2372,7 +2420,7 @@ export function mountAnalysisWorkspace(api) {
     const med = (a) => { const b = a.slice().sort((x, y) => x - y); return b.length ? b[Math.floor(b.length / 2)] : null; };
     const many = (D.n_days || 1) > 1, f = (x) => (many ? x.toFixed(1) : String(x));
     rpUi.lead = h('div', { class: 'hx-rp-now' }, h('b', null, f(n.q)), h('span', null, many ? 'queuing on average' : 'queuing'), h('b', { class: 's' }, f(n.s)), h('span', null, many ? 'paying on average' : 'paying'));
-    const out = [ihead('05 · CHECKOUT SERVICE', `The checkouts at ${rpClock(sec)}`, { badge: srcBadge(`Measured · raw 10 Hz · ${(D.n_days || 1) > 1 ? `average of ${D.n_days} days · ` : ''}${VJ.fmtDay(D.day)}`, 'Positions read 10 times a second; a person counts as queuing or paying when standing still (under 0.5 m/s) in that zone.', 'flow'),
+    const out = [ihead('06 · CHECKOUT SERVICE', `The checkouts at ${rpClock(sec)}`, { badge: srcBadge(`Measured · raw 10 Hz · ${(D.n_days || 1) > 1 ? `average of ${D.n_days} days · ` : ''}${VJ.fmtDay(D.day)}`, 'Positions read 10 times a second; a person counts as queuing or paying when standing still (under 0.5 m/s) in that zone.', 'flow'),
       lead: h('div', { class: 'hx-leadkpi coral' }, rpUi.now = h('small', null, `RIGHT NOW · ${rpClock(sec)}`), rpUi.lead) })];
     out.push(card('', h('div', { class: 'hx-card-h' }, h('b', null, `Peak hour ${rpClock(D.peak.from_s)}–${rpClock(D.peak.to_s)}`), h('small', null, 'most people at the checkouts')),
       h('div', { class: 'hx-grid3' },
@@ -2481,7 +2529,7 @@ export function mountAnalysisWorkspace(api) {
     const lanes = v.lanes.list;
     const sel = (state.sel?.kind === 'lane' ? lanes.find((l) => l.lane === state.sel.id) : null) || lanes[0] || null;
     const { peak, over } = VJ.queuePeak(v);
-    const out = [ihead('05 · CHECKOUT SERVICE', sel ? `Lane ${sel.lane}` : 'Checkouts', { badge: vjBadge(v),
+    const out = [ihead('06 · CHECKOUT SERVICE', sel ? `Lane ${sel.lane}` : 'Checkouts', { badge: vjBadge(v),
       lead: leadKpi('QUEUE WAIT · PER ENTRANT · WHOLE STORE', kpiValue(v.queue[state.slot]), `Queue person-minutes ÷ entrants, ${VJ.fmtSlot(state.slot)}. Not the average wait of one lane.`, 'coral') })];
     out.push(card('', h('div', { class: 'hx-grid3' },
       stat('Service at the till', kpiValue(v.service[state.slot]), 'per entrant'),
@@ -2520,7 +2568,7 @@ export function mountAnalysisWorkspace(api) {
     const layer = state.layer.opportunities;
     if (layer === 'radar') {
       const r = state.radar;
-      return [ihead('06 · PROFIT RADAR · CURRENT', 'Current scenarios', { badge: srcBadge('Profit Radar · live model', 'Separate from the day’s Visitor Journey and from the historical floor.', 'scenario') }),
+      return [ihead('07 · PROFIT RADAR · CURRENT', 'Current scenarios', { badge: srcBadge('Profit Radar · live model', 'Separate from the day’s Visitor Journey and from the historical floor.', 'scenario') }),
         h('button', { type: 'button', class: 'hx-ghost wide', disabled: r.busy, onclick: loadRadar }, r.busy ? 'Checking…' : (r.stamp ? `Refresh (${r.stamp})` : 'Load current Profit Radar')),
         r.note ? h('p', { class: 'hx-note' }, r.note) : null,
         ...r.list.slice(0, 3).map((a, i) => card('', h('div', { class: 'hx-card-h' }, h('b', null, `${String.fromCharCode(65 + i)} · ${a.name}`), h('small', null, a.priced ? 'MODELLED' : 'BEHAVIOUR ONLY')),
@@ -2529,14 +2577,14 @@ export function mountAnalysisWorkspace(api) {
     }
     const list = valueItems();
     const sel = list.find((c) => state.sel && c.sel.kind === state.sel.kind && c.sel.id === state.sel.id) || list[0];
-    if (!sel) return [ihead('06 · OPPORTUNITIES', 'Nothing to screen', { badge: vjBadge(v, VJ.DAY) }), card('', h('p', null, 'Visitor Journey has no usable department or queue reading for this day.'))];
+    if (!sel) return [ihead('07 · OPPORTUNITIES', 'Nothing to screen', { badge: vjBadge(v, VJ.DAY) }), card('', h('p', null, 'Visitor Journey has no usable department or queue reading for this day.'))];
     const r = sel.summary.range, rec = sel.summary.recommended, inp = sel.inputs, ax = inp.axes || {};
     const [obs, hyp, test] = HYPOTHESIS[rec.leverId] || HYPOTHESIS.layout;
     const observed = sel.kind === 'dept'
       ? [['Time in area', `${VJ.fmtDuration(sel.evidence.area)} per entrant`], ['At the shelf', `${VJ.fmtDuration(sel.evidence.banco)} per entrant`], ['Choice index', num(sel.evidence.choice)],
         ...(sel.axesSource === 'measured' ? [['Moving past (10 Hz)', pct(ax.avoidance)], ['Hesitation vs store', `×${num(2 * ax.hesitation, 1)}`], ['U-turns vs store', `×${num(2 * ax.confusion, 1)}`]] : [])]
       : [['Peak queue per entrant', `${VJ.fmtDuration(sel.evidence.peak.value)} at ${VJ.fmtSlot(sel.evidence.peak.slot)}`], [`Lane ${sel.evidence.lane} share of waiting`, pct(sel.evidence.laneShare)]];
-    const out = [ihead('06 · OPPORTUNITIES', sel.name, { badge: vjBadge(v, VJ.DAY) })];
+    const out = [ihead('07 · OPPORTUNITIES', sel.name, { badge: vjBadge(v, VJ.DAY) })];
     out.push(card('obs', h('div', { class: 'hx-step' }, h('b', null, '1'), h('span', null, 'OBSERVED')), h('p', { class: 'hx-strong' }, obs),
       h('dl', { class: 'hx-dl' }, ...observed.flatMap(([k, val]) => [h('dt', null, k), h('dd', null, val)])),
       sel.movement ? mixBar(sel.movement.share, { thin: true }) : null),
@@ -2567,7 +2615,7 @@ export function mountAnalysisWorkspace(api) {
     if (mode === 'day') {
       const W = compareWindows(), w = W[C.active] || W[0];
       const sl = w.slot;
-      const out = [ihead('07 · THE DAY', `${w.label}${v ? ` · ${VJ.fmtDay(v.day)}` : ''}`, { badge: v && sl ? vjBadge(v, sl) : srcBadge('Flow field only', '', 'flow'), sub: 'One large map for the slot in focus; the strip below walks the day.' }), metricSeg];
+      const out = [ihead('08 · THE DAY', `${w.label}${v ? ` · ${VJ.fmtDay(v.day)}` : ''}`, { badge: v && sl ? vjBadge(v, sl) : srcBadge('Flow field only', '', 'flow'), sub: 'One large map for the slot in focus; the strip below walks the day.' }), metricSeg];
       if (C.metric === 'k' && sl && kinMatches()) {
         const sh = KN.shares(KN.mixOf(state.kin.K, null, sl));
         out.push(card('kin', h('div', { class: 'hx-card-h' }, h('b', null, 'How the store moves'), h('small', null, `slot ${w.label} · measured`)), mixBar(sh),
@@ -2600,7 +2648,7 @@ export function mountAnalysisWorkspace(api) {
     const matched = sa && sb && v;
     const la = W.find((w) => w.slice === C.a)?.label || C.a, lb = W.find((w) => w.slice === C.b)?.label || C.b;
     const changes = compareChanges(la, lb);
-    return [ihead('07 · COMPARE', `${la} vs ${lb}`, { badge: srcBadge('Flow field · same frame and scale', '', 'flow'), sub: 'Same footprint, same scale. A movement comparison is not an intervention result.' }), metricSeg,
+    return [ihead('08 · COMPARE', `${la} vs ${lb}`, { badge: srcBadge('Flow field · same frame and scale', '', 'flow'), sub: 'Same footprint, same scale. A movement comparison is not an intervention result.' }), metricSeg,
       card('', h('small', { class: 'hx-cap' }, 'WINDOW A'), pick('a'), h('small', { class: 'hx-cap' }, 'WINDOW B'), pick('b')),
       card('', h('div', { class: 'hx-card-h' }, h('b', null, 'Matched Visitor Journey'), h('small', null, matched ? 'same slots' : 'not available')),
         matched ? h('table', { class: 'hx-table' }, h('tr', null, h('th'), h('th', null, sa.replace('-', '–')), h('th', null, sb.replace('-', '–'))),
@@ -2657,7 +2705,7 @@ export function mountAnalysisWorkspace(api) {
     const ranked = VJ.rankDepartments(state.vj.view, VJ.DAY, { includePackaged: false });
     const sel = state.sel?.kind === 'dept' ? state.sel.id : '';
     const canOpen = qs.has('liveLink');
-    return [ihead('08 · LIVE', 'The store now', { badge: srcBadge('Live feed · not connected here', '', 'coral'), sub: 'Anonymous current positions and short trails from the live pipeline.' }),
+    return [ihead('10 · LIVE', 'The store now', { badge: srcBadge('Live feed · not connected here', '', 'coral'), sub: 'Anonymous current positions and short trails from the live pipeline.' }),
       card('hx-big', h('small', null, 'PEOPLE IN STORE NOW'), h('strong', null, '—'), h('p', null, 'Shown only with a verified connection to the live feed. This view has none, so no number is shown.')),
       card('', h('small', { class: 'hx-cap' }, 'FOCUS AREA'),
         h('select', { 'aria-label': 'Region', onchange: (e) => select(e.target.value ? { kind: 'dept', id: e.target.value } : null, { fly: true }) }, h('option', { value: '' }, 'Entire store'), ...ranked.map((r) => h('option', { value: r.id, selected: r.id === sel }, r.name))),
@@ -2872,17 +2920,23 @@ export function mountAnalysisWorkspace(api) {
   async function loadSim() {
     const Q = state.media.simq; if (Q.status !== 'idle') return;
     Q.status = 'loading';
-    try { Q.data = await fetch('./media/sim.json', { cache: 'no-store' }).then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))); Q.status = 'ready'; }
+    try {
+      Q.data = await fetch('./media/sim.json', { cache: 'no-store' }).then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))); Q.status = 'ready';
+      if (Q.target === undefined) Q.target = MS.defaultTarget(Q.data, Q.spot);
+    }
     catch (e) { Q.status = 'none'; Q.note = e.message; }
     overlayKey = ''; render();
     if (state.lens === 'media' && state.layer.media === 'simulate') flyMedia();
   }
   function simRun() {
     const Q = state.media.simq; if (!Q.data) return null;
-    try { return MS.simulate(Q.data, { spot: Q.spot, sku: Q.sku, msg: Q.msg, days: Q.days, hours: Q.hours, spotSec: Q.spotSec, weeks: Q.weeks, lift: Q.lift }); }
-    catch { return null; }
+    try { Q.err = ''; return MS.simulate(Q.data, { spot: Q.spot, sku: Q.sku, msg: Q.msg, days: Q.days, hours: Q.hours, spotSec: Q.spotSec, weeks: Q.weeks, lift: Q.lift, target: Q.target ?? null }); }
+    catch (e) { Q.err = e.message; return null; }
   }
   function simSet(patch, { fly = false } = {}) {
+    const Q0 = state.media.simq;
+    if ('target' in patch) patch.targetAuto = false;
+    else if (patch.spot && Q0.targetAuto && Q0.data) patch.target = MS.defaultTarget(Q0.data, patch.spot);
     Object.assign(state.media.simq, patch); overlayKey = ''; render();
     const s = state.media.simq.data?.spots.find((x) => x.id === state.media.simq.spot);
     if (fly && s) api.flyTo(s.x, s.z, 30);
@@ -2891,19 +2945,24 @@ export function mountAnalysisWorkspace(api) {
     void loadSim();
     const Q = state.media.simq, S = Q.data; if (!S) return;
     const P = S.catalog.find((p) => p.sku === Q.sku), sp = S.spots.find((s) => s.id === Q.spot);
-    const sh = deptShape(P.dept); if (sh) items.push(...outlineOf(sh.rings, SIMC.reach, { width: 1.6, dash: [5, 4] }));
-    for (const [x, z, r] of S.field[P.dept] || []) items.push({ t: 'rect', x, z, s: 1.5, color: SIMC.reach, alpha: Math.min(0.55, 0.06 + 0.6 * r) });
+    const TG = Q.target ? MS.targetsOf(S).find((t) => t.id === Q.target) : null;
+    const sh = TG ? null : deptShape(P.dept); if (sh) items.push(...outlineOf(sh.rings, SIMC.reach, { width: 1.6, dash: [5, 4] }));
+    if (TG) for (const [x0, z0, x1, z1] of TG.fronts) items.push({ t: 'line', pts: [[x0, z0], [x1, z1]], color: TG.measured ? SIMC.reach : '#F49B90', width: 3, alpha: 0.95, y: 0.07, glow: 4 });
+    else for (const [x, z, r] of S.field[P.dept] || []) items.push({ t: 'rect', x, z, s: 1.5, color: SIMC.reach, alpha: Math.min(0.55, 0.06 + 0.6 * r) });
     const fc = S.faces[sp.id] || [[], []];
     fc.forEach((f, fi) => { for (const [x, z] of f) items.push({ t: 'rect', x, z, s: 0.5, color: MD_FACE[fi], alpha: 0.42 }); });
     items.push({ t: 'cage', ring: mdBox(sp.x, sp.z, sp.yaw), corners: [0, 1, 2, 3], height: 1.94, color: '#EAF6FF', width: 2, fill: 'rgba(143,211,255,0.25)' });
     const r = simRun();
-    callout(sp.x, sp.z, sp.label, r ? `${mdInt(r.inTarget)} heading to ${VJ.deptLabel(P.dept)} · ×${num(sp.index[S.depts.indexOf(P.dept)], 1)}` : null, { tone: 'sel', lead: true });
+    const ti = TG ? S.targets.indexOf(TG) : -1, tl = TG ? TG.label : VJ.deptLabel(P.dept);
+    const idxOf = (s) => (TG ? s.tindex[ti] : s.index[S.depts.indexOf(P.dept)]);
+    callout(sp.x, sp.z, sp.label, r ? `${mdInt(r.inTarget)} heading to ${tl} · ×${num(r.index, 1)}` : TG && !TG.measured ? `${tl}: not measured` : null, { tone: 'sel', lead: true });
     for (const s of S.spots) {
       if (s.id === sp.id) continue;
-      const d = S.depts.indexOf(P.dept);
-      addPin(s.x, s.z, h('button', { type: 'button', class: 'hx-sim-pin', title: `${s.label}: viewers ×${num(s.index[d], 1)} more likely than average to reach ${VJ.deptLabel(P.dept)}`, onclick: () => simSet({ spot: s.id }) }, s.kind === 'option' ? s.label.replace('Option ', '') : s.kind === 'cad' ? 'CAD' : `T${s.totem + 1}`));
+      const ix = idxOf(s);
+      addPin(s.x, s.z, h('button', { type: 'button', class: 'hx-sim-pin', title: TG && !TG.measured ? `${s.label}: ${tl} is not measured` : `${s.label}: viewers ×${num(ix ?? 0, 1)} more likely than average to reach ${tl}`, onclick: () => simSet({ spot: s.id }) }, s.kind === 'option' ? s.label.replace('Option ', '') : s.kind === 'cad' ? 'CAD' : `T${s.totem + 1}`));
     }
     if (sh?.label) callout(sh.label[0], sh.label[1], VJ.deptLabel(P.dept), P.name, { tone: 'quiet' });
+    if (TG?.fronts.length) { const [x0, z0, x1, z1] = TG.fronts[0]; callout((x0 + x1) / 2, (z0 + z1) / 2, tl, `corsia ${TG.corsie.join(', ')}`, { tone: 'quiet' }); }
   }
   function drawSimHeat(cv, r, S) {
     const c = cv.getContext('2d'), W = cv.width, H = cv.height, NH = S.h1 - S.h0;
@@ -2929,10 +2988,25 @@ export function mountAnalysisWorkspace(api) {
   }
   function inspectSim(pick) {
     const Q = state.media.simq, S = Q.data;
-    const head = (lead) => ihead('08 · IN-STORE MEDIA', 'Simulate a campaign', { badge: srcBadge(S ? `Measured · ${S.days.length} days of LiDAR · movement model` : 'Loading…', 'Audience and movement measured; sales baseline, message effect and base CPM are assumptions (DEMO).', 'flow'), lead });
+    const head = (lead) => ihead('09 · IN-STORE MEDIA', 'Simulate a campaign', { badge: srcBadge(S ? `Measured · ${S.days.length} days of LiDAR · movement model` : 'Loading…', 'Audience and movement measured; sales baseline, message effect and base CPM are assumptions (DEMO).', 'flow'), lead });
     if (!S) return [head(null), card('hx-empty', h('b', null, Q.status === 'none' ? 'No simulator data' : 'Loading…'), h('p', null, Q.status === 'none' ? `media/sim.json is built by analysis/journey_lab/241_media_sim.py. ${Q.note || ''}` : 'Reading weekday and hour profiles.'))];
-    const r = simRun(); if (!r) return [head(null), card('hx-empty', h('p', null, 'This combination cannot be simulated.'))];
-    const P = r.product, dl = VJ.deptLabel(P.dept);
+    const TS = MS.targetsOf(S), TG = Q.target ? TS.find((t) => t.id === Q.target) : null;
+    const tOpt = (t) => h('option', { value: t.id, selected: t.id === Q.target ? '' : null }, `${t.label} · corsia ${t.corsie.join(', ')}${t.measured ? '' : ' · not measured'}`);
+    const byMacro = new Map();
+    for (const t of TS.filter((x) => x.kind === 'categoria')) { const m = t.macro[0] || 'Other'; if (!byMacro.has(m)) byMacro.set(m, []); byMacro.get(m).push(t); }
+    const targetSel = TS.length ? h('label', null, h('small', null, 'Target · planogram category'),
+      h('select', { class: 'hx-sim-sel', onchange: (e) => simSet({ target: e.target.value || null }) },
+        h('option', { value: '', selected: Q.target == null ? '' : null }, 'Product department (no planogram target)'),
+        h('optgroup', { label: 'Groups' }, ...TS.filter((x) => x.kind === 'gruppo').map(tOpt)),
+        ...[...byMacro].sort((a, b) => a[0].localeCompare(b[0], 'it')).map(([m, ts]) => h('optgroup', { label: m }, ...ts.map(tOpt))))) : null;
+    const inferred = TG && TG.fonti.some((f) => f !== 'categoria planogramma');
+    const targetNote = TG ? h('p', { class: 'hx-note' }, `Target = the floor within ${S.targets_meta.band_m} m of the real fronts of ${TG.categorie.join(', ')} (corsia ${TG.corsie.join(', ')}), ${S.targets_meta.planogram.name}.`,
+      inferred ? ` Category partly inferred (${TG.fonti.filter((f) => f !== 'categoria planogramma').join(', ')}), not Esselunga data.` : ' Category from the Esselunga planogram.') : null;
+    const r = simRun();
+    if (!r && TG && !TG.measured) return [head(null), card('hx-sim-form', targetSel, targetNote),
+      card('hx-empty', h('b', null, `Not measured: ${TG.label}`), h('p', null, `${TG.reason || 'No LiDAR coverage on these fronts'}. Viewers, in-target viewers and CPM for this target are not computed, and are not 0. Corsia ${TG.corsie.join(', ')} needs LiDAR coverage first. Choose another target or the product department.`))];
+    if (!r) return [head(null), card('hx-empty', h('p', null, `This combination cannot be simulated. ${Q.err || ''}`))];
+    const P = r.product, dl = r.target ? r.target.label : VJ.deptLabel(P.dept);
     const seg = (opts, cur, on) => h('div', { class: 'hx-seg hx-sim-seg' }, ...opts.map(([v, l]) => h('button', { type: 'button', 'aria-pressed': String(cur === v), onclick: () => on(v) }, l)));
     const toggle = (arr, v) => (arr.includes(v) ? arr.filter((x) => x !== v) : [...arr, v].sort((a, b) => a - b));
     const allH = Array.from({ length: S.h1 - S.h0 }, (_, k) => S.h0 + k);
@@ -2947,6 +3021,7 @@ export function mountAnalysisWorkspace(api) {
     const form = card('hx-sim-form',
       h('label', null, h('small', null, 'Where'), spotSel),
       h('label', null, h('small', null, 'Product (planogram)'), prodSel),
+      targetSel, targetNote,
       h('label', null, h('small', null, 'Message'), seg(S.messages.map((m) => [m.id, m.label]), Q.msg, (v) => simSet({ msg: v, lift: null }))),
       h('label', null, h('small', null, 'Effect on viewers who reach the shelf (assumption)'), h('div', { class: 'hx-sim-lift' }, liftIn, liftOut)),
       h('label', null, h('small', null, 'Days'), h('div', { class: 'hx-sim-chips' }, ...MS.WEEKDAYS.map((d, wd) => h('button', { type: 'button', 'aria-pressed': String(Q.days.includes(wd)), class: MS.daysFor(S, wd).measured ? '' : 'est', title: MS.daysFor(S, wd).measured ? 'measured' : 'no day measured yet: uses the same type of day', onclick: () => simSet({ days: toggle(Q.days, wd) }) }, d)))),
@@ -3001,7 +3076,7 @@ export function mountAnalysisWorkspace(api) {
   function inspectMedia() {
     const M = state.media, D = M.data, layer = state.layer.media;
     if (layer === 'simulate') return inspectSim(null);
-    const head = (title, lead, badge) => ihead('08 · IN-STORE MEDIA', title, { badge, lead });
+    const head = (title, lead, badge) => ihead('09 · IN-STORE MEDIA', title, { badge, lead });
     if (!D) {
       return [head('Digital totems', null, null), card('hx-empty', h('b', null, M.status === 'none' ? 'No media pack' : 'Loading…'),
         h('p', null, M.status === 'none' ? `The media pack is calculated from the LiDAR rows of one day (analysis/journey_lab/240_media_pack.py). ${M.note || ''}` : 'Reading the totem audience and test file.'))];
@@ -3091,6 +3166,233 @@ export function mountAnalysisWorkspace(api) {
     return out;
   }
 
+  // ------------------------------------------------------------------ Categories · Esselunga planogram on the floor
+  // Geometry: categories/sections.json (250_category_pack.py from the TEV planogram fit). KPIs: categories/<day>.json,
+  // copied as-is from daily_kpi (category_kpi_macro / category_kpi_categoria, 199c). Nothing is recomputed here.
+  const CAT_METRICS = [['rate', 'Stop rate'], ['shelf', 'Time at shelf'], ['ch', 'Choice index'], ['vis', 'Passers']];
+  const catFmt = (m, v) => (v == null || !Number.isFinite(v) ? '—' : m === 'rate' ? pct(v) : m === 'shelf' ? `${Math.round(v * 60)} s` : m === 'ch' ? num(v, 2) : VJ.fmtInt(v));
+  const catNote = { rate: 'of passers stop ≥ 20 s', shelf: 'at the shelf per store visitor', ch: 'choice index (time at the shelf ÷ time in the area)', vis: 'passes in the area' };
+  const C_ = () => state.cat;
+  const catSlot = () => (C_().day?.slots?.[state.slot] ? state.slot : 'giorno');
+  const catRow = (name) => C_().day?.slots?.[catSlot()]?.cat?.[name] || null;
+  const macroRow = (name) => C_().day?.slots?.[catSlot()]?.macro?.[name] || null;
+  const macroColor = (m) => C_().sec?.macros.find((x) => x.name === m)?.color || '#7A92A3';
+  const catOk = (r) => r && r.st === 'ok' && r[C_().metric] != null;
+  async function loadCat() {
+    const Q = C_(); if (Q.status !== 'idle') return;
+    Q.status = 'loading';
+    try {
+      const fetchJson = (u) => fetch(u, { credentials: 'include', cache: 'no-store' }).then((r) => (r.ok ? r.json() : Promise.reject(new Error(`${u}: HTTP ${r.status}`))));
+      const q = `?venueId=${encodeURIComponent(venueOf() || '')}`;
+      const get = (f) => fetchJson(`/api/windflow/categories/${f}${q}`).catch(() => fetchJson(`./categories/${f}`));
+      const [idx, sec] = await Promise.all([get('index.json'), get('sections.json')]);
+      const want = state.vj.view?.day;
+      const day = idx.days.includes(want) ? want : idx.days[idx.days.length - 1];
+      Q.sec = sec; Q.days = idx.days; Q.day = await get(`${day}.json`); Q.status = 'ready';
+      if (Q.aisle == null) Q.aisle = sec.aisles[0]?.corsia ?? null;
+    } catch (e) { Q.status = 'none'; Q.note = e.message; }
+    overlayKey = ''; render();
+    if (state.lens === 'categories') flyCategories();
+  }
+  const catAisle = () => C_().sec?.aisles.find((a) => a.corsia === C_().aisle) || null;
+  function flyCategories() {
+    const a = catAisle();
+    if (state.layer.categories !== 'store' && a) api.fit?.('oblique', { minX: a.x0 - 5, maxX: a.x1 + 5, minZ: a.z0 - 3, maxZ: a.z1 + 3, margin: 0.85 });
+    else api.overview();
+  }
+  function catSet(patch, { fly = false } = {}) { Object.assign(C_(), patch); overlayKey = ''; render(); if (fly) flyCategories(); }
+  /** Aisles the sensor does not see: no stop and almost no category coverage along them. */
+  function blindAisles() {
+    const Q = C_(); if (!Q.day?.modules || !Q.sec) return [];
+    return Q.sec.aisles.filter((a) => (Q.day.modules[String(a.corsia)]?.stops.giorno || []).reduce((s, v) => s + v, 0) < 20).map((a) => a.corsia);
+  }
+  function catRibbon(s, w) { const [ax, az] = s.a, [bx, bz] = s.b, [nx, nz] = s.n; return [[ax, az], [bx, bz], [bx + nx * w, bz + nz * w], [ax + nx * w, az + nz * w]]; }
+  function buildCatOverlay(layer) {
+    void loadCat();
+    const Q = C_(), S = Q.sec, D = Q.day; if (!S || !D) return;
+    const m = Q.metric, aisleMode = layer !== 'store', A = catAisle();
+    const vals = S.cats.map((n) => catRow(n)).filter(catOk).map((r) => r[m]);
+    const mx = Math.max(1e-9, ...vals);
+    for (const s of S.sections) {
+      const name = S.cats[s.cat], r = catRow(name), col = macroColor(s.macro);
+      const inAisle = !aisleMode || (A && s.corsia === A.corsia);
+      const focus = Q.macro && !aisleMode ? s.macro === Q.macro : true;
+      const dim = (inAisle ? 1 : 0.25) * (focus ? 1 : 0.3);
+      if (!r) { items.push({ t: 'ring', pts: catRibbon(s, 0.25), color: col, width: 0.8, dash: [2, 3], alpha: 0.45 * dim }); continue; }   // place category (avancassa, self-checkout)
+      if (!catOk(r)) { items.push({ t: 'ring', pts: catRibbon(s, 0.3), color: '#7A92A3', width: 0.9, dash: [3, 3], alpha: 0.6 * dim, fill: 'rgba(122,146,163,0.06)' }); continue; }
+      const w = 0.12 + 0.78 * Math.sqrt(r[m] / mx);
+      items.push({ t: 'ring', pts: catRibbon(s, w), color: col, width: 0.6, alpha: dim, fill: `${col}${Math.round(255 * (focus ? 0.85 : 0.55)).toString(16).padStart(2, '0')}` });
+      if (s.q !== 'ok') items.push({ t: 'ring', pts: catRibbon(s, w), color: '#F3C778', width: 1, dash: [2, 2], alpha: 0.8 * dim });
+    }
+    // hit targets: a click on a front picks its macro (store) or its aisle (aisle / shelf)
+    for (const s of S.sections) addHit([catRibbon(s, 0.9)], () => (aisleMode ? catSet({ aisle: s.corsia, cat: S.cats[s.cat] }, { fly: true }) : catSet({ macro: C_().macro === s.macro ? null : s.macro, cat: null })), `${S.cats[s.cat]} · ${s.macro} · corsia ${s.corsia}`);
+    const blind = blindAisles();
+    for (const c of blind) {
+      const a = S.aisles.find((x) => x.corsia === c); if (!a) continue;
+      items.push({ t: 'ring', pts: [[a.x0 + 0.3, a.z0], [a.x1 - 0.3, a.z0], [a.x1 - 0.3, a.z1], [a.x0 + 0.3, a.z1]], color: '#7A92A3', width: 1, dash: [4, 4], alpha: 0.7, fill: 'rgba(122,146,163,0.05)' });
+    }
+    if (blind.length && !aisleMode) { const a = S.aisles.find((x) => x.corsia === blind[0]); callout((a.x0 + a.x1) / 2, (a.z0 + a.z1) / 2, `Corsia ${blind.join(' and ')}`, 'not seen by the sensor · not measured', { tone: 'quiet' }); }
+    if (aisleMode && A) {
+      items.push({ t: 'cage', ring: [[A.x0 - 0.6, A.z0 - 0.4], [A.x1 + 0.6, A.z0 - 0.4], [A.x1 + 0.6, A.z1 + 0.4], [A.x0 - 0.6, A.z1 + 0.4]], corners: [0, 1, 2, 3], height: 2.2, color: G.TOKENS.selection, width: 1.6 });
+      const M = D.modules?.[String(A.corsia)];
+      const st = M?.stops[catSlot()] || [];
+      const smx = Math.max(1, ...st), xc = (A.x0 + A.x1) / 2, half = Math.max(0.3, (A.x1 - A.x0) / 2 - 0.35);
+      st.forEach((v, k) => { if (!v) return; const z0 = M.z0 + k * M.step + 0.1, z1 = z0 + M.step - 0.2, hw = half * v / smx;
+        items.push({ t: 'ring', pts: [[xc - hw, z0], [xc + hw, z0], [xc + hw, z1], [xc - hw, z1]], color: '#F3C778', width: 0.6, fill: 'rgba(243,199,120,0.7)', y: 0.06 }); });
+      const tot = st.reduce((a, b) => a + b, 0);
+      callout(A.x1 + 0.4, A.z1 - 2, `Corsia ${A.corsia}`, blind.includes(A.corsia) ? 'not seen by the sensor' : `${VJ.fmtInt(tot)} stops along the aisle (${catSlot() === 'giorno' ? '08–20' : catSlot()})`, { tone: 'sel', lead: true });
+      return;
+    }
+    // callouts: the selected macro, else the three strongest planogram macros on this metric
+    const macros = S.macros.map((x) => x.name).filter((n) => macroRow(n)?.kind === 'categoria');
+    const list = Q.macro ? [Q.macro] : macros.filter((n) => catOk(macroRow(n))).sort((a, b) => macroRow(b)[m] - macroRow(a)[m]).slice(0, 3);
+    for (const n of list) {
+      const ss = S.sections.filter((s) => s.macro === n); if (!ss.length) continue;
+      const xs = ss.map((s) => s.a[0]).sort((a, b) => a - b), zs = ss.map((s) => s.a[1]).sort((a, b) => a - b);
+      const r = macroRow(n);
+      callout(xs[xs.length >> 1], zs[zs.length >> 1], n, catOk(r) ? `${catFmt(m, r[m])} ${catNote[m]}` : `not measured · sensor sees ${pct(r?.cov)}`, { tone: n === Q.macro ? 'sel' : '', lead: n === Q.macro, onclick: () => catSet({ macro: n === Q.macro ? null : n, cat: null }) });
+    }
+  }
+  /** Passes vs stop rate, one dot per macro-category (planogram) — dashed = not measured. */
+  function drawCatQuad(cv, rows) {
+    const c = cv.getContext('2d'), W = cv.width, H = cv.height, Q = C_();
+    const P = { x0: 70, y0: 26, w: W - 100, h: H - 80 };
+    const vmax = Math.max(1, ...rows.map((r) => r.r.vis || 0)) * 1.08, rmax = Math.max(0.05, ...rows.filter((r) => catOk(r.r)).map((r) => r.r.rate || 0)) * 1.15;
+    const ok = rows.filter((r) => catOk(r.r));
+    const medV = ok.map((r) => r.r.vis).sort((a, b) => a - b)[ok.length >> 1] || vmax / 2, medR = ok.map((r) => r.r.rate).sort((a, b) => a - b)[ok.length >> 1] || rmax / 2;
+    const X = (v) => P.x0 + P.w * v / vmax, Y = (r) => P.y0 + P.h * (1 - r / rmax);
+    c.clearRect(0, 0, W, H); c.font = '17px Inter, system-ui, sans-serif';
+    c.strokeStyle = '#2a4152'; c.lineWidth = 1.5; c.beginPath(); c.moveTo(P.x0, P.y0); c.lineTo(P.x0, P.y0 + P.h); c.lineTo(P.x0 + P.w, P.y0 + P.h); c.stroke();
+    c.setLineDash([5, 6]); c.beginPath(); c.moveTo(X(medV), P.y0); c.lineTo(X(medV), P.y0 + P.h); c.moveTo(P.x0, Y(medR)); c.lineTo(P.x0 + P.w, Y(medR)); c.stroke(); c.setLineDash([]);
+    c.fillStyle = '#5f7a8c';
+    c.textAlign = 'left'; c.fillText('Hidden pull', P.x0 + 8, P.y0 + 18); c.fillText('Quiet', P.x0 + 8, P.y0 + P.h - 10);
+    c.textAlign = 'right'; c.fillText('Destinations', P.x0 + P.w - 6, P.y0 + 18); c.fillText('Busy but skipped', P.x0 + P.w - 6, P.y0 + P.h - 10);
+    c.fillStyle = '#93AEBF'; c.fillText('passes →', P.x0 + P.w, H - 18); c.save(); c.translate(22, P.y0 + 90); c.rotate(-Math.PI / 2); c.textAlign = 'right'; c.fillText('stop rate →', 0, 0); c.restore();
+    cv._hits = [];
+    for (const { name, r } of rows) {
+      const okr = catOk(r), x = X(r.vis || 0), y = okr ? Y(r.rate || 0) : P.y0 + P.h - 10, rad = 6 + 12 * Math.sqrt(Math.min(1, (r.min || 0) / 1.5));
+      const sel = name === Q.macro, col = macroColor(name);
+      c.beginPath(); c.arc(x, y, rad, 0, Math.PI * 2);
+      if (okr) { c.globalAlpha = Q.macro && !sel ? 0.35 : 0.9; c.fillStyle = col; c.fill(); c.globalAlpha = 1; }
+      else { c.setLineDash([3, 3]); c.strokeStyle = col; c.lineWidth = 1.5; c.stroke(); c.setLineDash([]); }
+      if (sel) { c.strokeStyle = '#fff'; c.lineWidth = 2.5; c.stroke(); c.fillStyle = '#EEF8FF'; c.textAlign = 'left'; c.fillText(name, Math.min(x + rad + 6, W - 200), y + 6); }
+      cv._hits.push({ x, y, rad: rad + 4, name });
+    }
+  }
+  /** Front view of one aisle: west and east fronts as modules × shelf levels, stops along the aisle in between. */
+  function drawCatFront(cv, A) {
+    const Q = C_(), S = Q.sec, c = cv.getContext('2d'), W = cv.width, H = cv.height;
+    const z0 = A.z0, z1 = A.z1, X = (z) => 16 + (W - 32) * (z - z0) / Math.max(1, z1 - z0);
+    const BH = 78, faces = [['West front', (s) => s.n[0] > 0.7, 28], ['East front', (s) => s.n[0] < -0.7, H - BH - 40]];
+    c.clearRect(0, 0, W, H);
+    for (const [label, pick, top] of faces) {
+      c.font = '600 16px Inter, system-ui, sans-serif'; c.fillStyle = '#93AEBF'; c.textAlign = 'left'; c.fillText(label, 16, top - 8);
+      const ss = S.sections.filter((s) => s.corsia === A.corsia && pick(s)).sort((a, b) => a.a[1] - b.a[1]);
+      const spans = [];
+      for (const s of ss) {
+        const xa = X(Math.min(s.a[1], s.b[1])), xb = X(Math.max(s.a[1], s.b[1])), nl = Math.max(1, s.lv.length), lh = BH / nl;
+        s.lv.forEach((ci, l) => {
+          const cat = S.cats[ci], r = catRow(cat), col = macroColor(r?.macro || s.macro);
+          c.globalAlpha = Q.cat && Q.cat !== cat ? 0.22 : catOk(r) ? 0.92 : 0.3; c.fillStyle = col;
+          c.fillRect(xa + 1, top + BH - (l + 1) * lh + 1, Math.max(1, xb - xa - 2), Math.max(1, lh - 2));
+        });
+        c.globalAlpha = 1;
+        if (s.q !== 'ok') { c.strokeStyle = '#F3C778'; c.lineWidth = 1.5; c.setLineDash([3, 3]); c.strokeRect(xa + 1, top, xb - xa - 2, BH); c.setLineDash([]); }
+        const cat = S.cats[s.cat], last = spans[spans.length - 1];
+        if (last && last.cat === cat) last.xb = xb; else spans.push({ cat, xa, xb });
+      }
+      c.font = '14px Inter, system-ui, sans-serif'; c.fillStyle = '#C8D6E0';
+      let free = 0;
+      for (const sp of spans) {
+        const w = sp.xb - sp.xa; if (w < 46 || sp.xa < free) continue;
+        const t = sp.cat.length * 7.4 > w + 30 ? `${sp.cat.slice(0, Math.max(4, Math.floor((w + 30) / 7.4)))}…` : sp.cat;
+        c.fillText(t, sp.xa + 2, top + BH + 18); free = sp.xa + t.length * 7.4 + 8;
+      }
+    }
+    const M = Q.day.modules?.[String(A.corsia)], st = M?.stops[catSlot()] || [], mxs = Math.max(1, ...st);
+    const y0 = 28 + BH + 34, y1 = H - BH - 62;
+    c.font = '14px Inter, system-ui, sans-serif'; c.fillStyle = '#93AEBF'; c.textAlign = 'left';
+    if (!st.some(Boolean)) { c.textAlign = 'center'; c.fillText('The sensor does not see this aisle: no stop can be measured here.', W / 2, (y0 + y1) / 2); return; }
+    c.fillText(`stops in the aisle, per 1.3 m · max ${mxs}`, 16, y0 + 12);
+    st.forEach((v, k) => { const za = M.z0 + k * M.step, xa = X(za), xb = X(za + M.step), hh = (y1 - y0 - 20) * v / mxs;
+      c.fillStyle = '#F3C778'; c.fillRect(xa + 1.5, y1 - hh, Math.max(1, xb - xa - 3), hh); });
+  }
+  function inspectCat() {
+    const Q = C_(), S = Q.sec, D = Q.day, layer = state.layer.categories, m = Q.metric;
+    const kick = `${LENS.categories.n} · PLANOGRAM CATEGORIES`;
+    if (!S || !D) return [ihead(kick, 'Esselunga planogram'), card('hx-empty', h('b', null, Q.status === 'none' ? 'No category data' : 'Loading…'),
+      h('p', null, Q.status === 'none' ? `Built by analysis/journey_lab/250_category_pack.py from the TEV planogram and the day's daily_kpi category rows. ${Q.note || ''}` : 'Reading the planogram and the day’s category KPIs.'))];
+    const day = VJ.fmtDay(D.day), slotL = catSlot() === 'giorno' ? 'whole day 08–20' : catSlot();
+    const badge = (r) => srcBadge(`${r?.lb === 'MEASURED' ? 'Measured' : 'Estimated'} · raw 10 Hz · ${day} · ${slotL}`, 'Category layer of the daily KPI job (199c): owner = nearest planogram front; same radii, speed, stop and staff rules as the departments.', r?.lb === 'MEASURED' ? 'flow' : 'scenario');
+    const metricSeg = h('div', { class: 'hx-seg hx-sim-seg' }, ...CAT_METRICS.map(([id, l]) => h('button', { type: 'button', 'aria-pressed': String(m === id), onclick: () => catSet({ metric: id }) }, l)));
+    const planoMacros = S.macros.map((x) => x.name).filter((n) => macroRow(n)?.kind === 'categoria');
+    const rowsM = planoMacros.map((name) => ({ name, r: macroRow(name) }));
+    const blind = blindAisles();
+    const catList = (names) => {
+      const rr = names.map((n) => ({ n, r: catRow(n) })).filter((x) => x.r);
+      const okr = rr.filter((x) => catOk(x.r)).sort((a, b) => b.r[m] - a.r[m]), no = rr.filter((x) => !catOk(x.r));
+      const mx = Math.max(1e-9, ...okr.map((x) => x.r[m]));
+      return h('div', { class: 'hx-cat-list' }, ...okr.map(({ n, r }) => h('button', { type: 'button', class: `hx-cat-row${Q.cat === n ? ' on' : ''}`, onclick: () => catSet({ cat: Q.cat === n ? null : n }) },
+        h('span', null, n), h('i', { style: `--w:${(r[m] / mx * 100).toFixed(1)}%;--c:${macroColor(r.macro)}` }), h('b', null, catFmt(m, r[m])), h('em', { class: r.lb === 'MEASURED' ? 'm' : 'e' }, r.lb === 'MEASURED' ? 'M' : 'E'))),
+        ...no.map(({ n, r }) => h('div', { class: 'hx-cat-row no' }, h('span', null, n), h('i'), h('b', null, 'not measured'), h('em', null, r.cov != null ? pct(r.cov) : ''))));
+    };
+    const out = [];
+    if (layer === 'store') {
+      const r = Q.macro ? macroRow(Q.macro) : null;
+      const okN = rowsM.filter((x) => catOk(x.r)).length;
+      out.push(ihead(kick, Q.macro || 'The planogram on the floor', { badge: badge(r || { lb: 'MEASURED' }),
+        lead: Q.macro ? (catOk(r) ? leadKpi(`${CAT_METRICS.find((x) => x[0] === m)[1].toUpperCase()} · ${Q.macro.toUpperCase()}`, catFmt(m, r[m]), `${VJ.fmtInt(r.stops)} stops out of ${VJ.fmtInt(r.vis)} passes · ${Math.round((r.shelf || 0) * 60)} s at the shelf per visitor · choice ${num(r.ch, 2)}`, 'cyan')
+          : leadKpi(`${Q.macro.toUpperCase()}`, 'Not measured', `The sensor sees ${pct(r?.cov)} of this category’s floor. No number is shown in its place.`, ''))
+          : leadKpi('MACRO-CATEGORIES MEASURED', `${okN} of ${rowsM.length}`, `${S.sections.length} planogram sections on the floor · ${S.cats.length} display categories · ${S.quality.ok} sections on a twin shelf`, 'cyan') }), metricSeg);
+      const qc = mdCanvas('hx-md-cv', 340);
+      qc.addEventListener('click', (e) => { const b = qc.getBoundingClientRect(), sx = qc.width / b.width, x = (e.clientX - b.left) * sx, y = (e.clientY - b.top) * sx;
+        const hit = (qc._hits || []).find((p) => Math.hypot(p.x - x, p.y - y) <= p.rad); if (hit) catSet({ macro: Q.macro === hit.name ? null : hit.name, cat: null }); });
+      out.push(card('', h('div', { class: 'hx-card-h' }, h('b', null, 'Where shoppers pass, where they stop'), h('small', null, 'one dot per macro-category · size = minutes in the area')), qc,
+        h('p', { class: 'hx-note' }, 'Destinations draw both traffic and stops. Hidden pull: few pass, many stop. Busy but skipped: many pass, few stop — the first place to look for a layout or media test.')));
+      requestAnimationFrame(() => drawCatQuad(qc, rowsM));
+      if (Q.macro) {
+        const names = S.cats.filter((n) => catRow(n)?.macro === Q.macro);
+        out.push(card('', h('div', { class: 'hx-card-h' }, h('b', null, `Categories in ${Q.macro}`), h('small', null, CAT_METRICS.find((x) => x[0] === m)[1].toLowerCase())), catList(names),
+          h('button', { type: 'button', class: 'hx-ghost wide', onclick: () => { const ss = S.sections.filter((s) => s.macro === Q.macro && s.corsia > 0 && !blind.includes(s.corsia)); const cnt = {}; ss.forEach((s) => { cnt[s.corsia] = (cnt[s.corsia] || 0) + 1; }); const best = Object.entries(cnt).sort((a, b) => b[1] - a[1])[0]; if (best) { catSet({ aisle: Number(best[0]) }); setLayer('aisle'); } } }, 'Open its main aisle')));
+      } else {
+        const mx = Math.max(1e-9, ...rowsM.filter((x) => catOk(x.r)).map((x) => x.r[m]));
+        out.push(card('', h('div', { class: 'hx-card-h' }, h('b', null, 'Macro-categories'), h('small', null, CAT_METRICS.find((x) => x[0] === m)[1].toLowerCase())),
+          bars(rowsM.filter((x) => catOk(x.r)).sort((a, b) => b.r[m] - a.r[m]).map(({ name, r }) => ({ label: name, value: r[m] / (m === 'vis' ? 1 : 1), color: macroColor(name), onclick: () => catSet({ macro: name }) })), (v) => catFmt(m, v)),
+          h('p', { class: 'hx-note' }, `Not measured: ${rowsM.filter((x) => !catOk(x.r)).map((x) => `${x.name} (${pct(x.r?.cov)} seen)`).join(', ') || 'none'}.`)));
+      }
+      if (blind.length) out.push(card('hx-rp-warn', h('p', null, h('b', null, `Corsia ${blind.join(' and ')}: not seen by the sensor. `), 'Their categories show as dashed fronts and carry no number. Coverage, not a lack of shoppers.')));
+    } else {
+      const A = catAisle();
+      const chips = h('div', { class: 'hx-sim-chips' }, ...S.aisles.map((a) => h('button', { type: 'button', 'aria-pressed': String(a.corsia === Q.aisle), class: blind.includes(a.corsia) ? 'est' : '', title: blind.includes(a.corsia) ? 'not seen by the sensor' : '', onclick: () => catSet({ aisle: a.corsia, cat: null }, { fly: true }) }, String(a.corsia))));
+      const M = D.modules?.[String(A?.corsia)], tot = (M?.stops[catSlot()] || []).reduce((a, b) => a + b, 0);
+      const names = [...new Set(S.sections.filter((s) => s.corsia === A?.corsia).map((s) => S.cats[s.cat]))];
+      out.push(ihead(kick, `Corsia ${A?.corsia ?? '—'}`, { badge: srcBadge(`Estimated · raw LiDAR per second · ${day} · ${slotL}`, 'Stops = under 0.4 m/s for at least 20 s, counted in the aisle between the two fronts. Both fronts are pooled: the LiDAR ↔ layout offset (~0.5 m in X) is not corrected yet.', 'scenario'),
+        lead: blind.includes(A?.corsia) ? leadKpi('STOPS ALONG THE AISLE', 'Not measured', 'The sensor does not see this aisle.', '') : leadKpi('STOPS ALONG THE AISLE', VJ.fmtInt(tot), `people stopping ≥ 20 s between the two fronts · ${names.length} display categories`, 'amber') }),
+        h('label', { class: 'hx-cat-pick' }, h('small', null, 'Aisle'), chips), metricSeg);
+      if (layer === 'aisle') {
+        const fc = mdCanvas('hx-md-cv', 400);
+        out.push(card('', h('div', { class: 'hx-card-h' }, h('b', null, 'Front view'), h('small', null, 'modules × shelf levels · bars = stops along the aisle')), fc,
+          h('p', { class: 'hx-note' }, 'Colour = macro-category of the shelf level. Faded = category not measured. Yellow dashed = module still to verify on the twin.')));
+        requestAnimationFrame(() => drawCatFront(fc, A));
+        out.push(card('', h('div', { class: 'hx-card-h' }, h('b', null, 'Categories in this aisle'), h('small', null, `${CAT_METRICS.find((x) => x[0] === m)[1].toLowerCase()} · whole category, all its fronts`)), catList(names)));
+      } else {
+        out.push(card('hx-rp-warn', h('p', null, h('b', null, 'Product level is estimated and not shown yet. '),
+          `A product sits within ±${S.precision_m} m of its planogram position (the export has no module angle), and the LiDAR is about 0.5 m off the layout in X. Product numbers appear here once both are fixed and the category has enough stops.`)));
+        const ss = S.sections.filter((s) => s.corsia === A?.corsia);
+        out.push(card('', h('div', { class: 'hx-card-h' }, h('b', null, 'What is on these shelves'), h('small', null, 'planogram, not measured')),
+          h('div', { class: 'hx-cat-list' }, ...names.map((n) => { const k = S.cats.indexOf(n); const items = ss.filter((s) => s.cat === k).reduce((a, s) => a + s.items, 0);
+            return h('div', { class: 'hx-cat-row' }, h('span', null, n), h('i', { style: `--w:0%` }), h('b', null, `${items} items`), h('em', null, '')); }))));
+      }
+    }
+    const want = state.vj.view?.day;
+    if (want && want !== D.day) out.splice(1, 0, h('p', { class: 'hx-note' }, `Category numbers exist for ${(Q.days || []).map((d) => VJ.fmtDay(d)).join(' and ') || VJ.fmtDay(D.day)}: showing ${day}, not ${VJ.fmtDay(want)}.`));
+    const chk = D.check;
+    out.push(evidence(h('p', null, 'Each display category owns the floor nearest to its planogram fronts; aisles are split at the midline. Fresh departments keep their department area. The numbers are the daily KPI job’s category rows, unchanged.'),
+      chk ? h('p', null, `Check: the minutes of all categories, aisles and fresh departments add up to the store total (${chk.passed ? 'passed' : 'failed'}${chk.detail ? `, ${chk.detail}` : ''}).`) : null,
+      h('p', null, `Planogram ${S.planogram}: ${S.sections.length} sections, ${S.quality.ok} on a twin shelf, ${S.quality.verify} to verify, ${S.quality.out} without a shelf. Category names are Esselunga’s; some are inferred from product names and flagged so.`)));
+    return out;
+  }
+
   function renderInspector() {
     const v = state.vj.view;
     const L = state.lens;
@@ -3102,6 +3404,7 @@ export function mountAnalysisWorkspace(api) {
     else if (L === 'behaviour') body = inspectBehaviour(v);
     else if (L === 'live') body = inspectLive();
     else if (L === 'media') body = inspectMedia();
+    else if (L === 'categories') body = inspectCat();
     else if (!v) body = [h('div', { class: 'hx-kicker' }, LENS[L].kicker), h('h2', null, LENS[L].title), state.vj.origin === 'loading' ? card('', h('p', null, 'Loading Visitor Journey…')) : unavailable(state.vj.note)];
     else if (L === 'pulse') body = [sourceSwitch(), ...inspectPulse(v)];
     else if (L === 'engagement') body = [sourceSwitch(), ...inspectEngagement(v)];
@@ -3124,6 +3427,14 @@ export function mountAnalysisWorkspace(api) {
         h('span', { class: 'hx-lhot' }, h('i'), 'Hesitation spot'));
       return;
     }
+    if (L === 'categories') {
+      const Q = state.cat, S = Q.sec; legend.hidden = !S;
+      if (!S) return;
+      const names = S.macros.map((x) => x.name).filter((n) => Q.day?.slots?.giorno?.macro?.[n]?.kind === 'categoria');
+      legend.replaceChildren(...names.map((n) => h('button', { type: 'button', class: `hx-lchip${Q.macro === n ? ' on' : ''}${Q.macro && Q.macro !== n ? ' off' : ''}`, style: `--c:${S.macros.find((x) => x.name === n).color}`, onclick: () => catSet({ macro: Q.macro === n ? null : n, cat: null }) }, h('i'), n)),
+        h('span', { class: 'hx-lhot' }, 'ribbon width = ', CAT_METRICS.find((x) => x[0] === Q.metric)[1].toLowerCase(), ' · dashed grey = not measured · dashed colour = checkout fixtures'));
+      return;
+    }
     if (L === 'flow' && layer === 'regime') {
       legend.hidden = false;
       legend.replaceChildren(...REGIMES.filter((T) => T.id !== 0).map((T) => h('button', { type: 'button', class: `hx-lchip${state.regFocus === T.id ? ' on' : ''}${state.regFocus != null && state.regFocus !== T.id ? ' off' : ''}`, style: `--c:${T.color}`, onclick: () => setRegFocus(T.id), title: T.rule }, h('i'), T.name)));
@@ -3141,6 +3452,7 @@ export function mountAnalysisWorkspace(api) {
       service: isExec() ? [['queue', 'Lane queue · weight = avg wait']] : [['queue', layer === 'transit' ? 'Queue area · weight = walk-through' : 'Queue area · weight = waiting share'], ['svcd', 'Till / service band']],
       opportunities: [['scenario', 'Place under review'], ['letter', 'Other places to screen']],
       live: [sel],
+      categories: null,
       media: layer === 'simulate' ? [['facea', 'Face A'], ['faceb', 'Face B'], ['reach', 'Chance of reaching the department · 3 min'], ['tgt', 'Product department']] : [['facea', 'Face A · where its viewers are'], ['faceb', 'Face B'], ['tgt', 'Product department'], layer === 'placement' ? ['ghost', 'Previous spot (CAD)'] : null],
     }[L];
         legend.hidden = !items;

@@ -1,6 +1,6 @@
 // node media-sim.test.mjs — plain assertions on a tiny synthetic sim.json
 import assert from 'node:assert/strict';
-import { simulate, daysFor, weekdayProfile } from './media-sim.js';
+import { simulate, daysFor, weekdayProfile, targetsOf, defaultTarget } from './media-sim.js';
 
 const NH = 2;
 const S = {
@@ -29,4 +29,26 @@ assert.equal(r.estimated.length, 0);
 assert.ok(r.price > 0 && r.cpm > 0 && r.inTargetCpm > r.cpm);
 const r2 = simulate(S, { spot: 'T1', sku: 'X', msg: 'promo', days: [2], hours: [10], weeks: 2 });
 assert.deepEqual(r2.estimated, ['Wed']);
+
+// planogram category targets: reach, index and traffic come from the target, not the product's department
+const ST = {
+  ...S,
+  spots: [{ ...S.spots[0], treach: [0.2, 0], tindex: [4, null] }],
+  profiles: { ...S.profiles, ttraffic: [[[500, 500], [0, 0]], [[1000, 1000], [0, 0]]] },
+  targets: [
+    { id: 'cat:CAFFE', label: 'CAFFE', measured: true, default_for_spot: null },
+    { id: 'grp:biscotti', label: 'BISCOTTI', measured: false, reason: 'LiDAR does not see BISCOTTI', default_for_spot: 'T1' },
+  ],
+};
+assert.equal(defaultTarget(ST, 'T1'), 'grp:biscotti');
+assert.equal(defaultTarget(S, 'T1'), null);
+assert.deepEqual(targetsOf(S), []);
+const rt = simulate(ST, { spot: 'T1', sku: 'X', msg: 'promo', days: [0], hours: [10, 11], spotSec: 15, weeks: 1, target: 'cat:CAFFE' });
+assert.ok(Math.abs(rt.inTarget - 120 / 3 * 0.2 * 0.5) < 1e-9);
+assert.equal(rt.index, 4);
+assert.equal(rt.target.label, 'CAFFE');
+// conversion = 300 units / average daily target traffic 1500 = 0.2 per passer
+assert.ok(Math.abs(rt.extraUnits.mid - rt.inTarget * 0.2 * 0.1) < 1e-9);
+assert.throws(() => simulate(ST, { spot: 'T1', sku: 'X', msg: 'promo', days: [0], hours: [10], target: 'grp:biscotti' }), /not measured/);
+assert.throws(() => simulate(ST, { spot: 'T1', sku: 'X', msg: 'promo', days: [0], hours: [10], target: 'cat:NONE' }), /unknown target/);
 console.log('media-sim ok');

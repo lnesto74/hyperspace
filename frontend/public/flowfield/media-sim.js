@@ -2,7 +2,7 @@
 // Input: media/sim.json (241_media_sim.py). Pure functions, no DOM.
 //
 // Measured (LiDAR): impressions, qualified impressions, time in view, department traffic, and the probability
-// that a viewer reaches the product's department within 3 minutes (movement model, calibrated on ids that survive).
+// that a viewer reaches the product's department (or a planogram category target, along its real fronts) within 3 minutes (movement model, calibrated on ids that survive).
 // Assumed (DEMO): baseline sales per department, the effect of each message type, the base CPM.
 
 export const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
@@ -20,11 +20,11 @@ export function daysFor(S, wd) {
 const avg = (rows) => rows[0].map((_, k) => rows.reduce((s, r) => s + r[k], 0) / rows.length);
 
 /** Average day profile for a weekday: audience[h] = [imp, qual, aqsSum, dwellSum], traffic[h] for the department. */
-export function weekdayProfile(S, spotIdx, deptIdx, wd) {
+export function weekdayProfile(S, spotIdx, deptIdx, wd, trafficOf = (i) => S.profiles.traffic[i][deptIdx]) {
   const { idx, measured } = daysFor(S, wd);
   const aud = idx.map((i) => S.profiles.aud[i][spotIdx]);
   const audience = aud[0].map((_, h) => avg(aud.map((a) => a[h])));
-  const traffic = avg(idx.map((i) => S.profiles.traffic[i][deptIdx]));
+  const traffic = avg(idx.map(trafficOf));
   return { audience, traffic, measured, days: idx.map((i) => S.days[i]) };
 }
 
@@ -35,21 +35,34 @@ export function attentionRef(S) {
   return n ? a / n : 45;
 }
 
-export function simulate(S, { spot, sku, msg, days, hours, spotSec = 15, weeks = 2, lift = null }) {
+/** Planogram category targets (sim.json built with MEDIA_TARGETS); [] for a department-only build. */
+export function targetsOf(S) { return S.targets || []; }
+
+/** Proposed target for a spot: the configured group for it, if any. */
+export function defaultTarget(S, spot) { return targetsOf(S).find((t) => t.default_for_spot === spot)?.id ?? null; }
+
+export function simulate(S, { spot, sku, msg, days, hours, spotSec = 15, weeks = 2, lift = null, target = null }) {
   const si = S.spots.findIndex((s) => s.id === spot);
   const P = S.catalog.find((p) => p.sku === sku);
   const Mx = S.messages.find((m) => m.id === msg);
   if (si < 0 || !P || !Mx) throw new Error('unknown spot, product or message');
+  const ti = target == null ? -1 : targetsOf(S).findIndex((t) => t.id === target);
+  if (target != null && ti < 0) throw new Error('unknown target');
+  const T = ti >= 0 ? S.targets[ti] : null;
+  // A target the LiDAR does not see has no audience figure: never simulate it as 0 viewers.
+  if (T && !T.measured) throw new Error(`target not measured: ${T.reason || 'no coverage'}`);
   const d = S.depts.indexOf(P.dept);
+  const trafficOf = T ? (i) => S.profiles.ttraffic[i][ti] : (i) => S.profiles.traffic[i][d];
   const loop = S.params.loop_s, cal = S.params.calibration ?? 1;
-  const reach = S.spots[si].reach[d] * cal, index = S.spots[si].index[d];
+  const reach = (T ? S.spots[si].treach[ti] : S.spots[si].reach[d]) * cal;
+  const index = (T ? S.spots[si].tindex[ti] : S.spots[si].index[d]) ?? 0;
   const NH = S.h1 - S.h0;
-  // conversion: units of the SKU per department passer (DEMO units / measured average traffic)
-  const dailyTraffic = S.profiles.traffic.map((t) => t[d].reduce((a, b) => a + b, 0));
+  // conversion: units of the SKU per target passer (DEMO units / measured average traffic)
+  const dailyTraffic = S.profiles.traffic.map((_, i) => trafficOf(i).reduce((a, b) => a + b, 0));
   const conv = P.units_day / Math.max(1, dailyTraffic.reduce((a, b) => a + b, 0) / dailyTraffic.length);
   const ref = attentionRef(S);
   // tiers from this spot's whole week of qualified viewers
-  const week = WEEKDAYS.map((_, wd) => weekdayProfile(S, si, d, wd));
+  const week = WEEKDAYS.map((_, wd) => weekdayProfile(S, si, d, wd, trafficOf));
   const allQ = week.flatMap((w) => w.audience.map((a) => a[1])).sort((a, b) => a - b);
   const q70 = allQ[Math.floor(allQ.length * 0.7)], q30 = allQ[Math.floor(allQ.length * 0.3)];
   const tierOf = (q) => (q >= q70 ? 'prime' : q <= q30 ? 'value' : 'standard');
@@ -91,7 +104,7 @@ export function simulate(S, { spot, sku, msg, days, hours, spotSec = 15, weeks =
   const dirDays = p > 0 && L > 0 && nDay > 0 ? Math.max(1, Math.ceil((Z ** 2 * 2 * p * (1 - p) / (p * L) ** 2) / (nDay / 2))) : null;
   const total = price * W;
   return {
-    spot: S.spots[si], product: P, message: Mx, dept: P.dept, weeks: W, days, hours, spotSec,
+    spot: S.spots[si], product: P, message: Mx, dept: P.dept, target: T, weeks: W, days, hours, spotSec,
     impressions: imp * W, qualified: qual * W, seen: seen * W, inTarget: inTarget * W,
     reach, index, relevance: rel, attention: imp ? aqs / imp / ref : 1,
     cpm: seen ? total / (seen * W) * 1000 : 0, price: total, inTargetCpm: inTarget ? total / (inTarget * W) * 1000 : 0,

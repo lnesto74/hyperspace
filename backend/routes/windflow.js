@@ -1,6 +1,8 @@
 import { Router } from 'express';
 import fs from 'fs';
+import path from 'path';
 import { TREVIGLIO } from '../services/windflow/WindflowDayService.js';
+import { categoryPackDir, CATEGORY_FILE } from '../services/windflow/categoryPack.js';
 
 /**
  * Windflow day packs (raw 10 Hz). Contract for the spatial workspace:
@@ -10,6 +12,7 @@ import { TREVIGLIO } from '../services/windflow/WindflowDayService.js';
  *   GET  /api/windflow/field?venueId&day&slice    -> flow pack (404 until ready)
  *   GET  /api/windflow/kinetic?venueId&day        -> movement states (404 until ready)
  *   GET  /api/windflow/checkouts?venueId&day      -> checkouts minute by minute (404 until ready)
+ *   GET  /api/windflow/categories/<file>?venueId  -> Categories lens (index.json, sections.json, <day>.json), read only
  */
 export default function createWindflowRoutes(service) {
   const router = Router();
@@ -44,5 +47,15 @@ export default function createWindflowRoutes(service) {
   router.get('/field', send('flow'));
   router.get('/kinetic', send('kinetic'));
   router.get('/checkouts', send('checkouts'));
+  router.get('/categories/:file', (req, res) => {
+    const file = String(req.params.file);
+    const v = venueOf(req);
+    if (!CATEGORY_FILE.test(file) || !/^[A-Za-z0-9-]{1,64}$/.test(v)) return res.status(400).json({ error: 'unknown file' });
+    const p = path.join(categoryPackDir(v), file);
+    if (!fs.existsSync(p)) return res.status(404).json({ status: 'not_ready' });
+    res.set('Cache-Control', file === 'index.json' ? 'no-store' : 'public, max-age=600');
+    res.type('application/json');
+    fs.createReadStream(p).pipe(res);
+  });
   return router;
 }

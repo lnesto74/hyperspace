@@ -1,5 +1,5 @@
 import { analyseAreas, rankAreas } from './business-analysis.js?v=report-4';
-import { mountAnalysisWorkspace } from './workspace.js?v=v3-17';
+import { mountAnalysisWorkspace } from './workspace.js?v=v3-22';
 // Lens modes that draw the cyan movement streams (Pulse, Flow Explorer).
 const MOVE_MODES = new Set(['moved', 'flow']);
 const STREAM_MODES = new Set(['moved', 'flow', 'stopped', 'value']);
@@ -6092,7 +6092,7 @@ mountAnalysisWorkspace({
   // Compare draws its own matched 2D maps; the 3D twin stops drawing meanwhile (no reload).
   suspend: (on) => { renderSuspended = !!on; },
   // Colour streams by a per-place mix (e.g. measured movement states). null restores the lens colour.
-  streams: (g = 1) => { streamGain = Math.max(0, Math.min(1.5, g)); if (lineMesh && streamGain > 0.001) lineMesh.visible = STREAM_MODES.has(params.businessMode); },
+  streams: (g = 1) => { streamGain = Math.max(0, Math.min(1.5, g)); if (lineMesh) lineMesh.visible = streamGain > 0.001 && STREAM_MODES.has(params.businessMode); },
   focusStreams,
   /** Re-read the day catalogue after the server built new day packs. */
   refreshCatalog: async () => { const c = await fetchDateCatalog(); if (c) dateCatalog = c; return [...catalogDays()]; },

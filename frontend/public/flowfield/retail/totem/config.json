@@ -23,7 +23,7 @@
   "devices": [
     {
       "id": "89020b8c-d9d0-428b-9a7b-e62e1e25f123",
-      "cadIndex": 1117,
+      "cadIndex": 913,
       "name": "Digital Display 1118",
       "x": 48.08,
       "z": 60.07,
@@ -50,7 +50,7 @@
     },
     {
       "id": "a51574e5-33c4-4616-b093-73a3faea27cd",
-      "cadIndex": 1118,
+      "cadIndex": 914,
       "name": "Digital Display 1118 (copy)",
       "x": 22.18,
       "z": 60.019999999999996,
