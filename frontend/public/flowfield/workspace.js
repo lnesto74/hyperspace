@@ -236,6 +236,7 @@ export function mountAnalysisWorkspace(api) {
   }
   function returnToStore() { if(isExec())execSelect(null);else select(null);api.twin?.returnToStore();render(); }
   api.onFloorPick?.((x,z,fixtureCategory)=>{
+    if(state.lens==='categories' && catFloorPick(x,z))return;
     if(fixtureCategory==='Display digitali' && api.media){api.media.open();return;}
     if(isExec()) {
       const a=execAreas().find(a=>a.name===fixtureCategory) || execAreas().find(a=>inRings(x,z,a.polygons.map(outer=>({outer}))));
@@ -1139,7 +1140,9 @@ export function mountAnalysisWorkspace(api) {
       const slots = h('div', { class: 'hx-seg hx-slots', role: 'group', 'aria-label': 'Time slot' });
       for (const sl of [VJ.DAY, ...VJ.SLOTS]) {
         const v = state.vj.view?.entrances?.[sl]?.value;
-        slots.append(h('button', { type: 'button', 'aria-pressed': String(state.slot === sl), title: v != null ? `${VJ.fmtInt(v)} entrants` : '', onclick: () => setSlot(sl) }, sl === VJ.DAY ? 'Whole day' : sl.replace('-', '–')));
+        slots.append(h('button', { type: 'button', 'aria-pressed': String(state.slot === sl), title: v != null ? `${VJ.fmtInt(v)} entrants` : '', onclick: () => { state.cat.preview = null; setSlot(sl); },
+          onmouseenter: state.lens === 'categories' ? () => { if (state.cat.preview !== sl) { state.cat.preview = sl; overlayKey = ''; renderLegend(); } } : null,
+          onmouseleave: state.lens === 'categories' ? () => { state.cat.preview = null; overlayKey = ''; renderLegend(); } : null }, sl === VJ.DAY ? 'Whole day' : sl.replace('-', '–')));
       }
       const i = info();
       const moved = i.slice === SLOT_TO_SLICE[state.slot];
@@ -1296,7 +1299,7 @@ export function mountAnalysisWorkspace(api) {
   function buildOverlay() {
     const view = state.vj.view, A = state.areas;
     const f = api.snapshot().field;
-    const key = [fid(f), !!geo.fix, state.eng.iso, state.eng.flow, state.flowCell, state.kfocus, state.regFocus, state.flowSpot, state.kin.status, state.lens, state.econ.effort, JSON.stringify(state.econ.margins), state.econ.basketMargin, state.source, state.execLayer[state.lens], !!state.exec.report, state.layer[state.lens], state.slot, state.sel?.kind, state.sel?.id, !!view, !!A, state.radar.list.length, state.radar.stamp, state.media.status, state.media.sel, state.media.simq.status, state.media.simq.spot, state.media.simq.sku, state.media.simq.target, state.cat.status, state.cat.metric, state.cat.macro, state.cat.cat, state.cat.aisle].join('|');
+    const key = [fid(f), !!geo.fix, state.eng.iso, state.eng.flow, state.flowCell, state.kfocus, state.regFocus, state.flowSpot, state.kin.status, state.lens, state.econ.effort, JSON.stringify(state.econ.margins), state.econ.basketMargin, state.source, state.execLayer[state.lens], !!state.exec.report, state.layer[state.lens], state.slot, state.sel?.kind, state.sel?.id, !!view, !!A, state.radar.list.length, state.radar.stamp, state.media.status, state.media.sel, state.media.simq.status, state.media.simq.spot, state.media.simq.sku, state.media.simq.target, state.cat.status, state.cat.metric, state.cat.macro, state.cat.cat, state.cat.aisle, state.cat.preview].join('|');
     if (key === overlayKey) return;
     overlayKey = key; paintKey = '';
     overlay.replaceChildren(); tags.replaceChildren(); shapes = []; pins = []; items = [];
@@ -1849,7 +1852,8 @@ export function mountAnalysisWorkspace(api) {
     }
     const P = api.projector();
     const rp = rpOn() && state.replay.data;
-    const PK = rp ? `${P.key}|rp${state.replay.k}|${state.replay.pay}` : P.key;
+    const hvk = state.lens === 'categories' && state.cat.hover ? `|hv${hoverKey(state.cat.hover)}|${Math.floor(performance.now() / 50)}` : '';
+    const PK = (rp ? `${P.key}|rp${state.replay.k}|${state.replay.pay}` : P.key) + hvk;
     if (PK === paintKey) {
       // Camera at rest: resolve callout overlaps once (DOM measuring every moving frame made orbiting stutter).
       if (collidePending) { collidePending = false; resolveCollisions(); }
@@ -1864,6 +1868,7 @@ export function mountAnalysisWorkspace(api) {
     ctx.clearRect(0, 0, W, H);
     if (items.length) G.paint(ctx, P, items, dpr);
     if (rp) G.paint(ctx, P, replayDyn().concat(payRouteItems()), dpr);
+    if (state.lens === 'categories') paintCatHover(ctx, P, dpr);
     overlay.setAttribute('viewBox', `0 0 ${P.w} ${P.h}`);
     for (const s of shapes) {
       let ok = true;
@@ -3173,7 +3178,7 @@ export function mountAnalysisWorkspace(api) {
   const catFmt = (m, v) => (v == null || !Number.isFinite(v) ? '—' : m === 'rate' ? pct(v) : m === 'shelf' ? `${Math.round(v * 60)} s` : m === 'ch' ? num(v, 2) : VJ.fmtInt(v));
   const catNote = { rate: 'of passers stop ≥ 20 s', shelf: 'at the shelf per store visitor', ch: 'choice index (time at the shelf ÷ time in the area)', vis: 'passes in the area' };
   const C_ = () => state.cat;
-  const catSlot = () => (C_().day?.slots?.[state.slot] ? state.slot : 'giorno');
+  const catSlot = () => { const sl = C_().preview || state.slot; return C_().day?.slots?.[sl] ? sl : 'giorno'; };
   const catRow = (name) => C_().day?.slots?.[catSlot()]?.cat?.[name] || null;
   const macroRow = (name) => C_().day?.slots?.[catSlot()]?.macro?.[name] || null;
   const macroColor = (m) => C_().sec?.macros.find((x) => x.name === m)?.color || '#7A92A3';
@@ -3298,6 +3303,11 @@ export function mountAnalysisWorkspace(api) {
         });
         c.globalAlpha = 1;
         if (s.q !== 'ok') { c.strokeStyle = '#F3C778'; c.lineWidth = 1.5; c.setLineDash([3, 3]); c.strokeRect(xa + 1, top, xb - xa - 2, BH); c.setLineDash([]); }
+        const hv = Q.hover, si = S.sections.indexOf(s);
+        if (hv && ((hv.kind === 'sec' && hv.id === si) || (hv.kind === 'cat' && S.cats[s.cat] === hv.id) || (hv.kind === 'macro' && s.macro === hv.id))) {
+          c.strokeStyle = '#FFFFFF'; c.lineWidth = 3; c.shadowColor = '#FFFFFF'; c.shadowBlur = 8; c.strokeRect(xa, top - 1, xb - xa, BH + 2); c.shadowBlur = 0;
+          if (hv.kind === 'sec') { c.fillStyle = '#FFFFFF'; c.fillRect((xa + xb) / 2 - 1, top + BH + 24, 2, 40); }
+        }
         const cat = S.cats[s.cat], last = spans[spans.length - 1];
         if (last && last.cat === cat) last.xb = xb; else spans.push({ cat, xa, xb });
       }
@@ -3317,6 +3327,136 @@ export function mountAnalysisWorkspace(api) {
     st.forEach((v, k) => { const za = M.z0 + k * M.step, xa = X(za), xb = X(za + M.step), hh = (y1 - y0 - 20) * v / mxs;
       c.fillStyle = '#F3C778'; c.fillRect(xa + 1.5, y1 - hh, Math.max(1, xb - xa - 3), hh); });
   }
+  // ---- Categories · linked hover between the panel and the twin
+  // Hover never moves the camera; it lights the place (spotlight + beacons + leader line). Click commits and flies.
+  const catLink = sv('svg', { class: 'hx-cat-link', 'aria-hidden': 'true' });
+  const catLinkLine = sv('line'), catLinkDot = sv('circle', { r: '4' });
+  catLink.append(catLinkLine, catLinkDot); document.body.append(catLink);
+  const catTip = h('div', { class: 'hx-cat-tip', hidden: true });
+  stage.append(catTip);
+  const catCenters = () => { const S = C_().sec; if (!S) return [];
+    if (!S._c) S._c = S.sections.map((s) => [(s.a[0] + s.b[0]) / 2 + s.n[0] * 0.3, (s.a[1] + s.b[1]) / 2 + s.n[1] * 0.3]);
+    return S._c; };
+  const hoverKey = (hv) => (hv ? `${hv.kind}:${hv.id}` : '');
+  function catMatch(hv) {
+    const S = C_().sec; if (!S || !hv) return [];
+    const out = [];
+    S.sections.forEach((s, i) => {
+      if ((hv.kind === 'macro' && s.macro === hv.id) || (hv.kind === 'cat' && S.cats[s.cat] === hv.id) || (hv.kind === 'aisle' && s.corsia === hv.id) || (hv.kind === 'sec' && i === hv.id)) out.push(i);
+    });
+    return out;
+  }
+  function catHover(hv, el = null) {
+    const Q = C_();
+    if (hoverKey(hv) === hoverKey(Q.hover) && el === Q.hoverEl) return;
+    Q.hover = hv; Q.hoverEl = el; paintKey = '';
+    // panel side: mark rows of the same thing
+    for (const n of inspector.querySelectorAll('.hov')) n.classList.remove('hov');
+    if (hv) {
+      const S = Q.sec, names = new Set(), macros = new Set();
+      if (hv.kind === 'sec') { const s = S.sections[hv.id]; names.add(S.cats[s.cat]); macros.add(s.macro); }
+      if (hv.kind === 'cat') names.add(hv.id);
+      if (hv.kind === 'macro') macros.add(hv.id);
+      for (const n of inspector.querySelectorAll('[data-cat],[data-macro],[data-aisle]')) {
+        if (names.has(n.dataset.cat) || macros.has(n.dataset.macro) || (hv.kind === 'aisle' && Number(n.dataset.aisle) === hv.id)) {
+          n.classList.add('hov');
+          if (hv.from === 'twin' && n.dataset.cat) n.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+        }
+      }
+    }
+    if (!hv || hv.from !== 'twin') catTip.hidden = true;
+    if (!el) catLink.style.display = 'none';
+    Q.frontRedraw?.();
+  }
+  /** Highlight items, drawn over a dark veil: matched ribbons glow, one beacon per aisle, the aisle corridor if any. */
+  function catHoverItems(t) {
+    const Q = C_(), S = Q.sec, hv = Q.hover; if (!S || !hv || state.lens !== 'categories') return [];
+    const idx = catMatch(hv); if (!idx.length && hv.kind !== 'aisle') return [];
+    const m = Q.metric, vals = S.cats.map((n) => catRow(n)).filter(catOk).map((r) => r[m]), mx = Math.max(1e-9, ...vals);
+    const pulse = 0.65 + 0.35 * Math.sin(t / 220), out = [], beacons = new Map();
+    for (const i of idx) {
+      const s = S.sections[i], r = catRow(S.cats[s.cat]), col = macroColor(s.macro);
+      const w = catOk(r) ? 0.12 + 0.78 * Math.sqrt(r[m] / mx) : 0.3;
+      out.push({ t: 'ring', pts: catRibbon(s, w), color: '#FFFFFF', width: 2.2, glow: 12 * pulse, alpha: 0.95, fill: catOk(r) ? col : 'rgba(122,146,163,0.35)', y: 0.06 });
+      const k = s.corsia > 0 ? `c${s.corsia}` : `p${Math.round(s.a[0] / 6)}_${Math.round(s.a[1] / 6)}`;
+      if (!beacons.has(k)) beacons.set(k, []); beacons.get(k).push(i);
+    }
+    const C = catCenters();
+    for (const list of beacons.values()) {
+      const i = list[list.length >> 1], [x, z] = C[i], col = macroColor(S.sections[i].macro);
+      out.push({ t: 'line', pts: [[x, z, 0.05], [x, z, 2.7]], color: col, width: 2, alpha: 0.9, glow: 8 });
+      out.push({ t: 'ring', pts: Array.from({ length: 12 }, (_, k) => [x + Math.cos(k / 12 * Math.PI * 2) * 0.28, z + Math.sin(k / 12 * Math.PI * 2) * 0.28, 2.7]), color: '#FFFFFF', width: 1.5, fill: col, alpha: 0.95 * pulse });
+    }
+    if (hv.kind === 'aisle') { const a = S.aisles.find((x) => x.corsia === hv.id); if (a) out.push({ t: 'ring', pts: [[a.x0, a.z0], [a.x1, a.z0], [a.x1, a.z1], [a.x0, a.z1]], color: '#FFFFFF', width: 2, glow: 10 * pulse, fill: 'rgba(243,199,120,0.12)', y: 0.05 }); }
+    return out;
+  }
+  /** Paint pass for the hover (veil + items + off-screen arrow) and the panel → twin leader line. */
+  function paintCatHover(ctx, P, dpr) {
+    const Q = C_(), hv = Q.hover; if (!hv || state.lens !== 'categories' || !Q.sec) { catLink.style.display = 'none'; return; }
+    const t = performance.now(), its = catHoverItems(t); if (!its.length) return;
+    ctx.save(); ctx.fillStyle = 'rgba(3,8,13,0.48)'; ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height); ctx.restore();
+    G.paint(ctx, P, its, dpr);
+    // where is the thing on screen? nearest visible matched centre to the stage centre, else an edge arrow
+    const C = catCenters(), idx = hv.kind === 'aisle' ? catMatch(hv).slice(0, 40) : catMatch(hv);
+    let best = null, any = null;
+    for (const i of idx) { const p = P.at(C[i][0], 0.3, C[i][1]); if (!p) continue; any = any || p;
+      if (p[0] >= 0 && p[1] >= 0 && p[0] <= P.w && p[1] <= P.h) { const d = Math.hypot(p[0] - P.w / 2, p[1] - P.h / 2); if (!best || d < best.d) best = { p, d }; } }
+    if (!best && any) {
+      const cx = P.w / 2, cy = P.h / 2, dx = any[0] - cx, dy = any[1] - cy, k = Math.min((P.w / 2 - 40) / Math.max(1e-6, Math.abs(dx)), (P.h / 2 - 40) / Math.max(1e-6, Math.abs(dy)));
+      const ex = cx + dx * k, ey = cy + dy * k, a = Math.atan2(dy, dx);
+      ctx.save(); ctx.scale(dpr, dpr); ctx.fillStyle = '#F3C778'; ctx.beginPath();
+      ctx.moveTo(ex + Math.cos(a) * 14, ey + Math.sin(a) * 14); ctx.lineTo(ex + Math.cos(a + 2.4) * 10, ey + Math.sin(a + 2.4) * 10); ctx.lineTo(ex + Math.cos(a - 2.4) * 10, ey + Math.sin(a - 2.4) * 10); ctx.fill();
+      ctx.font = '600 12px Inter, system-ui, sans-serif'; ctx.textAlign = ex > cx ? 'right' : 'left'; ctx.fillText(`${hv.label || hv.id} · off screen, click to go`, ex + (ex > cx ? -18 : 18), ey + 4); ctx.restore();
+    }
+    // leader line from the hovered panel row to the place
+    if (Q.hoverEl?.isConnected && best) {
+      const vr = view.getBoundingClientRect(), er = Q.hoverEl.getBoundingClientRect();
+      const x2 = vr.left + best.p[0], y2 = vr.top + best.p[1], x1 = er.left - 4, y1 = er.top + er.height / 2;
+      for (const [k, v] of Object.entries({ x1, y1, x2, y2 })) catLinkLine.setAttribute(k, v.toFixed(1));
+      catLinkDot.setAttribute('cx', x2.toFixed(1)); catLinkDot.setAttribute('cy', y2.toFixed(1));
+      catLink.style.display = 'block';
+    } else catLink.style.display = 'none';
+  }
+  /** Twin → panel: the module nearest the cursor (screen space, 22 px) lights itself and its rows. */
+  let catMoveRaf = 0;
+  view.addEventListener('pointermove', (e) => {
+    if (state.lens !== 'categories' || !C_().sec || catMoveRaf) return;
+    catMoveRaf = requestAnimationFrame(() => {
+      catMoveRaf = 0;
+      const Q = C_(), S = Q.sec, P = api.projector(), vr = view.getBoundingClientRect(), mx = e.clientX - vr.left, my = e.clientY - vr.top;
+      if (Q.hover && Q.hover.from !== 'twin') return;
+      let best = -1, bd = 22;
+      catCenters().forEach(([x, z], i) => { const p = P.at(x, 0.3, z); if (!p) return; const d = Math.hypot(p[0] - mx, p[1] - my); if (d < bd) { bd = d; best = i; } });
+      if (best < 0) { if (Q.hover?.from === 'twin') catHover(null); return; }
+      const s = S.sections[best], name = S.cats[s.cat], r = catRow(name), m = Q.metric;
+      catHover({ kind: 'sec', id: best, from: 'twin', label: name });
+      catTip.replaceChildren(h('b', null, name), h('span', null, `${s.macro} · corsia ${s.corsia || 'perimeter'}${s.inf ? ' · category inferred from product names' : ''}`),
+        h('strong', null, r ? (catOk(r) ? `${catFmt(m, r[m])} ${catNote[m]}` : `not measured · sensor sees ${pct(r.cov)}`) : 'checkout fixture · no category KPI'),
+        h('small', null, 'click to open'));
+      catTip.style.transform = `translate(${Math.min(mx + 16, vr.width - 260)}px, ${Math.max(8, my - 70)}px)`; catTip.hidden = false;
+    });
+  });
+  view.addEventListener('pointerleave', () => { if (C_().hover?.from === 'twin') catHover(null); });
+  /** Click on the floor in this lens: the nearest module picks its macro (Store) or its aisle (Aisle / Shelf). */
+  function catFloorPick(x, z) {
+    const Q = C_(), S = Q.sec; if (!S) return false;
+    let best = -1, bd = 1.8;
+    catCenters().forEach(([cx, cz], i) => { const d = Math.hypot(cx - x, cz - z); if (d < bd) { bd = d; best = i; } });
+    if (best < 0) return false;
+    const s = S.sections[best];
+    catHover(null);
+    if (state.layer.categories === 'store') catSet({ macro: Q.macro === s.macro ? null : s.macro, cat: null });
+    else catSet({ aisle: s.corsia, cat: S.cats[s.cat] }, { fly: s.corsia !== Q.aisle });
+    return true;
+  }
+  /** Panel helpers: hover handlers for rows, chips and canvases. */
+  const hovAttrs = (hv) => ({ onmouseenter: (e) => catHover({ ...hv, from: 'panel' }, e.currentTarget), onmouseleave: () => catHover(null) });
+  function flyToHover(hv) {
+    const S = C_().sec, C = catCenters(), idx = catMatch(hv); if (!idx.length) return;
+    const xs = idx.map((i) => C[i][0]), zs = idx.map((i) => C[i][1]);
+    api.fit?.('oblique', { minX: Math.min(...xs) - 6, maxX: Math.max(...xs) + 6, minZ: Math.min(...zs) - 5, maxZ: Math.max(...zs) + 5, margin: 0.85 });
+  }
+
   function inspectCat() {
     const Q = C_(), S = Q.sec, D = Q.day, layer = state.layer.categories, m = Q.metric;
     const kick = `${LENS.categories.n} · PLANOGRAM CATEGORIES`;
@@ -3332,9 +3472,10 @@ export function mountAnalysisWorkspace(api) {
       const rr = names.map((n) => ({ n, r: catRow(n) })).filter((x) => x.r);
       const okr = rr.filter((x) => catOk(x.r)).sort((a, b) => b.r[m] - a.r[m]), no = rr.filter((x) => !catOk(x.r));
       const mx = Math.max(1e-9, ...okr.map((x) => x.r[m]));
-      return h('div', { class: 'hx-cat-list' }, ...okr.map(({ n, r }) => h('button', { type: 'button', class: `hx-cat-row${Q.cat === n ? ' on' : ''}`, onclick: () => catSet({ cat: Q.cat === n ? null : n }) },
+      return h('div', { class: 'hx-cat-list' }, ...okr.map(({ n, r }) => h('button', { type: 'button', class: `hx-cat-row${Q.cat === n ? ' on' : ''}`, 'data-cat': n, ...hovAttrs({ kind: 'cat', id: n, label: n }),
+        onclick: () => { catHover(null); catSet({ cat: Q.cat === n ? null : n }); if (Q.cat) flyToHover({ kind: 'cat', id: n }); } },
         h('span', null, n), h('i', { style: `--w:${(r[m] / mx * 100).toFixed(1)}%;--c:${macroColor(r.macro)}` }), h('b', null, catFmt(m, r[m])), h('em', { class: r.lb === 'MEASURED' ? 'm' : 'e' }, r.lb === 'MEASURED' ? 'M' : 'E'))),
-        ...no.map(({ n, r }) => h('div', { class: 'hx-cat-row no' }, h('span', null, n), h('i'), h('b', null, 'not measured'), h('em', null, r.cov != null ? pct(r.cov) : ''))));
+        ...no.map(({ n, r }) => h('div', { class: 'hx-cat-row no', 'data-cat': n, ...hovAttrs({ kind: 'cat', id: n, label: n }) }, h('span', null, n), h('i'), h('b', null, 'not measured'), h('em', null, r.cov != null ? pct(r.cov) : ''))));
     };
     const out = [];
     if (layer === 'store') {
@@ -3345,6 +3486,10 @@ export function mountAnalysisWorkspace(api) {
           : leadKpi(`${Q.macro.toUpperCase()}`, 'Not measured', `The sensor sees ${pct(r?.cov)} of this category’s floor. No number is shown in its place.`, ''))
           : leadKpi('MACRO-CATEGORIES MEASURED', `${okN} of ${rowsM.length}`, `${S.sections.length} planogram sections on the floor · ${S.cats.length} display categories · ${S.quality.ok} sections on a twin shelf`, 'cyan') }), metricSeg);
       const qc = mdCanvas('hx-md-cv', 340);
+      qc.addEventListener('mousemove', (e) => { const b = qc.getBoundingClientRect(), sx = qc.width / b.width, x = (e.clientX - b.left) * sx, y = (e.clientY - b.top) * sx;
+        const hit = (qc._hits || []).find((p) => Math.hypot(p.x - x, p.y - y) <= p.rad);
+        if (hit) catHover({ kind: 'macro', id: hit.name, label: hit.name, from: 'panel' }, qc); else if (Q.hover?.from === 'panel') catHover(null); });
+      qc.addEventListener('mouseleave', () => catHover(null));
       qc.addEventListener('click', (e) => { const b = qc.getBoundingClientRect(), sx = qc.width / b.width, x = (e.clientX - b.left) * sx, y = (e.clientY - b.top) * sx;
         const hit = (qc._hits || []).find((p) => Math.hypot(p.x - x, p.y - y) <= p.rad); if (hit) catSet({ macro: Q.macro === hit.name ? null : hit.name, cat: null }); });
       out.push(card('', h('div', { class: 'hx-card-h' }, h('b', null, 'Where shoppers pass, where they stop'), h('small', null, 'one dot per macro-category · size = minutes in the area')), qc,
@@ -3357,13 +3502,17 @@ export function mountAnalysisWorkspace(api) {
       } else {
         const mx = Math.max(1e-9, ...rowsM.filter((x) => catOk(x.r)).map((x) => x.r[m]));
         out.push(card('', h('div', { class: 'hx-card-h' }, h('b', null, 'Macro-categories'), h('small', null, CAT_METRICS.find((x) => x[0] === m)[1].toLowerCase())),
-          bars(rowsM.filter((x) => catOk(x.r)).sort((a, b) => b.r[m] - a.r[m]).map(({ name, r }) => ({ label: name, value: r[m] / (m === 'vis' ? 1 : 1), color: macroColor(name), onclick: () => catSet({ macro: name }) })), (v) => catFmt(m, v)),
-          h('p', { class: 'hx-note' }, `Not measured: ${rowsM.filter((x) => !catOk(x.r)).map((x) => `${x.name} (${pct(x.r?.cov)} seen)`).join(', ') || 'none'}.`)));
+          (() => { const okm = rowsM.filter((x) => catOk(x.r)).sort((a, b) => b.r[m] - a.r[m]), mx = Math.max(1e-9, ...okm.map((x) => x.r[m]));
+            return h('div', { class: 'hx-cat-list' }, ...okm.map(({ name, r }) => h('button', { type: 'button', class: 'hx-cat-row', 'data-macro': name, ...hovAttrs({ kind: 'macro', id: name, label: name }),
+              onclick: () => { catHover(null); catSet({ macro: name, cat: null }); flyToHover({ kind: 'macro', id: name }); } },
+              h('span', null, name), h('i', { style: `--w:${(r[m] / mx * 100).toFixed(1)}%;--c:${macroColor(name)}` }), h('b', null, catFmt(m, r[m])), h('em', { class: r.lb === 'MEASURED' ? 'm' : 'e' }, r.lb === 'MEASURED' ? 'M' : 'E'))),
+              ...rowsM.filter((x) => !catOk(x.r)).map(({ name, r }) => h('div', { class: 'hx-cat-row no', 'data-macro': name, ...hovAttrs({ kind: 'macro', id: name, label: name }) }, h('span', null, name), h('i'), h('b', null, 'not measured'), h('em', null, pct(r?.cov))))); })()));
       }
       if (blind.length) out.push(card('hx-rp-warn', h('p', null, h('b', null, `Corsia ${blind.join(' and ')}: not seen by the sensor. `), 'Their categories show as dashed fronts and carry no number. Coverage, not a lack of shoppers.')));
     } else {
       const A = catAisle();
-      const chips = h('div', { class: 'hx-sim-chips' }, ...S.aisles.map((a) => h('button', { type: 'button', 'aria-pressed': String(a.corsia === Q.aisle), class: blind.includes(a.corsia) ? 'est' : '', title: blind.includes(a.corsia) ? 'not seen by the sensor' : '', onclick: () => catSet({ aisle: a.corsia, cat: null }, { fly: true }) }, String(a.corsia))));
+      const chips = h('div', { class: 'hx-sim-chips' }, ...S.aisles.map((a) => h('button', { type: 'button', 'aria-pressed': String(a.corsia === Q.aisle), class: blind.includes(a.corsia) ? 'est' : '', 'data-aisle': a.corsia,
+        title: blind.includes(a.corsia) ? 'not seen by the sensor' : '', ...hovAttrs({ kind: 'aisle', id: a.corsia, label: `Corsia ${a.corsia}` }), onclick: () => { catHover(null); catSet({ aisle: a.corsia, cat: null }, { fly: true }); } }, String(a.corsia))));
       const M = D.modules?.[String(A?.corsia)], tot = (M?.stops[catSlot()] || []).reduce((a, b) => a + b, 0);
       const names = [...new Set(S.sections.filter((s) => s.corsia === A?.corsia).map((s) => S.cats[s.cat]))];
       out.push(ihead(kick, `Corsia ${A?.corsia ?? '—'}`, { badge: srcBadge(`Estimated · raw LiDAR per second · ${day} · ${slotL}`, 'Stops = under 0.4 m/s for at least 20 s, counted in the aisle between the two fronts. Both fronts are pooled: the LiDAR ↔ layout offset (~0.5 m in X) is not corrected yet.', 'scenario'),
@@ -3373,6 +3522,14 @@ export function mountAnalysisWorkspace(api) {
         const fc = mdCanvas('hx-md-cv', 400);
         out.push(card('', h('div', { class: 'hx-card-h' }, h('b', null, 'Front view'), h('small', null, 'modules × shelf levels · bars = stops along the aisle')), fc,
           h('p', { class: 'hx-note' }, 'Colour = macro-category of the shelf level. Faded = category not measured. Yellow dashed = module still to verify on the twin.')));
+        Q.frontRedraw = () => { if (fc.isConnected) drawCatFront(fc, A); };
+        fc.addEventListener('mousemove', (e) => {
+          const b = fc.getBoundingClientRect(), sx = fc.width / b.width, x = (e.clientX - b.left) * sx, y = (e.clientY - b.top) * sx;
+          const z = A.z0 + (x - 16) / (fc.width - 32) * Math.max(1, A.z1 - A.z0), west = y < fc.height / 2;
+          const i = S.sections.findIndex((s) => s.corsia === A.corsia && (west ? s.n[0] > 0.7 : s.n[0] < -0.7) && z >= Math.min(s.a[1], s.b[1]) && z <= Math.max(s.a[1], s.b[1]));
+          if (i >= 0) catHover({ kind: 'sec', id: i, from: 'panel', label: S.cats[S.sections[i].cat] }, fc); else catHover(null);
+        });
+        fc.addEventListener('mouseleave', () => catHover(null));
         requestAnimationFrame(() => drawCatFront(fc, A));
         out.push(card('', h('div', { class: 'hx-card-h' }, h('b', null, 'Categories in this aisle'), h('small', null, `${CAT_METRICS.find((x) => x[0] === m)[1].toLowerCase()} · whole category, all its fronts`)), catList(names)));
       } else {
@@ -3431,8 +3588,9 @@ export function mountAnalysisWorkspace(api) {
       const Q = state.cat, S = Q.sec; legend.hidden = !S;
       if (!S) return;
       const names = S.macros.map((x) => x.name).filter((n) => Q.day?.slots?.giorno?.macro?.[n]?.kind === 'categoria');
-      legend.replaceChildren(...names.map((n) => h('button', { type: 'button', class: `hx-lchip${Q.macro === n ? ' on' : ''}${Q.macro && Q.macro !== n ? ' off' : ''}`, style: `--c:${S.macros.find((x) => x.name === n).color}`, onclick: () => catSet({ macro: Q.macro === n ? null : n, cat: null }) }, h('i'), n)),
-        h('span', { class: 'hx-lhot' }, 'ribbon width = ', CAT_METRICS.find((x) => x[0] === Q.metric)[1].toLowerCase(), ' · dashed grey = not measured · dashed colour = checkout fixtures'));
+      legend.replaceChildren(...names.map((n) => h('button', { type: 'button', class: `hx-lchip${Q.macro === n ? ' on' : ''}${Q.macro && Q.macro !== n ? ' off' : ''}`, style: `--c:${S.macros.find((x) => x.name === n).color}`, onclick: () => catSet({ macro: Q.macro === n ? null : n, cat: null }),
+        onmouseenter: () => catHover({ kind: 'macro', id: n, label: n, from: 'legend' }), onmouseleave: () => catHover(null) }, h('i'), n)),
+        h('span', { class: 'hx-lhot' }, Q.preview ? h('b', { class: 'hx-cat-prev' }, `Previewing ${Q.preview === 'giorno' ? 'the whole day' : Q.preview.replace('-', '–')} · `) : null, 'ribbon width = ', CAT_METRICS.find((x) => x[0] === Q.metric)[1].toLowerCase(), ' · dashed grey = not measured · dashed colour = checkout fixtures · hover anything to find it'));
       return;
     }
     if (L === 'flow' && layer === 'regime') {

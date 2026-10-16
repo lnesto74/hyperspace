@@ -1,4 +1,4 @@
-# Cursor prompt v8 — publish everything (Windflow v3-22: Categories lens + Media + Astra)
+# Cursor prompt v8 — publish everything (Windflow v3-23: Categories lens + Media + Astra)
 
 Replaces v7.1. Cumulative and safe to run even if v5, v6 or v7 never completed.
 Run it only AFTER docs/CURSOR_PROMPT_categories_lens.md answered "PRONTO PER IL DEPLOY".
@@ -13,7 +13,7 @@ Frontend (static, baked into the frontend image)
     - Media lens (09): media/, media-sim.js
     - Service receipts: checkouts/
     - Astra's totem visibility: media-visibility*.js/.css, retail/totem/, retail-twin.js
-    - cache v3-22 in main.js and index.html
+    - cache v3-23 in main.js and index.html (linked hover panel ↔ twin in Categories)
 Backend (Windflow)
   backend/routes/windflow.js       (now also serves /api/windflow/categories/*)
   backend/services/windflow/
@@ -54,7 +54,7 @@ the droplet stays exactly as it is today.
        Do not fix those errors here.
      find . -path ./node_modules -prune -o -type f -size +50M -print   → must print nothing you are about to stage
 4. git add <only the copied paths>. Commit:
-   "Windflow v3-22: Categories lens on the Esselunga planogram, Media simulator, receipts, totem visibility (Astra)"
+   "Windflow v3-23: Categories lens on the Esselunga planogram, Media simulator, receipts, totem visibility (Astra)"
    Push: git push origin release/windflow-v3, then git push origin release/windflow-v3:main (fast-forward only).
    If main is not a fast-forward: stop and report. Do not force.
 
